@@ -1777,6 +1777,9 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             "jobs",
             "personalization",
             "evaluations",
+            # Ensure experimental connectors endpoints are available in tests
+            # to avoid 404s when the app is imported before ROUTES_ENABLE is set.
+            "connectors",
         }
         if (_test_mode or _pytest_active) and key in _force_in_tests:
             return True

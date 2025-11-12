@@ -41,6 +41,7 @@ def test_gemini_filedata_mapping_for_urls_and_multi_parts(monkeypatch):
     monkeypatch.setattr(hc, "create_client", fake_create_client)
     import tldw_Server_API.app.core.LLM_Calls.providers.google_adapter as gmod
     monkeypatch.setattr(gmod, "_hc_create_client", fake_create_client)
+    monkeypatch.setattr(gmod, "http_client_factory", fake_create_client)
 
     adapter = GoogleAdapter()
     request = {
@@ -86,6 +87,7 @@ def test_gemini_tool_calls_and_usage_mapping(monkeypatch):
     monkeypatch.setattr(hc, "create_client", fake_create_client)
     import tldw_Server_API.app.core.LLM_Calls.providers.google_adapter as gmod
     monkeypatch.setattr(gmod, "_hc_create_client", fake_create_client)
+    monkeypatch.setattr(gmod, "http_client_factory", fake_create_client)
 
     adapter = GoogleAdapter()
     req = {"model": "models/gemini-pro", "api_key": "k", "messages": [{"role": "user", "content": "hi"}]}

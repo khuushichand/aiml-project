@@ -71,7 +71,9 @@ def _enable(monkeypatch):
 def test_qwen_adapter_native_http_non_streaming(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter import QwenAdapter
     import tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter as qwen_mod
+    # Patch both the internal alias and the adapter's exposed factory
     monkeypatch.setattr(qwen_mod, "_hc_create_client", lambda *a, **k: _FakeClient(*a, **k))
+    monkeypatch.setattr(qwen_mod, "http_client_factory", lambda *a, **k: _FakeClient(*a, **k))
     a = QwenAdapter()
     r = a.chat({"messages": [{"role": "user", "content": "hi"}], "model": "qwen-plus", "api_key": "k"})
     assert r.get("object") == "chat.completion"
@@ -81,6 +83,7 @@ def test_qwen_adapter_native_http_streaming(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter import QwenAdapter
     import tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter as qwen_mod
     monkeypatch.setattr(qwen_mod, "_hc_create_client", lambda *a, **k: _FakeClient(*a, **k))
+    monkeypatch.setattr(qwen_mod, "http_client_factory", lambda *a, **k: _FakeClient(*a, **k))
     a = QwenAdapter()
     chunks = list(a.stream({"messages": [{"role": "user", "content": "hi"}], "model": "qwen-plus", "api_key": "k", "stream": True}))
     assert any(c.startswith("data: ") for c in chunks)

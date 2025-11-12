@@ -32,6 +32,7 @@ def test_google_gemini_streaming_sse_passthrough(monkeypatch):
     monkeypatch.setattr(hc, "create_client", fake_create_client)
     import tldw_Server_API.app.core.LLM_Calls.providers.google_adapter as gmod
     monkeypatch.setattr(gmod, "_hc_create_client", fake_create_client)
+    monkeypatch.setattr(gmod, "http_client_factory", fake_create_client)
 
     adapter = GoogleAdapter()
     req = {

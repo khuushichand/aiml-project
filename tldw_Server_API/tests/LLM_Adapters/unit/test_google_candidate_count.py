@@ -43,7 +43,9 @@ def test_google_includes_candidate_count_when_n_set(monkeypatch):
     import tldw_Server_API.app.core.http_client as hc
     monkeypatch.setattr(hc, "create_client", fake_create_client)
     import tldw_Server_API.app.core.LLM_Calls.providers.google_adapter as gmod
+    # Patch both the internal alias and the adapter's exposed factory
     monkeypatch.setattr(gmod, "_hc_create_client", fake_create_client)
+    monkeypatch.setattr(gmod, "http_client_factory", fake_create_client)
 
     adapter = GoogleAdapter()
     req = {
@@ -54,4 +56,5 @@ def test_google_includes_candidate_count_when_n_set(monkeypatch):
     }
     out = adapter.chat(req)
     assert out["object"] == "chat.completion"
-    assert captured.get("candidateCount") == 2
+    # Gemini expects candidateCount under generationConfig in generateContent
+    assert (captured.get("generationConfig") or {}).get("candidateCount") == 2

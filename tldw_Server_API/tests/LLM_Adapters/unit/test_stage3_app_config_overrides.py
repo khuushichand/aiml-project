@@ -52,7 +52,12 @@ def test_huggingface_app_config_timeout(monkeypatch):
     import tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter as mod
 
     captured: Dict[str, Any] = {}
-    monkeypatch.setattr(mod, "_hc_create_client", lambda *a, timeout=None, **k: (captured.setdefault("timeout", timeout) or _FakeClient(captured)) and _FakeClient(captured), raising=True)
+    # Patch the adapter's exposed factory so the adapter path is used without network
+    def _factory(*a, timeout=None, **k):
+        captured.setdefault("timeout", timeout)
+        return _FakeClient(captured)
+
+    monkeypatch.setattr(mod, "http_client_factory", _factory, raising=True)
 
     a = HuggingFaceAdapter()
     req = {
@@ -95,7 +100,11 @@ def test_qwen_app_config_timeout(monkeypatch):
     import tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter as mod
 
     captured: Dict[str, Any] = {}
-    monkeypatch.setattr(mod, "_hc_create_client", lambda *a, timeout=None, **k: (captured.setdefault("timeout", timeout) or _FakeClient(captured)) and _FakeClient(captured), raising=True)
+    def _factory(*a, timeout=None, **k):
+        captured.setdefault("timeout", timeout)
+        return _FakeClient(captured)
+
+    monkeypatch.setattr(mod, "http_client_factory", _factory, raising=True)
 
     a = QwenAdapter()
     req = {
@@ -113,7 +122,11 @@ def test_deepseek_app_config_timeout(monkeypatch):
     import tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter as mod
 
     captured: Dict[str, Any] = {}
-    monkeypatch.setattr(mod, "_hc_create_client", lambda *a, timeout=None, **k: (captured.setdefault("timeout", timeout) or _FakeClient(captured)) and _FakeClient(captured), raising=True)
+    def _factory(*a, timeout=None, **k):
+        captured.setdefault("timeout", timeout)
+        return _FakeClient(captured)
+
+    monkeypatch.setattr(mod, "http_client_factory", _factory, raising=True)
 
     a = DeepSeekAdapter()
     req = {
