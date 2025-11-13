@@ -266,8 +266,9 @@ def normalize_request_provider_and_model(
             # 3) Test-friendly defaults (preserve legacy behavior under pytest only)
             if os.getenv("PYTEST_CURRENT_TEST"):
                 return {
-                    "anthropic": {"claude-sonnet": "claude-sonnet-4.5"},
-                    "openrouter": {"dummy": "openai/gpt-4o-mini"},
+                    "anthropic": {"claude-sonnet": "claude-sonnet-4-5"},
+                    # Use a small, fast model via OpenRouter in tests
+                    "openrouter": {"dummy": "anthropic/claude-haiku-4-5"},
                     "mistral": {"dummy": "mistral-small-latest"},
                 }
             return {}

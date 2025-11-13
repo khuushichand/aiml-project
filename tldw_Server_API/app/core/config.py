@@ -1957,7 +1957,7 @@ def load_and_log_configs():
         openai_api_retry_delay = config_parser_object.get('API', 'openai_api_retry_delay', fallback='5')
 
         # OpenRouter
-        openrouter_model = config_parser_object.get('API', 'openrouter_model', fallback='microsoft/wizardlm-2-8x22b')
+        openrouter_model = config_parser_object.get('API', 'openrouter_model', fallback='anthropic/claude-haiku-4.5')
         openrouter_streaming = config_parser_object.get('API', 'openrouter_streaming', fallback='False')
         openrouter_temperature = config_parser_object.get('API', 'openrouter_temperature', fallback='0.7')
         openrouter_top_p = config_parser_object.get('API', 'openrouter_top_p', fallback='0.95')
