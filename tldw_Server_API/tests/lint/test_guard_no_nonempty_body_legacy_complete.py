@@ -26,13 +26,6 @@ def test_no_nonempty_body_post_to_legacy_complete():
                     continue
                 if "json={" in window or "json = {" in window:
                     offenders.append((py, i + 1, line.strip()))
-            # Also catch multi-line with URL on one line and json on the next lines
-            if "/api/v1/chats/" in line and "/complete" in line and ".post(" in line:
-                window = "\n".join(lines[i : i + 8])
-                if "json={}" in window or "json = {}" in window:
-                    continue
-                if "json={" in window or "json = {" in window:
-                    offenders.append((py, i + 1, line.strip()))
 
     assert not offenders, (
         "Found tests posting non-empty JSON bodies to legacy /complete endpoint.\n"
