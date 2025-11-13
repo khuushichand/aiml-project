@@ -268,7 +268,7 @@ def normalize_request_provider_and_model(
                 return {
                     "anthropic": {"claude-sonnet": "claude-sonnet-4-5"},
                     # Use a small, fast model via OpenRouter in tests
-                    "openrouter": {"dummy": "anthropic/claude-haiku-4-5"},
+                    "openrouter": {"dummy": "z-ai/glm-4.6"},
                     "mistral": {"dummy": "mistral-small-latest"},
                 }
             return {}

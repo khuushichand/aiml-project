@@ -3995,7 +3995,7 @@ def legacy_chat_with_openrouter(
     # ... (api key, model, temp, streaming setup) ...
     final_api_key = api_key or openrouter_config.get('api_key')
     if not final_api_key: raise ChatConfigurationError(provider='openrouter', message="OpenRouter API Key required.")
-    current_model = model or openrouter_config.get('model', 'mistralai/mistral-7b-instruct:free')
+    current_model = model or openrouter_config.get('model', 'z-ai/glm-4.6')
     # ... other param resolutions ...
     current_streaming_cfg = openrouter_config.get('streaming', False)
     current_streaming = streaming if streaming is not None else \
