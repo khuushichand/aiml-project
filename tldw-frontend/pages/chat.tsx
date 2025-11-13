@@ -263,7 +263,11 @@ export default function ChatPage() {
             dResults.forEach((r: any) => {
               const name = r?.name || r?.tool || 'tool';
               const content = typeof r?.content === 'string' ? r.content : JSON.stringify(r?.content ?? r);
-              setUiMessages((prev) => [...prev, { role: 'tool', tool: { name, content } }]);
+              const toolCallId = r?.tool_call_id || r?.id;
+              setUiMessages((prev) => [
+                ...prev,
+                { role: 'tool', tool: { id: toolCallId, name, content } },
+              ]);
             });
           }
         }, () => {
