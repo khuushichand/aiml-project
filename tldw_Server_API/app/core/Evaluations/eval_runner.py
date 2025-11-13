@@ -10,6 +10,7 @@ Handles:
 """
 
 import asyncio
+import os
 import time
 import statistics
 from contextlib import suppress
@@ -375,8 +376,32 @@ class EvaluationRunner:
         leaderboard = []
         built_collections: List[str] = []
 
-        # Metrics helpers
-        custom_metrics = get_custom_metrics()
+        # Metrics helpers (lazy-load only if enabled)
+        enable_custom_metrics = True
+        try:
+            enable_custom_metrics = bool(rp.get("custom_metrics", True))
+        except Exception:
+            enable_custom_metrics = True
+
+        custom_metrics = None
+        if enable_custom_metrics:
+            try:
+                custom_metrics = get_custom_metrics()
+            except Exception as e:
+                logger.debug(f"Custom metrics initialization skipped: {e}")
+                custom_metrics = None
+
+        # Resolve custom metrics timeout (seconds)
+        metrics_timeout: float = 2.0
+        try:
+            if rp.get("custom_metrics_timeout_seconds") is not None:
+                metrics_timeout = float(rp.get("custom_metrics_timeout_seconds"))
+            else:
+                env_val = os.getenv("TLDW_CUSTOM_METRICS_TIMEOUT_SECONDS")
+                if env_val:
+                    metrics_timeout = float(env_val)
+        except Exception:
+            metrics_timeout = 2.0
 
         # Optional ephemeral indexing base namespace
         base_namespace = rp.get("index_namespace")
@@ -560,14 +585,32 @@ class EvaluationRunner:
                     scores = {}
                     overall = 0.0
 
-                # Optional: retrieval diversity/coverage
-                try:
-                    cov = await custom_metrics.evaluate_retrieval_coverage(query, ctx_texts)
-                    div = await custom_metrics.evaluate_retrieval_diversity(ctx_texts)
-                    scores["retrieval_coverage"] = cov.score
-                    scores["retrieval_diversity"] = div.score
-                except Exception as e:
-                    logger.debug(f"Custom retrieval metrics skipped: {e}")
+                # Optional: retrieval diversity/coverage (gated + timeboxed)
+                if enable_custom_metrics and custom_metrics is not None:
+                    try:
+                        cov = await asyncio.wait_for(
+                            custom_metrics.evaluate_retrieval_coverage(query, ctx_texts),
+                            timeout=metrics_timeout,
+                        )
+                    except Exception as e:
+                        cov = None
+                        logger.debug(f"Coverage metric skipped: {e}")
+                    try:
+                        div = await asyncio.wait_for(
+                            custom_metrics.evaluate_retrieval_diversity(ctx_texts),
+                            timeout=metrics_timeout,
+                        )
+                    except Exception as e:
+                        div = None
+                        logger.debug(f"Diversity metric skipped: {e}")
+
+                    try:
+                        if cov is not None:
+                            scores["retrieval_coverage"] = float(getattr(cov, "score", 0.0))
+                        if div is not None:
+                            scores["retrieval_diversity"] = float(getattr(div, "score", 0.0))
+                    except Exception:
+                        pass
 
                 # Optional: retrieval nDCG/MRR when relevant IDs provided
                 try:
