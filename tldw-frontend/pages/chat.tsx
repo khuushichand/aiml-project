@@ -205,7 +205,13 @@ export default function ChatPage() {
         save_to_db: saveToDb,
         messages: newUi
           .filter((m) => m.role !== 'system' && !m.error)
-          .map((m) => ({ role: m.role, content: m.text || '' })),
+          .map((m) => {
+            const content = (m as any)?.tool?.content ?? m.text ?? '';
+            const out: any = { role: m.role, content };
+            const toolCallId = (m as any).tool_call_id ?? (m as any)?.tool?.id;
+            if (toolCallId) out.tool_call_id = toolCallId;
+            return out;
+          }),
       };
       try { const extra = JSON.parse(advanced || '{}'); if (extra && typeof extra === 'object') payload = { ...payload, ...extra }; } catch {}
       payload.slash_command_injection_mode = slashMode;

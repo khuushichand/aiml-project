@@ -116,3 +116,18 @@ def test_directed_both_directions_allowed(client_with_graph_db: TestClient):
     r2 = client.post(f"/api/v1/notes/{b}/links", json={"to_note_id": a, "directed": True}, headers=headers)
     assert r1.status_code == 200 and r2.status_code == 200
 
+
+def test_self_loop_rejected(client_with_graph_db: TestClient):
+    client = client_with_graph_db
+    token = _make_token(scope="notes")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Create one note
+    n = client.post("/api/v1/notes/", json={"title": "Solo", "content": "One"}, headers=headers)
+    assert n.status_code == 201
+    nid = n.json()["id"]
+
+    # Attempt to link note to itself should be rejected
+    resp = client.post(f"/api/v1/notes/{nid}/links", json={"to_note_id": nid, "directed": False}, headers=headers)
+    assert resp.status_code == 400
+    assert "self" in resp.json().get("detail", "").lower()

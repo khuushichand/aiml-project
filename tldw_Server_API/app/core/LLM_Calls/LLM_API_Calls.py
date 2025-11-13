@@ -3486,7 +3486,7 @@ def legacy_chat_with_groq(
     # ... (logging key, model, temp, streaming setup as before) ...
     logging.debug("Groq: Using configured API key")
 
-    current_model = model or groq_config.get('model', 'llama3-8b-8192')
+    current_model = model or groq_config.get('model', 'llama-3.1-8b-instant')
     current_temp = temp if temp is not None else _safe_cast(groq_config.get('temperature'), float, 0.2)
     current_top_p = maxp  # Groq uses top_p
     current_streaming_cfg = groq_config.get('streaming', False)

@@ -185,6 +185,8 @@ def normalize_request_provider_and_model(
                 inline_provider, inline_model_part = parts_for_alias[0].strip(), parts_for_alias[1].strip()
         provider_for_mapping = ((api_provider or inline_provider or default_provider) or "").strip().lower()
 
+        from functools import lru_cache
+        @lru_cache(maxsize=16)
         def _load_models_with_case(provider: str) -> List[str]:
             # Try reading the raw pricing catalog to preserve original key casing
             try:
@@ -198,8 +200,8 @@ def normalize_request_provider_and_model(
                 # Expected file/format issues: fall back to normalized catalog
                 logger.debug(f"Model catalog raw load fallback for provider '{provider}': {_e}")
             except Exception as _ue:
-                # Log unexpected exceptions for visibility
-                logger.warning(f"Unexpected error loading model catalog for provider '{provider}': {_ue}")
+                # Log unexpected exceptions for visibility at debug level
+                logger.debug(f"Unexpected error loading model catalog for provider '{provider}': {_ue}")
 
             # Fallback: use the normalized list (lowercase keys)
             return list_provider_models(provider) or []
@@ -238,6 +240,7 @@ def normalize_request_provider_and_model(
         #  - ENV JSON CHAT_MODEL_ALIAS_OVERRIDES = { provider: { alias: concrete_model } }
         #  - Config_Files/model_pricing.json key "model_aliases" or "aliases"
         #  - Test-safe built-ins when PYTEST_CURRENT_TEST is set (keeps historical behavior)
+        @lru_cache(maxsize=1)
         def _load_alias_overrides() -> Dict[str, Dict[str, str]]:
             # 1) ENV
             try:
@@ -249,7 +252,7 @@ def normalize_request_provider_and_model(
             except (ValueError, TypeError) as _e:
                 logger.debug(f"CHAT_MODEL_ALIAS_OVERRIDES parse failed: {_e}")
             except Exception as _ue:
-                logger.warning(f"Unexpected error parsing CHAT_MODEL_ALIAS_OVERRIDES: {_ue}")
+                logger.debug(f"Unexpected error parsing CHAT_MODEL_ALIAS_OVERRIDES: {_ue}")
             # 2) File keys in pricing catalog
             try:
                 cfg_path = Path(__file__).resolve().parents[3] / "Config_Files" / "model_pricing.json"
@@ -262,7 +265,7 @@ def normalize_request_provider_and_model(
             except (OSError, ValueError, KeyError, AttributeError) as _e:
                 logger.debug(f"Alias overrides load fallback: {_e}")
             except Exception as _ue:
-                logger.warning(f"Unexpected error loading alias overrides: {_ue}")
+                logger.debug(f"Unexpected error loading alias overrides: {_ue}")
             # 3) Test-friendly defaults (preserve legacy behavior under pytest only)
             if os.getenv("PYTEST_CURRENT_TEST"):
                 return {
@@ -285,29 +288,51 @@ def normalize_request_provider_and_model(
             # Resolve against known models when no explicit override present
             resolved = _resolve_alias(provider_for_mapping, target_model_part)
         if resolved and resolved != model_str:
+            allow_cross = str(os.getenv("CHAT_ALLOW_CROSS_PROVIDER_ALIASING", "0")).lower() in {"1", "true", "yes", "on"}
             if inline_provider:
                 # Preserve inline provider prefix until final normalization below
                 combined = f"{inline_provider}/{resolved}"
-                setattr(request_data, "model", combined)
+                request_data.model = combined
                 model_str = combined
             else:
-                setattr(request_data, "model", resolved)
-                model_str = resolved
+                # Prevent accidental provider flips unless explicitly allowed
+                if "/" in resolved and not allow_cross:
+                    request_data.model = resolved.split("/", 1)[1]
+                else:
+                    request_data.model = resolved
+                model_str = request_data.model
     except (AttributeError, KeyError, ValueError):
         # Expected lookup/attr issues: do not block request
         pass
     except Exception as _unexpected:
         # Log unexpected exceptions instead of silencing them
-        logger.warning(f"Unexpected error during model alias resolution: {_unexpected}")
+        logger.debug(f"Unexpected error during model alias resolution: {_unexpected}")
     provider = (api_provider or default_provider).lower()
     if "/" in model_str:
         parts = model_str.split("/", 1)
         if len(parts) == 2:
             model_provider, actual_model = parts
+            inline_provider_lower = model_provider.lower()
+            # If the api_provider was not explicitly set, allow inline provider to select it
             if not api_provider:
-                provider = model_provider.lower()
-            # Update the request in place so downstream code sees the stripped model
-            setattr(request_data, "model", actual_model)
+                provider = inline_provider_lower
+                # In this case, strip the inline provider prefix from the model
+                setattr(request_data, "model", actual_model)
+            else:
+                # api_provider is explicitly set on the request. For OpenRouter, many valid
+                # model IDs include a provider namespace (e.g., "openai/gpt-4o-mini",
+                # "z-ai/glm-4.6"). OpenRouter expects that namespace to be preserved.
+                # Only strip when the inline namespace is literally "openrouter";
+                # otherwise, keep the full "namespace/model" string.
+                if provider == "openrouter":
+                    if inline_provider_lower == "openrouter":
+                        setattr(request_data, "model", actual_model)
+                    else:
+                        # Keep the namespaced model id as-is for OpenRouter
+                        setattr(request_data, "model", model_str)
+                else:
+                    # Non-OpenRouter providers do not use namespaced model ids; strip prefix
+                    setattr(request_data, "model", actual_model)
     return provider
 
 

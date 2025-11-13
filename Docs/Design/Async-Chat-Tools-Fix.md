@@ -90,10 +90,93 @@ Merged references:
 - `tldw_Server_API/app/core/Chat/chat_orchestrator.py` (new `achat` function)
 
 ### Phase 1: Async-first orchestration
-- Implement a robust sync wrapper for `chat` that internally runs `achat` safely:
+- Implement a robust sync wrapper for `chat` that internally runs `achat` safely using stdlib-only primitives (no new runtime deps):
   - If not in an event loop, run with `asyncio.run(achat(...))`.
-  - If in a running loop, avoid `asyncio.run`; instead schedule and await appropriately (e.g., via `anyio` or loop task strategy) to prevent runtime errors in tests.
+  - If in a running loop on the current thread, do not call `asyncio.run` or `loop.run_until_complete` (would error/deadlock). Offload to a worker thread that runs a private loop via `asyncio.run` and block for result.
+  - If invoking from a different thread and you hold a reference to the target loop, schedule with `asyncio.run_coroutine_threadsafe` and block on `future.result()`.
 - Keep symbol compatibility (`chat`) to minimize churn.
+
+#### Phase 1 Implementation Details
+
+Decision: Do not add `anyio` as a runtime dependency for the wrapper. Prefer stdlib-only (`asyncio`, `threading`/`concurrent.futures`). `pytest-asyncio` remains for tests; `anyio` may be used in tests only if already present, but is not required.
+
+Reference implementation (pseudocode):
+
+```python
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
+
+# async canonical entry
+async def achat(request: ChatRequest) -> ChatResponse:
+    ...
+
+def chat(request: ChatRequest) -> ChatResponse:
+    """Sync wrapper around async `achat`.
+    Safe across contexts: no loop, running loop (same thread), or cross-thread.
+    """
+
+    async def _runner() -> ChatResponse:
+        return await achat(request)
+
+    # Case A: no running loop on this thread → just run it
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(_runner())
+
+    # Case B: we are on a thread that already runs an event loop
+    # Do NOT attempt asyncio.run() or loop.run_until_complete() here.
+    # Option B1: offload to a worker thread and run a private loop there.
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(lambda: asyncio.run(_runner()))
+        return fut.result()
+
+def chat_on_loop(loop: asyncio.AbstractEventLoop, request: ChatRequest) -> ChatResponse:
+    """Optional helper when you have a handle to a loop running on another thread.
+    Safe to call from non-loop threads. Schedules onto `loop` and blocks for result.
+    """
+    cfut = asyncio.run_coroutine_threadsafe(achat(request), loop)
+    return cfut.result()
+
+# For async-aware callers, prefer using the async API directly:
+async def achat_entry(request: ChatRequest) -> ChatResponse:
+    return await achat(request)
+```
+
+Notes and variations:
+- Tests or CLIs that own their loop can explicitly use `create_task` + `run_until_complete` on a loop they control:
+  ```python
+  loop = asyncio.new_event_loop()
+  try:
+      asyncio.set_event_loop(loop)
+      task = loop.create_task(achat(req))
+      result = loop.run_until_complete(task)
+  finally:
+      loop.close()
+      asyncio.set_event_loop(None)
+  ```
+- From async contexts where you must not block the event loop, call the async API directly or offload the sync wrapper:
+  - Python 3.9+: `result = await asyncio.to_thread(chat, req)`
+  - Python 3.8: `loop = asyncio.get_running_loop(); result = await loop.run_in_executor(None, chat, req)`
+
+Test validation patterns (add under Testing Strategy):
+- No-loop context: plain pytest test calls `chat(...)`; assert response; ensure no loop-related errors.
+- Running-loop context: `pytest.mark.asyncio` test calls both:
+  - `await achat(...)` (preferred async path) and
+  - `res = await asyncio.to_thread(chat, ...)` to validate the sync wrapper path without blocking the loop.
+- Nested-loop simulation: inside a running task (`asyncio.create_task(...)`), invoke `await asyncio.to_thread(chat, ...)` and ensure no deadlock; also verify that directly calling `chat(...)` completes (wrapper offloads to thread) albeit blocking the caller.
+- FastAPI contexts:
+  - Async endpoint uses `await achat(...)` (recommended). Validate with `fastapi.TestClient`.
+  - Sync endpoint uses `chat(...)`; FastAPI runs sync endpoints in a threadpool, so wrapper takes the no-loop path (`asyncio.run`). Validate 200 and response parity.
+  - Explicitly avoid calling `chat(...)` from within an async endpoint to prevent blocking the server loop; if present for legacy reasons, tests should still pass but mark as deprecated usage.
+
+Python version constraint:
+- Target Python >= 3.12 for development and CI.
+- Compatible behaviors for 3.8–3.11:
+  - Use `ThreadPoolExecutor` + `asyncio.run` as shown (available since 3.7).
+  - Prefer `asyncio.to_thread` when available (3.9+); fall back to `loop.run_in_executor` on 3.8.
+  - `asyncio.run_coroutine_threadsafe` is available across these versions and should only be used from threads other than the loop’s thread.
 
 ### Phase 2: Call-site migration
 - Replace remaining sync `dispatch_command` in async-capable contexts with `await async_dispatch_command`.
@@ -165,8 +248,9 @@ Merged references:
 
 ## Dependencies
 
-- `pytest-asyncio` / `anyio` already present for async tests.
 - No new runtime dependencies required.
+- Sync wrapper uses stdlib-only (`asyncio`, `threading`/`concurrent.futures`); do not add `anyio` for runtime bridging.
+- `pytest-asyncio` remains for async tests; `anyio` may be used in tests only if already present, but is not required.
 
 ## Acceptance Criteria
 
@@ -175,4 +259,3 @@ Merged references:
 - No direct `TokenBucket` field mutation outside `rate_limiter` internals.
 - Concurrency tests pass; no rate-limit bypass observed.
 - Deprecation warning emitted when `dispatch_command` is invoked (until removal).
-

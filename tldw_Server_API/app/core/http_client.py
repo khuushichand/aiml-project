@@ -276,23 +276,50 @@ def _redact_headers(h: Optional[Dict[str, str]]) -> Dict[str, str]:
 def _sanitize_accept_encoding_for_backend(headers: Optional[Dict[str, str]], backend: str) -> Dict[str, str]:
     """Return a copy of headers with backend-specific Accept-Encoding tweaks.
 
-    Tests expect that when using the 'httpx' backend in this module's simple
-    fetch path, the 'zstd' token is removed from 'Accept-Encoding'.
+    - Case-insensitively reads/removes existing Accept-Encoding headers.
+    - For 'httpx' backend, removes any 'zstd' codings (with or without parameters, e.g. 'zstd;q=0.9').
+    - Writes back a single canonical 'Accept-Encoding' header if tokens remain; otherwise removes it.
+    - Best-effort: on any parsing error, leaves headers unchanged.
     """
     hdrs: Dict[str, str] = dict(headers or {})
-    ae = hdrs.get("Accept-Encoding") or hdrs.get("accept-encoding")
-    if ae and str(backend).lower() == "httpx":
-        try:
-            tokens = [t.strip() for t in ae.split(',') if t.strip()]
-            tokens = [t for t in tokens if t.lower() != 'zstd']
-            if tokens:
-                hdrs["Accept-Encoding"] = ", ".join(tokens)
-            else:
-                # If all tokens removed, drop the header
-                hdrs.pop("Accept-Encoding", None)
-        except Exception:
-            # Best-effort: if parsing fails, leave headers as-is
-            pass
+    if str(backend).lower() != "httpx":
+        return hdrs
+    try:
+        # Find all Accept-Encoding header keys regardless of case
+        ae_keys = [k for k in hdrs.keys() if k.lower() == "accept-encoding"]
+        if not ae_keys:
+            return hdrs
+
+        # Combine values from all variants
+        raw_vals: list[str] = []
+        for k in ae_keys:
+            v = hdrs.get(k)
+            if v is None:
+                continue
+            raw_vals.append(str(v))
+        combined = ",".join(raw_vals)
+
+        # Parse tokens, dropping any with coding 'zstd' (case-insensitive), regardless of parameters
+        filtered: list[str] = []
+        for part in combined.split(','):
+            token = part.strip()
+            if not token:
+                continue
+            coding = token.split(';', 1)[0].strip().lower()
+            if coding == 'zstd':
+                continue
+            filtered.append(token)
+
+        # Commit: remove all original variants
+        for k in ae_keys:
+            hdrs.pop(k, None)
+        # Write canonical header back if any tokens remain
+        if filtered:
+            hdrs["Accept-Encoding"] = ", ".join(filtered)
+        # else: if nothing remains, header stays removed
+    except Exception:
+        # Best-effort: return original headers unchanged
+        return dict(headers or {})
     return hdrs
 
 
@@ -771,6 +798,11 @@ async def afetch(
 
     async def _do_once(ac: "httpx.AsyncClient", target_url: str) -> Tuple[Optional["httpx.Response"], str]:
         req_headers = _inject_trace_headers(headers)
+        # Parity with other paths: drop 'zstd' from Accept-Encoding for httpx
+        try:
+            req_headers = _sanitize_accept_encoding_for_backend(req_headers, "httpx")
+        except Exception:
+            pass
         try:
             # Optional cert pinning per host
             try:
@@ -1002,6 +1034,12 @@ def _fetch_httpx_response(
 
     def _do_once(sc: "httpx.Client", target_url: str) -> Tuple[Optional["httpx.Response"], str]:
         req_headers = _inject_trace_headers(headers)
+        # Parity with simple fetch: drop 'zstd' from Accept-Encoding for httpx
+        try:
+            req_headers = _sanitize_accept_encoding_for_backend(req_headers, "httpx")
+        except Exception:
+            # Best-effort only; ignore sanitizer errors
+            pass
         try:
             # Optional cert pinning per host
             try:

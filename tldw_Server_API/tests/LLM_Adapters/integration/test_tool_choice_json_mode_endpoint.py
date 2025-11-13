@@ -45,8 +45,12 @@ def test_endpoint_passes_tool_choice_and_json_mode(monkeypatch, client, auth_tok
 
     real_key = _env_key_for(provider)
     if real_key:
-        # Real key present: exercise live adapter path, do not monkeypatch legacy
-        chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), provider: real_key}
+        # Real key present: exercise live adapter path.
+        # Use monkeypatch to isolate mutations to API_KEYS and ensure cleanup.
+        base = chat_endpoint.API_KEYS if isinstance(chat_endpoint.API_KEYS, dict) else {}
+        copied = dict(base)
+        monkeypatch.setattr(chat_endpoint, "API_KEYS", copied, raising=False)
+        monkeypatch.setitem(chat_endpoint.API_KEYS, provider, real_key)
         r = client.post_with_auth("/api/v1/chat/completions", auth_token, json=_payload(provider, stream=False))
         assert r.status_code == 200, f"Body: {r.text}"
         data = r.json()

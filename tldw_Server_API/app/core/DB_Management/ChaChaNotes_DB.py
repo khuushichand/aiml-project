@@ -1493,7 +1493,11 @@ CREATE TABLE IF NOT EXISTS note_edges(
   metadata      JSON
 );
 
-/* Canonicalization for undirected edges (enforced at application layer). */
+/* Canonicalization for undirected edges (enforced at application layer).
+   Self-loop prevention (from_note_id != to_note_id) is also enforced at the
+   application layer for portability. We intentionally do not add a DB-level
+   CHECK constraint here because the Postgres migration transformer does not
+   currently translate SQLite CHECK clauses. */
 
 /* Helpful indexes */
 CREATE INDEX IF NOT EXISTS idx_note_edges_user_from_to ON note_edges(user_id, from_note_id, to_note_id);
@@ -3264,6 +3268,10 @@ UPDATE db_schema_version
         """
         if not user_id or not from_note_id or not to_note_id or created_by is None or created_by == "":
             raise InputError("user_id, from_note_id, to_note_id, and created_by are required")
+
+        # Prevent self-loops for manual edges (regardless of directed flag)
+        if from_note_id == to_note_id:
+            raise InputError("from_note_id and to_note_id must differ (self-loops are not allowed)")
 
         # Canonicalize for undirected edges
         src = from_note_id
