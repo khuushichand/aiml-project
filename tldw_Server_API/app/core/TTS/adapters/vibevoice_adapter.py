@@ -37,6 +37,7 @@ from ..tts_exceptions import (
 )
 from ..tts_validation import validate_tts_request
 from ..tts_resource_manager import get_resource_manager
+from ..utils import parse_bool
 #
 #######################################################################################################################
 #
@@ -123,7 +124,7 @@ class VibeVoiceAdapter(TTSAdapter):
         self.batch_size = self.config.get("vibevoice_batch_size", 1)
 
         # Memory optimization settings (4-bit quantization is effectively CUDA-only)
-        requested_quant = bool(self.config.get("vibevoice_use_quantization", False))
+        requested_quant = parse_bool(self.config.get("vibevoice_use_quantization", False), default=False)
         self.use_quantization = requested_quant and self.device == "cuda"
         # If using the pre-quantized 7B-Q8 variant (or Q8 repo), avoid stacking 4-bit quantization
         try:
@@ -135,20 +136,10 @@ class VibeVoiceAdapter(TTSAdapter):
             pass
         self.auto_cleanup = self.config.get("vibevoice_auto_cleanup", True)
         # Auto-download behavior: config override > env overrides > default False
-        def _parse_bool(val, default=True):
-            if isinstance(val, bool):
-                return val
-            if val is None:
-                return default
-            s = str(val).strip().lower()
-            if s in ("1", "true", "yes", "on"): return True
-            if s in ("0", "false", "no", "off"): return False
-            return default
-
         cfg_auto = self.config.get("vibevoice_auto_download")
         env_auto = os.getenv("VIBEVOICE_AUTO_DOWNLOAD") or os.getenv("TTS_AUTO_DOWNLOAD")
         # Default to False to prevent background model downloads unless explicitly allowed
-        self.auto_download = _parse_bool(cfg_auto, _parse_bool(env_auto, False))
+        self.auto_download = parse_bool(cfg_auto, default=parse_bool(env_auto, default=False))
 
         # Advanced attention settings
         self.enable_sage = self.config.get("vibevoice_enable_sage", False)

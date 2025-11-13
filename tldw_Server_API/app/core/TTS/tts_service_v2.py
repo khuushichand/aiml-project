@@ -120,7 +120,11 @@ class TTSServiceV2:
                     except Exception:
                         max_concurrent = 4
                     if env_stream_override is None and "stream_errors_as_audio" in perf_cfg:
-                        stream_errors_as_audio = bool(perf_cfg.get("stream_errors_as_audio"))
+                        try:
+                            from .utils import parse_bool
+                            stream_errors_as_audio = parse_bool(perf_cfg.get("stream_errors_as_audio"), default=True)
+                        except Exception:
+                            stream_errors_as_audio = bool(perf_cfg.get("stream_errors_as_audio"))
         except Exception:
             # Fallback to default on any parsing/config errors
             max_concurrent = 4

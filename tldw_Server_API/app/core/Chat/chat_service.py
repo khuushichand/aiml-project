@@ -19,6 +19,7 @@ import time
 import json as _json
 import os
 from pathlib import Path
+from functools import lru_cache
 
 # Reuse existing helpers from chat_helpers and prompt templating
 from tldw_Server_API.app.core.Chat.chat_helpers import (
@@ -104,6 +105,104 @@ if _env_history_order:
 DEFAULT_HISTORY_MESSAGE_ORDER = _default_history_order
 
 
+# --- Cached helpers (module scope) -------------------------------------------
+@lru_cache(maxsize=16)
+def _load_models_with_case_cached(provider: str) -> List[str]:
+    """Load provider models preserving original key casing when possible.
+
+    Attempts to read the raw model_pricing.json to preserve the original
+    casing of model identifiers. Falls back to the normalized catalog
+    via list_provider_models (lowercase keys) if needed.
+    """
+    try:
+        cfg_path = Path(__file__).resolve().parents[3] / "Config_Files" / "model_pricing.json"
+        if cfg_path.exists():
+            data = _json.loads(cfg_path.read_text())
+            prov_block = data.get(provider) or data.get(provider.capitalize()) or data.get(provider.upper())
+            if isinstance(prov_block, dict):
+                return list(prov_block.keys())
+    except (OSError, ValueError, KeyError, AttributeError) as _e:
+        # Expected file/format issues: fall back to normalized catalog
+        logger.debug(f"Model catalog raw load fallback for provider '{provider}': {_e}")
+    except Exception as _ue:
+        # Log unexpected exceptions for visibility at debug level
+        logger.debug(f"Unexpected error loading model catalog for provider '{provider}': {_ue}")
+
+    # Fallback: use the normalized list (lowercase keys)
+    return list_provider_models(provider) or []
+
+
+@lru_cache(maxsize=1)
+def _load_alias_overrides_cached() -> Dict[str, Dict[str, str]]:
+    """Load model alias overrides from env and pricing catalog.
+
+    Resolution order:
+    1) ENV var CHAT_MODEL_ALIAS_OVERRIDES (JSON)
+    2) Keys in Config_Files/model_pricing.json: model_aliases/aliases/alias_map
+    3) Test-friendly defaults when PYTEST_CURRENT_TEST is set
+    """
+    # 1) ENV
+    try:
+        raw = os.getenv("CHAT_MODEL_ALIAS_OVERRIDES")
+        if raw:
+            data = _json.loads(raw)
+            if isinstance(data, dict):
+                return {
+                    str(k).lower(): {str(ak).lower(): str(av) for ak, av in (v or {}).items()}
+                    for k, v in data.items()
+                    if isinstance(v, dict)
+                }
+    except (ValueError, TypeError) as _e:
+        logger.debug(f"CHAT_MODEL_ALIAS_OVERRIDES parse failed: {_e}")
+    except Exception as _ue:
+        logger.debug(f"Unexpected error parsing CHAT_MODEL_ALIAS_OVERRIDES: {_ue}")
+
+    # 2) File keys in pricing catalog
+    try:
+        cfg_path = Path(__file__).resolve().parents[3] / "Config_Files" / "model_pricing.json"
+        if cfg_path.exists():
+            data = _json.loads(cfg_path.read_text())
+            for key in ("model_aliases", "aliases", "alias_map"):
+                block = data.get(key)
+                if isinstance(block, dict):
+                    return {
+                        str(k).lower(): {str(ak).lower(): str(av) for ak, av in (v or {}).items()}
+                        for k, v in block.items()
+                        if isinstance(v, dict)
+                    }
+    except (OSError, ValueError, KeyError, AttributeError) as _e:
+        logger.debug(f"Alias overrides load fallback: {_e}")
+    except Exception as _ue:
+        logger.debug(f"Unexpected error loading alias overrides: {_ue}")
+
+    # 3) Test-friendly defaults (preserve legacy behavior under pytest only)
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return {
+            "anthropic": {"claude-sonnet": "claude-sonnet-4-5"},
+            # Use a small, fast model via OpenRouter in tests
+            "openrouter": {"dummy": "z-ai/glm-4.6"},
+            "mistral": {"dummy": "mistral-small-latest"},
+        }
+    return {}
+
+
+def invalidate_model_alias_caches() -> None:
+    """Invalidate cached model list and alias overrides for hot-reload.
+
+    Clears lru_cache for both `_load_models_with_case_cached` and
+    `_load_alias_overrides_cached`. Safe to call at runtime (no side effects
+    beyond cache flush). Subsequent requests will repopulate from sources.
+    """
+    try:
+        _load_models_with_case_cached.cache_clear()
+    except Exception:
+        pass
+    try:
+        _load_alias_overrides_cached.cache_clear()
+    except Exception:
+        pass
+
+
 def queue_is_active(queue: Any) -> bool:
     """Return True when the request queue is running and able to process work."""
     try:
@@ -185,32 +284,13 @@ def normalize_request_provider_and_model(
                 inline_provider, inline_model_part = parts_for_alias[0].strip(), parts_for_alias[1].strip()
         provider_for_mapping = ((api_provider or inline_provider or default_provider) or "").strip().lower()
 
-        from functools import lru_cache
-        @lru_cache(maxsize=16)
-        def _load_models_with_case(provider: str) -> List[str]:
-            # Try reading the raw pricing catalog to preserve original key casing
-            try:
-                cfg_path = Path(__file__).resolve().parents[3] / "Config_Files" / "model_pricing.json"
-                if cfg_path.exists():
-                    data = _json.loads(cfg_path.read_text())
-                    prov_block = data.get(provider) or data.get(provider.capitalize()) or data.get(provider.upper())
-                    if isinstance(prov_block, dict):
-                        return list(prov_block.keys())
-            except (OSError, ValueError, KeyError, AttributeError) as _e:
-                # Expected file/format issues: fall back to normalized catalog
-                logger.debug(f"Model catalog raw load fallback for provider '{provider}': {_e}")
-            except Exception as _ue:
-                # Log unexpected exceptions for visibility at debug level
-                logger.debug(f"Unexpected error loading model catalog for provider '{provider}': {_ue}")
-
-            # Fallback: use the normalized list (lowercase keys)
-            return list_provider_models(provider) or []
+        
 
         def _resolve_alias(provider: str, raw_model: str) -> Optional[str]:
             m = (raw_model or "").strip()
             if not m:
                 return None
-            models = _load_models_with_case(provider)
+            models = _load_models_with_case_cached(provider)
             if not models:
                 return None
             m_lower = m.lower()
@@ -240,43 +320,7 @@ def normalize_request_provider_and_model(
         #  - ENV JSON CHAT_MODEL_ALIAS_OVERRIDES = { provider: { alias: concrete_model } }
         #  - Config_Files/model_pricing.json key "model_aliases" or "aliases"
         #  - Test-safe built-ins when PYTEST_CURRENT_TEST is set (keeps historical behavior)
-        @lru_cache(maxsize=1)
-        def _load_alias_overrides() -> Dict[str, Dict[str, str]]:
-            # 1) ENV
-            try:
-                raw = os.getenv("CHAT_MODEL_ALIAS_OVERRIDES")
-                if raw:
-                    data = _json.loads(raw)
-                    if isinstance(data, dict):
-                        return {str(k).lower(): {str(ak).lower(): str(av) for ak, av in (v or {}).items()} for k, v in data.items() if isinstance(v, dict)}
-            except (ValueError, TypeError) as _e:
-                logger.debug(f"CHAT_MODEL_ALIAS_OVERRIDES parse failed: {_e}")
-            except Exception as _ue:
-                logger.debug(f"Unexpected error parsing CHAT_MODEL_ALIAS_OVERRIDES: {_ue}")
-            # 2) File keys in pricing catalog
-            try:
-                cfg_path = Path(__file__).resolve().parents[3] / "Config_Files" / "model_pricing.json"
-                if cfg_path.exists():
-                    data = _json.loads(cfg_path.read_text())
-                    for key in ("model_aliases", "aliases", "alias_map"):
-                        block = data.get(key)
-                        if isinstance(block, dict):
-                            return {str(k).lower(): {str(ak).lower(): str(av) for ak, av in (v or {}).items()} for k, v in block.items() if isinstance(v, dict)}
-            except (OSError, ValueError, KeyError, AttributeError) as _e:
-                logger.debug(f"Alias overrides load fallback: {_e}")
-            except Exception as _ue:
-                logger.debug(f"Unexpected error loading alias overrides: {_ue}")
-            # 3) Test-friendly defaults (preserve legacy behavior under pytest only)
-            if os.getenv("PYTEST_CURRENT_TEST"):
-                return {
-                    "anthropic": {"claude-sonnet": "claude-sonnet-4-5"},
-                    # Use a small, fast model via OpenRouter in tests
-                    "openrouter": {"dummy": "z-ai/glm-4.6"},
-                    "mistral": {"dummy": "mistral-small-latest"},
-                }
-            return {}
-
-        alias_overrides = _load_alias_overrides()
+        alias_overrides = _load_alias_overrides_cached()
 
         # First apply alias override (supports cross-provider targets)
         ov_map = alias_overrides.get(provider_for_mapping, {})

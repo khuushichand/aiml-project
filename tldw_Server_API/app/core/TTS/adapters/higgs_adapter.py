@@ -32,6 +32,7 @@ from ..tts_exceptions import (
     TTSGPUError
 )
 from ..tts_validation import validate_tts_request
+from ..utils import parse_bool
 from ..tts_resource_manager import get_resource_manager
 #
 #######################################################################################################################
@@ -114,18 +115,9 @@ class HiggsAdapter(TTSAdapter):
             self.device = preferred_device if preferred_device else ("cuda" if cuda_available else "cpu")
 
         # Auto-download toggle: config override > env overrides > default True
-        def _parse_bool(val, default=True):
-            if isinstance(val, bool):
-                return val
-            if val is None:
-                return default
-            s = str(val).strip().lower()
-            if s in ("1", "true", "yes", "on"): return True
-            if s in ("0", "false", "no", "off"): return False
-            return default
         cfg_auto = self.config.get("higgs_auto_download")
         env_auto = os.getenv("HIGGS_AUTO_DOWNLOAD") or os.getenv("TTS_AUTO_DOWNLOAD")
-        self.auto_download = _parse_bool(cfg_auto, _parse_bool(env_auto, True))
+        self.auto_download = parse_bool(cfg_auto, default=parse_bool(env_auto, default=True))
 
         # Audio configuration (24kHz for Higgs V2)
         self.sample_rate = 24000

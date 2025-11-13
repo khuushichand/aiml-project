@@ -3321,8 +3321,9 @@ UPDATE db_schema_version
                         cols = {c.get('name') for c in self.backend.get_table_info('sync_log', connection=conn)}
                         if 'entity_uuid' in cols and 'entity_id' not in cols:
                             entity_col = 'entity_uuid'
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("sync_log column introspection failed on {}: {}", self.backend_type.value, e)
+                assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
                 conn.execute(
                     f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     ("note_edges", edge_id, "create", now_iso, self.client_id, 1, json.dumps(payload)),
@@ -3376,8 +3377,9 @@ UPDATE db_schema_version
                             cols = {c.get('name') for c in self.backend.get_table_info('sync_log', connection=conn)}
                             if 'entity_uuid' in cols and 'entity_id' not in cols:
                                 entity_col = 'entity_uuid'
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("sync_log column introspection failed on {}: {}", self.backend_type.value, e)
+                    assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
                     conn.execute(
                         f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
                         ("note_edges", edge_id, "delete", now_iso, self.client_id, 1, json.dumps({"edge_id": edge_id})),
@@ -6453,8 +6455,9 @@ UPDATE db_schema_version
                             cols = {c.get('name') for c in self.backend.get_table_info('sync_log', connection=conn)}
                             if 'entity_uuid' in cols and 'entity_id' not in cols:
                                 entity_col = 'entity_uuid'
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("sync_log column introspection failed on {}: {}", self.backend_type.value, e)
+                    assert entity_col in ('entity_id', 'entity_uuid'), f"Unexpected sync_log id column: {entity_col}"
 
                     sync_log_query = (
                         f"INSERT INTO sync_log (entity, {entity_col}, operation, timestamp, client_id, version, payload) "

@@ -39,6 +39,7 @@ from ..tts_exceptions import (
     TTSValidationError,
 )
 from ..tts_validation import validate_tts_request
+from ..utils import parse_bool
 
 
 class NeuTTSAdapter(TTSAdapter):
@@ -75,7 +76,7 @@ class NeuTTSAdapter(TTSAdapter):
                 f"NeuTTS: loading backbone={self.backbone_repo} codec={self.codec_repo}"
             )
             # Respect auto_download toggle from provider config (default True)
-            auto_download = bool(self.config.get("auto_download", True))
+            auto_download = parse_bool(self.config.get("auto_download", True), default=True)
             self._engine = _NeuTTSAir(
                 backbone_repo=self.backbone_repo,
                 backbone_device=self.backbone_device,

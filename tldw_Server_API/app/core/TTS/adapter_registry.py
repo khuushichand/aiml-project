@@ -20,6 +20,7 @@ from .tts_exceptions import (
     TTSModelNotFoundError
 )
 from .tts_resource_manager import get_resource_manager
+from .utils import parse_bool
 from .tts_config import get_tts_config_manager, TTSConfig
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 #
@@ -259,7 +260,10 @@ class TTSAdapterRegistry:
                 #   (e.g., OPENAI/ELEVENLABS) and keep heavy local providers disabled by default.
                 enabled_key = f"{provider.value}_enabled"
                 if enabled_key in self.config:
-                    if not bool(self.config.get(enabled_key)):
+                    raw_enabled = self.config.get(enabled_key)
+                    # Treat unknown non-empty string tokens as enabled by default
+                    enabled = parse_bool(raw_enabled, default=True)
+                    if not enabled:
                         logger.info(f"Provider {provider.value} is disabled in configuration")
                         return False
                 else:

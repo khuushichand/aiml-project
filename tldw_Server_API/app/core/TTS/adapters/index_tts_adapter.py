@@ -25,6 +25,7 @@ from .base import (
 )
 from ..audio_converter import AudioConverter
 from ..streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
+from ..utils import parse_bool
 from ..tts_exceptions import (
     TTSGenerationError,
     TTSModelLoadError,
@@ -66,18 +67,18 @@ class IndexTTS2Adapter(TTSAdapter):
             or self.model_dir / "config.yaml"
         )
         self.device = cfg.get("index_tts_device") or cfg.get("device")
-        self.use_fp16 = bool(cfg.get("index_tts_use_fp16", cfg.get("use_fp16", False)))
-        self.use_cuda_kernel = bool(
-            cfg.get("index_tts_use_cuda_kernel", cfg.get("use_cuda_kernel", False))
+        self.use_fp16 = parse_bool(cfg.get("index_tts_use_fp16", cfg.get("use_fp16", False)), default=False)
+        self.use_cuda_kernel = parse_bool(
+            cfg.get("index_tts_use_cuda_kernel", cfg.get("use_cuda_kernel", False)), default=False
         )
-        self.use_deepspeed = bool(
-            cfg.get("index_tts_use_deepspeed", cfg.get("use_deepspeed", False))
+        self.use_deepspeed = parse_bool(
+            cfg.get("index_tts_use_deepspeed", cfg.get("use_deepspeed", False)), default=False
         )
         self.quick_streaming_tokens = int(
             cfg.get("index_tts_quick_streaming_tokens", 0)
         )
         self.interval_silence = int(cfg.get("index_tts_interval_silence", 200))
-        self.verbose = bool(cfg.get("index_tts_verbose", False))
+        self.verbose = parse_bool(cfg.get("index_tts_verbose", False), default=False)
         self.max_text_tokens_per_segment = int(
             cfg.get("index_tts_max_text_tokens_per_segment", 120)
         )
