@@ -272,6 +272,10 @@
         <pre id="ragPipelineCreate_response">---</pre>
         <pre id="ragPipelineRun_response">---</pre>
 
+        <div class="text-small" style="margin-top:10px;">
+            Quick samples: <a href="/docs-static/Evals/samples/README.md" target="_blank" rel="noopener">Docs/Evals/samples</a>
+        </div>
+
         <h3>Best Config Preset</h3>
         <div class="form-group">
             <button class="api-button" id="btnExtractBestConfig">Extract Best Config From Last Run</button>
@@ -420,6 +424,80 @@
         <h3>Tip:</h3>
         <p>When the run completes, the results include a <code>leaderboard</code> and <code>best_config</code> with the winning configuration. You can copy these settings to your RAG defaults.</p>
     </div>
+</div>
+
+<!-- RAG Pipeline Presets Tab -->
+<div id="tabEvalsRAGPresets" class="tab-content">
+  <div class="endpoint-section" id="ragPresetList">
+    <h2>
+      <span class="endpoint-method get">GET</span>
+      <span class="endpoint-path">/api/v1/evaluations/rag/pipeline/presets - List Presets</span>
+    </h2>
+    <p>List saved RAG pipeline presets.</p>
+    <button class="api-button" data-req-section="ragPresetList" data-req-method="GET" data-req-path="/api/v1/evaluations/rag/pipeline/presets" data-req-body-type="none">List Presets</button>
+    <h3>Response:</h3>
+    <pre id="ragPresetList_response">---</pre>
+  </div>
+
+  <div class="endpoint-section" id="ragPresetGet">
+    <h2>
+      <span class="endpoint-method get">GET</span>
+      <span class="endpoint-path">/api/v1/evaluations/rag/pipeline/presets/{name} - Get Preset</span>
+    </h2>
+    <div class="form-group">
+      <label for="ragPresetGet_name">Preset Name <span class="required">*</span>:</label>
+      <input type="text" id="ragPresetGet_name" placeholder="rag_pipeline_best">
+    </div>
+    <button class="api-button" data-req-section="ragPresetGet" data-req-method="GET" data-req-path="/api/v1/evaluations/rag/pipeline/presets/{name}" data-req-body-type="none">Get Preset</button>
+    <h3>Response:</h3>
+    <pre id="ragPresetGet_response">---</pre>
+  </div>
+
+  <div class="endpoint-section" id="ragPresetDelete">
+    <h2>
+      <span class="endpoint-method delete">DELETE</span>
+      <span class="endpoint-path">/api/v1/evaluations/rag/pipeline/presets/{name} - Delete Preset</span>
+    </h2>
+    <div class="form-group">
+      <label for="ragPresetDelete_name">Preset Name <span class="required">*</span>:</label>
+      <input type="text" id="ragPresetDelete_name" placeholder="rag_pipeline_best">
+    </div>
+    <button class="api-button btn-danger" data-req-section="ragPresetDelete" data-req-method="DELETE" data-req-path="/api/v1/evaluations/rag/pipeline/presets/{name}" data-req-body-type="none" data-confirm="Delete preset?">Delete Preset</button>
+    <h3>Response:</h3>
+    <pre id="ragPresetDelete_response">---</pre>
+  </div>
+</div>
+
+<!-- Evaluation Runs Tab -->
+<div id="tabEvalsRuns" class="tab-content">
+  <div class="endpoint-section" id="evalRunsList">
+    <h2>
+      <span class="endpoint-method get">GET</span>
+      <span class="endpoint-path">/api/v1/evaluations/{id}/runs - List Runs</span>
+    </h2>
+    <p>List runs for a specific evaluation.</p>
+    <div class="form-group">
+      <label for="evalRunsList_id">Evaluation ID <span class="required">*</span>:</label>
+      <input type="text" id="evalRunsList_id" placeholder="eval_...">
+    </div>
+    <button class="api-button" data-req-section="evalRunsList" data-req-method="GET" data-req-path="/api/v1/evaluations/{id}/runs" data-req-body-type="none">List Runs</button>
+    <h3>Response:</h3>
+    <pre id="evalRunsList_response">---</pre>
+  </div>
+
+  <div class="endpoint-section" id="evalRunGet">
+    <h2>
+      <span class="endpoint-method get">GET</span>
+      <span class="endpoint-path">/api/v1/evaluations/runs/{run_id} - Get Run</span>
+    </h2>
+    <div class="form-group">
+      <label for="evalRunGet_run_id">Run ID <span class="required">*</span>:</label>
+      <input type="text" id="evalRunGet_run_id" placeholder="run_...">
+    </div>
+    <button class="api-button" data-req-section="evalRunGet" data-req-method="GET" data-req-path="/api/v1/evaluations/runs/{run_id}" data-req-body-type="none">Get Run</button>
+    <h3>Response:</h3>
+    <pre id="evalRunGet_response">---</pre>
+  </div>
 </div>
 
 <!-- Datasets Tab -->
