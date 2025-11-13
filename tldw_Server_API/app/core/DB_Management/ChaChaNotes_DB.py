@@ -3282,9 +3282,19 @@ UPDATE db_schema_version
         edge_id = self._generate_uuid()
         now_iso = self._get_current_utc_timestamp_iso()
         type_str = "manual"
+        # Validate weight
+        import math  # at top-level import preferred; see helper snippet below
+        w = 1.0 if weight is None else float(weight)
+        if not math.isfinite(w) or w < 0:
+            raise InputError("weight must be a finite, non-negative number")
 
         try:
             with self.transaction() as conn:
+                # Ensure endpoints exist (avoid dangling edges)
+                if not conn.execute("SELECT 1 FROM notes WHERE id = ? AND deleted = 0", (src,)).fetchone():
+                    raise InputError("from_note_id not found or deleted")
+                if not conn.execute("SELECT 1 FROM notes WHERE id = ? AND deleted = 0", (dst,)).fetchone():
+                    raise InputError("to_note_id not found or deleted")
                 query = (
                     "INSERT INTO note_edges(edge_id, user_id, from_note_id, to_note_id, type, directed, weight, created_at, created_by, metadata) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -3296,7 +3306,7 @@ UPDATE db_schema_version
                     dst,
                     type_str,
                     1 if directed else 0,
-                    float(weight) if weight is not None else 1.0,
+                    w,
                     now_iso,
                     created_by,
                     json.dumps(metadata) if metadata is not None else None,
