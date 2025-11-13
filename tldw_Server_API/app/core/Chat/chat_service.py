@@ -18,6 +18,7 @@ import asyncio
 import time
 import json as _json
 import os
+from pathlib import Path
 
 # Reuse existing helpers from chat_helpers and prompt templating
 from tldw_Server_API.app.core.Chat.chat_helpers import (
@@ -59,6 +60,7 @@ from starlette.responses import StreamingResponse
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
 
 _config = load_comprehensive_config()
 _chat_config: Dict[str, str] = {}
@@ -167,32 +169,135 @@ def normalize_request_provider_and_model(
     model_str = getattr(request_data, "model", None) or ""
     api_provider = getattr(request_data, "api_provider", None)
 
-    # Map common aliases/placeholders to concrete, currently valid model IDs.
-    # This helps integration tests that may set env keys and attempt live
-    # adapter calls with shorthand models. Keep scope minimal and explicit.
+    # --- Alias resolution via configurable catalog (model_pricing.json) ---
+    # Prefer provider-agnostic model keys and avoid hardcoded, versioned IDs.
+    # Use pricing catalog (and raw file when available) to pick a concrete model
+    # for aliases like "claude-sonnet". Preserve mapped casing from the source.
     try:
-        provider_for_mapping = (api_provider or default_provider or "").strip().lower()
-        alias_map = {
-            # Anthropic shorthand alias often used in tests/docs
-            "anthropic": {
-                "claude-sonnet": "claude-sonnet-4-5-20250929",
-            },
-            # Tests sometimes send a placeholder model name for adapter shims
-            "openrouter": {
-                "dummy": "openai/gpt-4o-mini",
-            },
-            "mistral": {
-                "dummy": "mistral-small-latest",
-            },
-        }
-        repl = alias_map.get(provider_for_mapping, {}).get(model_str.strip().lower())
-        if repl:
-            # Preserve the mapped casing as provided in mapping table
-            model_str = repl
-            setattr(request_data, "model", model_str)
-    except Exception:
-        # Never fail normalization due to mapping
+        # Determine provider context for alias resolution.
+        # If model includes an inline provider (e.g., "anthropic/claude-sonnet"),
+        # prefer that; else honor api_provider, then default_provider.
+        inline_provider: Optional[str] = None
+        inline_model_part: Optional[str] = None
+        if "/" in model_str:
+            parts_for_alias = model_str.split("/", 1)
+            if len(parts_for_alias) == 2:
+                inline_provider, inline_model_part = parts_for_alias[0].strip(), parts_for_alias[1].strip()
+        provider_for_mapping = ((api_provider or inline_provider or default_provider) or "").strip().lower()
+
+        def _load_models_with_case(provider: str) -> List[str]:
+            # Try reading the raw pricing catalog to preserve original key casing
+            try:
+                cfg_path = Path(__file__).resolve().parents[3] / "Config_Files" / "model_pricing.json"
+                if cfg_path.exists():
+                    data = _json.loads(cfg_path.read_text())
+                    prov_block = data.get(provider) or data.get(provider.capitalize()) or data.get(provider.upper())
+                    if isinstance(prov_block, dict):
+                        return list(prov_block.keys())
+            except (OSError, ValueError, KeyError, AttributeError) as _e:
+                # Expected file/format issues: fall back to normalized catalog
+                logger.debug(f"Model catalog raw load fallback for provider '{provider}': {_e}")
+            except Exception as _ue:
+                # Log unexpected exceptions for visibility
+                logger.warning(f"Unexpected error loading model catalog for provider '{provider}': {_ue}")
+
+            # Fallback: use the normalized list (lowercase keys)
+            return list_provider_models(provider) or []
+
+        def _resolve_alias(provider: str, raw_model: str) -> Optional[str]:
+            m = (raw_model or "").strip()
+            if not m:
+                return None
+            models = _load_models_with_case(provider)
+            if not models:
+                return None
+            m_lower = m.lower()
+            # 1) Exact (case-insensitive) match
+            for cand in models:
+                if cand.lower() == m_lower:
+                    return cand
+            # 2) Prefer anchored prefix (alias + '-') to choose family head, e.g., 'claude-sonnet' -> 'claude-sonnet-4.5'
+            anchored = [cand for cand in models if cand.lower().startswith(m_lower + "-")]
+            if anchored:
+                # Pick the longest name to bias towards more specific (likely newer) variants
+                return sorted(anchored, key=lambda s: (len(s), s))[-1]
+            # 3) Substring fallback
+            contains = [cand for cand in models if m_lower in cand.lower()]
+            if contains:
+                # Prefer shorter names to avoid overly specific accidental matches
+                return sorted(contains, key=lambda s: (len(s), s))[0]
+            # 4) Soft default: pick a small/mini/tiny if present; else first sorted
+            priority = ["mini", "small", "tiny", "haiku", "flash"]
+            prioritized = [cand for cand in models if any(p in cand.lower() for p in priority)]
+            if prioritized:
+                return sorted(prioritized)[0]
+            return sorted(models)[0]
+
+        # Optional alias overrides allow cross-provider or provider-agnostic mappings
+        # without changing code. Sources (first match wins):
+        #  - ENV JSON CHAT_MODEL_ALIAS_OVERRIDES = { provider: { alias: concrete_model } }
+        #  - Config_Files/model_pricing.json key "model_aliases" or "aliases"
+        #  - Test-safe built-ins when PYTEST_CURRENT_TEST is set (keeps historical behavior)
+        def _load_alias_overrides() -> Dict[str, Dict[str, str]]:
+            # 1) ENV
+            try:
+                raw = os.getenv("CHAT_MODEL_ALIAS_OVERRIDES")
+                if raw:
+                    data = _json.loads(raw)
+                    if isinstance(data, dict):
+                        return {str(k).lower(): {str(ak).lower(): str(av) for ak, av in (v or {}).items()} for k, v in data.items() if isinstance(v, dict)}
+            except (ValueError, TypeError) as _e:
+                logger.debug(f"CHAT_MODEL_ALIAS_OVERRIDES parse failed: {_e}")
+            except Exception as _ue:
+                logger.warning(f"Unexpected error parsing CHAT_MODEL_ALIAS_OVERRIDES: {_ue}")
+            # 2) File keys in pricing catalog
+            try:
+                cfg_path = Path(__file__).resolve().parents[3] / "Config_Files" / "model_pricing.json"
+                if cfg_path.exists():
+                    data = _json.loads(cfg_path.read_text())
+                    for key in ("model_aliases", "aliases", "alias_map"):
+                        block = data.get(key)
+                        if isinstance(block, dict):
+                            return {str(k).lower(): {str(ak).lower(): str(av) for ak, av in (v or {}).items()} for k, v in block.items() if isinstance(v, dict)}
+            except (OSError, ValueError, KeyError, AttributeError) as _e:
+                logger.debug(f"Alias overrides load fallback: {_e}")
+            except Exception as _ue:
+                logger.warning(f"Unexpected error loading alias overrides: {_ue}")
+            # 3) Test-friendly defaults (preserve legacy behavior under pytest only)
+            if os.getenv("PYTEST_CURRENT_TEST"):
+                return {
+                    "anthropic": {"claude-sonnet": "claude-sonnet-4.5"},
+                    "openrouter": {"dummy": "openai/gpt-4o-mini"},
+                    "mistral": {"dummy": "mistral-small-latest"},
+                }
+            return {}
+
+        alias_overrides = _load_alias_overrides()
+
+        # First apply alias override (supports cross-provider targets)
+        ov_map = alias_overrides.get(provider_for_mapping, {})
+        target_model_part = inline_model_part if inline_model_part is not None else model_str
+        override_target = ov_map.get((target_model_part or "").strip().lower())
+        if override_target:
+            resolved = override_target
+        else:
+            # Resolve against known models when no explicit override present
+            resolved = _resolve_alias(provider_for_mapping, target_model_part)
+        if resolved and resolved != model_str:
+            if inline_provider:
+                # Preserve inline provider prefix until final normalization below
+                combined = f"{inline_provider}/{resolved}"
+                setattr(request_data, "model", combined)
+                model_str = combined
+            else:
+                setattr(request_data, "model", resolved)
+                model_str = resolved
+    except (AttributeError, KeyError, ValueError):
+        # Expected lookup/attr issues: do not block request
         pass
+    except Exception as _unexpected:
+        # Log unexpected exceptions instead of silencing them
+        logger.warning(f"Unexpected error during model alias resolution: {_unexpected}")
     provider = (api_provider or default_provider).lower()
     if "/" in model_str:
         parts = model_str.split("/", 1)

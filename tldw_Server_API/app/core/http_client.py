@@ -717,6 +717,12 @@ def create_client(
         kwargs["verify"] = verify_ctx
     if base_url is not None:
         kwargs["base_url"] = base_url
+    # Debug which factory is being used, to verify test monkeypatches
+    try:
+        from loguru import logger as _logger  # local import to avoid global cost
+        _logger.debug("http_client.create_client: httpx.Client factory={} kwargs_keys={}", getattr(_hx, "Client", None), list(kwargs.keys()))
+    except Exception:
+        pass
     client = _instantiate_client(getattr(_hx, "Client", object), kwargs)
     try:
         if cert_pinning:

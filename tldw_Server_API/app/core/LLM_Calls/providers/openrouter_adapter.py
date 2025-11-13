@@ -142,11 +142,9 @@ class OpenRouterAdapter(ChatProvider):
         if tools is not None and tool_choice != "none":
             payload["tools"] = tools
         rf = request.get("response_format")
-        # Some OpenRouter model backends are strict about response_format. To
-        # maximize compatibility in integration tests, only forward when it is
-        # not the simple json_object flag. Full structured outputs still work
-        # via tool calling or schema paths.
-        if rf is not None and not (isinstance(rf, dict) and rf.get("type") == "json_object"):
+        # Forward response_format as-is for parity with other adapters and tests
+        # (e.g., JSON mode: {"type": "json_object"}).
+        if rf is not None:
             payload["response_format"] = rf
         if request.get("seed") is not None:
             payload["seed"] = request.get("seed")
