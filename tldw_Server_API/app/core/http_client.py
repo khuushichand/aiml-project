@@ -715,9 +715,9 @@ def create_client(
     # Build a timeout value tolerant of stubbed httpx without Timeout class
     if hasattr(_hx, "Timeout"):
         try:
-            to = timeout if isinstance(timeout, _hx.Timeout) else (timeout or _httpx_timeout_from_defaults())
+            to = timeout if isinstance(timeout, _hx.Timeout) else (timeout if timeout is not None else _httpx_timeout_from_defaults())
         except Exception:
-            to = timeout or DEFAULT_READ_TIMEOUT
+            to = timeout if timeout is not None else DEFAULT_READ_TIMEOUT
         if not isinstance(to, getattr(_hx, "Timeout", object)):
             try:
                 to = _hx.Timeout(float(to))
