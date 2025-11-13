@@ -497,6 +497,12 @@
     <button class="api-button" data-req-section="evalRunGet" data-req-method="GET" data-req-path="/api/v1/evaluations/runs/{run_id}" data-req-body-type="none">Get Run</button>
     <h3>Response:</h3>
     <pre id="evalRunGet_response">---</pre>
+    <div class="form-group" style="margin-top:10px;">
+      <button class="api-button" id="btnEvalRunRenderLeaderboard">Render Leaderboard Preview</button>
+      <button class="api-button" id="btnEvalRunExportCsv">Export Leaderboard CSV</button>
+      <button class="api-button" id="btnEvalRunExportPerConfigCsv">Export Per-Config CSV</button>
+    </div>
+    <div id="evalRunGet_preview" style="overflow:auto; max-height:320px; border:1px solid var(--color-border); padding:8px; border-radius:6px; background: var(--color-surface-alt);"></div>
   </div>
 </div>
 

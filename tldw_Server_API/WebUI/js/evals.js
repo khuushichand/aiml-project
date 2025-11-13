@@ -213,6 +213,154 @@
     }
   }
 
+  // --------- Run details helpers (leaderboard preview + CSV exports) ---------
+  function _parseRunFromPre() {
+    const pre = document.getElementById('evalRunGet_response');
+    if (!pre) throw new Error('Run response area not found');
+    const text = (pre.textContent || pre.innerText || '').trim();
+    if (!text || text === '---') throw new Error('No run JSON loaded yet');
+    try { return JSON.parse(text); } catch (e) { throw new Error('Invalid JSON in run response'); }
+  }
+
+  function _getRunResults(runObj) {
+    if (!runObj) return {};
+    // Prefer nested results; fallback to object root for direct structures
+    return runObj.results || runObj;
+  }
+
+  function _createEl(tag, attrs = {}, html = '') {
+    const el = document.createElement(tag);
+    Object.entries(attrs || {}).forEach(([k,v]) => el.setAttribute(k, String(v)));
+    if (html) el.innerHTML = html;
+    return el;
+  }
+
+  function renderRunLeaderboardPreview() {
+    let run; try { run = _parseRunFromPre(); } catch (e) { alert(e.message); return; }
+    const res = _getRunResults(run);
+    const lb = Array.isArray(res?.leaderboard) ? res.leaderboard : [];
+    const box = document.getElementById('evalRunGet_preview');
+    if (!box) return;
+    if (!lb.length) { box.innerHTML = '<em>No leaderboard in run results.</em>'; return; }
+    const top = lb.slice(0, 10);
+    const table = _createEl('table', { style: 'width:100%; border-collapse:collapse;' });
+    const thead = _createEl('thead');
+    thead.innerHTML = '<tr>'+
+      '<th style="text-align:left; padding:6px; border-bottom:1px solid var(--color-border);">#</th>'+
+      '<th style="text-align:left; padding:6px; border-bottom:1px solid var(--color-border);">Config ID</th>'+
+      '<th style="text-align:right; padding:6px; border-bottom:1px solid var(--color-border);">Score</th>'+
+      '<th style="text-align:right; padding:6px; border-bottom:1px solid var(--color-border);">Overall</th>'+
+      '<th style="text-align:right; padding:6px; border-bottom:1px solid var(--color-border);">Latency (ms)</th>'+
+      '<th style="text-align:left; padding:6px; border-bottom:1px solid var(--color-border);">Modes</th>'+
+      '<th style="text-align:left; padding:6px; border-bottom:1px solid var(--color-border);">Model</th>'+
+    '</tr>';
+    table.appendChild(thead);
+    const tbody = _createEl('tbody');
+    top.forEach((row, idx) => {
+      const cfg = row.config || {};
+      const retr = cfg.retriever || {};
+      const rerk = cfg.reranker || {};
+      const rag = cfg.rag || {};
+      const tr = _createEl('tr');
+      const modes = [retr.search_mode, rerk.strategy].filter(Boolean).join(' + ');
+      tr.innerHTML = '<td style="padding:6px;">'+(idx+1)+'</td>'+
+        '<td style="padding:6px;">'+(row.config_id || '')+'</td>'+
+        '<td style="padding:6px; text-align:right;">'+(Number(row.config_score||0).toFixed(3))+'</td>'+
+        '<td style="padding:6px; text-align:right;">'+(Number(row.overall||0).toFixed(3))+'</td>'+
+        '<td style="padding:6px; text-align:right;">'+(Number(row.latency_ms||0).toFixed(0))+'</td>'+
+        '<td style="padding:6px;">'+(modes||'')+'</td>'+
+        '<td style="padding:6px;">'+(Array.isArray(rag.model)? rag.model[0] : (rag.model||''))+'</td>';
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    box.innerHTML = '';
+    box.appendChild(table);
+  }
+
+  function _downloadCsv(filename, csvText) {
+    const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); document.body.removeChild(a); }, 0);
+  }
+
+  function _csvEscape(val) {
+    const s = val == null ? '' : String(val);
+    if (/[",\n]/.test(s)) return '"' + s.replaceAll('"', '""') + '"';
+    return s;
+  }
+
+  function exportRunLeaderboardCsv() {
+    let run; try { run = _parseRunFromPre(); } catch (e) { alert(e.message); return; }
+    const res = _getRunResults(run);
+    const lb = Array.isArray(res?.leaderboard) ? res.leaderboard : [];
+    if (!lb.length) { alert('No leaderboard found in run results'); return; }
+    const header = [
+      'rank','config_id','config_score','overall','latency_ms',
+      'retrieval_mode','hybrid_alpha','retriever_top_k','rerank_strategy','rerank_top_k',
+      'gen_model','gen_temperature','gen_max_tokens','chunk_method','chunk_size','chunk_overlap'
+    ];
+    const rows = [header];
+    lb.forEach((row, idx) => {
+      const cfg = row.config || {};
+      const retr = cfg.retriever || {};
+      const rerk = cfg.reranker || {};
+      const rag = cfg.rag || {};
+      const chunk = cfg.chunking || {};
+      rows.push([
+        String(idx+1),
+        row.config_id || '',
+        Number(row.config_score||0).toFixed(6),
+        Number(row.overall||0).toFixed(6),
+        Number(row.latency_ms||0).toFixed(0),
+        retr.search_mode || '',
+        retr.hybrid_alpha != null ? retr.hybrid_alpha : '',
+        retr.top_k != null ? retr.top_k : '',
+        rerk.strategy || '',
+        rerk.top_k != null ? rerk.top_k : '',
+        Array.isArray(rag.model)? rag.model[0] : (rag.model||''),
+        rag.temperature != null ? rag.temperature : '',
+        rag.max_tokens != null ? rag.max_tokens : '',
+        chunk.method || '',
+        chunk.chunk_size != null ? chunk.chunk_size : '',
+        chunk.overlap != null ? chunk.overlap : ''
+      ].map(_csvEscape).join(','));
+    });
+    const csv = rows.map(r => Array.isArray(r) ? r : r.split(',')).join('\n');
+    const rid = run.id || 'run';
+    _downloadCsv(`rag_leaderboard_${rid}.csv`, csv);
+  }
+
+  function exportRunPerConfigCsv() {
+    let run; try { run = _parseRunFromPre(); } catch (e) { alert(e.message); return; }
+    const res = _getRunResults(run);
+    const items = Array.isArray(res?.by_config) ? res.by_config : [];
+    if (!items.length) { alert('No by_config records found'); return; }
+    const header = [
+      'config_id','overall','latency_ms','retrieval_coverage','retrieval_diversity','mrr','ndcg','chunk_cohesion','chunk_separation'
+    ];
+    const rows = [header.join(',')];
+    items.forEach(c => {
+      const agg = c.aggregate || {};
+      rows.push([
+        c.config_id || '',
+        Number(agg.overall||0).toFixed(6),
+        Number(agg.latency_ms||0).toFixed(0),
+        Number(agg.retrieval_coverage||0).toFixed(6),
+        Number(agg.retrieval_diversity||0).toFixed(6),
+        Number(agg.mrr||0).toFixed(6),
+        Number(agg.ndcg||0).toFixed(6),
+        Number(agg.chunk_cohesion||0).toFixed(6),
+        Number(agg.chunk_separation||0).toFixed(6)
+      ].map(_csvEscape).join(','));
+    });
+    const csv = rows.join('\n');
+    const rid = run.id || 'run';
+    _downloadCsv(`rag_by_config_${rid}.csv`, csv);
+  }
+
   // expose globals for inline attributes until we remove them
   window.updateEvalsCreateJSON = updateEvalsCreateJSON;
   window.updateGEvalJSON = updateGEvalJSON;
@@ -226,6 +374,9 @@
   window.refreshServerPresets = refreshServerPresets;
   window.applySelectedServerPreset = applySelectedServerPreset;
   window.initializeEvaluationsTab = initializeEvaluationsTab;
+  window.renderRunLeaderboardPreview = renderRunLeaderboardPreview;
+  window.exportRunLeaderboardCsv = exportRunLeaderboardCsv;
+  window.exportRunPerConfigCsv = exportRunPerConfigCsv;
 })();
 
 // Bind UI events to remove inline handlers for Evals tabs
@@ -245,6 +396,11 @@
   byId('btnLoadPresetFromServer')?.addEventListener('click', loadPresetFromServer);
   byId('btnRefreshServerPresets')?.addEventListener('click', refreshServerPresets);
   byId('btnApplySelectedServerPreset')?.addEventListener('click', applySelectedServerPreset);
+
+  // run details: preview and exports
+  byId('btnEvalRunRenderLeaderboard')?.addEventListener('click', renderRunLeaderboardPreview);
+  byId('btnEvalRunExportCsv')?.addEventListener('click', exportRunLeaderboardCsv);
+  byId('btnEvalRunExportPerConfigCsv')?.addEventListener('click', exportRunPerConfigCsv);
 
   // Delegate to legacy makeRequest for data-req buttons
   document.addEventListener('click', (ev) => {
