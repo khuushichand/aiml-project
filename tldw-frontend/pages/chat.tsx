@@ -412,7 +412,12 @@ export default function ChatPage() {
       try {
         const data = await apiClient.get<any>('/chats?limit=30&offset=0');
         const list: any[] = Array.isArray(data?.chats) ? data.chats : [];
-        const mapped: SessionItem[] = list.map((c) => ({ id: c.id, title: c.title || 'Chat', model: model, created_at: c.created_at || new Date().toISOString() }));
+        const mapped: SessionItem[] = list.map((c) => ({
+          id: c.id,
+          title: c.title || 'Chat',
+          model: c.model || model,
+          created_at: c.created_at || new Date().toISOString(),
+        }));
         if (mapped.length) {
           setSessions((prev) => {
             const ids = new Set(prev.map((p) => p.id));
