@@ -282,8 +282,7 @@ def normalize_request_provider_and_model(
             parts_for_alias = model_str.split("/", 1)
             if len(parts_for_alias) == 2:
                 inline_provider, inline_model_part = parts_for_alias[0].strip(), parts_for_alias[1].strip()
-        provider_for_mapping = ((api_provider or inline_provider or default_provider) or "").strip().lower()
-
+        provider_for_mapping = ((inline_provider or api_provider or default_provider) or "").strip().lower()
         
 
         def _resolve_alias(provider: str, raw_model: str) -> Optional[str]:
