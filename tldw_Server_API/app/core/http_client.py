@@ -200,7 +200,7 @@ try:
 except Exception:
     pass
     try:
-        reg.register_metric(
+        registry.register_metric(
             MetricDefinition(
                 name="http_client_egress_denials_total",
                 type=MetricType.COUNTER,

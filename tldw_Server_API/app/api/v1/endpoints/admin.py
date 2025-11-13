@@ -132,6 +132,9 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrganizationWatchlistsSettingsResponse,
 )
 from tldw_Server_API.app.core.Usage.pricing_catalog import reset_pricing_catalog
+from tldw_Server_API.app.core.Chat.chat_service import (
+    invalidate_model_alias_caches,
+)
 from tldw_Server_API.app.services.admin_roles_permissions_service import (
     list_roles as svc_list_roles,
     create_role as svc_create_role,
@@ -3531,6 +3534,26 @@ async def reload_llm_pricing_catalog() -> dict:
     except Exception as e:
         logger.error(f"Failed to reload pricing catalog: {e}")
         raise HTTPException(status_code=500, detail="Failed to reload pricing catalog")
+
+
+# ---------------------------------------------
+# Chat Model Alias Cache Management
+# ---------------------------------------------
+
+@router.post("/chat/model-aliases/reload", response_model=dict)
+async def reload_chat_model_alias_caches() -> dict:
+    """Invalidate cached chat model lists and alias overrides (admin-only).
+
+    Clears module-scope lru_caches used by chat model alias resolution so
+    updates to Config_Files/model_pricing.json or env vars take effect
+    without restarting the server.
+    """
+    try:
+        invalidate_model_alias_caches()
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Failed to reload chat model alias caches: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reload chat model alias caches")
 
 #
 ## End of admin.py

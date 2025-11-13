@@ -38,6 +38,7 @@ export function Header() {
     { href: '/search', label: 'Search' },
     { href: '/audio', label: 'Audio' },
     { href: '/evaluations', label: 'Evals' },
+    ...(userIsAdmin ? [{ href: '/admin/maintenance', label: 'Admin' } as const] : []),
     { href: '/config', label: 'Config' },
   ];
 

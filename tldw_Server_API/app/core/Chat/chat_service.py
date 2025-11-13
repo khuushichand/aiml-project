@@ -339,11 +339,16 @@ def normalize_request_provider_and_model(
                 request_data.model = combined
                 model_str = combined
             else:
-                # Prevent accidental provider flips unless explicitly allowed
-                if "/" in resolved and not allow_cross:
-                    request_data.model = resolved.split("/", 1)[1]
-                else:
+                # Prevent accidental provider flips unless explicitly allowed.
+                # Special-case OpenRouter: it expects namespaced model ids like
+                # "z-ai/glm-4.6" to be preserved when api_provider is openrouter.
+                if provider_for_mapping == "openrouter":
                     request_data.model = resolved
+                else:
+                    if "/" in resolved and not allow_cross:
+                        request_data.model = resolved.split("/", 1)[1]
+                    else:
+                        request_data.model = resolved
                 model_str = request_data.model
     except (AttributeError, KeyError, ValueError):
         # Expected lookup/attr issues: do not block request

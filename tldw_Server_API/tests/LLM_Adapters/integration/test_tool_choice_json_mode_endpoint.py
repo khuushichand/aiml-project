@@ -36,11 +36,11 @@ def _env_key_for(provider: str) -> str | None:
     return None
 
 
-@pytest.mark.parametrize("provider,legacy_name", [
-    ("mistral", "chat_with_mistral"),
-    ("openrouter", "chat_with_openrouter"),
+@pytest.mark.parametrize("provider", [
+    "mistral",
+    "openrouter",
 ])
-def test_endpoint_passes_tool_choice_and_json_mode(monkeypatch, client, auth_token, provider: str, legacy_name: str):
+def test_endpoint_passes_tool_choice_and_json_mode(monkeypatch, client, auth_token, provider: str):
     import tldw_Server_API.app.api.v1.endpoints.chat as chat_endpoint
 
     real_key = _env_key_for(provider)
