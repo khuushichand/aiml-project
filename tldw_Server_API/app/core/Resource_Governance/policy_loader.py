@@ -65,9 +65,18 @@ class PolicyLoader:
         if self._store is not None:
             # DB-backed: fetch latest policy snapshot
             res = await self._store.get_latest_policy()
-            version, policies, tenant = int(res[0]), dict(res[1] or {}), dict(res[2] or {})
-            updated_at = float(res[3]) if len(res) >= 4 else self._time_source()
-            db_route_map = dict(res[3] or {}) if len(res) == 5 else {}
+            version = int(res[0])
+            policies = dict(res[1] or {})
+            tenant = dict(res[2] or {})
+            # Tuple shapes supported:
+            #  - (version, policies, tenant, updated_at)
+            #  - (version, policies, tenant, route_map, updated_at)
+            if len(res) == 5:
+                db_route_map = dict(res[3] or {})
+                updated_at = float(res[4])
+            else:
+                db_route_map = {}
+                updated_at = float(res[3]) if len(res) >= 4 else self._time_source()
             mtime = float(updated_at)
             # Merge route_map from file and DB consistently (DB overrides file)
             file_route_map: Dict[str, Any] = {}
@@ -98,7 +107,8 @@ class PolicyLoader:
                     out["by_tag"] = by_tag
                 return out
 
-            route_map = _merge_route_map(file_route_map, db_route_map)
+            # Precedence: file route_map overrides DB route_map on conflicts (per README)
+            route_map = _merge_route_map(db_route_map, file_route_map)
         else:
             if not self._path.exists():
                 raise FileNotFoundError(f"Policy file not found: {self._path}")

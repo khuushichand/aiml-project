@@ -24,7 +24,8 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from loguru import logger
 
-from .metrics_rg import ensure_rg_metrics_registered, _labels
+from .metrics_rg import ensure_rg_metrics_registered, _labels, rg_metrics_entity_label_enabled
+from .tenant import hash_entity
 
 try:
     # Metrics are optional during early startup
@@ -265,11 +266,13 @@ class MemoryResourceGovernor(ResourceGovernor):
             burst = float(cfg.get("burst") or 1.0)
             refill_per_sec = rpm / 60.0
             capacity = rpm * max(1.0, burst)
+            effective_limit = int(rpm)
         else:  # tokens
             per_min = float(cfg.get("per_min") or 0)
             burst = float(cfg.get("burst") or 1.0)
             refill_per_sec = per_min / 60.0
             capacity = per_min * max(1.0, burst)
+            effective_limit = int(per_min)
 
         if refill_per_sec <= 0 or capacity <= 0:
             # Policy disabled or zero → deny with large retry
@@ -299,7 +302,8 @@ class MemoryResourceGovernor(ResourceGovernor):
         allowed = effective_remaining >= units
         retry_after = max(retry_after_candidates) if retry_after_candidates else None
         details = {
-            "limit": int(capacity),
+            "limit": int(effective_limit),
+            "burst": float(burst),
             "remaining": int(effective_remaining),
             "retry_after": int(retry_after or 0) if retry_after is not None else None,
         }
@@ -400,6 +404,23 @@ class MemoryResourceGovernor(ResourceGovernor):
                         1,
                         _labels(category=category, scope=entity_scope, reason="insufficient_capacity", policy_id=policy_id),
                     )
+                # Optional by-entity metrics (hashed)
+                try:
+                    if rg_metrics_entity_label_enabled():
+                        ent_h = hash_entity(req.entity)
+                        get_metrics_registry().increment(
+                            "rg_decisions_by_entity_total",
+                            1,
+                            {"category": category, "scope": entity_scope, "backend": backend, "result": ("allow" if allowed else "deny"), "policy_id": policy_id, "entity": ent_h},
+                        )
+                        if not allowed:
+                            get_metrics_registry().increment(
+                                "rg_denials_by_entity_total",
+                                1,
+                                {"category": category, "scope": entity_scope, "reason": "insufficient_capacity", "policy_id": policy_id, "entity": ent_h},
+                            )
+                except Exception:
+                    pass
 
         return RGDecision(allowed=overall_allowed, retry_after=(retry_after_overall or None), details={"policy_id": policy_id, "categories": per_category})
 
@@ -539,6 +560,16 @@ class MemoryResourceGovernor(ResourceGovernor):
                             1,
                             _labels(category=category, scope=entity_scope, reason="commit_diff", policy_id=h.policy_id),
                         )
+                        try:
+                            if rg_metrics_entity_label_enabled():
+                                ent_h = hash_entity(h.entity)
+                                get_metrics_registry().increment(
+                                    "rg_refunds_by_entity_total",
+                                    1,
+                                    {"category": category, "scope": entity_scope, "reason": "commit_diff", "policy_id": h.policy_id, "entity": ent_h},
+                                )
+                        except Exception:
+                            pass
                 # concurrency: nothing to refund here
 
         # Release any concurrency leases
@@ -611,6 +642,16 @@ class MemoryResourceGovernor(ResourceGovernor):
                         1,
                         _labels(category=category, scope=entity_scope, reason="explicit_refund", policy_id=h.policy_id),
                     )
+                    try:
+                        if rg_metrics_entity_label_enabled():
+                            ent_h = hash_entity(h.entity)
+                            get_metrics_registry().increment(
+                                "rg_refunds_by_entity_total",
+                                1,
+                                {"category": category, "scope": entity_scope, "reason": "explicit_refund", "policy_id": h.policy_id, "entity": ent_h},
+                            )
+                    except Exception:
+                        pass
 
         if op_id:
             self._ops[op_id] = {"type": "refund", "handle_id": handle_id}

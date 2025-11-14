@@ -36,8 +36,8 @@ trap cleanup INT TERM EXIT
 echo "Starting server with API key: $SINGLE_USER_API_KEY"
 cd ../..
 
-# Start server and capture both stdout and stderr
-python -m uvicorn app.main:app --reload --port 8000 2>&1 &
+# Start server and capture both stdout and stderr (use full module path)
+python -m uvicorn tldw_Server_API.app.main:app --reload --port 8000 2>&1 &
 SERVER_PID=$!
 
 # Give server a moment to start and check if it's actually running

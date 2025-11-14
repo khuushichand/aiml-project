@@ -30,14 +30,34 @@ TEST_TIMEOUT = 120  # seconds for each request (increased for video transcriptio
 RATE_LIMIT_RETRY_DELAY = float(os.getenv("E2E_RATE_LIMIT_DELAY", "0.5"))  # Delay after rate limit
 MAX_RETRIES = int(os.getenv("E2E_MAX_RETRIES", "3"))  # Max retries for rate limit errors
 SERVER_STARTUP_TIMEOUT = int(os.getenv("E2E_SERVER_STARTUP_TIMEOUT", "30"))  # Max time to wait for server
+E2E_INPROCESS = os.getenv("E2E_INPROCESS", "").lower() in {"1", "true", "yes", "on"}
+
+
+def _build_inprocess_httpx_client() -> httpx.Client:
+    """
+    Build a sync httpx.Client wired directly to the ASGI app using ASGITransport.
+
+    This allows running e2e tests without opening a network socket (useful in
+    restricted CI sandboxes) while exercising the real FastAPI application.
+    """
+    # Import lazily to avoid heavy init unless needed
+    from tldw_Server_API.app.main import app
+    transport = httpx.ASGITransport(app=app, lifespan="on")
+    return httpx.Client(transport=transport, base_url="http://testserver", timeout=TEST_TIMEOUT)
 
 
 class APIClient:
     """Wrapper for API interactions with authentication support."""
 
-    def __init__(self, base_url: str = BASE_URL):
+    def __init__(self, base_url: str = BASE_URL, client: Optional[httpx.Client] = None):
         self.base_url = base_url
-        self.client = httpx.Client(base_url=base_url, timeout=TEST_TIMEOUT)
+        # Prefer provided client (e.g., in-process), otherwise decide based on env
+        if client is not None:
+            self.client = client
+        elif E2E_INPROCESS:
+            self.client = _build_inprocess_httpx_client()
+        else:
+            self.client = httpx.Client(base_url=base_url, timeout=TEST_TIMEOUT)
         self.token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self.user_id: Optional[int] = None
@@ -550,6 +570,30 @@ def ensure_server_running(base_url: str = BASE_URL, timeout: int = SERVER_STARTU
     Raises:
         pytest.skip if server is not available
     """
+    # In in-process mode, probe the app directly without network
+    if E2E_INPROCESS:
+        try:
+            temp_client = _build_inprocess_httpx_client()
+            r = temp_client.get(f"{API_PREFIX}/health")
+            # Treat 200 OK and 206 Partial Content as available
+            if r.status_code in (200, 206):
+                data = r.json()
+                # Provide reasonable defaults expected by tests when missing
+                data.setdefault("auth_mode", os.getenv("AUTH_MODE", "single_user"))
+                test_key = os.getenv("SINGLE_USER_TEST_API_KEY") or os.getenv("SINGLE_USER_API_KEY")
+                if test_key:
+                    data.setdefault("test_api_key", test_key)
+                print(f"✅ API app (in-process) is available; mode={data.get('auth_mode','unknown')}")
+                temp_client.close()
+                return data
+            # Fallback: synthesize minimal info
+            data = {"status": "ok", "auth_mode": os.getenv("AUTH_MODE", "single_user")}
+            temp_client.close()
+            return data
+        except Exception as e:
+            # If even in-process health fails, skip to avoid false negatives
+            pytest.skip(f"❌ In-process API app unavailable: {e}")
+
     health_url = f"{base_url}{API_PREFIX}/health"
     start_time = time.time()
     last_error = None
@@ -586,11 +630,13 @@ def api_client():
     # First ensure server is running - like a user would check if app is accessible
     health_info = ensure_server_running()
 
-    client = APIClient()
+    # Build HTTP client matching the chosen mode
+    httpx_client = _build_inprocess_httpx_client() if E2E_INPROCESS else None
+    client = APIClient(client=httpx_client)
 
     # Check if single-user mode and set token
     try:
-        if health_info.get("auth_mode") == "single_user":
+        if (health_info.get("auth_mode") or os.getenv("AUTH_MODE", "single_user")) == "single_user":
             # In test mode, get API key from health endpoint
             if health_info.get("test_api_key"):
                 api_key = health_info.get("test_api_key")

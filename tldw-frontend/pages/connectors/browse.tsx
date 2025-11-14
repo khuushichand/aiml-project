@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { apiClient } from '@/lib/api'
 
 type Item = { id: string; name?: string; mimeType?: string; is_folder?: boolean; type?: string }
 
@@ -20,14 +21,12 @@ export default function Browse() {
     if (!canBrowse) return
     setBusy(true); setError(null)
     try {
-      const params = new URLSearchParams()
-      params.set('account_id', String(accountId))
-      if (parentId) params.set('parent_remote_id', parentId)
-      if (cursor && !reset) params.set('cursor', cursor)
-      const r = await fetch(`/api/v1/connectors/providers/${provider}/sources/browse?` + params.toString())
-      const j = await r.json()
-      setItems(j.items || [])
-      setCursor(j.next_cursor || null)
+      const params: any = { account_id: accountId }
+      if (parentId) params.parent_remote_id = parentId
+      if (cursor && !reset) params.cursor = cursor
+      const j = await apiClient.get<any>(`/connectors/providers/${provider}/sources/browse`, { params })
+      setItems(j?.items || [])
+      setCursor(j?.next_cursor || null)
     } catch (e: any) {
       setError(e?.message || 'Browse failed')
     } finally { setBusy(false) }
@@ -44,13 +43,8 @@ export default function Browse() {
       path: item.name || item.id,
       options: { recursive: true }
     }
-    const r = await fetch('/api/v1/connectors/sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-    if (!r.ok) {
-      const j = await r.json().catch(() => ({}))
-      throw new Error(j?.detail || 'Create source failed')
-    }
-    const s = await r.json()
-    window.location.href = `/connectors/sources?sid=${s.id}`
+    const s = await apiClient.post<any>('/connectors/sources', payload)
+    window.location.href = `/connectors/sources?sid=${s?.id}`
   }
 
   return (

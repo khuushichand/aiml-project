@@ -317,3 +317,4 @@ Config_Files/session_encryption.key
 /tldw_Server_API/WebUI/node_modules
 /.mkdocs-venv
 /tmp_dir
+/tldw_Server_API/app/core/Ingestion_Media_Processing/Audio/models

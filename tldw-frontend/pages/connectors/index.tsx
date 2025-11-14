@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { apiClient } from '@/lib/api'
 
 type Provider = { name: 'drive' | 'notion'; auth_type: 'oauth2'; scopes_required: string[] }
 type Account = { id: number; provider: 'drive' | 'notion'; display_name: string; email?: string; created_at?: string }
@@ -12,10 +13,10 @@ export default function ConnectorsHome() {
   async function load() {
     setError(null)
     try {
-      const p = await fetch('/api/v1/connectors/providers').then(r => r.json())
-      setProviders(p)
-      const a = await fetch('/api/v1/connectors/accounts').then(r => r.json())
-      setAccounts(a)
+      const p = await apiClient.get<Provider[]>('/connectors/providers')
+      setProviders(Array.isArray(p) ? p : [])
+      const a = await apiClient.get<Account[]>('/connectors/accounts')
+      setAccounts(Array.isArray(a) ? a : [])
     } catch (e: any) {
       setError(e?.message || 'Failed to load')
     }
@@ -26,8 +27,7 @@ export default function ConnectorsHome() {
   async function startAuthorize(provider: 'drive' | 'notion') {
     setBusy(true)
     try {
-      const r = await fetch(`/api/v1/connectors/providers/${provider}/authorize`, { method: 'POST' })
-      const j = await r.json()
+      const j = await apiClient.post<{ auth_url?: string }>(`/connectors/providers/${provider}/authorize`)
       if (j?.auth_url) {
         window.location.href = j.auth_url
       }

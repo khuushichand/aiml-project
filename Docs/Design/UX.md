@@ -81,7 +81,8 @@ https://uxdesign.cc/right-narratives-shape-lasting-products-9a50e28caae9
 https://posthog.com/newsletter/building-ai-features
 
 
-
+https://medium.com/design-bootcamp/10-ui-ux-cheat-codes-for-instantly-better-designs-2c6f6b4312c8
+https://medium.com/ai-ux-designers/37-ai-patterns-for-product-teams-e04c953270b3
 https://uxdesign.cc/designing-the-jarvis-moment-8f1a2f201d4a
 https://uxdesign.cc/making-medical-appointments-this-month-made-me-miss-phone-trees-e1bc3757e505
 https://uxdesign.cc/when-innovation-deceives-escaping-the-value-mirage-bcbf5511aecf

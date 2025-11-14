@@ -6,12 +6,13 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Callable
 
 from loguru import logger
 
 from .governor import ResourceGovernor, RGRequest, RGDecision, MemoryResourceGovernor
-from .metrics_rg import ensure_rg_metrics_registered, _labels
+from .metrics_rg import ensure_rg_metrics_registered, _labels, rg_metrics_entity_label_enabled
+from .tenant import hash_entity
 try:
     # Metrics are optional during early startup
     from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
@@ -24,7 +25,7 @@ from tldw_Server_API.app.core.Infrastructure.redis_factory import create_async_r
 from tldw_Server_API.app.core.config import rg_redis_fail_mode
 
 
-TimeSource = callable
+TimeSource = Callable[[], float]
 
 
 @dataclass
@@ -45,7 +46,12 @@ class _RedisKeys:
 
     def backoff(self, policy_id: str, category: str, entity: str) -> str:
         # Backoff per (policy, category, entity) to stabilize deny-until-expiry behavior
-        return f"{self.ns}:backoff:{policy_id}:{category}:{hash(entity)}"
+        # Use stable HMAC-based hash to avoid per-process randomization
+        try:
+            ent_hash = hash_entity(entity)
+        except Exception:
+            ent_hash = "anon"
+        return f"{self.ns}:backoff:{policy_id}:{category}:{ent_hash}"
 
 
 class RedisResourceGovernor(ResourceGovernor):
@@ -962,7 +968,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 overall_allowed = False
             retry_after_overall = max(retry_after_overall, int(per_category[category].get("retry_after") or 0))
 
-            # Metrics per category (decision) — low-cardinality, no entity label
+            # Metrics per category (decision)
             reg = self._reg()
             if reg:
                 try:
@@ -983,6 +989,23 @@ class RedisResourceGovernor(ResourceGovernor):
                             1,
                             _labels(category=category, scope=entity_scope, reason="insufficient_capacity", policy_id=policy_id),
                         )
+                    # Optional by-entity metrics (hashed)
+                    try:
+                        if rg_metrics_entity_label_enabled():
+                            ent_h = hash_entity(req.entity)
+                            reg.increment(
+                                "rg_decisions_by_entity_total",
+                                1,
+                                {"category": category, "scope": entity_scope, "backend": backend, "result": ("allow" if per_category[category]["allowed"] else "deny"), "policy_id": policy_id, "entity": ent_h},
+                            )
+                            if not per_category[category]["allowed"]:
+                                reg.increment(
+                                    "rg_denials_by_entity_total",
+                                    1,
+                                    {"category": category, "scope": entity_scope, "reason": "insufficient_capacity", "policy_id": policy_id, "entity": ent_h},
+                                )
+                    except Exception:
+                        pass
                 except Exception:
                     pass
 
@@ -1774,6 +1797,16 @@ class RedisResourceGovernor(ResourceGovernor):
                                 1,
                                 _labels(category=category, scope=entity_scope, reason="commit_diff", policy_id=policy_id),
                             )
+                            if rg_metrics_entity_label_enabled():
+                                try:
+                                    ent_h = hash_entity(entity)
+                                    reg.increment(
+                                        "rg_refunds_by_entity_total",
+                                        1,
+                                        {"category": category, "scope": entity_scope, "reason": "commit_diff", "policy_id": policy_id, "entity": ent_h},
+                                    )
+                                except Exception:
+                                    pass
                         except Exception:
                             pass
                     # Remove up to refund_units members per scope (LIFO of what we added)
@@ -1899,6 +1932,19 @@ class RedisResourceGovernor(ResourceGovernor):
                                 1,
                                 _labels(category=category, scope="entity", reason="explicit_refund", policy_id=policy_id),
                             )
+                            if rg_metrics_entity_label_enabled():
+                                try:
+                                    # Try to read entity from handle record
+                                    data = await client.hgetall(hkey)
+                                    entity = data.get("entity") if isinstance(data, dict) else None
+                                    ent_h = hash_entity(str(entity or ""))
+                                    reg.increment(
+                                        "rg_refunds_by_entity_total",
+                                        1,
+                                        {"category": category, "scope": "entity", "reason": "explicit_refund", "policy_id": policy_id, "entity": ent_h},
+                                    )
+                                except Exception:
+                                    pass
                 except Exception:
                     pass
 

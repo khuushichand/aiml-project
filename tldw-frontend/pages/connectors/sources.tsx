@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { apiClient } from '@/lib/api'
 
 type Source = {
   id: number; account_id: number; provider: 'drive' | 'notion'; remote_id: string; type: string; path?: string;
@@ -13,9 +14,8 @@ export default function Sources() {
   async function load() {
     setError(null)
     try {
-      const r = await fetch('/api/v1/connectors/sources')
-      const j = await r.json()
-      setSources(j)
+      const j = await apiClient.get<Source[]>('/connectors/sources')
+      setSources(Array.isArray(j) ? j : [])
     } catch (e: any) {
       setError(e?.message || 'Failed to load sources')
     }
@@ -25,8 +25,7 @@ export default function Sources() {
   async function toggleEnable(s: Source) {
     setBusy(s.id)
     try {
-      const r = await fetch(`/api/v1/connectors/sources/${s.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !s.enabled }) })
-      if (!r.ok) throw new Error('Update failed')
+      await apiClient.patch(`/connectors/sources/${s.id}`, { enabled: !s.enabled })
       await load()
     } catch (e: any) { setError(e?.message || 'Failed to update') } finally { setBusy(null) }
   }
@@ -34,8 +33,7 @@ export default function Sources() {
   async function importNow(s: Source) {
     setBusy(s.id)
     try {
-      const r = await fetch(`/api/v1/connectors/sources/${s.id}/import`, { method: 'POST' })
-      const j = await r.json()
+      const j = await apiClient.post<{ id?: string }>(`/connectors/sources/${s.id}/import`)
       const jobId = j?.id
       if (jobId) window.location.href = `/connectors/jobs?job_id=${jobId}`
     } catch (e: any) { setError(e?.message || 'Failed to import') } finally { setBusy(null) }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { apiClient } from '@/lib/api'
 
 type Job = { id: string; status: string; progress_percent?: number; counts?: Record<string, number> }
 
@@ -13,9 +14,8 @@ export default function Jobs() {
     setError(null)
     if (!jobId) return
     try {
-      const r = await fetch(`/api/v1/connectors/jobs/${jobId}`)
-      if (!r.ok) throw new Error(`Job fetch failed (${r.status})`)
-      setJob(await r.json())
+      const data = await apiClient.get<Job>(`/connectors/jobs/${jobId}`)
+      setJob(data)
     } catch (e: any) {
       setError(e?.message || 'Failed to load job')
     }

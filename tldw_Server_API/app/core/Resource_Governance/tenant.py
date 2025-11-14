@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any, Mapping, Optional
+from loguru import logger
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,9 @@ def get_tenant_id(
     return None
 
 
+_LOG_HASH_SECRET_WARNED = False
+
+
 def hash_entity(value: str, secret: Optional[str] = None) -> str:
     """
     Produce a stable, non-reversible identifier for logging/metrics.
@@ -53,7 +57,20 @@ def hash_entity(value: str, secret: Optional[str] = None) -> str:
     When no secret is supplied, reads from env; if still missing, uses a
     process-unique fallback (less ideal for multi-process correlation).
     """
-    key = (secret or os.getenv("TLDW_LOG_HASH_SECRET") or os.getpid().__repr__()).encode()
+    global _LOG_HASH_SECRET_WARNED
+    env_secret = os.getenv("TLDW_LOG_HASH_SECRET")
+    enforce = str(os.getenv("TLDW_ENFORCE_LOG_HASH_SECRET") or "").strip().lower() in ("1", "true", "yes", "on")
+    if not secret and not env_secret:
+        if enforce:
+            # In enforced mode, fail fast to avoid cross-process instability
+            raise RuntimeError("TLDW_LOG_HASH_SECRET is required but not set (TLDW_ENFORCE_LOG_HASH_SECRET=1)")
+        if not _LOG_HASH_SECRET_WARNED:
+            try:
+                logger.warning("hash_entity using process-local fallback; set TLDW_LOG_HASH_SECRET for stable hashing across processes")
+            except Exception:
+                pass
+            _LOG_HASH_SECRET_WARNED = True
+    key = (secret or env_secret or os.getpid().__repr__()).encode()
     return hmac.new(key, value.encode(), sha256).hexdigest()
 
 

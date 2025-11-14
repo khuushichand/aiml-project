@@ -243,6 +243,7 @@ async def get_policy(policy_id: str = Path(..., description="Policy identifier")
 async def rg_diag_peek(
     entity: str = Query(..., description="Entity key, e.g., 'user:123'"),
     categories: str = Query(..., description="Comma-separated categories, e.g., 'requests,tokens'"),
+    policy_id: Optional[str] = Query(None, description="Optional policy id to use for peek_with_policy when supported"),
     user=Depends(RoleChecker("admin")),
 ):
     try:
@@ -250,10 +251,16 @@ async def rg_diag_peek(
         if gov is None:
             return JSONResponse({"status": "unavailable", "reason": "governor_not_initialized"}, status_code=503)
         cats = [c.strip() for c in categories.split(",") if c.strip()]
-        data = gov.peek(entity, cats)
-        if inspect.isawaitable(data):
-            data = await data
-        return JSONResponse({"status": "ok", "entity": entity, "data": data})
+        # Prefer policy-aware peek when policy_id is provided and supported
+        if policy_id and hasattr(gov, "peek_with_policy") and callable(getattr(gov, "peek_with_policy")):
+            data = gov.peek_with_policy(entity, cats, policy_id)  # type: ignore[attr-defined]
+            if inspect.isawaitable(data):
+                data = await data
+        else:
+            data = gov.peek(entity, cats)
+            if inspect.isawaitable(data):
+                data = await data
+        return JSONResponse({"status": "ok", "entity": entity, "data": data, "policy_id": policy_id})
     except Exception as e:
         logger.exception("rg_diag_peek failed")
         return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)

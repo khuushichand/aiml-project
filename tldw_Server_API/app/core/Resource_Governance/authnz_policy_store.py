@@ -27,7 +27,7 @@ class AuthNZPolicyStore:
         """
         self._pool: Optional[DatabasePool] = pool
 
-    async def get_latest_policy(self) -> Tuple[int, Dict[str, Any], Dict[str, Any], float]:
+    async def get_latest_policy(self) -> Tuple[int, Dict[str, Any], Dict[str, Any], float] | Tuple[int, Dict[str, Any], Dict[str, Any], Dict[str, Any], float]:
         try:
             pool = self._pool or await get_db_pool()
         except Exception as e:
@@ -46,6 +46,7 @@ class AuthNZPolicyStore:
 
         policies: Dict[str, Any] = {}
         tenant: Dict[str, Any] = {}
+        route_map: Dict[str, Any] = {}
         max_version = 1
         latest_updated: float = 0.0
 
@@ -91,6 +92,11 @@ class AuthNZPolicyStore:
                     if isinstance(payload, dict):
                         tenant = payload
                     continue
+                # Recognize route_map row when present
+                if rid_str in {"route_map", "rg.route_map", "__route_map__"}:
+                    if isinstance(payload, dict):
+                        route_map = payload
+                    continue
 
                 # Otherwise, treat as policy payload keyed by id
                 if rid:
@@ -101,4 +107,7 @@ class AuthNZPolicyStore:
 
         if not latest_updated:
             latest_updated = time.time()
+        # Backwards-compatible return: include route_map only when present
+        if route_map:
+            return max_version, policies, tenant, route_map, latest_updated
         return max_version, policies, tenant, latest_updated

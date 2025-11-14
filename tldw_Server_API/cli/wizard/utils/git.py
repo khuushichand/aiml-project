@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from typing import List
+
+
+def is_git_repo(base: Path) -> bool:
+    return (base / ".git").exists()
+
+
+def changed_or_untracked_files(base: Path) -> List[str]:
+    """Return a list of changed or untracked files (best-effort)."""
+    if not is_git_repo(base):
+        return []
+    try:
+        # --porcelain for stable output; include untracked
+        out = subprocess.check_output(["git", "status", "--porcelain"], cwd=str(base), text=True)
+        files: list[str] = []
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Format: XY <path>
+            parts = line.split(maxsplit=1)
+            if len(parts) == 2:
+                files.append(parts[1])
+        return files
+    except Exception:
+        return []
+
