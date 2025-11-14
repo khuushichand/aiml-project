@@ -6,9 +6,9 @@ Registers shared test plugins and provides common fixtures.
 
 """Local pytest configuration for tests subtree.
 
-Note: pytest>=8 forbids defining `pytest_plugins` in non-top-level conftest
-files. Global plugin registration now lives in the repository root
-`conftest.py`. Keep this file focused on environment setup and local fixtures.
+Note: pytest>=8 discourages defining `pytest_plugins` outside top-level conftest
+files. We register shared plugins here to ensure discovery across the suite,
+and keep per-suite conftests focused on markers and env overrides.
 """
 
 import os
@@ -87,6 +87,14 @@ except Exception as e:
 import pytest
 from fastapi.testclient import TestClient
 import contextlib
+
+# Register shared test plugins for the whole suite
+pytest_plugins = (
+    "tldw_Server_API.tests._plugins.e2e_fixtures",
+    "tldw_Server_API.tests._plugins.e2e_state_fixtures",
+    "tldw_Server_API.tests._plugins.chat_fixtures",
+    "tldw_Server_API.tests._plugins.media_fixtures",
+)
 
 
 # Skip Jobs-marked tests by default unless explicitly enabled via RUN_JOBS.

@@ -129,6 +129,19 @@ jobs:
             uv.lock
           extras: dev,multiplayer
 
+      - name: Verify core e2e fixtures are discoverable
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Collect fixtures from the entire tests tree so top-level conftest is loaded
+          FIXTURES_OUTPUT="$(pytest --fixtures -q tldw_Server_API/tests || true)"
+          echo "Checking for 'test_user_credentials' fixture in e2e suite..."
+          if command -v rg >/dev/null 2>&1; then
+            echo "$FIXTURES_OUTPUT" | rg -q '^test_user_credentials$' || { echo 'Fixture test_user_credentials not found'; exit 1; }
+          else
+            echo "$FIXTURES_OUTPUT" | grep -qx 'test_user_credentials' || { echo 'Fixture test_user_credentials not found'; exit 1; }
+          fi
+
       - name: Install pg client and wait for PG
         uses: ./.github/actions/wait-for-postgres
         with:

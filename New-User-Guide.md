@@ -85,17 +85,33 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 - Legacy Web UI: http://127.0.0.1:8000/webui/
 
 ### 3.5 Smoke-test the API
-Use your API key (`SINGLE_USER_API_KEY`) in the header:
-```bash
-curl -X POST "http://127.0.0.1:8000/api/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -H "X-API-KEY: CHANGE_ME_TO_SECURE_API_KEY" \
-  -d '{
-        "model": "openai:gpt-4o-mini",
-        "messages": [{"role": "user", "content": "Say hello from tldw_server"}]
-      }'
-```
-Replace `model` with anything configured in your provider list (see `/api/v1/llm/providers` for active entries).
+Use your API key (`SINGLE_USER_API_KEY`) in the header. Choose one of the two request styles:
+
+- Option A (explicit provider):
+  ```bash
+  curl -X POST "http://127.0.0.1:8000/api/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -H "X-API-KEY: CHANGE_ME_TO_SECURE_API_KEY" \
+    -d '{
+          "api_provider": "openai",
+          "model": "gpt-4o-mini",
+          "messages": [{"role": "user", "content": "Say hello from tldw_server"}]
+        }'
+  ```
+
+- Option B (provider-prefixed model):
+  ```bash
+  curl -X POST "http://127.0.0.1:8000/api/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -H "X-API-KEY: CHANGE_ME_TO_SECURE_API_KEY" \
+    -d '{
+          "model": "openai/gpt-4o-mini",
+          "messages": [{"role": "user", "content": "Say hello from tldw_server"}]
+        }'
+  ```
+
+If you configured a default provider, you can omit `api_provider` and the prefix and just send `"model": "gpt-4o-mini"`.
+List active providers/models via `GET /api/v1/llm/providers`.
 
 ---
 
@@ -158,6 +174,47 @@ tabby_api_IP = http://127.0.0.1:5000/v1/chat/completions
 - **Storage paths**: `[Database] sqlite_path`, `backup_path`, and `chroma_db_path`.
 - **Web access**: `[Server] allow_remote_webui_access=true` plus `webui_ip_allowlist=10.0.0.0/24`.
 - **Setup UI**: `[Setup] allow_remote_setup_access=true` if you must run first-time setup remotely (only on trusted networks).
+
+### 4.6 Set the default LLM provider
+You can set which provider the Chat API uses when a request does not specify one.
+
+- Preferred: set it in `tldw_Server_API/Config_Files/config.txt` under `[API]`:
+  ```ini
+  [API]
+  # All your provider settings...
+  default_api = openai        # e.g., openai | anthropic | groq | mistral | ollama | vllm
+  # Optional: also set the provider's default model
+  openai_model = gpt-4o-mini
+  ```
+
+- Alternative: set an environment variable (overrides when `config.txt` lacks a default):
+  ```bash
+  export DEFAULT_LLM_PROVIDER=openai
+  # then restart the server
+  ```
+
+- RAG-only defaults (optional): the RAG service has its own default in `[RAG]`:
+  ```ini
+  [RAG]
+  default_llm_provider = openai
+  ```
+
+- Verify the default is active:
+  - `GET /api/v1/llm/providers` returns `default_provider` from your config.
+  - Send a chat request without `api_provider` and with an unprefixed model; it should use the default:
+    ```bash
+    curl -X POST "http://127.0.0.1:8000/api/v1/chat/completions" \
+      -H "Content-Type: application/json" \
+      -H "X-API-KEY: CHANGE_ME_TO_SECURE_API_KEY" \
+      -d '{
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Which provider did I hit?"}]
+          }'
+    ```
+
+- Request-level overrides (ignore the default):
+  - Provide `api_provider` explicitly, e.g. `"api_provider": "anthropic"`.
+  - Or prefix the model with the provider using `provider/model`, e.g. `"model": "anthropic/claude-3-5-sonnet"`.
 
 ---
 
