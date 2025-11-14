@@ -10,7 +10,14 @@ import os
 from typing import Dict, Any, Optional
 
 # Re-export shared fixtures so pytest can discover them everywhere
-from .fixtures import api_client, authenticated_client, data_tracker  # noqa: F401
+# Note: pytest only auto-loads fixtures from conftest.py and collected test modules.
+# Importing here exposes them project-wide for the e2e suite.
+from .fixtures import (
+    api_client,
+    authenticated_client,
+    data_tracker,
+    test_user_credentials,  # Required by authenticated_client
+)  # noqa: F401
 
 # Disable rate limiting for all e2e tests
 @pytest.fixture(autouse=True, scope="session")
