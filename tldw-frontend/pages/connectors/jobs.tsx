@@ -34,7 +34,7 @@ export default function Jobs() {
       }
     }
     ping()
-  }, [jobId])
+  }, [jobId, load])
 
   return (
     <div className="p-6 space-y-4">
