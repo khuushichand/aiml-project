@@ -13,3 +13,4 @@ def has_cuda() -> bool:
     # Avoid importing heavy libs; leave real checks to full implementation
     return False
 
+
