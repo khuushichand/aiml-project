@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, useCallback } from 'react'
-import { apiClient, getApiBaseUrl, buildAuthHeaders } from '@/lib/api'
+import { useMemo, useState, useCallback } from 'react'
+import { apiClient } from '@/lib/api'
+import { useConnectorBackend } from '@/hooks/useConnectorBackend'
 
 type Item = { id: string; name?: string; mimeType?: string; is_folder?: boolean; type?: string }
 
@@ -14,7 +15,7 @@ export default function Browse() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [parentId, setParentId] = useState<string | null>(null)
-  const [notEnabled, setNotEnabled] = useState(false)
+  const [notEnabled, _setNotEnabled] = useState(false)
 
   const canBrowse = useMemo(() => accountId > 0 && ['drive','notion'].includes(provider), [accountId, provider])
 
@@ -33,20 +34,9 @@ export default function Browse() {
     } finally { setBusy(false) }
   }, [canBrowse, accountId, parentId, provider])
 
-  useEffect(() => {
-    const ping = async () => {
-      try {
-        const url = `${getApiBaseUrl()}/connectors/providers`
-        const resp = await fetch(url, { headers: buildAuthHeaders('GET') })
-        if (resp.status === 404) { setNotEnabled(true); return }
-        await load(true)
-      } catch {
-        await load(true)
-      }
-    }
-    ping()
-    // re-run browsing when inputs change if enabled
-  }, [load])
+  // Preflight connectors backend; if enabled, trigger initial load
+  const { notEnabled: hookNotEnabled } = useConnectorBackend(() => load(true))
+  const notEnabled = hookNotEnabled
 
   async function addSource(item: Item) {
     const payload = {

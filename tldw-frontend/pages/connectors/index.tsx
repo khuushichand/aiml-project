@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
-import { apiClient, getApiBaseUrl, buildAuthHeaders } from '@/lib/api'
+import { useCallback, useState } from 'react'
+import { apiClient } from '@/lib/api'
+import { useConnectorBackend } from '@/hooks/useConnectorBackend'
 
 type Provider = { name: 'drive' | 'notion'; auth_type: 'oauth2'; scopes_required: string[] }
 type Account = { id: number; provider: 'drive' | 'notion'; display_name: string; email?: string; created_at?: string }
@@ -9,9 +10,8 @@ export default function ConnectorsHome() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [notEnabled, setNotEnabled] = useState(false)
 
-  async function load() {
+  const load = useCallback(async () => {
     setError(null)
     try {
       const p = await apiClient.get<Provider[]>('/connectors/providers')
@@ -21,23 +21,10 @@ export default function ConnectorsHome() {
     } catch (e: any) {
       setError(e?.message || 'Failed to load')
     }
-  }
-
-  useEffect(() => {
-    const ping = async () => {
-      try {
-        const url = `${getApiBaseUrl()}/connectors/providers`
-        const resp = await fetch(url, { headers: buildAuthHeaders('GET') })
-        if (resp.status === 404) { setNotEnabled(true); return }
-        // Only load if endpoint exists
-        await load()
-      } catch {
-        // Network or CORS issues fall back to normal load (may show generic error)
-        await load()
-      }
-    }
-    ping()
   }, [])
+
+  // Use shared hook to run preflight and then invoke load when enabled
+  const { notEnabled } = useConnectorBackend(load)
 
   async function startAuthorize(provider: 'drive' | 'notion') {
     setBusy(true)
