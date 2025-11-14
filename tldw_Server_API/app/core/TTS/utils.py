@@ -31,7 +31,7 @@ def parse_bool(value: Any, default: Optional[bool] = False) -> bool:
     if isinstance(value, (int, float)):
         try:
             return int(value) != 0
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             return bool(default) if default is not None else False
     if isinstance(value, str):
         s = value.strip().lower()
