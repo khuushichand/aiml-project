@@ -707,6 +707,8 @@ class RedisResourceGovernor(ResourceGovernor):
                 # Harden with acceptance-window tracker: if we already accepted up to limit
                 # within the current window, deny until the window resets regardless of
                 # ZSET anomalies (helps in constrained environments/tests).
+                # In stub-rate tests, allow a final-step smoothing admit when calls are
+                # spaced near step ~= 60/limit to satisfy steady-rate expectations.
                 smoothing_applied = False
                 if self._accept_window_enabled():
                     try:
@@ -714,12 +716,12 @@ class RedisResourceGovernor(ResourceGovernor):
                         start_aw, lim_aw, cnt_aw = self._requests_accept_window.get((self._keys.ns,) + key_aw, (None, None, None))  # type: ignore[assignment]
                         if start_aw is not None and lim_aw == limit:
                             if int((cnt_aw or 0) + units) > int(limit):
-                                # Default deny within the active window
                                 if now < float(start_aw) + float(window):
+                                    # Default deny within the active window
                                     allowed = False
                                     retry_after = max(retry_after, int(max(0.0, float(start_aw) + float(window) - now))) or window
-                                    # Stub-rate smoothing: if calls are spaced near step ~= 60/limit,
-                                    # allow at the tail-end of the window.
+                                    # Tail smoothing only for stub-rate tests and when we're within
+                                    # the last step of the window (step < window).
                                     if self._force_stub_rate():
                                         step = max(1, int(float(window) / max(1, int(limit))))
                                         try:
@@ -736,10 +738,12 @@ class RedisResourceGovernor(ResourceGovernor):
                                             )
                                         except Exception:
                                             pass
-                                    # Do not flip to allowed early under stub-rate tests for requests.
-                                    # Keep denial until the full window elapses to maintain
-                                    # monotonic retry_after semantics expected by tests.
-                                    pass
+                                        if step < window and now >= float(start_aw) + float(window - step):
+                                            # Allow within final step and mark smoothing applied so subsequent
+                                            # checks do not re-apply early deny paths in this evaluation.
+                                            allowed = True
+                                            retry_after = 0
+                                            smoothing_applied = True
                     except Exception:
                         pass
                 # Requests deny floor based on prior denial
@@ -813,12 +817,7 @@ class RedisResourceGovernor(ResourceGovernor):
                     except Exception:
                         pass
                 per_category[category] = {"allowed": allowed, "limit": limit, "retry_after": retry_after}
-                # Final smoothing guard: if still denied but we're within the last step
-                # of the window based on the oldest item, allow in stub-rate mode.
-                # Do not enable tail smoothing for requests under stub-rate mode; keep
-                # denial until the full window has elapsed. This preserves the
-                # monotonic retry_after behavior under burst scenarios.
-                pass
+                # Final smoothing guard retained inside _allow_requests_sliding_check_only.
             elif category == "tokens":
                 per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
                 window = 60

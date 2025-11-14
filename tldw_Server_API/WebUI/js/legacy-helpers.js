@@ -185,7 +185,8 @@
                     value = numValue;
                 }
 
-                processedPath = processedPath.replace(`{${param}}`, value);
+                // Ensure path parameters are URL-encoded so spaces/special chars don't break URLs
+                processedPath = processedPath.replace(`{${param}}`, encodeURIComponent(String(value)));
             });
 
             if (bodyType === 'json' || bodyType === 'json_with_query') {
