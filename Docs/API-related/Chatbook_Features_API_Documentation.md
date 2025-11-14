@@ -17,8 +17,9 @@ Notes on conventions used here:
 ## Table of Contents
 1. [Chat Dictionary API](#chat-dictionary-api)
 2. [World Book Manager API](#world-book-manager-api)
-3. [Document Generator API](#document-generator-api)
-4. [Chatbooks Import/Export API](#chatbooks-importexport-api)
+3. [Chat Tools (Slash Commands)](#chat-tools-slash-commands)
+4. [Document Generator API](#document-generator-api)
+5. [Chatbooks Import/Export API](#chatbooks-importexport-api)
 
 ---
 
@@ -302,6 +303,38 @@ DELETE `/api/v1/chat/dictionaries/{dictionary_id}`
 GET `/api/v1/chat/dictionaries/{dictionary_id}/statistics`
 
 Aggregate statistics for a dictionary (counts by type, groups, average probability, usage if available).
+
+#### 16. Validate Dictionary (New)
+POST `/api/v1/chat/dictionaries/validate`
+
+Validate dictionary structure, regex safety, and template syntax. Returns a structured report.
+
+Request body:
+```json
+{
+  "data": {
+    "name": "Example",
+    "entries": [
+      {"type": "literal", "pattern": "today", "replacement": "It is {{ now('%B %d') }}."},
+      {"type": "regex", "pattern": "User:(\\w+)", "replacement": "Hello, {{ match.group(1) }}!"}
+    ]
+  },
+  "schema_version": 1,
+  "strict": false
+}
+```
+
+Response body:
+```json
+{
+  "ok": true,
+  "schema_version": 1,
+  "errors": [],
+  "warnings": [{"code": "regex_ambiguous", "field": "entries[1].pattern", "message": "…"}],
+  "entry_stats": {"total": 2, "regex": 1, "literal": 1},
+  "suggested_fixes": []
+}
+```
 
 ---
 
@@ -909,3 +942,29 @@ For users migrating from the TUI application:
 3. Large operations support async jobs with status polling and secure download URLs.
 4. Import conflict resolution supports `skip`, `overwrite`, `rename`, and `merge`.
 5. Endpoint-level rate limiting is enforced; plan for 429 handling.
+
+---
+
+## Chat Tools (Slash Commands)
+
+Discovery endpoint for slash commands that run before LLM dispatch (e.g., `/time`, `/weather`).
+
+Injection behavior (configurable):
+- `CHAT_COMMAND_INJECTION_MODE=system` (default): insert command result as a separate `system` message and strip the `/command` token from the user's text.
+- `CHAT_COMMAND_INJECTION_MODE=preface`: prefix the user's text with the command result.
+- `CHAT_COMMAND_INJECTION_MODE=replace`: replace the user's text entirely with the command result.
+
+### List Commands (New)
+GET `/api/v1/chat/commands`
+
+Returns available commands (RBAC-filtered where applicable).
+
+Response body:
+```json
+{
+  "commands": [
+    {"name": "time", "description": "Show the current time (optional TZ).", "required_permission": "chat.commands.time"},
+    {"name": "weather", "description": "Show current weather for a location.", "required_permission": "chat.commands.weather"}
+  ]
+}
+```

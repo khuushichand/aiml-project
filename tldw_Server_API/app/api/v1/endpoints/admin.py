@@ -50,6 +50,8 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     ToolCatalogEntryResponse,
     RateLimitResetRequest,
     RateLimitResetResponse,
+    NotesTitleSettingsUpdate,
+    AdminCleanupSettingsUpdate,
 )
 from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyCreateRequest,
@@ -130,6 +132,9 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrganizationWatchlistsSettingsResponse,
 )
 from tldw_Server_API.app.core.Usage.pricing_catalog import reset_pricing_catalog
+from tldw_Server_API.app.core.Chat.chat_service import (
+    invalidate_model_alias_caches,
+)
 from tldw_Server_API.app.services.admin_roles_permissions_service import (
     list_roles as svc_list_roles,
     create_role as svc_create_role,
@@ -1079,16 +1084,13 @@ async def get_cleanup_settings() -> Dict[str, Any]:
 
 
 @router.post("/cleanup-settings")
-async def set_cleanup_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
+async def set_cleanup_settings(payload: AdminCleanupSettingsUpdate) -> Dict[str, Any]:
     """Set cleanup worker settings (enabled, interval_sec)."""
     try:
-        if "enabled" in payload:
-            app_settings["EPHEMERAL_CLEANUP_ENABLED"] = bool(payload["enabled"])  # type: ignore[index]
-        if "interval_sec" in payload:
-            val = int(payload["interval_sec"])  # type: ignore[index]
-            if val < 60 or val > 604800:
-                raise HTTPException(status_code=400, detail="interval_sec must be between 60 and 604800")
-            app_settings["EPHEMERAL_CLEANUP_INTERVAL_SEC"] = val  # type: ignore[index]
+        if payload.enabled is not None:
+            app_settings["EPHEMERAL_CLEANUP_ENABLED"] = bool(payload.enabled)
+        if payload.interval_sec is not None:
+            app_settings["EPHEMERAL_CLEANUP_INTERVAL_SEC"] = int(payload.interval_sec)
         enabled = bool(app_settings.get("EPHEMERAL_CLEANUP_ENABLED", True))
         interval = int(app_settings.get("EPHEMERAL_CLEANUP_INTERVAL_SEC", 1800))
         return {"enabled": enabled, "interval_sec": interval}
@@ -1097,6 +1099,60 @@ async def set_cleanup_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Failed to set cleanup settings: {e}")
         raise HTTPException(status_code=500, detail="Failed to set cleanup settings")
+
+
+# ---------------------------------------------
+# Notes Title Settings
+# ---------------------------------------------
+
+@router.get("/notes/title-settings")
+async def get_notes_title_settings() -> Dict[str, Any]:
+    """Get Notes auto-title settings (LLM enabled flag and default strategy)."""
+    try:
+        llm_enabled = bool(app_settings.get("NOTES_TITLE_LLM_ENABLED", False))
+        default_strategy = str(app_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
+    except Exception as e:
+        logger.error(f"Failed to get notes title settings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get notes title settings") from e
+    else:
+        return {
+            "llm_enabled": llm_enabled,
+            "default_strategy": default_strategy,
+            "strategies": ["heuristic", "llm", "llm_fallback"],
+        }
+
+
+@router.post("/notes/title-settings")
+async def set_notes_title_settings(payload: NotesTitleSettingsUpdate) -> Dict[str, Any]:
+    """Update Notes auto-title settings.
+
+    Payload fields (both optional):
+    - llm_enabled: bool
+    - default_strategy: one of [heuristic, llm, llm_fallback]
+    """
+    try:
+        if payload.llm_enabled is not None:
+            app_settings["NOTES_TITLE_LLM_ENABLED"] = bool(payload.llm_enabled)
+        if payload.default_strategy is not None:
+            app_settings["NOTES_TITLE_DEFAULT_STRATEGY"] = payload.default_strategy
+        # Return effective settings
+        llm_enabled = bool(app_settings.get("NOTES_TITLE_LLM_ENABLED", False))
+        default_strategy = str(app_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
+        # Provide an effective strategy hint for clients when LLM is disabled
+        effective_strategy = (
+            default_strategy if llm_enabled or default_strategy == "heuristic" else "heuristic"
+        )
+        return {
+            "llm_enabled": llm_enabled,
+            "default_strategy": default_strategy,
+            "effective_strategy": effective_strategy,
+            "strategies": ["heuristic", "llm", "llm_fallback"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to set notes title settings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to set notes title settings") from e
 
 
 @router.get("/users/{user_id}")
@@ -3478,6 +3534,26 @@ async def reload_llm_pricing_catalog() -> dict:
     except Exception as e:
         logger.error(f"Failed to reload pricing catalog: {e}")
         raise HTTPException(status_code=500, detail="Failed to reload pricing catalog")
+
+
+# ---------------------------------------------
+# Chat Model Alias Cache Management
+# ---------------------------------------------
+
+@router.post("/chat/model-aliases/reload", response_model=dict)
+async def reload_chat_model_alias_caches() -> dict:
+    """Invalidate cached chat model lists and alias overrides (admin-only).
+
+    Clears module-scope lru_caches used by chat model alias resolution so
+    updates to Config_Files/model_pricing.json or env vars take effect
+    without restarting the server.
+    """
+    try:
+        invalidate_model_alias_caches()
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Failed to reload chat model alias caches: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reload chat model alias caches")
 
 #
 ## End of admin.py

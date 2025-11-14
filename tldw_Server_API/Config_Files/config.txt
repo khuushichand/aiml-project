@@ -51,6 +51,9 @@ max_request_size_bytes = 1000000
 streaming_idle_timeout_seconds = 300
 streaming_heartbeat_interval_seconds = 0
 streaming_max_response_size_mb = 10
+# For queued streaming requests, bound the internal per-request channel size
+# to limit memory use and apply backpressure. Default: 100
+chat_stream_channel_maxsize = 100
 chat_save_default = False
 conversation_creation_max_retries = 3
 db_transaction_max_retries = 3
@@ -61,6 +64,49 @@ rate_limit_per_conversation_per_minute = 20
 history_messages_limit = 20
 # Ordering for loaded history: asc (oldest first) or desc (newest first). Default: desc.
 history_messages_order = desc
+
+[Chat-Commands]
+# Enable slash commands (env: CHAT_COMMANDS_ENABLED)
+commands_enabled = false
+
+# Injection behavior for command results: 'system' (separate system message) or 'preface' (prepend to user text)
+# env: CHAT_COMMAND_INJECTION_MODE
+injection_mode = system
+
+# Per-user, per-command requests per minute (RPM) limit
+# env: CHAT_COMMANDS_RATE_LIMIT
+commands_rate_limit = 10
+
+# Enforce RBAC permissions on commands (env: CHAT_COMMANDS_REQUIRE_PERMISSIONS)
+require_permissions = false
+
+# Fallback default location for /weather when no args provided (env: DEFAULT_LOCATION)
+default_location =
+
+[Chat-Templating]
+# Enable templating in chat dictionaries and chatbooks (env: CHAT_DICT_TEMPLATES_ENABLED)
+enable_templates = false
+
+# Allow random helpers in templates (env: CHAT_DICT_TEMPLATES_ALLOW_RANDOM)
+allow_random = false
+
+# Allow external calls from templates (e.g., weather()) (env: TEMPLATES_ALLOW_EXTERNAL_CALLS)
+allow_external_calls = false
+
+# Hard cap on rendered output length (env: MAX_TEMPLATE_OUTPUT_CHARS)
+max_output_chars = 2000
+
+# Per-render timeout in milliseconds (env: TEMPLATE_RENDER_TIMEOUT_MS)
+render_timeout_ms = 250
+
+# Default timezone for template functions like now_tz (env: TEMPLATE_DEFAULT_TZ)
+default_timezone = UTC
+
+# Default locale (reserved; currently not used unless Babel is enabled) (env: TEMPLATE_DEFAULT_LOCALE)
+default_locale =
+
+# Optional deterministic seeding for random helpers in tests (env: TEMPLATES_RANDOM_SEED)
+random_seed =
 
 [Character-Chat]
 CHARACTER_RATE_LIMIT_OPS = 100
@@ -202,6 +248,14 @@ rate_limit_per_minute = 60
 rate_limit_burst = 10
 access_token_expire_minutes = 30
 refresh_token_expire_days = 7
+
+[Streaming]
+# Unified Streams: standardize SSE handling (heartbeats/idle/errors/metrics)
+# for chat and selected SSE endpoints. Set to true to enable.
+streams_unified = true
+# Optional: allow setting the chat stream channel maxsize here as well
+# (Chat-Module.chat_stream_channel_maxsize takes precedence when present)
+# chat_stream_channel_maxsize = 100
 
 [Embeddings]
 embedding_provider = huggingface
@@ -450,8 +504,8 @@ vllm_max_tokens = 4096
 vllm_api_timeout = 90
 vllm_api_retry = 3
 vllm_api_retry_delay = 1
-ollama_api_IP = http://127.0.0.1:11434/v1/chat/completions
-ollama_model = llama3
+ollama_api_IP =  http://192.168.2.216:11434/v1
+ollama_model = gemma3:1b
 ollama_streaming = False
 ollama_temperature = 0.7
 ollama_top_p = 0.9

@@ -83,11 +83,21 @@ class RGSimpleMiddleware:
     def _derive_policy_id(self, request: Request) -> Optional[str]:
         # Prefer path-based routing (works even before route resolution)
         try:
+            # Use compiled route_map if available
+            if not self._compiled_map:
+                self._init_route_map(request)
+            path = request.url.path or "/"
+            for pat, pol in self._compiled_map:
+                try:
+                    if pat.match(path):
+                        return str(pol)
+                except Exception:
+                    continue
+            # Fallback to simple string matching from snapshot if compiled map unavailable
             loader = getattr(request.app.state, "rg_policy_loader", None)
             snap = loader.get_snapshot() if loader else None
             route_map = getattr(snap, "route_map", {}) or {}
             by_path = dict(route_map.get("by_path") or {})
-            path = request.url.path or "/"
             # Simple wildcard matching: prefix* → startswith(prefix), else exact
             for pat, pol in by_path.items():
                 pat = str(pat)
@@ -156,6 +166,11 @@ class RGSimpleMiddleware:
         request = Request(scope, receive=receive)
         # Make sure loader (and its route_map) tracks current env path
         await self._ensure_loader_matches_env(request)
+        # Compile route map for fast path matches (best-effort)
+        try:
+            self._init_route_map(request)
+        except Exception:
+            pass
         # If governor not initialized, lazily create one using loader + backend env
         gov = getattr(request.app.state, "rg_governor", None)
         if gov is None:

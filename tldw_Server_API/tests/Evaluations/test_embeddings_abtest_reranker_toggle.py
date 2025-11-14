@@ -36,7 +36,7 @@ def test_reranker_toggle_controls_reranking(monkeypatch):
     # Run without reranker
     no_rr_cfg = config.copy()
     no_rr_cfg["retrieval"] = dict(config["retrieval"], apply_reranker=False)
-    resp = client.post(f"/api/v1/evaluations/embeddings/abtest/{test_id}/run", json={"name": "toggle-test", "config": no_rr_cfg})
+    resp = client.post(f"/api/v1/evaluations/embeddings/abtest/{test_id}/run", json={"config": no_rr_cfg})
     assert resp.status_code == 200
 
     # Poll summary
@@ -60,7 +60,7 @@ def test_reranker_toggle_controls_reranking(monkeypatch):
     # Run again with reranker ON; this will create new results appended in DB
     rr_cfg = config.copy()
     rr_cfg["retrieval"] = dict(config["retrieval"], apply_reranker=True)
-    resp = client.post(f"/api/v1/evaluations/embeddings/abtest/{test_id}/run", json={"name": "toggle-test", "config": rr_cfg})
+    resp = client.post(f"/api/v1/evaluations/embeddings/abtest/{test_id}/run", json={"config": rr_cfg})
     assert resp.status_code == 200
 
     for _ in range(50):

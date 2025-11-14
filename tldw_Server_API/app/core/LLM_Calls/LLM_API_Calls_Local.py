@@ -444,6 +444,47 @@ def chat_with_local_llm(
 
     if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
     if isinstance(current_logprobs, str): current_logprobs = current_logprobs.lower() == "true"
+    # Coerce numeric/string config values to correct types
+    try:
+        if isinstance(current_top_p, str):
+            current_top_p = float(current_top_p)
+    except Exception:
+        logging.warning("local_llm: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
+    try:
+        if isinstance(current_top_k, str):
+            current_top_k = int(current_top_k)
+    except Exception:
+        logging.warning("local_llm: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
+    try:
+        if isinstance(current_min_p, str):
+            current_min_p = float(current_min_p)
+    except Exception:
+        logging.warning("local_llm: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
+    try:
+        if isinstance(current_seed, str):
+            current_seed = int(current_seed)
+    except Exception:
+        logging.warning("local_llm: Failed to coerce seed='%s' to int; sending as-is", current_seed)
+    try:
+        if isinstance(current_presence_penalty, str):
+            current_presence_penalty = float(current_presence_penalty)
+    except Exception:
+        logging.warning("local_llm: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
+    try:
+        if isinstance(current_frequency_penalty, str):
+            current_frequency_penalty = float(current_frequency_penalty)
+    except Exception:
+        logging.warning("local_llm: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
+    try:
+        if isinstance(current_n, str):
+            current_n = int(current_n)
+    except Exception:
+        logging.warning("local_llm: Failed to coerce n='%s' to int; sending as-is", current_n)
+    try:
+        if isinstance(current_top_logprobs, str):
+            current_top_logprobs = int(current_top_logprobs)
+    except Exception:
+        logging.warning("local_llm: Failed to coerce top_logprobs='%s' to int; sending as-is", current_top_logprobs)
 
     if custom_prompt_arg:
         logging.info(f"{cfg_section}: 'custom_prompt_arg' received. Ensure it's incorporated into 'input_data' or 'system_message' by the calling function if intended for the prompt, as this handler uses OpenAI message format.")
@@ -553,6 +594,42 @@ def chat_with_llama(
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
     if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    # Coerce numeric/string config values to correct types
+    try:
+        if isinstance(current_top_p, str):
+            current_top_p = float(current_top_p)
+    except Exception:
+        logging.warning("Llama.cpp: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
+    try:
+        if isinstance(current_top_k, str):
+            current_top_k = int(current_top_k)
+    except Exception:
+        logging.warning("Llama.cpp: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
+    try:
+        if isinstance(current_min_p, str):
+            current_min_p = float(current_min_p)
+    except Exception:
+        logging.warning("Llama.cpp: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
+    try:
+        if isinstance(current_seed, str):
+            current_seed = int(current_seed)
+    except Exception:
+        logging.warning("Llama.cpp: Failed to coerce seed='%s' to int; sending as-is", current_seed)
+    try:
+        if isinstance(current_presence_penalty, str):
+            current_presence_penalty = float(current_presence_penalty)
+    except Exception:
+        logging.warning("Llama.cpp: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
+    try:
+        if isinstance(current_frequency_penalty, str):
+            current_frequency_penalty = float(current_frequency_penalty)
+    except Exception:
+        logging.warning("Llama.cpp: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
+    try:
+        if isinstance(current_n, str):
+            current_n = int(current_n)
+    except Exception:
+        logging.warning("Llama.cpp: Failed to coerce n='%s' to int; sending as-is", current_n)
     if custom_prompt:
         logging.info("Llama.cpp: 'custom_prompt' received. Ensure it's incorporated into 'input_data' or 'system_prompt' by the calling function.")
 
@@ -637,6 +714,28 @@ def chat_with_kobold(
         logging.warning("KoboldAI (Native): Streaming with /api/v1/generate is often non-standard. "
                         "Consider using KoboldCpp's OpenAI compatible endpoint (/v1) for reliable streaming. Forcing non-streaming for native.")
         current_streaming = False
+
+    # Coerce numeric/string config values to correct types
+    try:
+        if isinstance(current_top_p, str):
+            current_top_p = float(current_top_p)
+    except Exception:
+        logging.warning("Kobold: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
+    try:
+        if isinstance(current_top_k, str):
+            current_top_k = int(current_top_k)
+    except Exception:
+        logging.warning("Kobold: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
+    try:
+        if isinstance(current_num_responses, str):
+            current_num_responses = int(current_num_responses)
+    except Exception:
+        logging.warning("Kobold: Failed to coerce num_responses='%s' to int; sending as-is", current_num_responses)
+    try:
+        if isinstance(current_seed, str):
+            current_seed = int(current_seed)
+    except Exception:
+        logging.warning("Kobold: Failed to coerce seed='%s' to int; sending as-is", current_seed)
 
     max_context_length = int(cfg.get('max_context_length', 2048)) # Kobold uses max_context_length for context window
     timeout = int(cfg.get('api_timeout', 180))
@@ -804,6 +903,37 @@ def chat_with_oobabooga(
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
     if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    # Coerce numeric/string config values to correct types
+    try:
+        if isinstance(current_top_p, str):
+            current_top_p = float(current_top_p)
+    except Exception:
+        logging.warning("Oobabooga: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
+    try:
+        if isinstance(current_top_k, str):
+            current_top_k = int(current_top_k)
+    except Exception:
+        logging.warning("Oobabooga: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
+    try:
+        if isinstance(current_min_p, str):
+            current_min_p = float(current_min_p)
+    except Exception:
+        logging.warning("Oobabooga: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
+    try:
+        if isinstance(current_seed, str):
+            current_seed = int(current_seed)
+    except Exception:
+        logging.warning("Oobabooga: Failed to coerce seed='%s' to int; sending as-is", current_seed)
+    try:
+        if isinstance(current_presence_penalty, str):
+            current_presence_penalty = float(current_presence_penalty)
+    except Exception:
+        logging.warning("Oobabooga: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
+    try:
+        if isinstance(current_frequency_penalty, str):
+            current_frequency_penalty = float(current_frequency_penalty)
+    except Exception:
+        logging.warning("Oobabooga: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     if custom_prompt:
         logging.info("Oobabooga: 'custom_prompt' received. Ensure it's incorporated into 'input_data' or 'system_prompt'.")
 
@@ -926,6 +1056,47 @@ def chat_with_tabbyapi(
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
     if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    # Coerce numeric/string config values to correct types
+    try:
+        if isinstance(current_top_p, str):
+            current_top_p = float(current_top_p)
+    except Exception:
+        logging.warning("TabbyAPI: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
+    try:
+        if isinstance(current_top_k, str):
+            current_top_k = int(current_top_k)
+    except Exception:
+        logging.warning("TabbyAPI: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
+    try:
+        if isinstance(current_min_p, str):
+            current_min_p = float(current_min_p)
+    except Exception:
+        logging.warning("TabbyAPI: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
+    try:
+        if isinstance(current_seed, str):
+            current_seed = int(current_seed)
+    except Exception:
+        logging.warning("TabbyAPI: Failed to coerce seed='%s' to int; sending as-is", current_seed)
+    try:
+        if isinstance(current_presence_penalty, str):
+            current_presence_penalty = float(current_presence_penalty)
+    except Exception:
+        logging.warning("TabbyAPI: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
+    try:
+        if isinstance(current_frequency_penalty, str):
+            current_frequency_penalty = float(current_frequency_penalty)
+    except Exception:
+        logging.warning("TabbyAPI: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
+    try:
+        if isinstance(current_n, str):
+            current_n = int(current_n)
+    except Exception:
+        logging.warning("TabbyAPI: Failed to coerce n='%s' to int; sending as-is", current_n)
+    try:
+        if isinstance(current_top_logprobs, str):
+            current_top_logprobs = int(current_top_logprobs)
+    except Exception:
+        logging.warning("TabbyAPI: Failed to coerce top_logprobs='%s' to int; sending as-is", current_top_logprobs)
     if custom_prompt_input:
         logging.info("TabbyAPI: 'custom_prompt_input' received. Ensure incorporated if needed.")
 
@@ -1048,6 +1219,47 @@ def chat_with_vllm(
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
     if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    # Coerce numeric/string config values to correct types
+    try:
+        if isinstance(current_top_p, str):
+            current_top_p = float(current_top_p)
+    except Exception:
+        logging.warning("vLLM: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
+    try:
+        if isinstance(current_top_k, str):
+            current_top_k = int(current_top_k)
+    except Exception:
+        logging.warning("vLLM: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
+    try:
+        if isinstance(current_min_p, str):
+            current_min_p = float(current_min_p)
+    except Exception:
+        logging.warning("vLLM: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
+    try:
+        if isinstance(current_seed, str):
+            current_seed = int(current_seed)
+    except Exception:
+        logging.warning("vLLM: Failed to coerce seed='%s' to int; sending as-is", current_seed)
+    try:
+        if isinstance(current_presence_penalty, str):
+            current_presence_penalty = float(current_presence_penalty)
+    except Exception:
+        logging.warning("vLLM: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
+    try:
+        if isinstance(current_frequency_penalty, str):
+            current_frequency_penalty = float(current_frequency_penalty)
+    except Exception:
+        logging.warning("vLLM: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
+    try:
+        if isinstance(current_n, str):
+            current_n = int(current_n)
+    except Exception:
+        logging.warning("vLLM: Failed to coerce n='%s' to int; sending as-is", current_n)
+    try:
+        if isinstance(current_top_logprobs, str):
+            current_top_logprobs = int(current_top_logprobs)
+    except Exception:
+        logging.warning("vLLM: Failed to coerce top_logprobs='%s' to int; sending as-is", current_top_logprobs)
     if isinstance(current_logprobs, str): current_logprobs = current_logprobs.lower() == "true"
     if custom_prompt_input:
         logging.info("vLLM: 'custom_prompt_input' received. Ensure incorporated if needed.")
@@ -1169,6 +1381,37 @@ def chat_with_aphrodite(
 
     if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
     if isinstance(current_logprobs, str): current_logprobs = current_logprobs.lower() == "true"
+    # Coerce numeric/string config values to correct types
+    try:
+        if isinstance(current_top_p, str):
+            current_top_p = float(current_top_p)
+    except Exception:
+        logging.warning("Aphrodite: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
+    try:
+        if isinstance(current_top_k, str):
+            current_top_k = int(current_top_k)
+    except Exception:
+        logging.warning("Aphrodite: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
+    try:
+        if isinstance(current_min_p, str):
+            current_min_p = float(current_min_p)
+    except Exception:
+        logging.warning("Aphrodite: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
+    try:
+        if isinstance(current_seed, str):
+            current_seed = int(current_seed)
+    except Exception:
+        logging.warning("Aphrodite: Failed to coerce seed='%s' to int; sending as-is", current_seed)
+    try:
+        if isinstance(current_presence_penalty, str):
+            current_presence_penalty = float(current_presence_penalty)
+    except Exception:
+        logging.warning("Aphrodite: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
+    try:
+        if isinstance(current_frequency_penalty, str):
+            current_frequency_penalty = float(current_frequency_penalty)
+    except Exception:
+        logging.warning("Aphrodite: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     if custom_prompt:
         logging.info("Aphrodite: 'custom_prompt' received. Ensure incorporated if needed.")
 
@@ -1215,6 +1458,8 @@ def chat_with_ollama(
     temp: Optional[float] = None,
     temperature: Optional[float] = None,  # from map (mapped from generic 'temp')
     system_message: Optional[str] = None, # from map
+    # Back-compat alias if any caller passed 'system'
+    system: Optional[str] = None,
     model: Optional[str] = None,          # from map
     streaming: Optional[bool] = None,    # from map
     stream: Optional[bool] = None,
@@ -1222,9 +1467,13 @@ def chat_with_ollama(
     top_k: Optional[int] = None,          # from map
     # Ollama specific params from map, ensure they are OpenAI compatible if passed to generic func
     num_predict: Optional[int] = None,      # from map (mapped from generic 'max_tokens')
+    # Back-compat alias from some direct callers
+    max_tokens: Optional[int] = None,
     seed: Optional[int] = None,             # from map
     stop: Optional[Union[str, List[str]]] = None, # from map
-    format_str: Optional[str] = None,       # from map (mapped from generic 'response_format', e.g. "json")
+    format_str: Optional[Union[str, Dict[str, Any]]] = None,       # from map (mapped from generic 'response_format', e.g. "json" or {'type': 'json_object'})
+    # Back-compat alias if any caller passed 'format'
+    format: Optional[str] = None,
                                             # _chat_with_openai_compatible_local_server expects dict {"type": "json_object"}
     presence_penalty: Optional[float] = None, # from map
     frequency_penalty: Optional[float] = None, # from map
@@ -1250,6 +1499,9 @@ def chat_with_ollama(
         if streaming is not None and streaming != stream:
             logging.warning("Ollama: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
+    # Harmonize system alias
+    if (system_message is None) and (system is not None):
+        system_message = system
     if model and (model.lower() == "none" or model.strip() == ""): model = None
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('ollama_api', {})
@@ -1267,7 +1519,13 @@ def chat_with_ollama(
     current_streaming = streaming if streaming is not None else cfg.get('streaming', False)
     current_top_p = top_p if top_p is not None else cfg.get('top_p') # Ollama uses 'top_p'
     current_top_k = top_k if top_k is not None else cfg.get('top_k') # Ollama uses 'top_k'
-    current_max_tokens = num_predict if num_predict is not None else int(cfg.get('num_predict', cfg.get('max_tokens', 4096))) # Ollama uses 'num_predict'
+    # Support both num_predict (native) and max_tokens (alias) from callers
+    if num_predict is not None:
+        current_max_tokens = num_predict
+    elif max_tokens is not None:
+        current_max_tokens = max_tokens
+    else:
+        current_max_tokens = int(cfg.get('num_predict', cfg.get('max_tokens', 4096))) # Ollama uses 'num_predict'
     current_seed = seed if seed is not None else cfg.get('seed') # Ollama uses 'seed'
     current_stop = stop if stop is not None else cfg.get('stop') # Ollama uses 'stop' (list of strings)
     current_user_identifier = user_identifier if user_identifier is not None else cfg.get('user_identifier', cfg.get('user'))
@@ -1281,11 +1539,22 @@ def chat_with_ollama(
     # _chat_with_openai_compatible_local_server expects {'type': 'json_object'}
     # We need to translate `format_str` (which is "json" from mapping) to the dict format.
     ollama_response_format_dict: Optional[Dict[str, str]] = None
-    actual_format_str = format_str if format_str is not None else cfg.get('format')
-    if actual_format_str and actual_format_str.lower() == 'json':
-        ollama_response_format_dict = {"type": "json_object"}
-    elif actual_format_str: # if other formats are supported by Ollama and have an OpenAI equivalent
-        logging.warning(f"Ollama: Unsupported format string '{actual_format_str}' from 'format_str'. Only 'json' is translated to OpenAI's response_format dict.")
+    # Prefer explicit format_str argument, then alias 'format', then config key
+    actual_format_value: Optional[Union[str, Dict[str, Any]]] = (
+        format_str if format_str is not None else (format if format is not None else cfg.get('format'))
+    )
+    if isinstance(actual_format_value, dict):
+        # Accept OpenAI-style dict: {'type': 'json_object'}
+        fmt_type = str(actual_format_value.get('type', '')).lower()
+        if fmt_type == 'json_object':
+            ollama_response_format_dict = {"type": "json_object"}
+        elif fmt_type:
+            logging.warning(f"Ollama: Unsupported response_format dict type '{fmt_type}'. Only 'json_object' is recognized.")
+    elif isinstance(actual_format_value, str):
+        if actual_format_value.lower() == 'json':
+            ollama_response_format_dict = {"type": "json_object"}
+        elif actual_format_value:
+            logging.warning(f"Ollama: Unsupported format string '{actual_format_value}'. Only 'json' is translated to OpenAI's response_format dict.")
 
 
     current_presence_penalty = presence_penalty if presence_penalty is not None else cfg.get('presence_penalty') # Ollama uses 'presence_penalty'
@@ -1300,6 +1569,32 @@ def chat_with_ollama(
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
     if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    # Coerce numeric/string config values to correct types for Ollama's JSON schema
+    try:
+        if isinstance(current_top_p, str):
+            current_top_p = float(current_top_p)
+    except Exception:
+        logging.warning("Ollama: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
+    try:
+        if isinstance(current_top_k, str):
+            current_top_k = int(current_top_k)
+    except Exception:
+        logging.warning("Ollama: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
+    try:
+        if isinstance(current_presence_penalty, str):
+            current_presence_penalty = float(current_presence_penalty)
+    except Exception:
+        logging.warning("Ollama: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
+    try:
+        if isinstance(current_frequency_penalty, str):
+            current_frequency_penalty = float(current_frequency_penalty)
+    except Exception:
+        logging.warning("Ollama: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
+    try:
+        if isinstance(current_seed, str):
+            current_seed = int(current_seed)
+    except Exception:
+        logging.warning("Ollama: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     if custom_prompt:
         logging.info("Ollama: 'custom_prompt' received. Ensure incorporated if needed.")
 

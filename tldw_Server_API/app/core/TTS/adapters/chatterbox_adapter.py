@@ -31,6 +31,7 @@ from ..tts_exceptions import (
     TTSModelLoadError,
 )
 from ..tts_validation import validate_tts_request
+from ..utils import parse_bool
 
 
 #######################################################################################################################
@@ -151,18 +152,9 @@ class ChatterboxAdapter(TTSAdapter):
         self.target_latency_ms = 200
 
         # Auto-download toggle: config override > env overrides > default True
-        def _parse_bool(val, default=True):
-            if isinstance(val, bool):
-                return val
-            if val is None:
-                return default
-            s = str(val).strip().lower()
-            if s in ("1", "true", "yes", "on"): return True
-            if s in ("0", "false", "no", "off"): return False
-            return default
         cfg_auto = self.config.get("chatterbox_auto_download") or self.config.get("auto_download")
         env_auto = os.getenv("CHATTERBOX_AUTO_DOWNLOAD") or os.getenv("TTS_AUTO_DOWNLOAD")
-        self.auto_download = _parse_bool(cfg_auto, _parse_bool(env_auto, True))
+        self.auto_download = parse_bool(cfg_auto, default=parse_bool(env_auto, default=True))
 
     async def initialize(self) -> bool:
         """Initialize the Chatterbox TTS adapter (lazy model load)."""

@@ -49,17 +49,19 @@ class KeywordRelevanceScorer(URLScorer):
     def __post_init__(self) -> None:
         self._kw = [k.strip().lower() for k in (self.keywords or []) if k and k.strip()]
 
+    @staticmethod
     @lru_cache(maxsize=10000)
-    def _score_core(self, url_lower: str) -> float:
-        if not self._kw:
+    def _score_core_cached(keywords_key: tuple[str, ...], url_lower: str) -> float:
+        if not keywords_key:
             return 0.0
-        matches = sum(1 for k in self._kw if k in url_lower)
+        matches = sum(1 for k in keywords_key if k in url_lower)
         if matches <= 0:
             return 0.0
-        return min(1.0, matches / float(len(self._kw)))
+        return min(1.0, matches / float(len(keywords_key)))
 
     def score(self, url: str) -> float:
-        return self._score_core((url or "").lower()) * self.weight
+        kw_key = tuple(self._kw)
+        return self._score_core_cached(kw_key, (url or "").lower()) * self.weight
 
 
 @dataclass
@@ -104,19 +106,20 @@ class FreshnessScorer(URLScorer):
         if self.current_year is None:
             self.current_year = datetime.now().year
 
+    @staticmethod
     @lru_cache(maxsize=10000)
-    def _extract_year(self, url: str) -> Optional[int]:
-        # Look for a 4-digit year in path
+    def _extract_year_cached(url: str, current_year: int) -> Optional[int]:
+        """Extract the most recent <= current_year 4-digit year from URL path."""
         try:
             path = (urlparse(url).path or "").lower()
             import re
             years = [int(m.group(0)) for m in re.finditer(r"(?<!\d)(19|20)\d{2}(?!\d)", path)]
-            return max((y for y in years if y <= int(self.current_year)), default=None)
+            return max((y for y in years if y <= int(current_year)), default=None)
         except Exception:
             return None
 
     def score(self, url: str) -> float:
-        y = self._extract_year(url)
+        y = self._extract_year_cached(url, int(self.current_year))
         if y is None:
             return 0.5 * self.weight
         diff = max(0, int(self.current_year) - int(y))

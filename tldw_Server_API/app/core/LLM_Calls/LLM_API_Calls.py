@@ -3486,7 +3486,7 @@ def legacy_chat_with_groq(
     # ... (logging key, model, temp, streaming setup as before) ...
     logging.debug("Groq: Using configured API key")
 
-    current_model = model or groq_config.get('model', 'llama3-8b-8192')
+    current_model = model or groq_config.get('model', 'llama-3.1-8b-instant')
     current_temp = temp if temp is not None else _safe_cast(groq_config.get('temperature'), float, 0.2)
     current_top_p = maxp  # Groq uses top_p
     current_streaming_cfg = groq_config.get('streaming', False)
@@ -3995,7 +3995,7 @@ def legacy_chat_with_openrouter(
     # ... (api key, model, temp, streaming setup) ...
     final_api_key = api_key or openrouter_config.get('api_key')
     if not final_api_key: raise ChatConfigurationError(provider='openrouter', message="OpenRouter API Key required.")
-    current_model = model or openrouter_config.get('model', 'mistralai/mistral-7b-instruct:free')
+    current_model = model or openrouter_config.get('model', 'z-ai/glm-4.6')
     # ... other param resolutions ...
     current_streaming_cfg = openrouter_config.get('streaming', False)
     current_streaming = streaming if streaming is not None else \

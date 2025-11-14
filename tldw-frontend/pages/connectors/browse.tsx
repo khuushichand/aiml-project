@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState, useCallback } from 'react'
+import { apiClient } from '@/lib/api'
+import { useConnectorBackend } from '@/hooks/useConnectorBackend'
 
 type Item = { id: string; name?: string; mimeType?: string; is_folder?: boolean; type?: string }
 
@@ -13,27 +15,28 @@ export default function Browse() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [parentId, setParentId] = useState<string | null>(null)
+  const [notEnabled, _setNotEnabled] = useState(false)
 
   const canBrowse = useMemo(() => accountId > 0 && ['drive','notion'].includes(provider), [accountId, provider])
 
-  async function load(reset = false) {
+  const load = useCallback(async (reset = false, cursorArg?: string | null) => {
     if (!canBrowse) return
     setBusy(true); setError(null)
     try {
-      const params = new URLSearchParams()
-      params.set('account_id', String(accountId))
-      if (parentId) params.set('parent_remote_id', parentId)
-      if (cursor && !reset) params.set('cursor', cursor)
-      const r = await fetch(`/api/v1/connectors/providers/${provider}/sources/browse?` + params.toString())
-      const j = await r.json()
-      setItems(j.items || [])
-      setCursor(j.next_cursor || null)
+      const params: any = { account_id: accountId }
+      if (parentId) params.parent_remote_id = parentId
+      if (!reset && cursorArg) params.cursor = cursorArg
+      const j = await apiClient.get<any>(`/connectors/providers/${provider}/sources/browse`, { params })
+      setItems(j?.items || [])
+      setCursor(j?.next_cursor || null)
     } catch (e: any) {
       setError(e?.message || 'Browse failed')
     } finally { setBusy(false) }
-  }
+  }, [canBrowse, accountId, parentId, provider])
 
-  useEffect(() => { load(true) }, [provider, accountId, parentId])
+  // Preflight connectors backend; if enabled, trigger initial load
+  const { notEnabled: hookNotEnabled } = useConnectorBackend(() => load(true))
+  const notEnabled = hookNotEnabled
 
   async function addSource(item: Item) {
     const payload = {
@@ -44,19 +47,19 @@ export default function Browse() {
       path: item.name || item.id,
       options: { recursive: true }
     }
-    const r = await fetch('/api/v1/connectors/sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-    if (!r.ok) {
-      const j = await r.json().catch(() => ({}))
-      throw new Error(j?.detail || 'Create source failed')
-    }
-    const s = await r.json()
-    window.location.href = `/connectors/sources?sid=${s.id}`
+    const s = await apiClient.post<any>('/connectors/sources', payload)
+    window.location.href = `/connectors/sources?sid=${s?.id}`
   }
 
   return (
     <div className="p-6 space-y-4">
       <h1 className="text-xl font-semibold">Browse {provider} (Account {accountId})</h1>
-      {error && <div className="text-red-600 text-sm">{error}</div>}
+      {notEnabled && (
+        <div className="rounded border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-800">
+          Connectors backend not enabled. This feature is optional and may be disabled on your server.
+        </div>
+      )}
+      {!notEnabled && error && <div className="text-red-600 text-sm">{error}</div>}
       <div className="flex gap-2 items-center">
         <label className="text-sm">Provider</label>
         <select value={provider} onChange={e => setProvider(e.target.value as any)} className="border rounded px-2 py-1">
@@ -69,7 +72,7 @@ export default function Browse() {
         <input value={parentId || ''} onChange={e => setParentId(e.target.value || null)} className="border rounded px-2 py-1" placeholder={provider === 'drive' ? 'root or folder id' : 'database id (optional)'} />
         <button onClick={() => load(true)} disabled={busy} className="px-3 py-1 rounded bg-gray-800 text-white">Refresh</button>
       </div>
-      <div className="grid grid-cols-1 gap-2">
+      {!notEnabled && (<div className="grid grid-cols-1 gap-2">
         {items.map(it => (
           <div key={it.id} className="flex items-center justify-between border rounded p-2">
             <div>
@@ -84,7 +87,7 @@ export default function Browse() {
             </div>
           </div>
         ))}
-      </div>
+      </div>)}
     </div>
   )
 }

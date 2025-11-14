@@ -117,19 +117,82 @@ async def process_documents(
                     logging.warning(f"[file_security] non-strict: Egress check error: {_e}")
 
             # Validate with HEAD before download (size/MIME)
-            from tldw_Server_API.app.core.http_client import fetch as http_fetch, download as http_download, RetryPolicy
+            from tldw_Server_API.app.core.http_client import (
+                fetch as http_fetch,
+                download as http_download,
+                RetryPolicy,
+                create_client as http_create_client,
+            )
+            from loguru import logger as _logger
 
-            head = http_fetch(method="HEAD", url=url, headers=headers, timeout=60)
+            head_headers: dict = {}
+            _last_err: Optional[Exception] = None
+            # Prefer a tiny GET with Range over HEAD for preflight, to handle servers that
+            # mishandle HEAD or HTTP/2. Keep body discard by using stream() and not reading.
+            try:
+                sc0 = http_create_client()
+                try:
+                    req_headers = dict(headers or {})
+                    req_headers.setdefault("Range", "bytes=0-0")
+                    _fallback_to = float(os.getenv("DOC_PREFLIGHT_RANGE_TIMEOUT", "5"))
+                    with sc0.stream("GET", url, headers=req_headers, timeout=_fallback_to) as resp:
+                        # Validate status: accept 2xx (including 206 Partial Content)
+                        status = getattr(resp, "status_code", getattr(resp, "status", None))
+                        if status is None or not (200 <= int(status) < 300):
+                            _last_err = RuntimeError(f"Preflight GET Range returned status {status} for {url}")
+                            # Force fallback path
+                            raise _last_err
+                        head_headers = dict(resp.headers or {})
+                finally:
+                    try:
+                        sc0.close()
+                    except Exception as cleanup_err:
+                        _logger.debug(f"Ignored client close error (preflight GET): {cleanup_err}")
+            except Exception as e_gr:
+                _last_err = e_gr
+                _logger.debug("Preflight GET Range failed, trying single HEAD with retries=1 (no http2): {}", e_gr)
+                # As a best-effort fallback, try a single HEAD with http2 disabled and limited retries
+                try:
+                    sc = http_create_client(http2=False)
+                    try:
+                        head_resp2 = http_fetch(
+                            method="HEAD",
+                            url=url,
+                            headers=headers,
+                            timeout=60,
+                            client=sc,
+                            retry=RetryPolicy(attempts=1),
+                        )
+                        try:
+                            # Validate HEAD status
+                            status2 = getattr(head_resp2, "status_code", getattr(head_resp2, "status", None))
+                            if status2 is None or not (200 <= int(status2) < 300):
+                                raise RuntimeError(f"Preflight HEAD returned status {status2} for {url}")
+                            head_headers = dict(head_resp2.headers or {})
+                        finally:
+                            try:
+                                head_resp2.close()
+                            except Exception as cleanup_err:
+                                _logger.debug(f"Ignored response close error (preflight HEAD): {cleanup_err}")
+                    finally:
+                        try:
+                            sc.close()
+                        except Exception as cleanup_err:
+                            _logger.debug(f"Ignored client close error (preflight HEAD): {cleanup_err}")
+                except Exception as e2:
+                    _last_err = e2
+                    _logger.warning("All preflight attempts failed for URL {}: {}", url, e2)
+                    raise _last_err from e2
             try:
                 max_bytes = int(os.getenv("DOC_DOWNLOAD_MAX_BYTES", "52428800"))  # 50 MB default
-                cl = head.headers.get('content-length')
+                cl = head_headers.get('content-length')
                 if cl and cl.isdigit() and int(cl) > max_bytes:
                     if _file_security_strict():
                         raise RuntimeError("Document too large")
                     else:
                         logging.warning("[file_security] non-strict: Document exceeds size; continuing")
                 allowed_mimes = [s.strip() for s in (os.getenv("DOC_DOWNLOAD_ALLOWED_MIME", "text/plain,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/html").split(",")) if s.strip()]
-                ct = head.headers.get('content-type', '')
+                ct = head_headers.get('content-type', '')
                 if allowed_mimes and ct:
                     mt = ct.split(';', 1)[0].strip().lower()
                     if not any(mt == a or (a.endswith('/*') and mt.startswith(a[:-1])) for a in allowed_mimes):
@@ -156,8 +219,8 @@ async def process_documents(
             except Exception as e:
                 try:
                     os.unlink(tmp_path)
-                except Exception:
-                    pass
+                except Exception as cleanup_err:
+                    logging.debug(f"Ignored tmp unlink error: {cleanup_err}")
                 raise RuntimeError(f"Download from '{url}' failed: {e}")
         except Exception as e:
             raise RuntimeError(f"Download from '{url}' failed: {str(e)}")

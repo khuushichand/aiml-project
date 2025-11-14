@@ -2,7 +2,7 @@
 # Request models for optimization endpoints
 
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 class CompareStrategiesRequest(BaseModel):
     """Request model for comparing optimization strategies."""
@@ -15,3 +15,21 @@ class CompareStrategiesRequest(BaseModel):
     strategies: List[str] = Field(..., description="Strategies to compare")
     # Back-compat: accept config as alias for model_configuration
     model_configuration: Dict[str, Any] = Field(default_factory=dict, alias="config", description="Model configuration")
+
+
+class OptimizationSimpleCreateRequest(BaseModel):
+    """Minimal optimization job creation payload (compat endpoint)."""
+    model_config = ConfigDict(extra='forbid')
+
+    prompt_id: Optional[int] = None
+    initial_prompt_id: Optional[int] = None
+    config: Dict[str, Any] = Field(default_factory=dict)
+    # Back-compat: accept but ignore project_id and strategy fields
+    project_id: Optional[int] = None
+    strategy: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _require_one_id(self):
+        if not self.prompt_id and not self.initial_prompt_id:
+            raise ValueError("One of prompt_id or initial_prompt_id must be provided")
+        return self

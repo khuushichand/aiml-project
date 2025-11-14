@@ -35,7 +35,8 @@ from tldw_Server_API.app.api.v1.schemas.prompt_studio_optimization import (
     OptimizationConfig
 )
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_optimization_requests import (
-    CompareStrategiesRequest
+    CompareStrategiesRequest,
+    OptimizationSimpleCreateRequest,
 )
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
     get_prompt_studio_db, get_prompt_studio_user, require_project_access, require_project_write_access,
@@ -420,13 +421,13 @@ def _validate_strategy_config(optimizer_type: str, cfg: Dict[str, Any]) -> None:
 # Compatibility: base POST returns job info directly
 @router.post("")
 async def create_optimization_simple(
-    payload: Dict[str, Any],
+    payload: OptimizationSimpleCreateRequest,
     db: PromptStudioDatabase = Depends(get_prompt_studio_db),
     user_context: Dict = Depends(get_prompt_studio_user),
     request: Request = None,  # type: ignore[assignment]
 ) -> Dict[str, Any]:
     # Minimal creation: create a job with provided payload
-    prompt_id = int(payload.get("prompt_id") or payload.get("initial_prompt_id") or 0)
+    prompt_id = int(payload.prompt_id or payload.initial_prompt_id or 0)
     job_manager = JobManager(db)
     # Correlate job with request_id if available
     req_id = ensure_request_id(request) if request is not None else None
@@ -436,7 +437,7 @@ async def create_optimization_simple(
         entity_id=prompt_id if prompt_id else 0,
         payload={
             "prompt_id": prompt_id,
-            "config": payload.get("config", {}),
+            "config": payload.config or {},
             **({"request_id": req_id} if req_id else {}),
         },
         priority=5,

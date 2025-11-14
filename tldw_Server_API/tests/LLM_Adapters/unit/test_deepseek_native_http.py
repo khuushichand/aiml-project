@@ -71,6 +71,7 @@ def test_deepseek_adapter_native_http_non_streaming(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter import DeepSeekAdapter
     import tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter as ds_mod
     monkeypatch.setattr(ds_mod, "_hc_create_client", lambda *a, **k: _FakeClient(*a, **k))
+    monkeypatch.setattr(ds_mod, "http_client_factory", lambda *a, **k: _FakeClient(*a, **k))
     a = DeepSeekAdapter()
     r = a.chat({"messages": [{"role": "user", "content": "hi"}], "model": "deepseek-chat", "api_key": "k"})
     assert r.get("object") == "chat.completion"
@@ -80,6 +81,7 @@ def test_deepseek_adapter_native_http_streaming(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter import DeepSeekAdapter
     import tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter as ds_mod
     monkeypatch.setattr(ds_mod, "_hc_create_client", lambda *a, **k: _FakeClient(*a, **k))
+    monkeypatch.setattr(ds_mod, "http_client_factory", lambda *a, **k: _FakeClient(*a, **k))
     a = DeepSeekAdapter()
     chunks = list(a.stream({"messages": [{"role": "user", "content": "hi"}], "model": "deepseek-chat", "api_key": "k", "stream": True}))
     assert any(c.startswith("data: ") for c in chunks)

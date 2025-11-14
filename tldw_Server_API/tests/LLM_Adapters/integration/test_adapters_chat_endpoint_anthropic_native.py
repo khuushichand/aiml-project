@@ -1,11 +1,15 @@
 """
 Integration tests for /api/v1/chat/completions using Anthropic adapter native HTTP.
-HTTP is mocked via httpx.Client to avoid network.
+
+Behavior:
+- If ANTHROPIC_API_KEY is set, make a real API call via the adapter.
+- Otherwise, mock httpx.Client to avoid network and keep deterministic behavior.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List
+import os
 
 import pytest
 
@@ -84,30 +88,52 @@ def _payload(stream: bool = False):
 
 
 def test_chat_completions_anthropic_native_non_streaming(monkeypatch, client_user_only):
-    # Provide key
     import tldw_Server_API.app.api.v1.endpoints.chat as chat_endpoint
-    chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "anthropic": "sk-ant-test"}
-    import httpx
-    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    real = os.getenv("ANTHROPIC_API_KEY")
+    if real:
+        chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "anthropic": real}
+        client = client_user_only
+        r = client.post("/api/v1/chat/completions", json=_payload(stream=False))
+        assert r.status_code == 200
+        data = r.json()
+        assert data.get("object") == "chat.completion"
+        assert isinstance(data.get("choices"), list)
+    else:
+        # Mock httpx client to avoid network when no key
+        chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "anthropic": "sk-ant-test"}
+        import httpx
+        monkeypatch.setattr(httpx, "Client", _FakeClient)
 
-    client = client_user_only
-    r = client.post("/api/v1/chat/completions", json=_payload(stream=False))
-    assert r.status_code == 200
-    data = r.json()
-    assert data["object"] == "chat.completion"
+        client = client_user_only
+        r = client.post("/api/v1/chat/completions", json=_payload(stream=False))
+        assert r.status_code == 200
+        data = r.json()
+        assert data["object"] == "chat.completion"
 
 
 def test_chat_completions_anthropic_native_streaming(monkeypatch, client_user_only):
     import tldw_Server_API.app.api.v1.endpoints.chat as chat_endpoint
-    chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "anthropic": "sk-ant-test"}
-    import httpx
-    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    real = os.getenv("ANTHROPIC_API_KEY")
+    if real:
+        chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "anthropic": real}
+        client = client_user_only
+        with client.stream("POST", "/api/v1/chat/completions", json=_payload(stream=True)) as resp:
+            assert resp.status_code == 200
+            ct = resp.headers.get("content-type", "").lower()
+            assert ct.startswith("text/event-stream")
+            lines = list(resp.iter_lines())
+            assert any(l.startswith("data: ") and "[DONE]" not in l for l in lines)
+            assert sum(1 for l in lines if l.strip().lower() == "data: [done]") == 1
+    else:
+        chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "anthropic": "sk-ant-test"}
+        import httpx
+        monkeypatch.setattr(httpx, "Client", _FakeClient)
 
-    client = client_user_only
-    with client.stream("POST", "/api/v1/chat/completions", json=_payload(stream=True)) as resp:
-        assert resp.status_code == 200
-        ct = resp.headers.get("content-type", "").lower()
-        assert ct.startswith("text/event-stream")
-        lines = list(resp.iter_lines())
-        assert any(l.startswith("data: ") and "[DONE]" not in l for l in lines)
-        assert sum(1 for l in lines if l.strip().lower() == "data: [done]") == 1
+        client = client_user_only
+        with client.stream("POST", "/api/v1/chat/completions", json=_payload(stream=True)) as resp:
+            assert resp.status_code == 200
+            ct = resp.headers.get("content-type", "").lower()
+            assert ct.startswith("text/event-stream")
+            lines = list(resp.iter_lines())
+            assert any(l.startswith("data: ") and "[DONE]" not in l for l in lines)
+            assert sum(1 for l in lines if l.strip().lower() == "data: [done]") == 1

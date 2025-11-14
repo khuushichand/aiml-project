@@ -101,7 +101,8 @@ class OpenRouterAdapter(ChatProvider):
         except Exception:
             # best-effort; fall back to env/defaults
             pass
-        h["HTTP-Referer"] = site_url or "http://localhost"
+        # OpenRouter strongly prefers a valid public referer; use their site as a safe default
+        h["HTTP-Referer"] = site_url or "https://openrouter.ai"
         h["X-Title"] = site_name or "TLDW-API"
         return h
 
@@ -112,26 +113,39 @@ class OpenRouterAdapter(ChatProvider):
         if system_message:
             payload_messages.append({"role": "system", "content": system_message})
         payload_messages.extend(messages)
+        # Start with required fields
         payload = {
             "model": request.get("model"),
             "messages": payload_messages,
-            "temperature": request.get("temperature"),
-            "top_p": request.get("top_p"),
-            "top_k": request.get("top_k"),
-            "min_p": request.get("min_p"),
-            "max_tokens": request.get("max_tokens"),
-            "n": request.get("n"),
-            "presence_penalty": request.get("presence_penalty"),
-            "frequency_penalty": request.get("frequency_penalty"),
-            "logit_bias": request.get("logit_bias"),
-            "user": request.get("user"),
         }
-        if request.get("tools") is not None:
-            payload["tools"] = request.get("tools")
-        if request.get("tool_choice") is not None:
-            payload["tool_choice"] = request.get("tool_choice")
-        if request.get("response_format") is not None:
-            payload["response_format"] = request.get("response_format")
+        # Add optional fields only when not None to avoid sending nulls
+        for key in (
+            "temperature",
+            "top_p",
+            "top_k",
+            "min_p",
+            "max_tokens",
+            "n",
+            "presence_penalty",
+            "frequency_penalty",
+            "logit_bias",
+            "user",
+        ):
+            val = request.get(key)
+            if val is not None:
+                payload[key] = val
+        tool_choice = request.get("tool_choice")
+        tools = request.get("tools")
+        # If tool_choice is explicitly 'none', omit tools entirely to avoid provider-side validation quirks
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if tools is not None and tool_choice != "none":
+            payload["tools"] = tools
+        rf = request.get("response_format")
+        # Forward response_format as-is for parity with other adapters and tests
+        # (e.g., JSON mode: {"type": "json_object"}).
+        if rf is not None:
+            payload["response_format"] = rf
         if request.get("seed") is not None:
             payload["seed"] = request.get("seed")
         if request.get("stop") is not None:

@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 ###########################
 [project]
 name = "tldw-server"
-version = "0.1.4"
+version = "0.1.5"
 description = "A comprehensive research assistant and media analysis platform - Too Long; Didn't Watch Server"
 requires-python = ">=3.10"
 readme = "README.md"
@@ -48,6 +48,7 @@ dependencies = [
   "cachetools>=5.0.0",
   "click>=8.0.0",
   "click-completion>=0.5.2",
+  "typer>=0.12.0",
   "defusedxml>=0.7.0",
   "email-validator>=2.0.0",
   "fastapi>=0.100.0",
@@ -437,6 +438,7 @@ all = [
 tldw-server = "tldw_Server_API.app.main:run_server"
 # Point tldw-evals to the richer, unified CLI
 tldw-evals = "tldw_Server_API.cli.evals_cli:main"
+tldw-setup = "tldw_Server_API.cli.wizard.cli:main"
 
 ###########################
 # Tools - Package Discovery

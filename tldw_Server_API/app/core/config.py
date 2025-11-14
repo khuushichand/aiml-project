@@ -822,6 +822,29 @@ def load_settings():
         "SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC": SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC,
         "SANDBOX_CANCEL_GRACE_SECONDS": SANDBOX_CANCEL_GRACE_SECONDS,
         "SANDBOX_ENABLE_EXECUTION": SANDBOX_ENABLE_EXECUTION,
+
+        # Notes/Auto-Title configuration
+        # Enable LLM-backed title generation and choose default strategy
+        # Precedence: ENV > config.txt [Notes] > defaults
+        "NOTES_TITLE_LLM_ENABLED": (lambda _env, _cp: (
+            # env override first
+            (str(_env).strip().lower() in {"1", "true", "yes", "on"}) if _env is not None else (
+                (str(_cp.get('Notes', 'title_llm_enabled', fallback='false')).strip().lower() in {"1", "true", "yes", "on"})
+                if _cp and hasattr(_cp, 'get') and _cp.has_section('Notes') else False
+            )
+        ))(
+            os.getenv('NOTES_TITLE_LLM_ENABLED') or os.getenv('NOTE_TITLE_LLM_ENABLED'),
+            load_comprehensive_config(),
+        ),
+        "NOTES_TITLE_DEFAULT_STRATEGY": (lambda _env, _cp: (
+            _env.strip().lower() if isinstance(_env, str) else (
+                str(_cp.get('Notes', 'title_default_strategy', fallback='heuristic')).strip().lower()
+                if _cp and hasattr(_cp, 'get') and _cp.has_section('Notes') else 'heuristic'
+            )
+        ))(
+            os.getenv('NOTES_TITLE_DEFAULT_STRATEGY') or os.getenv('NOTE_TITLE_DEFAULT_STRATEGY'),
+            load_comprehensive_config(),
+        ),
         "SANDBOX_BACKGROUND_EXECUTION": SANDBOX_BACKGROUND_EXECUTION,
         "SANDBOX_MAX_ARTIFACT_BYTES_PER_RUN_MB": SANDBOX_MAX_ARTIFACT_BYTES_PER_RUN_MB,
         "SANDBOX_MAX_ARTIFACT_BYTES_PER_USER_MB": SANDBOX_MAX_ARTIFACT_BYTES_PER_USER_MB,
@@ -1355,6 +1378,34 @@ def load_comprehensive_config():
     except Exception as _rag_env_err:
         _log_debug(f"RAG env propagation skipped: {_rag_env_err}")
 
+    # Propagate Streaming flags from config.txt into process env when unset.
+    try:
+        def _env_default(name: str, value: Optional[str]):
+            if value is None:
+                return
+            if os.getenv(name) is None:
+                os.environ[name] = str(value)
+
+        # Unified streaming switch (affects chat and selected SSE endpoints)
+        if hasattr(config_parser, 'has_section') and config_parser.has_section('Streaming'):
+            _env_default('STREAMS_UNIFIED', config_parser.get('Streaming', 'streams_unified', fallback=None))
+
+        # Chat streaming channel maxsize (bound the in-memory channel used when queueing is enabled)
+        maxsize_val: Optional[str] = None
+        if hasattr(config_parser, 'has_section') and config_parser.has_section('Chat-Module'):
+            try:
+                maxsize_val = config_parser.get('Chat-Module', 'chat_stream_channel_maxsize', fallback=None)
+            except Exception:
+                maxsize_val = None
+        if (not maxsize_val) and hasattr(config_parser, 'has_section') and config_parser.has_section('Streaming'):
+            try:
+                maxsize_val = config_parser.get('Streaming', 'chat_stream_channel_maxsize', fallback=None)
+            except Exception:
+                maxsize_val = None
+        _env_default('CHAT_STREAM_CHANNEL_MAXSIZE', maxsize_val)
+    except Exception as _stream_env_err:
+        _log_debug(f"Streaming env propagation skipped: {_stream_env_err}")
+
     return config_parser
 
 
@@ -1726,6 +1777,9 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             "jobs",
             "personalization",
             "evaluations",
+            # Ensure experimental connectors endpoints are available in tests
+            # to avoid 404s when the app is imported before ROUTES_ENABLE is set.
+            "connectors",
         }
         if (_test_mode or _pytest_active) and key in _force_in_tests:
             return True
@@ -1903,7 +1957,7 @@ def load_and_log_configs():
         openai_api_retry_delay = config_parser_object.get('API', 'openai_api_retry_delay', fallback='5')
 
         # OpenRouter
-        openrouter_model = config_parser_object.get('API', 'openrouter_model', fallback='microsoft/wizardlm-2-8x22b')
+        openrouter_model = config_parser_object.get('API', 'openrouter_model', fallback='z-ai/glm-4.6')
         openrouter_streaming = config_parser_object.get('API', 'openrouter_streaming', fallback='False')
         openrouter_temperature = config_parser_object.get('API', 'openrouter_temperature', fallback='0.7')
         openrouter_top_p = config_parser_object.get('API', 'openrouter_top_p', fallback='0.95')

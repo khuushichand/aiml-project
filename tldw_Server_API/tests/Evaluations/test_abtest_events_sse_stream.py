@@ -20,7 +20,7 @@ def _auth_headers(client: TestClient):
 
 
 @pytest.mark.unit
-def test_embeddings_abtest_events_sse_smoke_heartbeat_and_done():
+def test_embeddings_abtest_events_sse_smoke_heartbeat_and_done(monkeypatch):
     # Use a per-test DB file for Evaluations to avoid cross-test interference
     with tempfile.NamedTemporaryFile(suffix="_evals.db", delete=False) as f:
         eval_db_path = f.name
@@ -28,8 +28,8 @@ def test_embeddings_abtest_events_sse_smoke_heartbeat_and_done():
     try:
         # Configure fast heartbeats in data mode for reliable detection
         os.environ.setdefault("TEST_MODE", "1")
-        os.environ.setdefault("STREAM_HEARTBEAT_MODE", "data")
-        os.environ.setdefault("STREAM_HEARTBEAT_INTERVAL_S", "0.05")
+        monkeypatch.setenv("STREAM_HEARTBEAT_MODE", "data")
+        monkeypatch.setenv("STREAM_HEARTBEAT_INTERVAL_S", "0.05")
         os.environ.setdefault("EVALUATIONS_TEST_DB_PATH", eval_db_path)
 
         with TestClient(app) as client:

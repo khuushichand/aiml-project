@@ -736,6 +736,96 @@ router.include_router(datasets_router)
 router.include_router(webhooks_router)
 router.include_router(crud_router)
 
+@router.post("", response_model=EvaluationResponse, status_code=status.HTTP_201_CREATED)
+async def create_evaluation_root(
+    eval_request: CreateEvaluationRequest,
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    response: Response = None,
+):
+    """Alias for POST /api/v1/evaluations without trailing slash.
+
+    Mirrors the CRUD create endpoint to avoid 307 redirects in clients/tests
+    that use the non-slash form.
+    """
+    try:
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        if idempotency_key:
+            try:
+                existing_id = svc.db.lookup_idempotency("evaluation", idempotency_key, user_id)
+                if existing_id:
+                    existing = await svc.get_evaluation(existing_id)
+                    if existing:
+                        try:
+                            if response is not None:
+                                response.headers["X-Idempotent-Replay"] = "true"
+                                response.headers["Idempotency-Key"] = idempotency_key
+                        except Exception:
+                            pass
+                        return EvaluationResponse(**existing)
+            except Exception:
+                pass
+        evaluation = await svc.create_evaluation(
+            name=eval_request.name,
+            description=eval_request.description,
+            eval_type=eval_request.eval_type,
+            eval_spec=model_dump_compat(eval_request.eval_spec),
+            dataset_id=eval_request.dataset_id,
+            dataset=[model_dump_compat(s) for s in eval_request.dataset] if eval_request.dataset else None,
+            metadata=model_dump_compat(eval_request.metadata) if eval_request.metadata else None,
+            created_by=user_id,
+        )
+        try:
+            if idempotency_key and evaluation.get("id"):
+                svc.db.record_idempotency("evaluation", idempotency_key, evaluation["id"], user_id)
+        except Exception:
+            pass
+        return EvaluationResponse(**evaluation)
+    except Exception as e:
+        logger.error(f"Failed to create evaluation (alias): {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create evaluation: {sanitize_error_message(e, 'evaluation creation')}"
+        )
+
+
+@router.get("", response_model=EvaluationListResponse)
+async def list_evaluations_root(
+    limit: int = Query(20, ge=1, le=100),
+    after: Optional[str] = Query(None),
+    eval_type: Optional[str] = Query(None),
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_request_user),
+):
+    """Alias for GET /api/v1/evaluations without trailing slash.
+
+    Mirrors the CRUD list endpoint to avoid 307 redirects.
+    """
+    try:
+        svc = get_unified_evaluation_service_for_user(current_user.id)
+        evaluations, has_more = await svc.list_evaluations(
+            limit=limit,
+            after=after,
+            eval_type=eval_type,
+            created_by=current_user.id,
+        )
+        first_id = evaluations[0]["id"] if evaluations else None
+        last_id = evaluations[-1]["id"] if evaluations else None
+        return EvaluationListResponse(
+            object="list",
+            data=[EvaluationResponse(**eval) for eval in evaluations],
+            has_more=has_more,
+            first_id=first_id,
+            last_id=last_id,
+        )
+    except Exception as e:
+        logger.error(f"Failed to list evaluations (alias): {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list evaluations: {sanitize_error_message(e, 'listing evaluations')}"
+        )
+
 @router.post("/datasets", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
 async def create_dataset(
     dataset_request: CreateDatasetRequest,

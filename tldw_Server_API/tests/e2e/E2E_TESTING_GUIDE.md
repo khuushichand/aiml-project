@@ -431,11 +431,19 @@ The tests are organized into 11 sequential phases:
 pip install -e .[dev]
 pip install pytest httpx
 
-# Start the API server
+# Option A: Start the API server (normal mode)
 python -m uvicorn tldw_Server_API.app.main:app --reload
 
 # Verify server is running
 curl http://localhost:8000/api/v1/health
+
+# Option B: Run tests in-process (no open port)
+# Useful in CI environments that prohibit listening sockets.
+export E2E_INPROCESS=1
+export AUTH_MODE=single_user
+export TEST_MODE=1
+export SINGLE_USER_API_KEY=test-api-key-for-e2e-testing-12345
+export SINGLE_USER_TEST_API_KEY=$SINGLE_USER_API_KEY
 ```
 
 ### Environment Configuration

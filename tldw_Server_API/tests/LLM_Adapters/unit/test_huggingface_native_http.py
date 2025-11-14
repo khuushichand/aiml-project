@@ -68,7 +68,9 @@ def _enable(monkeypatch):
 def test_huggingface_adapter_native_http_non_streaming(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter import HuggingFaceAdapter
     import tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter as hf_mod
+    # Patch both the internal alias and the adapter's exposed factory
     monkeypatch.setattr(hf_mod, "_hc_create_client", lambda *a, **k: _FakeClient(*a, **k))
+    monkeypatch.setattr(hf_mod, "http_client_factory", lambda *a, **k: _FakeClient(*a, **k))
     a = HuggingFaceAdapter()
     request = {
         "messages": [{"role": "user", "content": "hi"}],
@@ -84,6 +86,7 @@ def test_huggingface_adapter_native_http_streaming(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter import HuggingFaceAdapter
     import tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter as hf_mod
     monkeypatch.setattr(hf_mod, "_hc_create_client", lambda *a, **k: _FakeClient(*a, **k))
+    monkeypatch.setattr(hf_mod, "http_client_factory", lambda *a, **k: _FakeClient(*a, **k))
     a = HuggingFaceAdapter()
     request = {
         "messages": [{"role": "user", "content": "hi"}],

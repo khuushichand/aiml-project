@@ -217,3 +217,31 @@ class DictionaryNotFoundError(DictionaryError):
     error: str = Field("not_found", description="Error type")
     resource_type: str = Field(..., description="Type of resource not found")
     resource_id: Optional[Union[int, str]] = Field(None, description="ID of missing resource")
+
+
+# -----------------------------------------------------------------------------
+# Validation API Schemas (for POST /api/v1/chat/dictionaries/validate)
+# -----------------------------------------------------------------------------
+
+class ValidationIssue(BaseModel):
+    """Represents a single validation error or warning entry."""
+    code: str = Field(..., description="Machine-readable issue code")
+    field: str = Field(..., description="Field path where the issue occurred")
+    message: str = Field(..., description="Human-readable message")
+
+
+class ValidateDictionaryRequest(BaseModel):
+    """Request body for dictionary validation endpoint."""
+    data: Dict[str, Any] = Field(..., description="Dictionary JSON data including entries")
+    schema_version: int = Field(1, description="Schema version for validation")
+    strict: bool = Field(False, description="If true, may be used to fail import on errors (reporting stays 200)")
+
+
+class ValidateDictionaryResponse(BaseModel):
+    """Structured validation result matching the validator's taxonomy."""
+    ok: bool = Field(..., description="Whether validation passed without errors")
+    schema_version: int = Field(..., description="Schema version that was validated")
+    errors: List[ValidationIssue] = Field(default_factory=list, description="List of validation errors")
+    warnings: List[ValidationIssue] = Field(default_factory=list, description="List of validation warnings")
+    entry_stats: Dict[str, int] = Field(default_factory=dict, description="Basic statistics about entries")
+    suggested_fixes: List[str] = Field(default_factory=list, description="Optional suggestions to fix issues")

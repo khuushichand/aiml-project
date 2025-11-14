@@ -42,7 +42,7 @@ def _payload(provider: str) -> dict:
     model_map = {
         "openai": "gpt-4o-mini",
         "anthropic": "claude-sonnet",
-        "groq": "llama3-8b-8192",
+        "groq": "llama-3.1-8b-instant",
         "openrouter": "openrouter/auto",
         "google": "gemini-1.5-pro",
         "mistral": "mistral-large-latest",

@@ -1,7 +1,7 @@
 # prompt_studio_test.py
 # Test case and evaluation schemas for Prompt Studio
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime
 
@@ -77,6 +77,32 @@ class TestCaseGenerateRequest(BaseModel):
     num_cases: int = Field(default=5, ge=1, le=50, description="Number of test cases to generate")
     generation_strategy: str = Field(default="diverse", description="Generation strategy")
     base_on_description: Optional[str] = Field(None, max_length=2000, description="Description to base generation on")
+
+
+class RunTestCasesSimpleRequest(BaseModel):
+    """Simple run request used by compatibility endpoint."""
+    model_config = ConfigDict(extra='forbid')
+
+    prompt_id: int
+    test_case_ids: List[Union[int, str]] = Field(default_factory=list)
+    model: Optional[str] = None
+    # Back-compat: allow ignored project_id
+    project_id: Optional[int] = None
+
+    @field_validator('test_case_ids', mode='before')
+    @classmethod
+    def _coerce_ids(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, list):
+            out = []
+            for t in v:
+                try:
+                    out.append(int(t))
+                except (ValueError, TypeError):
+                    raise ValueError(f"test_case_ids must contain only integers, got: {t}")
+            return out
+        return v
 
 ########################################################################################################################
 # Test Run Schemas

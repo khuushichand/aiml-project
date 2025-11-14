@@ -36,6 +36,7 @@ async def _ensure_admin(db_name: str) -> Tuple[str, str]:
     try:
         import uuid as _uuid
         admin_uuid = str(_uuid.uuid4())
+        # Upsert user row with role hint; RBAC checks use user_roles, so also ensure mapping exists.
         await conn.execute(
             """
             INSERT INTO users (uuid, username, email, password_hash, role, is_active, is_verified, storage_quota_mb, storage_used_mb)
@@ -47,6 +48,19 @@ async def _ensure_admin(db_name: str) -> Tuple[str, str]:
             email,
             pw_hash,
         )
+        # Ensure admin role mapping in user_roles for RBAC checks
+        user_row = await conn.fetchrow("SELECT id FROM users WHERE username=$1", username)
+        role_row = await conn.fetchrow("SELECT id FROM roles WHERE name='admin'")
+        if user_row and role_row:
+            await conn.execute(
+                """
+                INSERT INTO user_roles (user_id, role_id)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id, role_id) DO NOTHING
+                """,
+                int(user_row["id"]),
+                int(role_row["id"]),
+            )
     finally:
         await conn.close()
 
@@ -54,8 +68,29 @@ async def _ensure_admin(db_name: str) -> Tuple[str, str]:
 
 
 def _admin_headers(client, db_name: str):
-    """Login as admin and return Authorization headers."""
-    username, password = asyncio.run(_ensure_admin(db_name))
+    """Login as admin and return Authorization headers.
+
+    Safe to call from both sync and async pytest contexts. When an event loop
+    is already running (pytest.mark.asyncio), run the async DB bootstrap in a
+    dedicated thread to avoid nested-loop errors.
+    """
+    try:
+        # If there is a running loop, execute the coroutine in a separate thread
+        asyncio.get_running_loop()
+        import threading
+
+        result: dict = {}
+
+        def _runner():
+            result["creds"] = asyncio.run(_ensure_admin(db_name))
+
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+        t.join()
+        username, password = result["creds"]
+    except RuntimeError:
+        # No loop running; safe to use asyncio.run directly
+        username, password = asyncio.run(_ensure_admin(db_name))
     lr = client.post(
         "/api/v1/auth/login",
         data={"username": username, "password": password},

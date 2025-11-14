@@ -14,6 +14,8 @@ async def test_redis_backend_metrics_allow_deny_refund_paths():
 
     # Use in-memory Redis stub via default factory fallback
     rg = RedisResourceGovernor(policy_loader=_Loader(), ns="rg_m_redis")
+    # Ensure clean windows for deterministic metrics when FakeTime≈0.0 contexts
+    await rg.test_force_clear_windows(policy_id="p")
     reg = get_metrics_registry()
 
     # Baselines filtered by backend=redis

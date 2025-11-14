@@ -136,6 +136,20 @@ Even after decades of thinking about this, I find that sentence startling.`;
                 });
             }
 
+            // Escape HTML special characters in user input
+            function escapeHTML(str) {
+                return str.replace(/[&<>"']/g, function (m) {
+                    switch (m) {
+                        case '&': return '&amp;';
+                        case '<': return '&lt;';
+                        case '>': return '&gt;';
+                        case '"': return '&quot;';
+                        case "'": return '&#39;';
+                        default: return m;
+                    }
+                });
+            }
+
             function highlightChunks(chunks, originalText) {
                 console.log("Highlighting chunks:", chunks);
                 const colors = ['#70d6ff', '#e9ff70', '#ff9770', '#ffd670', '#ff70a6'];
@@ -147,16 +161,16 @@ Even after decades of thinking about this, I find that sentence startling.`;
 
                     // Add any text between chunks
                     if (chunk.startIndex > lastEnd) {
-                        highlightedText += originalText.slice(lastEnd, chunk.startIndex);
+                        highlightedText += escapeHTML(originalText.slice(lastEnd, chunk.startIndex));
                     }
 
                     // Add the chunk
-                    highlightedText += `<span class="chunk" style="background-color: ${color}">${chunk.text}</span>`;
+                    highlightedText += `<span class="chunk" style="background-color: ${color}">${escapeHTML(chunk.text)}</span>`;
 
                     // Add overlap
                     if (chunk.overlapWithNext > 0) {
                         const overlapText = chunk.text.slice(-chunk.overlapWithNext);
-                        highlightedText += `<span class="overlap">${overlapText}</span>`;
+                        highlightedText += `<span class="overlap">${escapeHTML(overlapText)}</span>`;
                     }
 
                     lastEnd = chunk.endIndex;
@@ -164,7 +178,7 @@ Even after decades of thinking about this, I find that sentence startling.`;
 
                 // Add any remaining text
                 if (lastEnd < originalText.length) {
-                    highlightedText += originalText.slice(lastEnd);
+                    highlightedText += escapeHTML(originalText.slice(lastEnd));
                 }
 
                 console.log("Highlighted text:", highlightedText);

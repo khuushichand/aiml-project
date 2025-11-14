@@ -134,16 +134,28 @@ class AuthNZPolicyAdmin:
                         payload = json.loads(payload)
                     except Exception:
                         payload = {}
+                upd = row.get("updated_at")
+                try:
+                    # Normalize datetimes to ISO strings for JSON friendliness
+                    if hasattr(upd, "isoformat"):
+                        upd = upd.isoformat()
+                except Exception:
+                    pass
                 return {
                     "id": row.get("id"),
                     "version": int(row.get("version") or 1),
-                    "updated_at": row.get("updated_at"),
+                    "updated_at": upd,
                     "payload": payload if isinstance(payload, dict) else {},
                 }
             # Row-like (SQLite)
             rid = row[0]
             ver = int(row[1] or 1)
             upd = row[2]
+            try:
+                if hasattr(upd, "isoformat"):
+                    upd = upd.isoformat()
+            except Exception:
+                pass
             payload = row[3]
             if isinstance(payload, (bytes, bytearray)):
                 payload = payload.decode("utf-8", errors="ignore")
@@ -164,10 +176,18 @@ class AuthNZPolicyAdmin:
             rows = await self.db_pool.fetchall("SELECT id, version, updated_at FROM rg_policies ORDER BY id")
             out: List[Dict[str, Any]] = []
             for r in rows:
+                rid = r["id"] if isinstance(r, dict) else r[0]
+                ver = int(r["version"] if isinstance(r, dict) else r[1] or 1)
+                upd = r["updated_at"] if isinstance(r, dict) else r[2]
+                try:
+                    if hasattr(upd, "isoformat"):
+                        upd = upd.isoformat()
+                except Exception:
+                    pass
                 out.append({
-                    "id": r["id"] if isinstance(r, dict) else r[0],
-                    "version": int(r["version"] if isinstance(r, dict) else r[1] or 1),
-                    "updated_at": r["updated_at"] if isinstance(r, dict) else r[2],
+                    "id": rid,
+                    "version": ver,
+                    "updated_at": upd,
                 })
             return out
         except Exception as e:

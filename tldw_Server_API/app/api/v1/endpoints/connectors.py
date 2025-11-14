@@ -12,6 +12,8 @@ from tldw_Server_API.app.api.v1.schemas.connectors import (
     ImportJob,
     AuthorizeURLResponse,
     ConnectorPolicy,
+    ConnectorSourceCreateRequest,
+    ConnectorSourcePatchRequest,
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_current_active_user,
@@ -197,17 +199,17 @@ async def browse_provider_sources(
 
 @router.post("/sources", response_model=ConnectorSource)
 async def add_source(
-    payload: Dict[str, Any],
+    payload: ConnectorSourceCreateRequest,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ) -> ConnectorSource:
     # payload keys: account_id, provider, remote_id, type, path, options
-    account_id = int(payload.get("account_id"))
-    provider = str(payload.get("provider"))
-    remote_id = str(payload.get("remote_id"))
-    type_ = str(payload.get("type"))
-    path = payload.get("path")
-    options = payload.get("options") or {}
+    account_id = int(payload.account_id)
+    provider = str(payload.provider)
+    remote_id = str(payload.remote_id)
+    type_ = str(payload.type)
+    path = payload.path
+    options = payload.options or {}
 
     # Enforce org policy on provider/path only in multi-user mode
     if not is_single_user_mode():
@@ -274,12 +276,12 @@ async def get_sources(
 @router.patch("/sources/{source_id}", response_model=ConnectorSource)
 async def patch_source(
     source_id: int,
-    payload: Dict[str, Any],
+    payload: ConnectorSourcePatchRequest,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ) -> ConnectorSource:
-    enabled = payload.get("enabled")
-    options = payload.get("options")
+    enabled = payload.enabled
+    options = payload.options
     row = await update_source(db, int(current_user.get("id")), source_id, enabled=enabled, options=options)
     if not row:
         raise HTTPException(status_code=404, detail="Source not found")

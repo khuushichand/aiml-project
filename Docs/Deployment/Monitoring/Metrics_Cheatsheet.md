@@ -238,6 +238,27 @@ Sample PromQL queries:
 - Executions: `prompt_studio.executions.total{provider,model,status}`, `prompt_studio.executions.duration_seconds{provider,model}`.
 - Tokens/Cost: `prompt_studio.tokens.used{provider,model,type}`, `prompt_studio.cost.total{provider,model}`.
 - Tests/Evals: `prompt_studio.tests.total{project,status}`, `prompt_studio.evaluations.score{project,metric_type}`, `prompt_studio.evaluations.duration_seconds{project}`.
+
+## Chatbook Tools (Templating / Commands / Validator)
+
+New counters and histograms added for Chatbook tooling. Examples assume a Prometheus datasource and $__rate_interval.
+
+- Template renderer
+  - Success rate by source: `sum(rate(template_render_success_total[$__rate_interval])) by (source)`
+  - Failure rate by reason: `sum(rate(template_render_failure_total[$__rate_interval])) by (reason)`
+  - Timeout rate by source: `sum(rate(template_render_timeout_total[$__rate_interval])) by (source)`
+  - p95 render latency by source:
+    `histogram_quantile(0.95, sum(rate(template_render_duration_seconds_bucket[$__rate_interval])) by (le, source))`
+
+- Slash commands
+  - Invocations by command/status: `sum(rate(chat_command_invoked_total[$__rate_interval])) by (command,status)`
+  - Errors by reason: `sum(rate(chat_command_errors_total[$__rate_interval])) by (reason)`
+
+- Dictionary validator
+  - Requests by strict: `sum(rate(chat_dictionary_validate_requests_total[$__rate_interval])) by (strict)`
+  - Errors by code: `sum(rate(chat_dictionary_validate_errors_total[$__rate_interval])) by (code)`
+  - p95 duration by strict:
+    `histogram_quantile(0.95, sum(rate(chat_dictionary_validate_duration_seconds_bucket[$__rate_interval])) by (le, strict))`
 - Optimizations: `prompt_studio.optimizations.total{strategy,status}`, `prompt_studio.optimizations.improvement{strategy}`, `prompt_studio.optimizations.iterations{strategy}`.
 - Jobs: `jobs.queued{job_type}`, `jobs.processing{job_type}`, `jobs.completed{job_type,status}`, `jobs.duration_seconds{job_type}`.
 - WebSocket: `prompt_studio.websocket.connections`, `prompt_studio.websocket.messages{event_type}`.

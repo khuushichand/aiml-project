@@ -69,7 +69,11 @@ async def test_rag_pipeline_runner_basic(monkeypatch):
             "overall_score": 0.8,
         }
 
-    runner._rag_evaluator = type("_E", (), {"evaluate": _fake_rag_eval})()  # type: ignore
+    class _E:
+        async def evaluate(self, **kwargs):
+            return await _fake_rag_eval(**kwargs)
+
+    runner._rag_evaluator = _E()  # type: ignore
 
     eval_spec: Dict[str, Any] = {
         "sub_type": "rag_pipeline",

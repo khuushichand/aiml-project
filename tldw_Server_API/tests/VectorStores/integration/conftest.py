@@ -11,8 +11,6 @@ import tempfile
 import pytest
 from pathlib import Path
 
-# Note: pgvector fixtures are registered at the top-level tests/conftest.py.
-
 
 @pytest.fixture(autouse=True, scope="session")
 def vectorstores_isolated_env():

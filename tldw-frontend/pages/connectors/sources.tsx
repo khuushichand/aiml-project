@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { apiClient, getApiBaseUrl, buildAuthHeaders } from '@/lib/api'
 
 type Source = {
   id: number; account_id: number; provider: 'drive' | 'notion'; remote_id: string; type: string; path?: string;
@@ -9,24 +10,35 @@ export default function Sources() {
   const [sources, setSources] = useState<Source[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<number | null>(null)
+  const [notEnabled, setNotEnabled] = useState(false)
 
   async function load() {
     setError(null)
     try {
-      const r = await fetch('/api/v1/connectors/sources')
-      const j = await r.json()
-      setSources(j)
+      const j = await apiClient.get<Source[]>('/connectors/sources')
+      setSources(Array.isArray(j) ? j : [])
     } catch (e: any) {
       setError(e?.message || 'Failed to load sources')
     }
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    const ping = async () => {
+      try {
+        const url = `${getApiBaseUrl()}/connectors/providers`
+        const resp = await fetch(url, { headers: buildAuthHeaders('GET') })
+        if (resp.status === 404) { setNotEnabled(true); return }
+        await load()
+      } catch {
+        await load()
+      }
+    }
+    ping()
+  }, [])
 
   async function toggleEnable(s: Source) {
     setBusy(s.id)
     try {
-      const r = await fetch(`/api/v1/connectors/sources/${s.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !s.enabled }) })
-      if (!r.ok) throw new Error('Update failed')
+      await apiClient.patch(`/connectors/sources/${s.id}`, { enabled: !s.enabled })
       await load()
     } catch (e: any) { setError(e?.message || 'Failed to update') } finally { setBusy(null) }
   }
@@ -34,8 +46,7 @@ export default function Sources() {
   async function importNow(s: Source) {
     setBusy(s.id)
     try {
-      const r = await fetch(`/api/v1/connectors/sources/${s.id}/import`, { method: 'POST' })
-      const j = await r.json()
+      const j = await apiClient.post<{ id?: string }>(`/connectors/sources/${s.id}/import`)
       const jobId = j?.id
       if (jobId) window.location.href = `/connectors/jobs?job_id=${jobId}`
     } catch (e: any) { setError(e?.message || 'Failed to import') } finally { setBusy(null) }
@@ -44,8 +55,13 @@ export default function Sources() {
   return (
     <div className="p-6 space-y-4">
       <h1 className="text-xl font-semibold">Sources</h1>
-      {error && <div className="text-red-600 text-sm">{error}</div>}
-      <div className="grid grid-cols-1 gap-2">
+      {notEnabled && (
+        <div className="rounded border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-800">
+          Connectors backend not enabled. This feature is optional and may be disabled on your server.
+        </div>
+      )}
+      {!notEnabled && error && <div className="text-red-600 text-sm">{error}</div>}
+      {!notEnabled && (<div className="grid grid-cols-1 gap-2">
         {sources.length === 0 && <div className="text-sm text-gray-500">No sources yet. Add from Browse.</div>}
         {sources.map(s => (
           <div key={s.id} className="flex items-center justify-between border rounded p-3">
@@ -59,7 +75,7 @@ export default function Sources() {
             </div>
           </div>
         ))}
-      </div>
+      </div>)}
     </div>
   )
 }

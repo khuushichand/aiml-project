@@ -1,3 +1,7 @@
+pytest_plugins = [
+    "tldw_Server_API.tests._plugins.chat_fixtures",
+]
+
 import pytest
 from fastapi import status
 from unittest.mock import patch

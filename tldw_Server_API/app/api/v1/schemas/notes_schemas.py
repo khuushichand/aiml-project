@@ -1,7 +1,7 @@
 # app/api/v1/schemas/notes_schemas.py
 #
 # Imports
-from typing import Optional, List, Any, Dict, Union
+from typing import Optional, List, Any, Dict, Union, Literal
 from datetime import datetime
 # 3rd-party Libraries
 from pydantic import BaseModel, Field, ConfigDict
@@ -19,12 +19,28 @@ class NoteBase(BaseModel):
 
 
 class NoteCreate(NoteBase):
+    # Override to allow optional title when auto_title is used
+    title: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=255,
+        description="Title of the note. Optional when auto_title=true."
+    )
     id: Optional[str] = Field(None,
                               description="Optional client-provided UUID for the note. If None, will be auto-generated.")
     keywords: Optional[Union[str, List[str]]] = Field(
         default=None,
         description="Optional keywords to attach to the note. Accepts a list of strings or a comma-separated string."
     )
+    # Title auto-generation controls
+    # MVP: heuristic-only; Phase 2: 'llm' available behind flag
+    auto_title: bool = Field(False, description="If true and no title provided, auto-generate a title from content.")
+    title_strategy: Literal["heuristic", "llm", "llm_fallback"] = Field(
+        "heuristic",
+        description="Strategy for title generation. MVP supports 'heuristic'."
+    )
+    title_max_len: int = Field(250, ge=1, le=500, description="Max title length when auto-generating.")
+    language: Optional[str] = Field(None, description="Optional language hint for title generation.")
 
     # Normalize keywords input to a clean list of strings (if provided)
     @property
@@ -151,6 +167,34 @@ class NotesExportResponse(BaseModel):
     limit: Optional[int] = None
     offset: Optional[int] = None
     exported_at: str
+
+
+class NotesExportRequest(BaseModel):
+    """Export request for selected notes.
+
+    Accepts explicit note IDs and optional flags for including keywords and
+    selecting the output format.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    note_ids: List[str] = Field(..., description="List of note IDs to export")
+    include_keywords: bool = Field(default=False)
+    format: Literal['json', 'csv'] = Field(default='json')
+
+
+# --- Title Suggestion Schemas ---
+class TitleSuggestRequest(BaseModel):
+    content: str = Field(..., min_length=1, max_length=5000000, description="Source content of the note")
+    title_strategy: Literal["heuristic", "llm", "llm_fallback"] = Field(
+        "heuristic",
+        description="Strategy for title generation. MVP supports 'heuristic'."
+    )
+    title_max_len: int = Field(250, ge=1, le=500, description="Max title length for suggestion.")
+    language: Optional[str] = Field(None, description="Optional language hint.")
+
+
+class TitleSuggestResponse(BaseModel):
+    title: str = Field(..., description="Suggested title")
 
 #
 # End of notes_schemas.py

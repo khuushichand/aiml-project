@@ -3,13 +3,16 @@
 
 FROM python:3.11-slim
 
-# Install system dependencies
+# Install system dependencies (include audio build deps so PyAudio can compile)
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     make \
     curl \
     git \
+    ffmpeg \
+    portaudio19-dev \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory

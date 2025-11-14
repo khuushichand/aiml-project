@@ -2320,6 +2320,25 @@ def convert_to_wav(
     # Output path in the same directory as input
     out_path = input_path.with_suffix(".wav")
 
+    # Avoid in-place writes when input is already a .wav
+    # If input and output resolve to the same file and overwrite is False, skip conversion.
+    # If overwrite is True, choose a different output filename to prevent FFmpeg in-place editing.
+    try:
+        same_path = out_path.resolve() == input_path.resolve()
+    except Exception:
+        same_path = str(out_path) == str(input_path)
+    if same_path:
+        if not overwrite:
+            logging.info(
+                f"Skipping conversion for WAV input (overwrite=False): {out_path}"
+            )
+            log_counter("convert_to_wav_skipped", labels={"file_path": video_file_path})
+            return str(out_path)
+        else:
+            # Select a new output filename in the same directory
+            alt_out_path = input_path.with_name(f"{input_path.stem}_16k_mono.wav")
+            out_path = alt_out_path
+
     if out_path.exists() and not overwrite:
         logging.info(f"Skipping conversion as WAV file already exists and overwrite=False: {out_path}")
         log_counter("convert_to_wav_skipped", labels={"file_path": video_file_path})

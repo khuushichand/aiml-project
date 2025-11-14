@@ -59,6 +59,7 @@ def test_google_gemini_tools_and_inline_image_mapping(monkeypatch):
     monkeypatch.setattr(hc, "create_client", fake_create_client)
     import tldw_Server_API.app.core.LLM_Calls.providers.google_adapter as gmod
     monkeypatch.setattr(gmod, "_hc_create_client", fake_create_client)
+    monkeypatch.setattr(gmod, "http_client_factory", fake_create_client)
 
     adapter = GoogleAdapter()
     # Messages with text and data: URL image part
@@ -116,6 +117,7 @@ def test_google_error_normalization_auth(monkeypatch):
     monkeypatch.setattr(hc, "create_client", fake_create_client)
     import tldw_Server_API.app.core.LLM_Calls.providers.google_adapter as gmod
     monkeypatch.setattr(gmod, "_hc_create_client", fake_create_client)
+    monkeypatch.setattr(gmod, "http_client_factory", fake_create_client)
 
     adapter = GoogleAdapter()
     with pytest.raises(Exception) as ei:

@@ -19,8 +19,22 @@ from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     CreateEvaluationRequest, UpdateEvaluationRequest, EvaluationResponse,
-    EvaluationListResponse, RunResponse, RunListResponse
+    EvaluationListResponse, RunResponse, RunListResponse,
+    
 )
+from pydantic import BaseModel, Field
+from pydantic import ConfigDict
+
+
+class CreateRunSimpleRequest(BaseModel):
+    """Create run request for CRUD endpoint.
+
+    Relaxed variant that allows free-form config while forbidding extra top-level keys.
+    """
+    model_config = ConfigDict(extra='forbid')
+    target_model: Optional[str] = Field(default=None, description="Model to evaluate")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Run configuration (free-form)")
+    webhook_url: Optional[str] = Field(default=None, description="Optional webhook URL for run events")
 
 
 crud_router = APIRouter()
@@ -202,15 +216,16 @@ async def delete_evaluation(
 @crud_router.post("/{eval_id}/runs", response_model=RunResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_run(
     eval_id: str,
-    request: Dict[str, Any],
+    request: CreateRunSimpleRequest,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        target_model = request.get("target_model")
-        config = request.get("config", {})
-        webhook_url = request.get("webhook_url")
+        target_model = request.target_model
+        # Allow free-form config; convert Pydantic models if provided in future
+        config = model_dump_compat(request.config) if hasattr(request.config, 'model_dump') else (request.config or {})
+        webhook_url = request.webhook_url
         run = await svc.create_run(
             eval_id=eval_id,
             target_model=target_model,

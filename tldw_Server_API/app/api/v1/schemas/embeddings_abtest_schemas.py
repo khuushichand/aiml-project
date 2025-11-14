@@ -109,3 +109,12 @@ class EmbeddingsABTestResultsResponse(BaseModel):
     page: int = 1
     page_size: int = 50
     total: int = 0
+
+
+class EmbeddingsABTestRunRequest(BaseModel):
+    """Run request wrapper to enforce validation at the boundary.
+
+    Keep strict extra='forbid' and carry the full AB test config.
+    """
+    model_config = ConfigDict(extra='forbid')
+    config: EmbeddingsABTestConfig

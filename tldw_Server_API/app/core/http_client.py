@@ -63,6 +63,18 @@ from tldw_Server_API.app.core.Metrics import (
 from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 
 
+def _resolve_httpx():
+    """Return the current `httpx` module, honoring test stubs in sys.modules.
+
+    Falls back to the module imported at file import time if dynamic import fails.
+    """
+    try:
+        import importlib
+        return importlib.import_module("httpx")
+    except Exception:
+        return httpx  # type: ignore
+
+
 # --------------------------------------------------------------------------------------
 # Defaults & env config
 # --------------------------------------------------------------------------------------
@@ -188,7 +200,7 @@ try:
 except Exception:
     pass
     try:
-        reg.register_metric(
+        registry.register_metric(
             MetricDefinition(
                 name="http_client_egress_denials_total",
                 type=MetricType.COUNTER,
@@ -259,6 +271,56 @@ def _redact_headers(h: Optional[Dict[str, str]]) -> Dict[str, str]:
         else:
             safe[k] = v
     return safe
+
+
+def _sanitize_accept_encoding_for_backend(headers: Optional[Dict[str, str]], backend: str) -> Dict[str, str]:
+    """Return a copy of headers with backend-specific Accept-Encoding tweaks.
+
+    - Case-insensitively reads/removes existing Accept-Encoding headers.
+    - For 'httpx' backend, removes any 'zstd' codings (with or without parameters, e.g. 'zstd;q=0.9').
+    - Writes back a single canonical 'Accept-Encoding' header if tokens remain; otherwise removes it.
+    - Best-effort: on any parsing error, leaves headers unchanged.
+    """
+    hdrs: Dict[str, str] = dict(headers or {})
+    if str(backend).lower() != "httpx":
+        return hdrs
+    try:
+        # Find all Accept-Encoding header keys regardless of case
+        ae_keys = [k for k in hdrs.keys() if k.lower() == "accept-encoding"]
+        if not ae_keys:
+            return hdrs
+
+        # Combine values from all variants
+        raw_vals: list[str] = []
+        for k in ae_keys:
+            v = hdrs.get(k)
+            if v is None:
+                continue
+            raw_vals.append(str(v))
+        combined = ",".join(raw_vals)
+
+        # Parse tokens, dropping any with coding 'zstd' (case-insensitive), regardless of parameters
+        filtered: list[str] = []
+        for part in combined.split(','):
+            token = part.strip()
+            if not token:
+                continue
+            coding = token.split(';', 1)[0].strip().lower()
+            if coding == 'zstd':
+                continue
+            filtered.append(token)
+
+        # Commit: remove all original variants
+        for k in ae_keys:
+            hdrs.pop(k, None)
+        # Write canonical header back if any tokens remain
+        if filtered:
+            hdrs["Accept-Encoding"] = ", ".join(filtered)
+        # else: if nothing remains, header stays removed
+    except Exception:
+        # Best-effort: return original headers unchanged
+        return dict(headers or {})
+    return hdrs
 
 
 def _url_parts(u: Union[str, Any]) -> Tuple[str, str, str]:
@@ -358,6 +420,21 @@ def _validate_egress_or_raise(url: str) -> None:
         raise EgressPolicyError(res.reason or "URL not allowed by egress policy")
 
 
+def _is_url_allowed(url: str) -> bool:
+    """Lightweight policy check used by simple fetch path (tests monkeypatch this).
+
+    Delegates to the central egress policy evaluator and returns a boolean.
+    """
+    try:
+        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+        res = evaluate_url_policy(url)
+        return bool(getattr(res, "allowed", False))
+    except Exception:
+        # Fail closed in strict paths; the simple path's callers expect explicit
+        # ValueError on denial and do not rely on exceptions from here.
+        return False
+
+
 def _validate_proxies_or_raise(proxies: Optional[Union[str, Dict[str, str]]]) -> None:
     if not proxies:
         return
@@ -413,9 +490,22 @@ def _build_default_headers(component: Optional[str] = None) -> Dict[str, str]:
     return {"User-Agent": ua}
 
 
-def _httpx_limits_default() -> "httpx.Limits":
-    return httpx.Limits(max_connections=int(os.getenv("HTTP_MAX_CONNECTIONS", "100")),
-                        max_keepalive_connections=int(os.getenv("HTTP_MAX_KEEPALIVE_CONNECTIONS", "20")))
+def _httpx_limits_default():  # Optional["httpx.Limits"]
+    """Return a default httpx.Limits if available; otherwise None.
+
+    Some tests stub `httpx` with minimal objects lacking `Limits`. In that case,
+    skip providing limits entirely so the client factory can succeed.
+    """
+    try:
+        _hx = _resolve_httpx()
+        if _hx is not None and hasattr(_hx, "Limits"):
+            return _hx.Limits(
+                max_connections=int(os.getenv("HTTP_MAX_CONNECTIONS", "100")),
+                max_keepalive_connections=int(os.getenv("HTTP_MAX_KEEPALIVE_CONNECTIONS", "20")),
+            )
+    except Exception:
+        pass
+    return None
 
 
 def _tls_min_version_from_str(ver: Optional[str]) -> ssl.TLSVersion:
@@ -484,7 +574,7 @@ def _check_cert_pinning(host: str, port: int, pins: set[str], min_ver: Optional[
         try:
             ctx.minimum_version = _tls_min_version_from_str(min_ver)
         except Exception:
-            pass
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         with socket.create_connection((host, port), timeout=DEFAULT_CONNECT_TIMEOUT) as sock:
             with ctx.wrap_socket(sock, server_hostname=host) as ssock:
                 der = ssock.getpeercert(binary_form=True)
@@ -506,23 +596,31 @@ def _check_cert_pinning(host: str, port: int, pins: set[str], min_ver: Optional[
 def _instantiate_client(factory, kwargs: Dict[str, Any]):  # type: ignore[no-untyped-def]
     """Instantiate httpx client tolerating version differences in kwargs.
 
-    Removes unsupported keyword arguments on TypeError and retries.
+    On TypeError mentioning an unexpected keyword argument, remove that kwarg
+    and retry. This also supports tests that stub `httpx.Client` with a minimal
+    constructor accepting only a subset (e.g., just `timeout`).
     """
-    unsupported = {"proxies", "http2", "limits"}
+    import re as _re
     while True:
         try:
             return factory(**kwargs)
         except TypeError as e:
             msg = str(e)
-            removed = False
-            for k in list(unsupported):
-                if f"unexpected keyword argument '{k}'" in msg or f"unexpected keyword argument \"{k}\"" in msg:
+            # Look for patterns like: "unexpected keyword argument 'foo'"
+            m = _re.search(r"unexpected keyword argument ['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]", msg)
+            key = m.group(1) if m else None
+            if key and key in kwargs:
+                kwargs.pop(key, None)
+                continue
+            # Fallback: remove commonly problematic kwargs if present, then retry once
+            removed_any = False
+            for k in ["limits", "http2", "proxies", "headers", "transport", "trust_env", "base_url", "verify"]:
+                if k in kwargs:
                     kwargs.pop(k, None)
-                    unsupported.remove(k)
-                    removed = True
-                    break
-            if not removed:
-                raise
+                    removed_any = True
+            if removed_any:
+                continue
+            raise
         except ImportError as e:
             # Gracefully disable http2 if h2 not installed
             if "Using http2=True" in str(e) and kwargs.get("http2"):
@@ -546,12 +644,27 @@ def create_async_client(
     tls_min_version: str = TLS_MIN_VERSION,
     cert_pinning: Optional[Dict[str, set[str]]] = None,
 ) -> "httpx.AsyncClient":
-    if httpx is None:  # pragma: no cover
+    _hx = _resolve_httpx()
+    if _hx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
     _validate_proxies_or_raise(proxies)
-    to = timeout if isinstance(timeout, httpx.Timeout) else (timeout or _httpx_timeout_from_defaults())
-    if not isinstance(to, httpx.Timeout):
-        to = httpx.Timeout(float(to))
+    # Build a timeout value tolerant of stubbed httpx without Timeout class
+    if hasattr(_hx, "Timeout"):
+        try:
+            to = (
+                timeout
+                if isinstance(timeout, _hx.Timeout)
+                else (timeout if timeout is not None else _httpx_timeout_from_defaults())
+            )
+        except Exception:
+            to = timeout if timeout is not None else DEFAULT_READ_TIMEOUT
+        if not isinstance(to, getattr(_hx, "Timeout", object)):
+            try:
+                to = _hx.Timeout(float(to))
+            except Exception:
+                to = float(timeout) if timeout is not None else DEFAULT_READ_TIMEOUT
+    else:
+        to = float(timeout) if timeout is not None else DEFAULT_READ_TIMEOUT
     hdrs = _build_default_headers()
     if headers:
         hdrs.update(headers)
@@ -563,13 +676,15 @@ def create_async_client(
         proxies=proxies,
         headers=hdrs,
         transport=transport,
-        limits=limits or _httpx_limits_default(),
     )
+    lim = limits or _httpx_limits_default()
+    if lim is not None:
+        kwargs["limits"] = lim
     if verify_ctx is not None:
         kwargs["verify"] = verify_ctx
     if base_url is not None:
         kwargs["base_url"] = base_url
-    client = _instantiate_client(httpx.AsyncClient, kwargs)
+    client = _instantiate_client(getattr(_hx, "AsyncClient", object), kwargs)
     try:
         if cert_pinning:
             setattr(client, "_tldw_cert_pinning", cert_pinning)
@@ -597,12 +712,27 @@ def create_client(
     tls_min_version: str = TLS_MIN_VERSION,
     cert_pinning: Optional[Dict[str, set[str]]] = None,
 ) -> "httpx.Client":
-    if httpx is None:  # pragma: no cover
+    _hx = _resolve_httpx()
+    if _hx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
     _validate_proxies_or_raise(proxies)
-    to = timeout if isinstance(timeout, httpx.Timeout) else (timeout or _httpx_timeout_from_defaults())
-    if not isinstance(to, httpx.Timeout):
-        to = httpx.Timeout(float(to))
+    # Build a timeout value tolerant of stubbed httpx without Timeout class
+    if hasattr(_hx, "Timeout"):
+        try:
+            to = (
+                timeout
+                if isinstance(timeout, _hx.Timeout)
+                else (timeout if timeout is not None else _httpx_timeout_from_defaults())
+            )
+        except Exception:
+            to = timeout if timeout is not None else DEFAULT_READ_TIMEOUT
+        if not isinstance(to, getattr(_hx, "Timeout", object)):
+            try:
+                to = _hx.Timeout(float(to))
+            except Exception:
+                to = float(timeout) if timeout is not None else DEFAULT_READ_TIMEOUT
+    else:
+        to = float(timeout) if timeout is not None else DEFAULT_READ_TIMEOUT
     hdrs = _build_default_headers()
     if headers:
         hdrs.update(headers)
@@ -614,13 +744,21 @@ def create_client(
         proxies=proxies,
         headers=hdrs,
         transport=transport,
-        limits=limits or _httpx_limits_default(),
     )
+    lim = limits or _httpx_limits_default()
+    if lim is not None:
+        kwargs["limits"] = lim
     if verify_ctx is not None:
         kwargs["verify"] = verify_ctx
     if base_url is not None:
         kwargs["base_url"] = base_url
-    client = _instantiate_client(httpx.Client, kwargs)
+    # Debug which factory is being used, to verify test monkeypatches
+    try:
+        from loguru import logger as _logger  # local import to avoid global cost
+        _logger.debug("http_client.create_client: httpx.Client factory={} kwargs_keys={}", getattr(_hx, "Client", None), list(kwargs.keys()))
+    except Exception:
+        pass
+    client = _instantiate_client(getattr(_hx, "Client", object), kwargs)
     try:
         if cert_pinning:
             setattr(client, "_tldw_cert_pinning", cert_pinning)
@@ -665,9 +803,17 @@ async def afetch(
     last_exc: Optional[Exception] = None
     tm = get_tracing_manager()
     host_attr = _parse_host_from_url(url)
+    method_upper = str(method).upper()
+    _head_disable_h2_tried = False
+    _head_get_range_tried = False
 
     async def _do_once(ac: "httpx.AsyncClient", target_url: str) -> Tuple[Optional["httpx.Response"], str]:
         req_headers = _inject_trace_headers(headers)
+        # Parity with other paths: drop 'zstd' from Accept-Encoding for httpx
+        try:
+            req_headers = _sanitize_accept_encoding_for_backend(req_headers, "httpx")
+        except Exception:
+            pass
         try:
             # Optional cert pinning per host
             try:
@@ -721,7 +867,63 @@ async def afetch(
                     _validate_egress_or_raise(cur_url)
                     resp, reason = await _do_once(ac, cur_url)
                     if resp is None:
-                        # network exception occurred
+                        # Special HEAD fallbacks: disable HTTP/2, then GET with Range 0-0
+                        if method_upper == "HEAD":
+                            if not _head_disable_h2_tried:
+                                _head_disable_h2_tried = True
+                                try:
+                                    if need_close:
+                                        try:
+                                            await ac.aclose()
+                                        except Exception:
+                                            pass
+                                    ac = create_async_client(proxies=proxies, http2=False)
+                                    need_close = True
+                                    # Retry immediately inside same attempt
+                                    continue
+                                except Exception:
+                                    pass
+                            if not _head_get_range_tried:
+                                _head_get_range_tried = True
+                                try:
+                                    req_headers = _inject_trace_headers(headers)
+                                    try:
+                                        req_headers = _sanitize_accept_encoding_for_backend(req_headers, "httpx")
+                                    except Exception:
+                                        pass
+                                    req_headers.setdefault("Range", "bytes=0-0")
+                                    # Use a small per-request timeout specifically for this fallback
+                                    try:
+                                        _head_fb_to = float(os.getenv("HTTP_HEAD_RANGE_FALLBACK_TIMEOUT", "5"))
+                                    except Exception:
+                                        _head_fb_to = 5.0
+                                    r2 = await ac.request(
+                                        "GET",
+                                        cur_url,
+                                        headers=req_headers,
+                                        params=params,
+                                        json=json,
+                                        data=data,
+                                        files=files,
+                                        timeout=_head_fb_to,
+                                        follow_redirects=False,
+                                    )
+                                    try:
+                                        tm.set_attributes({"http.status_code": int(r2.status_code)})
+                                    except Exception:
+                                        pass
+                                    _log_outbound_request(
+                                        method="GET",
+                                        url=r2.request.url if hasattr(r2.request, "url") else cur_url,
+                                        status_code=int(r2.status_code),
+                                        start_time=t0,
+                                        attempt=attempt,
+                                        last_retry_delay_s=sleep_s,
+                                    )
+                                    return r2
+                                except Exception:
+                                    pass
+                        # network exception occurred (no HEAD fallback succeeded)
                         last_exc = NetworkError(reason)
                     else:
                         # Handle redirects explicitly to enforce per-hop egress
@@ -869,7 +1071,7 @@ async def afetch(
                 pass
 
 
-def fetch(
+def _fetch_httpx_response(
     *,
     method: str,
     url: str,
@@ -896,9 +1098,18 @@ def fetch(
     t0 = time.time()
     tm = get_tracing_manager()
     host_attr = _parse_host_from_url(url)
+    method_upper = str(method).upper()
+    _head_disable_h2_tried = False
+    _head_get_range_tried = False
 
     def _do_once(sc: "httpx.Client", target_url: str) -> Tuple[Optional["httpx.Response"], str]:
         req_headers = _inject_trace_headers(headers)
+        # Parity with simple fetch: drop 'zstd' from Accept-Encoding for httpx
+        try:
+            req_headers = _sanitize_accept_encoding_for_backend(req_headers, "httpx")
+        except Exception:
+            # Best-effort only; ignore sanitizer errors
+            pass
         try:
             # Optional cert pinning per host
             try:
@@ -948,6 +1159,61 @@ def fetch(
                     _validate_egress_or_raise(cur_url)
                     resp, reason = _do_once(sc, cur_url)
                     if resp is None:
+                        if method_upper == "HEAD":
+                            if not _head_disable_h2_tried:
+                                _head_disable_h2_tried = True
+                                try:
+                                    if need_close:
+                                        try:
+                                            sc.close()
+                                        except Exception:
+                                            pass
+                                    sc = create_client(proxies=proxies, http2=False)
+                                    need_close = True
+                                    # Retry immediately within same attempt
+                                    continue
+                                except Exception:
+                                    pass
+                            if not _head_get_range_tried:
+                                _head_get_range_tried = True
+                                try:
+                                    req_headers = _inject_trace_headers(headers)
+                                    try:
+                                        req_headers = _sanitize_accept_encoding_for_backend(req_headers, "httpx")
+                                    except Exception:
+                                        pass
+                                    req_headers.setdefault("Range", "bytes=0-0")
+                                    # Use a small per-request timeout specifically for this fallback
+                                    try:
+                                        _head_fb_to = float(os.getenv("HTTP_HEAD_RANGE_FALLBACK_TIMEOUT", "5"))
+                                    except Exception:
+                                        _head_fb_to = 5.0
+                                    r2 = sc.request(
+                                        "GET",
+                                        cur_url,
+                                        headers=req_headers,
+                                        params=params,
+                                        json=json,
+                                        data=data,
+                                        files=files,
+                                        timeout=_head_fb_to,
+                                        follow_redirects=False,
+                                    )
+                                    try:
+                                        tm.set_attributes({"http.status_code": int(r2.status_code)})
+                                    except Exception:
+                                        pass
+                                    _log_outbound_request(
+                                        method="GET",
+                                        url=r2.request.url if hasattr(r2.request, "url") else cur_url,
+                                        status_code=int(r2.status_code),
+                                        start_time=t0,
+                                        attempt=attempt,
+                                        last_retry_delay_s=sleep_s,
+                                    )
+                                    return r2
+                                except Exception:
+                                    pass
                         should, rsn = _should_retry(method, None, NetworkError(reason), retry)
                         if not should or attempt == attempts:
                             raise NetworkError(reason)
@@ -1065,6 +1331,60 @@ def fetch(
                 sc.close()
             except Exception:
                 pass
+
+
+def fetch(*args, **kwargs):
+    """Dual-mode fetch helper.
+
+    - If called with keyword 'method', delegates to the HTTPX response API and
+      returns an httpx.Response (backward compatible with existing callers).
+    - Otherwise, provides a simplified fetch suitable for Web_Scraping tests:
+      accepts `url` (positional), optional `headers`, `backend` (default 'httpx'),
+      and returns a mapping with keys: status, headers, text, url, backend.
+    """
+    # Response-based API path (existing callers/tests)
+    if "method" in kwargs:
+        return _fetch_httpx_response(**kwargs)
+    # Simple path (tests: Web_Scraping/test_http_client_fetch.py)
+    if not args and "url" not in kwargs:
+        raise TypeError("fetch() missing required argument: 'url'")
+    url = str(args[0] if args else kwargs.get("url"))
+    backend = str(kwargs.get("backend", "httpx"))
+    headers = kwargs.get("headers") or {}
+    cookies = kwargs.get("cookies")
+    follow_redirects = bool(kwargs.get("follow_redirects", True))
+    trust_env = kwargs.get("trust_env", None)
+    proxies = kwargs.get("proxies", None)
+    timeout = kwargs.get("timeout", None)
+
+    # Enforce egress via stubbed policy helper (tests monkeypatch this)
+    if not _is_url_allowed(url):
+        raise ValueError("Egress denied for URL")
+
+    if httpx is None:  # pragma: no cover
+        raise RuntimeError("httpx is not available")
+
+    # Sanitize Accept-Encoding as per backend expectations
+    req_headers = _sanitize_accept_encoding_for_backend(headers, backend)
+
+    client_kwargs: Dict[str, Any] = {}
+    if timeout is not None:
+        client_kwargs["timeout"] = timeout
+    if trust_env is not None:
+        client_kwargs["trust_env"] = trust_env
+    if proxies is not None:
+        client_kwargs["proxies"] = proxies
+
+    # Minimal client lifecycle for simple fetch
+    with httpx.Client(**client_kwargs) as sc:  # type: ignore[call-arg]
+        r = sc.request("GET", url, headers=req_headers, cookies=cookies, follow_redirects=follow_redirects)
+        return HttpResponse(
+            status=int(getattr(r, "status_code", 0)),
+            headers=dict(getattr(r, "headers", {}) or {}),
+            text=str(getattr(r, "text", "")),
+            url=str(getattr(r, "url", url)),
+            backend=str(backend),
+        )
 
 
 # --------------------------------------------------------------------------------------

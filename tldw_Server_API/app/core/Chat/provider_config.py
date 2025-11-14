@@ -516,7 +516,9 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'messages_payload': 'input_data',
         'prompt': 'custom_prompt', # This is 'prompt' for generate, 'messages' for chat
         'temp': 'temperature',
-        'system_message': 'system', # Part of request body
+        # Use the adapter's expected kwarg; the adapter inserts the system
+        # prompt into messages for OpenAI-compatible chat.
+        'system_message': 'system_message',
         'streaming': 'stream',
         'topp': 'top_p',
         'topk': 'top_k',
@@ -524,7 +526,8 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'max_tokens': 'num_predict', # For generate endpoint, chat might be different
         'seed': 'seed',
         'stop': 'stop', # list of strings
-        'response_format': 'format', # 'json' string
+        # Adapter expects 'format_str' and can translate 'json' to OpenAI dict
+        'response_format': 'format_str',
         'presence_penalty': 'presence_penalty',
         'frequency_penalty': 'frequency_penalty',
         'http_client_factory': 'http_client_factory',

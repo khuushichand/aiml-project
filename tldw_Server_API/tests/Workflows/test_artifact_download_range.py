@@ -62,16 +62,15 @@ def test_artifact_download_with_range(monkeypatch, tmp_path, client_and_db):
     run_id = _bootstrap_run_with_artifact(db, tmp_path)
     # Sanity: run should be present in the overridden DB instance
     assert db.get_run(run_id) is not None
-    with client:
-        # auth: tests use single-user mode; dependency injects admin-like claims
-        # Fetch artifact list to get id
-        r = client.get(f"/api/v1/workflows/runs/{run_id}/artifacts")
-        assert r.status_code == 200
-        art_id = r.json()[0]["artifact_id"]
-        # Request a range
-        headers = {"Range": "bytes=0-9"}
-        r2 = client.get(f"/api/v1/workflows/artifacts/{art_id}/download", headers=headers)
-        assert r2.status_code == 206
-        assert r2.headers.get("Content-Range", "").startswith("bytes 0-9/")
-        assert r2.headers.get("Accept-Ranges") == "bytes"
-        assert r2.content == b"0123456789"
+    # auth: tests use single-user mode; dependency injects admin-like claims
+    # Fetch artifact list to get id
+    r = client.get(f"/api/v1/workflows/runs/{run_id}/artifacts")
+    assert r.status_code == 200
+    art_id = r.json()[0]["artifact_id"]
+    # Request a range
+    headers = {"Range": "bytes=0-9"}
+    r2 = client.get(f"/api/v1/workflows/artifacts/{art_id}/download", headers=headers)
+    assert r2.status_code == 206
+    assert r2.headers.get("Content-Range", "").startswith("bytes 0-9/")
+    assert r2.headers.get("Accept-Ranges") == "bytes"
+    assert r2.content == b"0123456789"

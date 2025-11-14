@@ -65,6 +65,24 @@ The comprehensive guide covers:
 - httpx
 - All tldw_server dependencies
 
+## In-process (no open port)
+
+Some CI environments disallow listening sockets. You can still run the e2e
+suite against the real FastAPI app using httpx’s ASGITransport by setting:
+
+```bash
+export E2E_INPROCESS=1
+export AUTH_MODE=single_user
+export TEST_MODE=1
+export SINGLE_USER_API_KEY=test-api-key-for-e2e-testing-12345
+export SINGLE_USER_TEST_API_KEY=$SINGLE_USER_API_KEY
+python -m pytest tldw_Server_API/tests/e2e/ -k smoke -q
+```
+
+Notes:
+- WebSocket-specific tests are skipped in this mode.
+- Many tests also skip gracefully if embeddings/LLM providers aren’t configured.
+
 ---
 
 For complete documentation, examples, and patterns, see **[E2E_TESTING_GUIDE.md](./E2E_TESTING_GUIDE.md)**

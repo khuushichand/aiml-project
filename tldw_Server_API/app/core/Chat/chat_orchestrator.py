@@ -39,6 +39,7 @@ from tldw_Server_API.app.core.Chat.chat_dictionary import (
     process_user_input,
 )
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.Chat import command_router
 from tldw_Server_API.app.core.config import load_and_log_configs
 #
 ####################################################################################################
@@ -531,6 +532,41 @@ def chat(
         if not isinstance(selected_parts, (list, tuple)):
             selected_parts = [selected_parts] if selected_parts else []
 
+        # Parse slash-commands before dictionary processing
+        injected_command_system_text: Optional[str] = None
+        original_message = message
+        if command_router.commands_enabled() and isinstance(message, str):
+            parsed = command_router.parse_slash_command(message)
+            if parsed:
+                cmd_name, cmd_args = parsed
+                # Build minimal context; user_identifier may be None
+                auth_user_int = None
+                try:
+                    if llm_user_identifier is not None:
+                        auth_user_int = int(llm_user_identifier)  # best-effort parse for RBAC
+                except Exception:
+                    auth_user_int = None
+                ctx = command_router.CommandContext(user_id=llm_user_identifier or "anonymous", auth_user_id=auth_user_int)
+                cmd_res = command_router.dispatch_command(ctx, cmd_name, cmd_args)
+                if cmd_res.ok:
+                    injection_mode = command_router.get_injection_mode()
+                    # Start with the args-only message (command token removed)
+                    base_args = (cmd_args or "").strip()
+                    if injection_mode == "preface":
+                        prefix = f"[/{cmd_name}] {cmd_res.content}\n\n"
+                        message = f"{prefix}{base_args}" if base_args else prefix.strip()
+                    elif injection_mode == "replace":
+                        # Replace the user's message content with the command result
+                        # Include the marker for traceability, consistent with preface
+                        message = f"[/{cmd_name}] {cmd_res.content}".strip()
+                    else:  # default: system injection
+                        message = base_args
+                        injected_command_system_text = f"[/{cmd_name}] {cmd_res.content}"
+                else:
+                    # On error, provide a short system injection so the model has context; strip the command from user text
+                    message = (cmd_args or "").strip()
+                    injected_command_system_text = f"[/{cmd_name}] {cmd_res.content}"
+
         # Process message with Chat Dictionary (text only for now)
         processed_text_message = message
         if chatdict_entries and message:
@@ -633,6 +669,26 @@ def chat(
 
         final_text_for_current_message = f"{rag_text_prefix}{final_text_for_current_message}".strip()
 
+        # Inject command result as a separate system message when configured
+        if injected_command_system_text:
+            # Enrich with audit metadata (non-visible) for downstream logging/adapters that preserve message fields
+            _cmd_meta = {
+                "source": "slash_command",
+                "command": cmd_name if 'cmd_name' in locals() else None,
+                "args": cmd_args if 'cmd_args' in locals() else None,
+                "mode": command_router.get_injection_mode(),
+                "result_ok": True if 'cmd_res' in locals() and getattr(cmd_res, 'ok', False) else False,
+                "error": (getattr(cmd_res, 'metadata', {}) or {}).get("error") if 'cmd_res' in locals() else None,
+                "rbac": (getattr(cmd_res, 'metadata', {}) or {}).get("rbac") if 'cmd_res' in locals() else None,
+            }
+            msg_obj = {
+                "role": "system",
+                "name": "system-command",
+                "content": [{"type": "text", "text": injected_command_system_text}],
+                "metadata": {"tldw_injection": _cmd_meta},
+            }
+            llm_messages_payload.append(msg_obj)
+
         if final_text_for_current_message:
             current_user_content_parts.append({"type": "text", "text": final_text_for_current_message})
 
@@ -734,6 +790,225 @@ def chat(
         logging.error(f"Error in multimodal chat function: {str(e)}", exc_info=True)
         # Consider if the error format should change from just a string
         return f"An error occurred in the chat function: {str(e)}"
+
+
+async def achat(
+    message: str,
+    history: List[Dict[str, Any]],
+    media_content: Optional[Dict[str, str]],
+    selected_parts: List[str],
+    api_endpoint: str,
+    api_key: Optional[str],
+    custom_prompt: Optional[str],
+    temperature: float,
+    system_message: Optional[str] = None,
+    streaming: bool = False,
+    minp: Optional[float] = None,
+    maxp: Optional[float] = None,
+    model: Optional[str] = None,
+    topp: Optional[float] = None,
+    topk: Optional[int] = None,
+    chatdict_entries: Optional[List[Any]] = None, # Should be List[ChatDictionary]
+    max_tokens: int = 500,
+    strategy: str = "sorted_evenly",
+    current_image_input: Optional[Dict[str, str]] = None,
+    image_history_mode: str = "tag_past",
+    llm_max_tokens: Optional[int] = None,
+    llm_seed: Optional[int] = None,
+    llm_stop: Optional[Union[str, List[str]]] = None,
+    llm_response_format: Optional[ResponseFormat] = None,
+    llm_n: Optional[int] = None,
+    llm_user_identifier: Optional[str] = None,
+    llm_logprobs: Optional[bool] = None,
+    llm_top_logprobs: Optional[int] = None,
+    llm_logit_bias: Optional[Dict[str, float]] = None,
+    llm_presence_penalty: Optional[float] = None,
+    llm_frequency_penalty: Optional[float] = None,
+    llm_tools: Optional[List[Dict[str, Any]]] = None,
+    llm_tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+) -> Union[str, Any]:
+    """Async variant of chat() that uses async slash-command dispatch and async provider calls.
+
+    Mirrors the behavior of chat() but awaits command_router.async_dispatch_command
+    and chat_api_call_async to ensure proper concurrency semantics.
+    """
+    log_counter("chat_attempt_multimodal", labels={"api_endpoint": api_endpoint, "image_mode": image_history_mode})
+    start_time = time.time()
+
+    try:
+        logging.info(f"Debug - Chat Function (async) - Input Text: '{message}', Image provided: {'Yes' if current_image_input else 'No'}")
+        logging.info(f"Debug - Chat Function (async) - History length: {len(history)}, Image History Mode: {image_history_mode}")
+
+        if not isinstance(selected_parts, (list, tuple)):
+            selected_parts = [selected_parts] if selected_parts else []
+
+        injected_command_system_text: Optional[str] = None
+        original_message = message
+        if command_router.commands_enabled() and isinstance(message, str):
+            parsed = command_router.parse_slash_command(message)
+            if parsed:
+                cmd_name, cmd_args = parsed
+                auth_user_int = None
+                try:
+                    if llm_user_identifier is not None:
+                        auth_user_int = int(llm_user_identifier)
+                except Exception:
+                    auth_user_int = None
+                ctx = command_router.CommandContext(user_id=llm_user_identifier or "anonymous", auth_user_id=auth_user_int)
+                cmd_res = await command_router.async_dispatch_command(ctx, cmd_name, cmd_args)
+                if cmd_res.ok:
+                    injection_mode = command_router.get_injection_mode()
+                    base_args = (cmd_args or "").strip()
+                    if injection_mode == "preface":
+                        prefix = f"[/{cmd_name}] {cmd_res.content}\n\n"
+                        message = f"{prefix}{base_args}" if base_args else prefix.strip()
+                    elif injection_mode == "replace":
+                        message = f"[/{cmd_name}] {cmd_res.content}".strip()
+                    else:
+                        message = base_args
+                        injected_command_system_text = f"[/{cmd_name}] {cmd_res.content}"
+                else:
+                    message = (cmd_args or "").strip()
+                    injected_command_system_text = f"[/{cmd_name}] {cmd_res.content}"
+
+        processed_text_message = message
+        if chatdict_entries and message:
+            processed_text_message = process_user_input(
+                message, chatdict_entries, max_tokens=max_tokens, strategy=strategy
+            )
+
+        llm_messages_payload: List[Dict[str, Any]] = []
+
+        last_user_image_url_from_history: Optional[str] = None
+        for hist_msg_obj in history:
+            role = hist_msg_obj.get("role")
+            original_content = hist_msg_obj.get("content")
+            processed_hist_content_parts = []
+            if isinstance(original_content, str):
+                processed_hist_content_parts.append({"type": "text", "text": original_content})
+            elif isinstance(original_content, list):
+                for part in original_content:
+                    if part.get("type") == "text":
+                        processed_hist_content_parts.append({"type": "text", "text": part.get("text", "")})
+                    elif part.get("type") == "image_url":
+                        processed_hist_content_parts.append(part)
+            if processed_hist_content_parts:
+                llm_messages_payload.append({"role": role, "content": processed_hist_content_parts})
+
+        rag_text_prefix = ""
+        try:
+            if media_content and selected_parts:
+                rag_text_prefix = ("\n\n".join(
+                    f"{part}:\n{media_content.get(part)}" for part in selected_parts if media_content.get(part)
+                )).strip()
+                if rag_text_prefix:
+                    rag_text_prefix += "\n\n---\n\n"
+        except Exception:
+            pass
+
+        current_user_content_parts: List[Dict[str, Any]] = []
+        final_text_for_current_message = processed_text_message
+        if custom_prompt:
+            final_text_for_current_message = f"{custom_prompt}\n\n{final_text_for_current_message}"
+        final_text_for_current_message = f"{rag_text_prefix}{final_text_for_current_message}".strip()
+
+        if injected_command_system_text:
+            _cmd_meta = {
+                "source": "slash_command",
+                "command": cmd_name if 'cmd_name' in locals() else None,
+                "args": cmd_args if 'cmd_args' in locals() else None,
+                "mode": command_router.get_injection_mode(),
+                "result_ok": True if 'cmd_res' in locals() and getattr(cmd_res, 'ok', False) else False,
+                "error": (getattr(cmd_res, 'metadata', {}) or {}).get("error") if 'cmd_res' in locals() else None,
+                "rbac": (getattr(cmd_res, 'metadata', {}) or {}).get("rbac") if 'cmd_res' in locals() else None,
+            }
+            msg_obj = {
+                "role": "system",
+                "name": "system-command",
+                "content": [{"type": "text", "text": injected_command_system_text}],
+                "metadata": {"tldw_injection": _cmd_meta},
+            }
+            llm_messages_payload.append(msg_obj)
+
+        if final_text_for_current_message:
+            current_user_content_parts.append({"type": "text", "text": final_text_for_current_message})
+        if current_image_input and current_image_input.get('base64_data') and current_image_input.get('mime_type'):
+            image_url = f"data:{current_image_input['mime_type']};base64,{current_image_input['base64_data']}"
+            current_user_content_parts.append({"type": "image_url", "image_url": {"url": image_url}})
+        if not current_user_content_parts:
+            logging.warning("Current user message has no text or image content parts. Sending a placeholder.")
+            current_user_content_parts.append({"type": "text", "text": "(No user input for this turn)"})
+
+        llm_messages_payload.append({"role": "user", "content": current_user_content_parts})
+
+        temperature_float = 0.7
+        try:
+            temperature_float = float(temperature) if temperature is not None else 0.7
+        except ValueError:
+            logging.warning(f"Invalid temperature '{temperature}', using 0.7.")
+
+        logging.debug("Debug - Async Chat Function - Final LLM Payload prepared")
+
+        preloaded_cfg = load_and_log_configs()
+        response = await chat_api_call_async(
+            api_endpoint=api_endpoint,
+            api_key=api_key,
+            messages_payload=llm_messages_payload,
+            temp=temperature_float,
+            system_message=system_message,
+            streaming=streaming,
+            minp=minp, maxp=maxp, model=model, topp=topp, topk=topk,
+            max_tokens=llm_max_tokens,
+            seed=llm_seed,
+            stop=llm_stop,
+            response_format=llm_response_format.model_dump() if llm_response_format else None,
+            n=llm_n,
+            user_identifier=llm_user_identifier,
+            logprobs=llm_logprobs,
+            top_logprobs=llm_top_logprobs,
+            logit_bias=llm_logit_bias,
+            presence_penalty=llm_presence_penalty,
+            frequency_penalty=llm_frequency_penalty,
+            tools=llm_tools,
+            tool_choice=llm_tool_choice,
+            app_config=preloaded_cfg,
+        )
+
+        if streaming:
+            logging.debug("Async Chat Function - Response: Streaming Generator")
+            return response
+        else:
+            chat_duration = time.time() - start_time
+            log_histogram("chat_duration_multimodal", chat_duration, labels={"api_endpoint": api_endpoint})
+            log_counter("chat_success_multimodal", labels={"api_endpoint": api_endpoint})
+
+            loaded_config_data = preloaded_cfg or load_and_log_configs()
+            post_gen_replacement_config = loaded_config_data.get('chat_dictionaries', {}).get('post_gen_replacement')
+            if post_gen_replacement_config and isinstance(response, str):
+                post_gen_replacement_dict_path = loaded_config_data.get('chat_dictionaries', {}).get('post_gen_replacement_dict')
+                if post_gen_replacement_dict_path and os.path.exists(post_gen_replacement_dict_path):
+                    try:
+                        parsed_entries = parse_user_dict_markdown_file(post_gen_replacement_dict_path)
+                        if parsed_entries:
+                            post_gen_chat_dict_objects = [
+                                ChatDictionary(key=k, content=str(v)) for k, v in parsed_entries.items()
+                            ]
+                            response = process_user_input(response, post_gen_chat_dict_objects)
+                            logging.debug(
+                                f"Async response after post-gen replacement (first 500 chars): {str(response)[:500]}"
+                            )
+                        else:
+                            logging.debug("Post-gen dictionary parsed but resulted in no ChatDictionary objects.")
+                    except Exception as e_post_gen:
+                        logging.error(f"Error during post-generation replacement: {e_post_gen}", exc_info=True)
+                else:
+                    logging.warning("Post-gen replacement enabled but dict file not found/configured.")
+            return response
+
+    except Exception as e:
+        log_counter("chat_error_multimodal", labels={"api_endpoint": api_endpoint, "error": str(e)})
+        logging.error(f"Error in async multimodal chat function: {str(e)}", exc_info=True)
+        return f"An error occurred in the async chat function: {str(e)}"
 
 #
 # End of chat_orchestrator.py

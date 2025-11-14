@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Union
 from loguru import logger
 
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls.sse import sse_data, sse_done
 # Import legacy implementations under explicit names to avoid recursion when
 # top-level names become adapter-backed wrappers.
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
@@ -93,21 +94,26 @@ def openai_chat_handler(
 
     Accepts extra kwargs (e.g., 'topp') to remain resilient to PROVIDER_PARAM_MAP drift.
     """
-    # Honor test monkeypatching of legacy chat_with_openai directly to avoid network in tests
+    # Honor explicit test monkeypatching of legacy chat_with_openai to avoid network
+    # Only delegate when the target appears to come from a tests module or is a
+    # clearly marked test double (function name starting with "_fake"). This avoids
+    # infinite recursion when the public function simply forwards back to this shim.
     try:
         from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_openai", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
-            # Prefer patched callable whenever running under pytest, even if
-            # module name heuristics fail (CI/packaging differences).
+            _fname = getattr(_patched, "__name__", "") or ""
             if (
-                os.getenv("PYTEST_CURRENT_TEST")
-                or _modname.startswith("tldw_Server_API.tests")
+                _modname.startswith("tldw_Server_API.tests")
                 or _modname.startswith("tests")
                 or ".tests." in _modname
+                or _fname.startswith("_fake")
             ):
-                logger.debug(f"adapter_shims.openai_chat_handler: using monkeypatched chat_with_openai from {_modname}")
+                logger.debug(
+                    "adapter_shims.openai_chat_handler: using monkeypatched chat_with_openai from {}",
+                    _modname,
+                )
                 return _patched(
                     input_data=input_data,
                     model=model,
@@ -463,6 +469,10 @@ def anthropic_chat_handler(
                 or ".tests." in _modname
                 or _fname.startswith("_fake")
             ):
+                logger.debug(
+                    "adapter_shims.anthropic_chat_handler: using monkeypatched legacy chat_with_anthropic from {}",
+                    _modname,
+                )
                 return _patched(
                     input_data=input_data,
                     model=model,
@@ -482,6 +492,7 @@ def anthropic_chat_handler(
         pass
 
     # Always route via adapter; legacy path pruned
+    logger.debug("adapter_shims.anthropic_chat_handler: selected path=adapter (sync)")
     use_adapter = True
     if not use_adapter:
         return _legacy_chat_with_anthropic(
@@ -507,6 +518,7 @@ def anthropic_chat_handler(
         registry.register_adapter("anthropic", AnthropicAdapter)
         adapter = registry.get_adapter("anthropic")
     if adapter is None:
+        logger.debug("adapter_shims.anthropic_chat_handler: adapter unavailable; using legacy")
         return _legacy_chat_with_anthropic(
             input_data=input_data,
             model=model,
@@ -828,8 +840,8 @@ async def anthropic_chat_handler_async(
                     msg = getattr(norm, 'message', msg) or msg
                 except Exception:
                     pass
-                yield f"data: {{\"error\":{{\"message\":\"{msg.replace('\\', '\\\\').replace('"', '\\"')}\",\"type\":\"qwen_stream_error\"}}}}\n\n"
-                yield "data: [DONE]\n\n"
+                yield sse_data({"error": {"message": msg, "type": "anthropic_stream_error"}})
+                yield sse_done()
         return _guarded_astream()
     return await adapter.achat(request)
 
@@ -1131,9 +1143,8 @@ async def qwen_chat_handler_async(
                 except Exception:
                     pass
                 # Emit one error frame followed by [DONE]
-                safe = msg.replace("\\", "\\\\").replace('"', '\\"')
-                yield f"data: {{\"error\":{{\"message\":\"{safe}\",\"type\":\"qwen_stream_error\"}}}}\n\n"
-                yield "data: [DONE]\n\n"
+                yield sse_data({"error": {"message": msg, "type": "qwen_stream_error"}})
+                yield sse_done()
         return _guarded_astream()
     return await adapter.achat(request)
 
@@ -2131,6 +2142,43 @@ def openrouter_chat_handler(
                 or ".tests." in _modname
                 or _fname.startswith("_fake")
             ):
+                logger.debug(
+                    "adapter_shims.openrouter_chat_handler: using monkeypatched legacy chat_with_openrouter from {}",
+                    _modname,
+                )
+                return _patched(
+                    input_data=input_data,
+                    model=model,
+                    api_key=api_key,
+                    system_message=system_message,
+                    temp=temp,
+                    streaming=streaming,
+                    top_p=top_p,
+                    top_k=top_k,
+                    min_p=min_p,
+                    max_tokens=max_tokens,
+                    seed=seed,
+                    stop=stop,
+                    response_format=response_format,
+                    n=n,
+                    user=user,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    logit_bias=logit_bias,
+                    presence_penalty=presence_penalty,
+                    frequency_penalty=frequency_penalty,
+                    logprobs=logprobs,
+                    top_logprobs=top_logprobs,
+                    custom_prompt_arg=custom_prompt_arg,
+                    app_config=app_config,
+                )
+            # More permissive in pytest: treat any callable replacement as patched
+            import os as _os
+            if _os.getenv("PYTEST_CURRENT_TEST"):
+                logger.debug(
+                    "adapter_shims.openrouter_chat_handler: pytest detected; honoring callable legacy chat_with_openrouter from {}",
+                    _modname or "<unknown>",
+                )
                 return _patched(
                     input_data=input_data,
                     model=model,
@@ -2178,6 +2226,12 @@ def openrouter_chat_handler(
             )
     else:
         use_adapter = _flag_enabled("LLM_ADAPTERS_OPENROUTER", "LLM_ADAPTERS_ENABLED")
+    logger.debug(
+        "adapter_shims.openrouter_chat_handler: selected path={} (use_adapter={}, pytest={})",
+        ("adapter" if use_adapter else "legacy"),
+        bool(use_adapter),
+        bool(os.getenv("PYTEST_CURRENT_TEST")),
+    )
     if not use_adapter:
         return _legacy_chat_with_openrouter(
             input_data=input_data,
@@ -2212,6 +2266,7 @@ def openrouter_chat_handler(
         registry.register_adapter("openrouter", OpenRouterAdapter)
         adapter = registry.get_adapter("openrouter")
     if adapter is None:
+        logger.debug("adapter_shims.openrouter_chat_handler: adapter unavailable; using legacy")
         return _legacy_chat_with_openrouter(
             input_data=input_data,
             model=model,

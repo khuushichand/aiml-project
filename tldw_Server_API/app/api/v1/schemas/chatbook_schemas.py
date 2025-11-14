@@ -257,6 +257,10 @@ class ImportChatbookResponse(BaseModel):
         None,
         description="Count of imported items by type"
     )
+    warnings: Optional[List[str]] = Field(
+        None,
+        description="Validator and import warnings (sync imports only)"
+    )
 
 
 class PreviewChatbookResponse(BaseModel):

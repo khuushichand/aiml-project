@@ -33,7 +33,8 @@ from tldw_Server_API.app.api.v1.schemas.notes_schemas import (
     NoteKeywordLinkResponse, KeywordsForNoteResponse, NotesForKeywordResponse,
     DetailResponse,
     NoteBulkCreateRequest, NoteBulkCreateItemResult, NoteBulkCreateResponse,
-    NotesListResponse, NotesExportResponse,
+    NotesListResponse, NotesExportResponse, NotesExportRequest,
+    TitleSuggestRequest, TitleSuggestResponse,
 )
 # Dependency to get user-specific ChaChaNotes_DB instance
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
@@ -44,6 +45,8 @@ from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_top
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep, rbac_rate_limit
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.Writing.note_title import generate_note_title, TitleGenOptions
+from tldw_Server_API.app.core.config import settings as core_settings
 #
 #
 #######################################################################################################################
@@ -51,6 +54,78 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 # Functions:
 
 router = APIRouter()
+
+# --- Title options helper -----------------------------------------------------
+def _field_supplied(model_obj: Any, field_name: str) -> bool:
+    """Return True if the incoming model explicitly supplied the field.
+
+    Works across Pydantic v2 (model_fields_set) and v1 (__fields_set__).
+    Falls back to checking a best-effort dump with exclude_unset.
+    """
+    try:
+        s = getattr(model_obj, "model_fields_set", None)
+        if isinstance(s, set):
+            return field_name in s
+    except Exception:
+        pass
+    try:
+        s = getattr(model_obj, "__fields_set__", None)  # pydantic v1
+        if isinstance(s, set):
+            return field_name in s
+    except Exception:
+        pass
+    try:
+        from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat as _dump
+        data = _dump(model_obj, exclude_unset=True)
+        return field_name in (data or {})
+    except Exception:
+        return False
+
+
+def _build_title_opts(note_in: Any) -> TitleGenOptions:
+    """Build TitleGenOptions from request payload with sane defaults and clamping.
+
+    - Strategy: use client-provided value if supplied; otherwise fall back to default setting.
+    - LLM gating: downgrade to heuristic when LLM strategies are disabled.
+    - Max length: coerce to int, default 250, clamp to [min_len, max_len_bound].
+    """
+    # Resolve strategy honoring client intent when provided
+    default_strategy = str(core_settings.get("NOTES_TITLE_DEFAULT_STRATEGY", "heuristic")).lower()
+    if _field_supplied(note_in, "title_strategy"):
+        strategy = getattr(note_in, "title_strategy", default_strategy) or default_strategy
+    else:
+        strategy = default_strategy
+
+    # Apply LLM enabled gate after resolving strategy
+    if strategy in ("llm", "llm_fallback") and not bool(core_settings.get("NOTES_TITLE_LLM_ENABLED", False)):
+        strategy = "heuristic"
+
+    # Resolve and clamp max length
+    try:
+        raw_len = getattr(note_in, "title_max_len", None)
+        max_len_val = int(raw_len) if raw_len is not None else 250
+    except Exception:
+        max_len_val = 250
+    try:
+        max_bound = int(core_settings.get("NOTES_TITLE_MAX_LEN", 1000))
+        if max_bound <= 0:
+            max_bound = 1000
+    except Exception:
+        max_bound = 1000
+    min_bound = 10
+    if max_len_val < min_bound:
+        max_len_val = min_bound
+    if max_len_val > max_bound:
+        max_len_val = max_bound
+
+    opts = TitleGenOptions()
+    opts.strategy = strategy
+    opts.max_len = max_len_val
+    try:
+        opts.language = getattr(note_in, "language", None)
+    except Exception:
+        opts.language = None
+    return opts
 
 # --- Helper for Exception Handling (largely the same) ---
 def handle_db_errors(e: Exception, entity_type: str = "resource"):
@@ -186,7 +261,10 @@ async def create_note(
 
         # The user context (user_id) is implicitly handled by `get_chacha_db_for_user`
         # The `db` instance is already specific to the authenticated user.
-        logger.info(f"User (via DB instance client_id: {db.client_id}) creating note: Title='{note_in.title[:30]}...'")
+        safe_title_log = (note_in.title or "").strip()
+        if len(safe_title_log) > 30:
+            safe_title_log = safe_title_log[:30] + "..."
+        logger.info(f"User (via DB instance client_id: {db.client_id}) creating note: Title='{safe_title_log}'")
         # Topic monitoring (non-blocking) for title and content
         try:
             mon = get_topic_monitoring_service()
@@ -197,8 +275,26 @@ async def create_note(
                 mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=note_in.content, source="notes.create", scope_type="user", scope_id=str(uid) if uid else None)
         except Exception:
             pass
+        # Compute title (auto-generate if requested)
+        effective_title = (note_in.title or "").strip()
+        if not effective_title:
+            if getattr(note_in, "auto_title", False):
+                try:
+                    opts = _build_title_opts(note_in)
+                    effective_title = generate_note_title(
+                        note_in.content,
+                        options=opts,
+                    )
+                except Exception as gen_err:
+                    logger.warning(f"Auto-title generation failed, falling back: {gen_err}")
+                    # Fallback to safe timestamped title
+                    effective_title = generate_note_title(note_in.content)
+            else:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                    detail="Title is required unless auto_title=true")
+
         note_id = db.add_note(
-            title=note_in.title,
+            title=effective_title,
             content=note_in.content,
             note_id=note_in.id  # Pass optional client-provided ID
         )
@@ -648,7 +744,7 @@ async def export_notes(
     tags=["notes"]
 )
 async def export_notes_post(
-        payload: Dict[str, Any] = Body(..., description="Export request with note_ids and optional format"),
+        payload: NotesExportRequest,
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
         current_user: User = Depends(get_request_user),
@@ -664,11 +760,9 @@ async def export_notes_post(
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="Rate limit exceeded for notes.export",
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
-        note_ids = payload.get("note_ids") or []
-        include_keywords = bool(payload.get("include_keywords", False))
-        fmt = str(payload.get("format", "json")).lower()
-        if not isinstance(note_ids, list) or not all(isinstance(n, str) for n in note_ids):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="note_ids must be a list of strings")
+        note_ids = payload.note_ids
+        include_keywords = bool(payload.include_keywords)
+        fmt = str(payload.format).lower()
 
         results: List[Dict[str, Any]] = []
         for nid in note_ids:
@@ -728,6 +822,37 @@ async def export_notes_post(
 
 
 # --- Keyword Endpoints (related to Notes) ---
+
+@router.post(
+    "/title/suggest",
+    response_model=TitleSuggestResponse,
+    summary="Suggest a title for provided content",
+    tags=["notes"],
+)
+async def suggest_note_title(
+        payload: TitleSuggestRequest,
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.title.suggest")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.title.suggest")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.title.suggest",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
+
+        opts = _build_title_opts(payload)
+        title = generate_note_title(payload.content, options=opts)
+        return TitleSuggestResponse(title=title)
+    except HTTPException:
+        raise
+    except Exception as e:
+        handle_db_errors(e, "title suggestion")
+
 @router.post(
     "/bulk",
     response_model=NoteBulkCreateResponse,
@@ -766,8 +891,24 @@ async def bulk_create_notes(
                     mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=item.content, source="notes.bulk_create", scope_type="user", scope_id=str(uid) if uid else None)
             except Exception:
                 pass
+            # Compute title per item
+            effective_title = (getattr(item, 'title', None) or "").strip()
+            if not effective_title:
+                if getattr(item, "auto_title", False):
+                    try:
+                        opts = _build_title_opts(item)
+                        effective_title = generate_note_title(
+                            item.content,
+                            options=opts,
+                        )
+                    except Exception as gen_err:
+                        logger.warning(f"[Bulk] Auto-title generation failed, falling back: {gen_err}")
+                        effective_title = generate_note_title(item.content)
+                else:
+                    raise InputError("Title is required for bulk item unless auto_title=true.")
+
             note_id = db.add_note(
-                title=item.title,
+                title=effective_title,
                 content=item.content,
                 note_id=item.id
             )

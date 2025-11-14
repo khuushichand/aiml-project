@@ -36,16 +36,24 @@ DEFAULT_REDIS_URL = "redis://127.0.0.1:6379"
 
 
 def _settings_lookup(*keys: str) -> Optional[str]:
+    """Look up configuration values with environment variables overriding file settings.
+
+    Order of precedence:
+      1) Environment variables (if set and non-empty)
+      2) Settings file values (e.g., from config.txt / .env)
+    """
     for key in keys:
+        # Prefer explicit environment overrides when present
+        env = os.getenv(key)
+        if env is not None and str(env).strip():
+            return str(env).strip()
+        # Fall back to settings-backed values
         try:
             value = settings.get(key)  # type: ignore[attr-defined]
             if isinstance(value, str) and value.strip():
-                return value
+                return value.strip()
         except Exception:
             pass
-        env = os.getenv(key)
-        if env is not None and env.strip():
-            return env
     return None
 
 

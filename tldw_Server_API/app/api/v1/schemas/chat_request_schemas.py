@@ -322,6 +322,13 @@ class ChatCompletionRequest(BaseModel):
     tool_choice: Optional[Union[Literal["none", "auto", "required"], ToolChoiceOption]] = Field("auto", description="Controls tool usage (provider support varies).")
     user: Optional[str] = Field(None, description="End-user identifier for monitoring.")
 
+    # --- Slash Commands Injection Override ---
+    slash_command_injection_mode: Optional[Literal["system", "preface", "replace"]] = Field(
+        None,
+        description="[Extension] Override the server's slash command injection behavior for this request."
+                    " Options: 'system' (default server behavior), 'preface', or 'replace'."
+    )
+
     # --- Conversation history controls ---
     history_message_limit: Optional[int] = Field(
         None,

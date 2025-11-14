@@ -106,11 +106,12 @@ async def test_complete_v2_streaming_e2e_monkeypatched(monkeypatch):
 
     monkeypatch.setattr(chat_sessions_mod, "perform_chat_api_call", _fake_perform_chat_api_call)
 
-    # Isolate DB
+    # Isolate DB and ensure env changes don't leak to other tests
     tmpdir = tempfile.mkdtemp(prefix="chacha_stream_e2e_")
-    os.environ["USER_DB_BASE_DIR"] = tmpdir
-    os.environ.setdefault("OPENAI_API_KEY", "test-key")
-    os.environ.setdefault("OPENAI_API_BASE_URL", "http://mock.local")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    # Point base URL to a non-routable host so any accidental network path fails fast
+    monkeypatch.setenv("OPENAI_API_BASE_URL", "http://mock.local")
     try:
         from tldw_Server_API.app.main import app
         settings = get_settings()

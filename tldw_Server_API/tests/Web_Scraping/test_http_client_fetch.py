@@ -40,6 +40,37 @@ def test_httpx_fetch_sanitizes_accept_encoding_and_backend_label(monkeypatch):
     assert "zstd" not in resp["headers"].get("Accept-Encoding", "").lower()
 
 
+def test_httpx_fetch_accept_encoding_case_and_params(monkeypatch):
+    # allow egress
+    monkeypatch.setattr(hc, "_is_url_allowed", lambda url: True)
+    # patch httpx.Client
+    monkeypatch.setattr(hc.httpx, "Client", DummyClient)
+
+    # Lower-case header key with parameterized zstd; should be dropped and canonicalized
+    headers = {"accept-encoding": "gzip, zstd;q=0.9, br"}
+    resp = hc.fetch("https://example.com/", headers=headers, backend="httpx")
+
+    # Original exact lower-case key should not remain; canonical should be present
+    assert "accept-encoding" not in resp["headers"].keys()
+    enc = resp["headers"].get("Accept-Encoding", "")
+    assert "zstd" not in enc.lower()
+    assert "gzip" in enc.lower() and "br" in enc.lower()
+
+
+def test_httpx_fetch_accept_encoding_all_removed(monkeypatch):
+    # allow egress
+    monkeypatch.setattr(hc, "_is_url_allowed", lambda url: True)
+    # patch httpx.Client
+    monkeypatch.setattr(hc.httpx, "Client", DummyClient)
+
+    headers = {"Accept-Encoding": "zstd;q=0.9, zstd"}
+    resp = hc.fetch("https://example.com/", headers=headers, backend="httpx")
+
+    # Accept-Encoding should be removed entirely if no tokens remain
+    keys_lower = {k.lower() for k in resp["headers"].keys()}
+    assert "accept-encoding" not in keys_lower
+
+
 def test_fetch_egress_denied_raises(monkeypatch):
     monkeypatch.setattr(hc, "_is_url_allowed", lambda url: False)
     with pytest.raises(ValueError):

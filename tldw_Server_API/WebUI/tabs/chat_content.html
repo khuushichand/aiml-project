@@ -217,75 +217,143 @@
                 Chat interface is currently shown on the Simple tab.
             </div>
             <div class="chat-interface" data-shared-chat-ui="true">
-            <!-- System Prompt Configuration -->
-            <div class="form-group" style="margin-bottom: 15px;">
-                <label for="chat-system-prompt">System Prompt:</label>
-                <textarea id="chat-system-prompt" placeholder="Enter system prompt..." style="width: 100%; min-height: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">You are a helpful assistant.</textarea>
-                <button class="btn btn-sm" id="chat-update-system" style="margin-top: 5px;">Update System Prompt</button>
-            </div>
-
-            <div id="chat-messages" class="chat-messages" style="height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; background: #f9f9f9;">
-                <div class="chat-message system">System: You are a helpful assistant.</div>
-            </div>
-
-            <div class="chat-input-group">
-                <textarea id="chat-input" placeholder="Type your message..." style="width: 100%; min-height: 60px; margin-bottom: 10px;"></textarea>
-
-                <!-- Controls row -->
-                <div class="form-row" style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:8px;">
-                    <label style="display:flex; gap:6px; align-items:center;">
-                        <input type="checkbox" id="chat-stream"> Stream response
-                    </label>
-                    <label style="display:flex; gap:6px; align-items:center;">
-                        <input type="checkbox" id="chat-save-to-db"> Save to DB
-                    </label>
-                    <label style="display:flex; gap:6px; align-items:center;">
-                        <input type="checkbox" id="chat-auto-continue"> Auto-continue after tools
-                    </label>
-                    <div class="sampling-controls" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                        <label for="chat-temp" class="muted">Temp</label>
-                        <input id="chat-temp" type="number" min="0" max="2" step="0.1" value="0.7" style="width:80px;">
-                        <label for="chat-top-p" class="muted">top_p</label>
-                        <input id="chat-top-p" type="number" min="0" max="1" step="0.01" value="1" style="width:80px;">
-                        <label for="chat-max-tokens" class="muted">max_tokens</label>
-                        <input id="chat-max-tokens" type="number" min="1" step="1" value="1000" style="width:100px;">
+            <!-- Conversation-first Layout -->
+            <div class="chat-layout">
+                <!-- Left: Conversations -->
+                <aside class="chat-sidebar" aria-label="Conversations">
+                    <div class="sidebar-header">
+                        <strong>Conversations</strong>
+                        <div class="sidebar-actions">
+                            <button class="btn btn-sm" id="chat-conv-refresh" title="Refresh">⟳</button>
+                            <button class="btn btn-sm" id="chat-conv-new" title="New conversation">＋</button>
+                        </div>
                     </div>
-                    <label for="chat-conversation-id" class="muted" style="margin-left:auto;">Conversation ID:</label>
-                    <input id="chat-conversation-id" type="text" readonly style="flex:1; min-width:220px;" placeholder="(not set)">
-                    <button class="btn btn-sm" id="chat-reset-conv" title="Clear conversation id">Reset</button>
-                </div>
+                    <div class="sidebar-search">
+                        <input type="search" id="chat-conv-search" placeholder="Search conversations..." aria-label="Search conversations">
+                    </div>
+                    <div id="chat-conversations-list" class="conversations-list" aria-live="polite"></div>
+                </aside>
 
-                <div class="btn-group" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                    <button class="btn btn-primary" id="chat-send-btn" aria-label="Send message" role="button">Send</button>
-                    <button class="btn btn-warning" id="chat-stop-btn" aria-label="Stop streaming" role="button" style="display:none;">Stop</button>
-                    <button class="btn btn-secondary" id="chat-clear-btn" aria-label="Clear chat history" role="button">Clear Chat</button>
-                    <button class="btn" id="chat-copy-last-btn" title="Copy last answer">Copy Last Answer</button>
-                    <button class="btn" id="chat-retry-btn" title="Retry last user message">Retry</button>
-                    <button class="btn" id="chat-edit-last-btn" title="Edit last user message inline">Edit Last</button>
-                    <select id="chat-provider" style="margin-left: 10px;" title="You can also set the model as provider/model without selecting a provider here.">
-                        <option value="">All Providers</option>
-                        <option value="openai">OpenAI</option>
-                        <option value="anthropic">Anthropic</option>
-                        <option value="cohere">Cohere</option>
-                        <option value="deepseek">DeepSeek</option>
-                        <option value="google">Google</option>
-                        <option value="groq">Groq</option>
-                        <option value="huggingface">HuggingFace</option>
-                        <option value="mistral">Mistral</option>
-                        <option value="openrouter">OpenRouter</option>
-                        <option value="llama.cpp">Llama.cpp</option>
-                        <option value="kobold">Kobold</option>
-                        <option value="ollama">Ollama</option>
-                        <option value="ooba">Oobabooga</option>
-                        <option value="tabbyapi">TabbyAPI</option>
-                        <option value="vllm">vLLM</option>
-                        <option value="local-llm">Local LLM</option>
-                        <option value="custom-openai-api">Custom OpenAI API</option>
-                    </select>
-                    <select id="chat-model" class="llm-model-select" style="margin-left: 10px;" title="Models reflect configured providers. You can paste a prefixed name like anthropic/claude-sonnet-4.5.">
-                        <option value="">Loading models...</option>
-                    </select>
-                </div>
+                <!-- Center: Messages -->
+                <section class="chat-main" aria-label="Messages">
+                    <!-- Toolbar: model/provider/presets -->
+                    <div class="chat-toolbar">
+                        <div class="toolbar-left">
+                            <label class="muted" for="chat-provider">Provider</label>
+                            <select id="chat-provider" title="You can also set the model as provider/model without selecting a provider here.">
+                                <option value="">All Providers</option>
+                                <option value="openai">OpenAI</option>
+                                <option value="anthropic">Anthropic</option>
+                                <option value="cohere">Cohere</option>
+                                <option value="deepseek">DeepSeek</option>
+                                <option value="google">Google</option>
+                                <option value="groq">Groq</option>
+                                <option value="huggingface">HuggingFace</option>
+                                <option value="mistral">Mistral</option>
+                                <option value="openrouter">OpenRouter</option>
+                                <option value="llama.cpp">Llama.cpp</option>
+                                <option value="kobold">Kobold</option>
+                                <option value="ollama">Ollama</option>
+                                <option value="ooba">Oobabooga</option>
+                                <option value="tabbyapi">TabbyAPI</option>
+                                <option value="vllm">vLLM</option>
+                                <option value="local-llm">Local LLM</option>
+                                <option value="custom-openai-api">Custom OpenAI API</option>
+                            </select>
+                            <label class="muted" for="chat-model">Model</label>
+                            <div class="model-picker">
+                                <input id="chat-model-search" type="search" placeholder="Search models..." aria-label="Search models">
+                                <select id="chat-model" class="llm-model-select"></select>
+                            </div>
+                        </div>
+                        <div class="toolbar-right">
+                            <label class="muted" for="chat-preset-select">Preset</label>
+                            <select id="chat-preset-select" title="Apply a chat preset (system + sampling)">
+                                <option value="">None</option>
+                            </select>
+                            <a href="/chat" target="_blank" rel="noopener noreferrer" class="btn" title="Open the React chat UI">Open React Chat ↗</a>
+                        </div>
+                    </div>
+
+                    <!-- System Prompt (compact) -->
+                    <div class="system-prompt-row">
+                        <label for="chat-system-prompt" class="muted">System Prompt</label>
+                        <textarea id="chat-system-prompt" placeholder="Enter system prompt...">You are a helpful assistant.</textarea>
+                        <button class="btn btn-sm" id="chat-update-system" title="Update system message in history">Apply</button>
+                    </div>
+
+                    <div id="chat-messages" class="chat-messages" aria-live="polite">
+                        <div class="chat-message system">
+                            <div class="bubble">
+                                <div class="content">System: You are a helpful assistant.</div>
+                            </div>
+                        </div>
+                        <button id="chat-jump-latest" class="chat-jump-latest" style="display:none;" title="Jump to latest">Jump to latest ↓</button>
+                    </div>
+
+                    <!-- Composer (sticky) -->
+                    <div class="chat-composer" aria-label="Message composer">
+                        <div class="composer-row">
+                            <textarea id="chat-input" placeholder="Type your message..."></textarea>
+                            <div class="composer-attachments">
+                                <input type="file" id="chat-attach" accept="image/*" style="display:none;">
+                                <button class="btn" id="chat-attach-btn" title="Attach image">🖼️</button>
+                                <div id="chat-attach-preview" class="attach-preview" style="display:none;">
+                                    <img alt="attachment preview">
+                                    <button class="btn btn-sm btn-danger" id="chat-attach-remove" title="Remove attachment">✕</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="composer-hint" id="chat-enter-hint">Enter to send • Shift+Enter for newline</div>
+                        <div class="composer-controls">
+                            <div class="left-controls">
+                                <label><input type="checkbox" id="chat-enter-to-send" checked> Enter to send</label>
+                                <label><input type="checkbox" id="chat-stream"> Stream</label>
+                                <label><input type="checkbox" id="chat-save-to-db"> Save to DB</label>
+                                <label><input type="checkbox" id="chat-auto-continue"> Auto-continue</label>
+                                <label><input type="checkbox" id="chat-scroll-lock"> Scroll lock</label>
+                            </div>
+                            <div class="sampling-controls">
+                                <label for="chat-temp" class="muted">Temp</label>
+                                <input id="chat-temp" type="number" min="0" max="2" step="0.1" value="0.7">
+                                <label for="chat-top-p" class="muted">top_p</label>
+                                <input id="chat-top-p" type="number" min="0" max="1" step="0.01" value="1">
+                                <label for="chat-max-tokens" class="muted">max_tokens</label>
+                                <input id="chat-max-tokens" type="number" min="1" step="1" value="1000">
+                            </div>
+                            <div class="right-controls">
+                                <button class="btn btn-secondary" id="chat-clear-btn" aria-label="Clear chat history">Clear</button>
+                                <button class="btn" id="chat-copy-last-btn" title="Copy last answer">Copy</button>
+                                <button class="btn" id="chat-retry-btn" title="Retry last user message">Retry</button>
+                                <button class="btn" id="chat-edit-last-btn" title="Edit last user message inline">Edit</button>
+                                <button class="btn btn-warning" id="chat-stop-btn" aria-label="Stop streaming" style="display:none;">Stop</button>
+                                <button class="btn btn-primary" id="chat-send-btn" aria-label="Send message">Send</button>
+                                <button class="btn" id="chat-continue-btn" title="Continue conversation" style="display:none;">Continue</button>
+                            </div>
+                        </div>
+                        <div class="composer-meta">
+                            <label for="chat-conversation-id" class="muted">Conversation ID</label>
+                            <input id="chat-conversation-id" type="text" readonly placeholder="(not set)">
+                            <button class="btn btn-sm" id="chat-reset-conv" title="Clear conversation id">Reset</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Right: Context/Tools -->
+                <aside class="chat-right" aria-label="Context and tools">
+                    <div class="card">
+                        <div class="card-title">Tools</div>
+                        <div id="chat-tools-log" class="tools-log"></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">Tips</div>
+                        <div class="muted" style="font-size:0.9em;">
+                            - Use presets to quickly change behavior.<br>
+                            - Scroll lock prevents auto-scrolling during long streams.<br>
+                            - Attach an image to send vision prompts.
+                        </div>
+                    </div>
+                </aside>
             </div>
             </div>
         </div>

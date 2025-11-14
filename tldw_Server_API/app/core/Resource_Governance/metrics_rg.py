@@ -7,6 +7,7 @@ Registers counters/gauges used by the Resource Governor. Metrics are only
 registered once and are safe to call multiple times.
 """
 
+import os
 from typing import Dict, Optional
 
 from loguru import logger
@@ -74,6 +75,32 @@ def ensure_rg_metrics_registered() -> None:
                 buckets=[0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300],
             )
         )
+        # Optional by-entity metrics (hashed) to keep cardinality manageable
+        if rg_metrics_entity_label_enabled():
+            reg.register_metric(
+                MetricDefinition(
+                    name="rg_decisions_by_entity_total",
+                    type=MetricType.COUNTER,
+                    description="RG decisions (allow/deny) by hashed entity",
+                    labels=["category", "scope", "backend", "result", "policy_id", "entity"],
+                )
+            )
+            reg.register_metric(
+                MetricDefinition(
+                    name="rg_denials_by_entity_total",
+                    type=MetricType.COUNTER,
+                    description="RG denials by reason and hashed entity",
+                    labels=["category", "scope", "reason", "policy_id", "entity"],
+                )
+            )
+            reg.register_metric(
+                MetricDefinition(
+                    name="rg_refunds_by_entity_total",
+                    type=MetricType.COUNTER,
+                    description="RG refunds by reason and hashed entity",
+                    labels=["category", "scope", "reason", "policy_id", "entity"],
+                )
+            )
         _RG_METRICS_REGISTERED = True
     except Exception as e:  # pragma: no cover - metrics must never block
         logger.debug(f"RG metrics registration skipped: {e}")
@@ -101,3 +128,13 @@ def _labels(
     if reason is not None:
         labels["reason"] = reason
     return labels
+
+
+def rg_metrics_entity_label_enabled() -> bool:
+    try:
+        v = os.getenv("RG_METRICS_ENTITY_LABEL")
+        if v is None:
+            return False
+        return str(v).strip().lower() in ("1", "true", "yes", "on")
+    except Exception:
+        return False

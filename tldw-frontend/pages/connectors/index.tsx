@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
+import { apiClient } from '@/lib/api'
+import { useConnectorBackend } from '@/hooks/useConnectorBackend'
 
 type Provider = { name: 'drive' | 'notion'; auth_type: 'oauth2'; scopes_required: string[] }
 type Account = { id: number; provider: 'drive' | 'notion'; display_name: string; email?: string; created_at?: string }
@@ -9,25 +11,25 @@ export default function ConnectorsHome() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  async function load() {
+  const load = useCallback(async () => {
     setError(null)
     try {
-      const p = await fetch('/api/v1/connectors/providers').then(r => r.json())
-      setProviders(p)
-      const a = await fetch('/api/v1/connectors/accounts').then(r => r.json())
-      setAccounts(a)
+      const p = await apiClient.get<Provider[]>('/connectors/providers')
+      setProviders(Array.isArray(p) ? p : [])
+      const a = await apiClient.get<Account[]>('/connectors/accounts')
+      setAccounts(Array.isArray(a) ? a : [])
     } catch (e: any) {
       setError(e?.message || 'Failed to load')
     }
-  }
+  }, [])
 
-  useEffect(() => { load() }, [])
+  // Use shared hook to run preflight and then invoke load when enabled
+  const { notEnabled } = useConnectorBackend(load)
 
   async function startAuthorize(provider: 'drive' | 'notion') {
     setBusy(true)
     try {
-      const r = await fetch(`/api/v1/connectors/providers/${provider}/authorize`, { method: 'POST' })
-      const j = await r.json()
+      const j = await apiClient.post<{ auth_url?: string }>(`/connectors/providers/${provider}/authorize`)
       if (j?.auth_url) {
         window.location.href = j.auth_url
       }
@@ -39,9 +41,14 @@ export default function ConnectorsHome() {
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-xl font-semibold">External Connectors</h1>
-      {error && <div className="text-red-600 text-sm">{error}</div>}
+      {notEnabled && (
+        <div className="rounded border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-800">
+          Connectors backend not enabled. This feature is optional and may be disabled on your server.
+        </div>
+      )}
+      {!notEnabled && error && <div className="text-red-600 text-sm">{error}</div>}
 
-      <section>
+      {!notEnabled && (<section>
         <h2 className="text-lg font-medium">Providers</h2>
         <div className="mt-2 grid grid-cols-1 gap-3">
           {providers.map(p => (
@@ -54,9 +61,9 @@ export default function ConnectorsHome() {
             </div>
           ))}
         </div>
-      </section>
+      </section>)}
 
-      <section>
+      {!notEnabled && (<section>
         <h2 className="text-lg font-medium">Linked Accounts</h2>
         <div className="mt-2 grid grid-cols-1 gap-3">
           {accounts.length === 0 && <div className="text-sm text-gray-500">No accounts linked yet.</div>}
@@ -70,7 +77,7 @@ export default function ConnectorsHome() {
             </div>
           ))}
         </div>
-      </section>
+      </section>)}
     </div>
   )
 }

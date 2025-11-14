@@ -250,20 +250,1039 @@ jobs:
           python Helper_Scripts/download_embedding_models.py --target models/embeddings
           echo "TLDW_EMBEDDING_MODELS_DIR=models/embeddings" >> "$GITHUB_ENV"
 
-      - name: Run full test suite (Linux + PG) - exclude Jobs and E2E
-        run: |
-          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
-            --ignore=tldw_Server_API/tests/Jobs \
-            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
-            --junit-xml=test-results-linux-${{ matrix.python }}.xml
+      - name: Prepare test outputs directory (Linux ${{ matrix.python }})
         shell: bash
+        run: |
+          rm -f .coverage coverage.xml || true
+          mkdir -p "test-results-linux-${{ matrix.python }}"
 
-      - name: Upload test results
+      - name: Run tests (root-level files) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="root"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin \
+            -m "not jobs and not e2e" \
+            tldw_Server_API/tests/test_*.py \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/root.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Admin) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Admin"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Admin \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Admin.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Audio) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Audio"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Audio \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Audio.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (AudioJobs) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="AudioJobs"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AudioJobs \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/AudioJobs.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Audit) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Audit"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Audit \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Audit.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (AuthNZ) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="AuthNZ"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AuthNZ \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/AuthNZ.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (AuthNZ_Postgres) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="AuthNZ_Postgres"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AuthNZ_Postgres \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/AuthNZ_Postgres.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (AuthNZ_SQLite) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="AuthNZ_SQLite"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AuthNZ_SQLite \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/AuthNZ_SQLite.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (AuthNZ_Unit) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="AuthNZ_Unit"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AuthNZ_Unit \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/AuthNZ_Unit.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (ChaChaNotesDB) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="ChaChaNotesDB"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/ChaChaNotesDB \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/ChaChaNotesDB.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Character_Chat) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Character_Chat"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Character_Chat \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Character_Chat.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Character_Chat_NEW) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Character_Chat_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Character_Chat_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Character_Chat_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Characters) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Characters"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Characters \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Characters.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Chat) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Chat"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Chat \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Chat.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Chat_NEW) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Chat_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Chat_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Chat_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Chatbooks) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Chatbooks"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Chatbooks \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Chatbooks.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (ChromaDB) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="ChromaDB"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/ChromaDB \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/ChromaDB.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Chunking) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Chunking"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Chunking \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Chunking.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Claims) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Claims"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Claims \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Claims.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Collections) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Collections"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Collections \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Collections.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Config) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Config"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Config \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Config.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (DB) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="DB"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/DB \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/DB.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (DB_Management) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="DB_Management"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/DB_Management \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/DB_Management.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Embeddings) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Embeddings"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Embeddings \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Embeddings.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Embeddings_NEW) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Embeddings_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Embeddings_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Embeddings_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Evaluations) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Evaluations"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Evaluations \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Evaluations.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (External_Sources) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="External_Sources"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/External_Sources \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/External_Sources.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Flashcards) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Flashcards"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Flashcards \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Flashcards.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Health) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Health"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Health \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Health.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Helper_Scripts) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Helper_Scripts"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Helper_Scripts \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Helper_Scripts.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Infrastructure) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Infrastructure"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Infrastructure \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Infrastructure.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (LLM_Adapters) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="LLM_Adapters"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/LLM_Adapters \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/LLM_Adapters.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (LLM_Calls) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="LLM_Calls"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/LLM_Calls \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/LLM_Calls.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (LLM_Local) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="LLM_Local"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/LLM_Local \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/LLM_Local.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (LLamaCpp) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="LLamaCpp"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/LLamaCpp \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/LLamaCpp.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Local_LLM) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Local_LLM"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Local_LLM \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Local_LLM.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Logging) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Logging"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Logging \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Logging.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (MCP) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="MCP"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/MCP \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/MCP.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (MCP_unified) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="MCP_unified"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/MCP_unified \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/MCP_unified.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Media) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Media"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Media \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Media.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (MediaDB2) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="MediaDB2"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/MediaDB2 \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/MediaDB2.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (MediaIngestion_NEW) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="MediaIngestion_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/MediaIngestion_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/MediaIngestion_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Media_Ingestion_Modification) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Media_Ingestion_Modification"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Media_Ingestion_Modification \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Media_Ingestion_Modification.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Metrics) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Metrics"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Metrics \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Metrics.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Monitoring) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Monitoring"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Monitoring \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Monitoring.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Notes) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Notes"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Notes \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Notes.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Notes_NEW) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Notes_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Notes_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Notes_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Notifications) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Notifications"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Notifications \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Notifications.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (PaperSearch) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="PaperSearch"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/PaperSearch \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/PaperSearch.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Persona) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Persona"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Persona \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Persona.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Personalization) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Personalization"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Personalization \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Personalization.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (PrivilegeCatalog) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="PrivilegeCatalog"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/PrivilegeCatalog \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/PrivilegeCatalog.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Privileges) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Privileges"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Privileges \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Privileges.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Prompt_Management) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Prompt_Management"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Prompt_Management \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Prompt_Management.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Prompt_Management_NEW) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Prompt_Management_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Prompt_Management_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Prompt_Management_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (RAG) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="RAG"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/RAG \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/RAG.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (RAG_NEW) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="RAG_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/RAG_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/RAG_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Research) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Research"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Research \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Research.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Resource_Governance) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Resource_Governance"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Resource_Governance \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Resource_Governance.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (STT) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="STT"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/STT \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/STT.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Security) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Security"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Security \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Security.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Services) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Services"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Services \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Services.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Setup) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Setup"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Setup \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Setup.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Streaming) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Streaming"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Streaming \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Streaming.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (TTS) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="TTS"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/TTS \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/TTS.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (TTS_NEW) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="TTS_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/TTS_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/TTS_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Tools) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Tools"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Tools \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Tools.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Usage) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Usage"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Usage \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Usage.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Utils) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Utils"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Utils \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Utils.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (VLM) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="VLM"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/VLM \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/VLM.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (VectorStores) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="VectorStores"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/VectorStores \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/VectorStores.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Watchlists) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Watchlists"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Watchlists \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Watchlists.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (WebScraping) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="WebScraping"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/WebScraping \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/WebScraping.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (WebSearch) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="WebSearch"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/WebSearch \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/WebSearch.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Web_Scraping) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Web_Scraping"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Web_Scraping \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Web_Scraping.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Workflows) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Workflows"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Workflows \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Workflows.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (helpers) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="helpers"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/helpers \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/helpers.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (http_client) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="http_client"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/http_client \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/http_client.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (integration) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="integration"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/integration \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/integration.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (lint) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="lint"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/lint \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/lint.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (prompt_studio) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="prompt_studio"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/prompt_studio \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/prompt_studio.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (sandbox) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="sandbox"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/sandbox \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/sandbox.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (sanity_tests) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="sanity_tests"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/sanity_tests \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/sanity_tests.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (schemas) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="schemas"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/schemas \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/schemas.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (unit) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="unit"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/unit \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/unit.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Upload test results (Linux ${{ matrix.python }})
         if: always()
         uses: actions/upload-artifact@v5
         with:
           name: full-suite-ubuntu-py${{ matrix.python }}
-          path: test-results-linux-${{ matrix.python }}.xml
+          path: test-results-linux-${{ matrix.python }}
 
       - name: Upload coverage artifact
         if: always()
@@ -280,6 +1299,19 @@ jobs:
           flags: fullsuite
           name: codecov-linux-py312
           fail_ci_if_error: false
+
+      - name: Fail if any module failed (Linux ${{ matrix.python }})
+        if: always()
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"
+          if [ -s "$RESULTS_DIR/failures.txt" ]; then
+            echo "Modules with failing tests (Linux ${{ matrix.python }}):"
+            cat "$RESULTS_DIR/failures.txt"
+            exit 1
+          fi
+          echo "All modules passed (Linux ${{ matrix.python }})."
+
 
   full-suite-os:
     name: Full Suite (${{ matrix.os }} / Python 3.12)
@@ -420,20 +1452,1042 @@ jobs:
           python Helper_Scripts/download_embedding_models.py --target models/embeddings
           echo "TLDW_EMBEDDING_MODELS_DIR=models/embeddings" >> "$GITHUB_ENV"
 
-      - name: Run full test suite - exclude Jobs and E2E
-        run: |
-          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
-            --ignore=tldw_Server_API/tests/Jobs \
-            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
-            --junit-xml=test-results-${{ matrix.os }}-3.12.xml
+      - name: Prepare test outputs directory
         shell: bash
+        run: |
+          rm -f .coverage coverage.xml || true
+          mkdir -p "test-results-${{ matrix.os }}-3.12"
+
+      - name: Run tests (root-level files)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"
+          MOD="root"
+          set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin \
+            -m "not jobs and not e2e" \
+            tldw_Server_API/tests/test_*.py \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/root.xml"
+          status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Admin)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Admin"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Admin \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Admin.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Audio)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Audio"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Audio \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Audio.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (AudioJobs)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="AudioJobs"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AudioJobs \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/AudioJobs.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Audit)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Audit"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Audit \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Audit.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (AuthNZ)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="AuthNZ"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AuthNZ \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/AuthNZ.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (AuthNZ_Postgres)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="AuthNZ_Postgres"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AuthNZ_Postgres \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/AuthNZ_Postgres.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (AuthNZ_SQLite)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="AuthNZ_SQLite"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AuthNZ_SQLite \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/AuthNZ_SQLite.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (AuthNZ_Unit)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="AuthNZ_Unit"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AuthNZ_Unit \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/AuthNZ_Unit.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (ChaChaNotesDB)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="ChaChaNotesDB"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/ChaChaNotesDB \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/ChaChaNotesDB.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Character_Chat)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Character_Chat"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Character_Chat \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Character_Chat.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Character_Chat_NEW)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Character_Chat_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Character_Chat_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Character_Chat_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Characters)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Characters"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Characters \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Characters.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Chat)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Chat"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Chat \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Chat.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Chat_NEW)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Chat_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Chat_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Chat_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Chatbooks)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Chatbooks"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Chatbooks \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Chatbooks.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (ChromaDB)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="ChromaDB"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/ChromaDB \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/ChromaDB.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Chunking)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Chunking"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Chunking \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Chunking.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Claims)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Claims"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Claims \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Claims.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Collections)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Collections"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Collections \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Collections.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Config)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Config"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Config \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Config.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (DB)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="DB"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/DB \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/DB.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (DB_Management)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="DB_Management"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/DB_Management \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/DB_Management.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Embeddings)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Embeddings"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Embeddings \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Embeddings.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Embeddings_NEW)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Embeddings_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Embeddings_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Embeddings_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Evaluations)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Evaluations"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Evaluations \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Evaluations.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (External_Sources)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="External_Sources"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/External_Sources \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/External_Sources.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Flashcards)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Flashcards"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Flashcards \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Flashcards.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Health)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Health"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Health \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Health.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Helper_Scripts)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Helper_Scripts"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Helper_Scripts \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Helper_Scripts.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Infrastructure)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Infrastructure"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Infrastructure \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Infrastructure.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (LLM_Adapters)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="LLM_Adapters"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/LLM_Adapters \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/LLM_Adapters.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (LLM_Calls)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="LLM_Calls"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/LLM_Calls \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/LLM_Calls.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (LLM_Local)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="LLM_Local"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/LLM_Local \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/LLM_Local.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (LLamaCpp)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="LLamaCpp"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/LLamaCpp \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/LLamaCpp.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Local_LLM)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Local_LLM"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Local_LLM \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Local_LLM.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Logging)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Logging"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Logging \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Logging.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (MCP)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="MCP"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/MCP \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/MCP.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (MCP_unified)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="MCP_unified"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/MCP_unified \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/MCP_unified.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Media)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Media"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Media \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Media.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (MediaDB2)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="MediaDB2"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/MediaDB2 \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/MediaDB2.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (MediaIngestion_NEW)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="MediaIngestion_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/MediaIngestion_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/MediaIngestion_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Media_Ingestion_Modification)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Media_Ingestion_Modification"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Media_Ingestion_Modification \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Media_Ingestion_Modification.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Metrics)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Metrics"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Metrics \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Metrics.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Monitoring)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Monitoring"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Monitoring \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Monitoring.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Notes)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Notes"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Notes \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Notes.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Notes_NEW)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Notes_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Notes_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Notes_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Notifications)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Notifications"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Notifications \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Notifications.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (PaperSearch)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="PaperSearch"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/PaperSearch \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/PaperSearch.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Persona)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Persona"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Persona \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Persona.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Personalization)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Personalization"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Personalization \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Personalization.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (PrivilegeCatalog)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="PrivilegeCatalog"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/PrivilegeCatalog \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/PrivilegeCatalog.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Privileges)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Privileges"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Privileges \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Privileges.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Prompt_Management)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Prompt_Management"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Prompt_Management \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Prompt_Management.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Prompt_Management_NEW)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Prompt_Management_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Prompt_Management_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Prompt_Management_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (RAG)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="RAG"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/RAG \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/RAG.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (RAG_NEW)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="RAG_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/RAG_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/RAG_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Research)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Research"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Research \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Research.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Resource_Governance)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Resource_Governance"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Resource_Governance \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Resource_Governance.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (STT)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="STT"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/STT \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/STT.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Security)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Security"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Security \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Security.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Services)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Services"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Services \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Services.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Setup)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Setup"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Setup \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Setup.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Streaming)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Streaming"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Streaming \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Streaming.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (TTS)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="TTS"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/TTS \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/TTS.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (TTS_NEW)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="TTS_NEW"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/TTS_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/TTS_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Tools)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Tools"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Tools \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Tools.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Usage)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Usage"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Usage \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Usage.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Utils)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Utils"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Utils \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Utils.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (VLM)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="VLM"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/VLM \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/VLM.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (VectorStores)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="VectorStores"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/VectorStores \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/VectorStores.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Watchlists)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Watchlists"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Watchlists \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Watchlists.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (WebScraping)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="WebScraping"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/WebScraping \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/WebScraping.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (WebSearch)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="WebSearch"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/WebSearch \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/WebSearch.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Web_Scraping)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Web_Scraping"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Web_Scraping \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Web_Scraping.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Workflows)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Workflows"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Workflows \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Workflows.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (helpers)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="helpers"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/helpers \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/helpers.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (http_client)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="http_client"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/http_client \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/http_client.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (integration)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="integration"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/integration \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/integration.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (lint)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="lint"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/lint \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/lint.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (prompt_studio)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="prompt_studio"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/prompt_studio \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/prompt_studio.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (sandbox)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="sandbox"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/sandbox \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/sandbox.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (sanity_tests)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="sanity_tests"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/sanity_tests \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/sanity_tests.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (schemas)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="schemas"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/schemas \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/schemas.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (unit)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="unit"; set +e
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/unit \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/unit.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v5
         with:
           name: full-suite-${{ matrix.os }}-py3.12
-          path: test-results-${{ matrix.os }}-3.12.xml
+          path: test-results-${{ matrix.os }}-3.12
 
       - name: Upload coverage artifact
         if: always()
@@ -441,3 +2495,57 @@ jobs:
         with:
           name: coverage-${{ matrix.os }}-py3.12
           path: coverage.xml
+
+      - name: Fail if any module failed (OS 3.12)
+        if: always()
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"
+          if [ -s "$RESULTS_DIR/failures.txt" ]; then
+            echo "Modules with failing tests:"
+            cat "$RESULTS_DIR/failures.txt"
+            exit 1
+          fi
+          echo "All modules passed (OS 3.12)."
+
+  character-chat-rate-limits:
+    name: Character Chat Rate-Limits (TEST_MODE=0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [full-suite-linux]
+    env:
+      PYTHONPATH: .
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      TEST_MODE: '0'
+      DISABLE_HEAVY_STARTUP: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+
+      - name: Setup Python and deps (uv)
+        uses: ./.github/actions/setup-python-deps
+        with:
+          python-version: '3.12'
+          use-uv: 'true'
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+          extras: dev
+
+      - name: Ensure pytest-asyncio installed
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio
+
+      - name: Run Character_Chat rate-limit tests with TEST_MODE=0
+        shell: bash
+        run: |
+          echo "TEST_MODE currently set to: ${TEST_MODE}"
+          pytest -q --maxfail=1 --disable-warnings -p pytest_asyncio.plugin \
+            tldw_Server_API/tests/Character_Chat -rs
+      - name: Run Character_Chat_NEW rate-limit tests with TEST_MODE=0
+        shell: bash
+        run: |
+          echo "TEST_MODE currently set to: ${TEST_MODE}"
+          pytest -q --maxfail=1 --disable-warnings -p pytest_asyncio.plugin \
+            tldw_Server_API/tests/Character_Chat_NEW -rs

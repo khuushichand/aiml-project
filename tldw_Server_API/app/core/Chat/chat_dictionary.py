@@ -12,11 +12,88 @@ import re
 import warnings
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Union
+import os
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter
 from tldw_Server_API.app.core.Utils.Utils import logging
+from tldw_Server_API.app.core.Templating.template_renderer import (
+    TemplateContext,
+    TemplateEnv,
+    render as render_template,
+)
+from tldw_Server_API.app.core.config import load_comprehensive_config
+
+
+def _truthy_env(name: str, default: bool = False) -> bool:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return str(val).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _templates_enabled() -> bool:
+    # Initial rollout default is false; may flip on after bake-in
+    if _truthy_env("CHAT_DICT_TEMPLATES_ENABLED", False):
+        return True
+    try:
+        cp = load_comprehensive_config()
+        if cp and cp.has_section('Chat-Templating'):
+            raw = cp.get('Chat-Templating', 'enable_templates', fallback='false')
+            return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        pass
+    return False
+
+
+def _has_template_syntax(text: str) -> bool:
+    try:
+        return ("{{" in text) or ("{%" in text)
+    except Exception:
+        return False
+
+
+def _build_template_context(extra: Optional[Dict[str, Any]] = None) -> TemplateContext:
+    tz = os.getenv("TEMPLATE_DEFAULT_TZ")
+    if not tz:
+        try:
+            cp = load_comprehensive_config()
+            tz = cp.get('Chat-Templating', 'default_timezone', fallback='UTC') if cp else 'UTC'
+        except Exception:
+            tz = 'UTC'
+    env = TemplateEnv(timezone=str(tz or 'UTC'))
+    ex = dict(extra or {})
+    # Hint the renderer for metrics labeling
+    ex.setdefault("_metrics_source", "dict")
+    return TemplateContext(env=env, extra=ex)
+
+
+class _SafeMatch:
+    """Read-only facade exposing a minimal API over re.Match for templates.
+
+    Exposes only: group(idx|name), groups(), groupdict(), start(), end().
+    """
+
+    __slots__ = ("_m",)
+
+    def __init__(self, match: re.Match):
+        self._m = match
+
+    def group(self, *args):  # type: ignore[no-untyped-def]
+        return self._m.group(*args)
+
+    def groups(self):  # type: ignore[no-untyped-def]
+        return self._m.groups()
+
+    def groupdict(self):  # type: ignore[no-untyped-def]
+        return self._m.groupdict()
+
+    def start(self, *args):  # type: ignore[no-untyped-def]
+        return self._m.start(*args)
+
+    def end(self, *args):  # type: ignore[no-untyped-def]
+        return self._m.end(*args)
 
 
 def parse_user_dict_markdown_file(file_path: str) -> Dict[str, str]:
@@ -290,19 +367,59 @@ def apply_replacement_once(text: str, entry: ChatDictionary) -> Tuple[str, int]:
     """
     replacements_done = 0
 
+    # Fast path: when templating is disabled or no template syntax is present,
+    # use original logic for performance.
+    templating_on = _templates_enabled()
+    has_tpl = _has_template_syntax(entry.content) if templating_on else False
+
     if isinstance(entry.key, re.Pattern):
-        def replacement(match: re.Match) -> str:
+        if has_tpl:
+            def replacement(match: re.Match) -> str:
+                nonlocal replacements_done
+                replacements_done += 1
+                try:
+                    extra_ctx = {
+                        "match": _SafeMatch(match),
+                        "matched_text": match.group(0),
+                    }
+                    ctx = _build_template_context(extra=extra_ctx)
+                    rendered = render_template(entry.content, ctx)
+                    return rendered
+                except Exception as _e:
+                    logger.debug(f"chat_dict.template_render_error(regex): {_e}")
+                    return entry.content
+
+            new_text, _ = entry.key.subn(replacement, text)
+            return new_text, replacements_done
+        else:
+            def replacement_plain(match: re.Match) -> str:
+                nonlocal replacements_done
+                replacements_done += 1
+                return entry.content
+
+            new_text, _ = entry.key.subn(replacement_plain, text)
+            return new_text, replacements_done
+
+    # Literal path
+    pattern = r"\b" + re.escape(str(entry.key)) + r"\b"
+    if has_tpl:
+        def replacement_lit(match: re.Match) -> str:
             nonlocal replacements_done
             replacements_done += 1
-            return entry.content
+            try:
+                extra_ctx = {"matched_text": match.group(0)}
+                ctx = _build_template_context(extra=extra_ctx)
+                return render_template(entry.content, ctx)
+            except Exception as _e:
+                logger.debug(f"chat_dict.template_render_error(literal): {_e}")
+                return entry.content
 
-        new_text, _ = entry.key.subn(replacement, text)
+        new_text, count = re.subn(pattern, replacement_lit, text, flags=re.IGNORECASE)
+        return new_text, count
+    else:
+        new_text, count = re.subn(pattern, entry.content, text, flags=re.IGNORECASE)
+        replacements_done += count
         return new_text, replacements_done
-
-    pattern = r"\b" + re.escape(str(entry.key)) + r"\b"
-    new_text, count = re.subn(pattern, entry.content, text, flags=re.IGNORECASE)
-    replacements_done += count
-    return new_text, replacements_done
 
 
 def process_user_input(

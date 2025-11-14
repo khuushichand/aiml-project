@@ -2398,7 +2398,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const chatInput = document.getElementById('chat-input');
     if (chatInput) {
         chatInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            const enterToggle = document.getElementById('chat-enter-to-send');
+            const enterToSend = !!(enterToggle && enterToggle.checked);
+            if (e.key === 'Enter' && enterToSend && !e.shiftKey) {
                 e.preventDefault();
                 sendChatMessage();
             }
@@ -3851,6 +3853,271 @@ let chatStreamHandle = null; // active SSE handle for streaming chat
 let chatConversationId = null; // current conversation id if any
 let chatAutoContinueInProgress = false; // guard for auto-continue
 
+// Composer state
+let chatComposerAttachment = null; // { dataUrl, name }
+let chatModelOptionsCache = null; // original <option> list for filtering
+
+function chatProviderIcon(provider) {
+    try {
+        if (!provider) return null;
+        const p = String(provider).toLowerCase();
+        const known = new Set(['openai','anthropic','google','groq','mistral','huggingface','ollama']);
+        if (!known.has(p)) return null;
+        return `/webui/img/providers/${p}.svg`;
+    } catch(_) { return null; }
+}
+
+function chatSetConversationId(cid) {
+    chatConversationId = cid || null;
+    const convIdInput = document.getElementById('chat-conversation-id');
+    if (convIdInput) convIdInput.value = chatConversationId || '';
+    const contBtn = document.getElementById('chat-continue-btn');
+    if (contBtn) contBtn.style.display = chatConversationId ? '' : 'none';
+}
+
+function chatCreateAvatar(role, provider, model) {
+    const s = document.createElement('span');
+    s.className = 'avatar';
+    if (role === 'assistant') {
+        const src = chatProviderIcon(provider);
+        if (src) {
+            const img = document.createElement('img');
+            img.src = src;
+            img.alt = String(provider||'assistant');
+            s.appendChild(img);
+            return s;
+        }
+    }
+    s.textContent = role === 'user' ? 'U' : (role === 'assistant' ? 'A' : 'S');
+    return s;
+}
+
+function ensureAnswerCollapsible(container) {
+    try {
+        if (!container || container._collapsibleChecked) return;
+        container._collapsibleChecked = true;
+        requestAnimationFrame(() => {
+            const threshold = 480; // px
+            if (container.scrollHeight > threshold && !container._collapsibleEnabled) {
+                container._collapsibleEnabled = true;
+                // Wrap children into a collapsible div
+                const wrap = document.createElement('div');
+                wrap.className = 'collapsible';
+                while (container.firstChild) wrap.appendChild(container.firstChild);
+                container.appendChild(wrap);
+                const fade = document.createElement('div'); fade.className='gradient-fade'; wrap.appendChild(fade);
+                const btn = document.createElement('button'); btn.className='btn btn-sm expand-btn'; btn.textContent='Show more';
+                btn.addEventListener('click', () => {
+                    wrap.classList.remove('collapsible');
+                    try { wrap.querySelector('.gradient-fade')?.remove(); } catch {}
+                    btn.remove();
+                });
+                container.appendChild(btn);
+            }
+        });
+    } catch (_) {}
+}
+
+function chatAtBottom(container) {
+    if (!container) return true;
+    const epsilon = 4;
+    return (container.scrollHeight - container.scrollTop - container.clientHeight) <= epsilon;
+}
+
+function chatScrollToBottom(container) {
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+}
+
+function chatUpdateJumpLatest(container) {
+    const btn = document.getElementById('chat-jump-latest');
+    const lock = document.getElementById('chat-scroll-lock');
+    if (!btn || !container) return;
+    const show = !chatAtBottom(container) || (lock && lock.checked);
+    btn.style.display = show ? '' : 'none';
+}
+
+function chatBindComposer() {
+    const input = document.getElementById('chat-input');
+    const enterToggle = document.getElementById('chat-enter-to-send');
+    const attachBtn = document.getElementById('chat-attach-btn');
+    const attachInput = document.getElementById('chat-attach');
+    const attachPreview = document.getElementById('chat-attach-preview');
+    const attachRemove = document.getElementById('chat-attach-remove');
+    const modelSelect = document.getElementById('chat-model');
+    const modelSearch = document.getElementById('chat-model-search');
+
+    if (input && !input._autoResizeBound) {
+        input._autoResizeBound = true;
+        const autoResize = () => {
+            input.style.height = 'auto';
+            const maxH = 180;
+            input.style.height = Math.min(input.scrollHeight, maxH) + 'px';
+        };
+        input.addEventListener('input', autoResize);
+        setTimeout(autoResize, 0);
+    }
+
+    if (input && !input._enterBound) {
+        input._enterBound = true;
+        input.addEventListener('keydown', (e) => {
+            const enterToSend = !!(enterToggle && enterToggle.checked);
+            if (e.key === 'Enter') {
+                if (enterToSend && !e.shiftKey) {
+                    e.preventDefault();
+                    try { sendChatMessage(); } catch (_) {}
+                }
+            }
+        });
+    }
+    if (enterToggle && !enterToggle._b) {
+        enterToggle._b = true;
+        const hint = document.getElementById('chat-enter-hint');
+        const update = () => {
+            if (!hint) return;
+            hint.textContent = enterToggle.checked ? 'Enter to send • Shift+Enter for newline' : 'Press Send to send • Enter adds newline';
+        };
+        enterToggle.addEventListener('change', update);
+        update();
+    }
+
+    if (attachBtn && attachInput && !attachBtn._b) {
+        attachBtn._b = true;
+        attachBtn.addEventListener('click', () => attachInput.click());
+    }
+    if (attachInput && !attachInput._b) {
+        attachInput._b = true;
+        attachInput.addEventListener('change', () => {
+            const file = attachInput.files && attachInput.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                chatComposerAttachment = { dataUrl: String(ev.target.result || ''), name: file.name || 'image' };
+                if (attachPreview) {
+                    try { attachPreview.querySelector('img').src = chatComposerAttachment.dataUrl; } catch (_) {}
+                    attachPreview.style.display = '';
+                }
+            };
+            reader.readAsDataURL(file);
+        });
+    }
+    if (attachRemove && !attachRemove._b) {
+        attachRemove._b = true;
+        attachRemove.addEventListener('click', () => {
+            chatComposerAttachment = null;
+            const pr = document.getElementById('chat-attach-preview');
+            if (pr) pr.style.display = 'none';
+            const ai = document.getElementById('chat-attach');
+            if (ai) ai.value = '';
+        });
+    }
+
+    // Drag & drop onto the input
+    if (input && !input._dragBound) {
+        input._dragBound = true;
+        const onOver = (e) => { e.preventDefault(); input.classList.add('drag-over'); };
+        const onLeave = () => { input.classList.remove('drag-over'); };
+        const onDrop = (e) => {
+            e.preventDefault(); input.classList.remove('drag-over');
+            const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+            if (!f || !/^image\//.test(f.type||'')) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                chatComposerAttachment = { dataUrl: String(ev.target.result || ''), name: f.name || 'image' };
+                if (attachPreview) {
+                    try { attachPreview.querySelector('img').src = chatComposerAttachment.dataUrl; } catch (_) {}
+                    attachPreview.style.display = '';
+                }
+            };
+            reader.readAsDataURL(f);
+        };
+        input.addEventListener('dragover', onOver);
+        input.addEventListener('dragleave', onLeave);
+        input.addEventListener('drop', onDrop);
+    }
+
+    // Model search filter
+    if (modelSelect && modelSearch && !modelSearch._b) {
+        modelSearch._b = true;
+        if (!chatModelOptionsCache) {
+            chatModelOptionsCache = Array.from(modelSelect.options).map(o => ({value:o.value, label:o.text, group:o.parentElement && o.parentElement.label}));
+        }
+        modelSearch.addEventListener('input', () => {
+            const q = modelSearch.value.toLowerCase();
+            while (modelSelect.firstChild) modelSelect.removeChild(modelSelect.firstChild);
+            const byGroup = new Map();
+            (chatModelOptionsCache||[]).forEach(opt => {
+                if (!q || (opt.label||'').toLowerCase().includes(q) || (opt.value||'').toLowerCase().includes(q)) {
+                    const grp = opt.group || '';
+                    if (!byGroup.has(grp)) byGroup.set(grp, []);
+                    byGroup.get(grp).push(opt);
+                }
+            });
+            byGroup.forEach((arr, label) => {
+                if (label) {
+                    const og = document.createElement('optgroup');
+                    og.label = label;
+                    arr.forEach(opt => { const o=document.createElement('option'); o.value=opt.value; o.textContent=opt.label; modelSelect.appendChild(og); og.appendChild(o); });
+                } else {
+                    arr.forEach(opt => { const o=document.createElement('option'); o.value=opt.value; o.textContent=opt.label; modelSelect.appendChild(o); });
+                }
+            });
+        });
+    }
+}
+
+function chatBindJumpLatest() {
+    const container = document.getElementById('chat-messages');
+    const btn = document.getElementById('chat-jump-latest');
+    if (container && !container._scrollBind) {
+        container._scrollBind = true;
+        container.addEventListener('scroll', () => chatUpdateJumpLatest(container));
+    }
+    if (btn && !btn._b) {
+        btn._b = true;
+        btn.addEventListener('click', () => {
+            chatScrollToBottom(document.getElementById('chat-messages'));
+            chatUpdateJumpLatest(document.getElementById('chat-messages'));
+        });
+    }
+}
+
+function chatBuildPresetsDropdown() {
+    try {
+        const sel = document.getElementById('chat-preset-select');
+        if (!sel) return;
+        // Clear
+        while (sel.options.length > 1) sel.remove(1);
+        const src = (typeof window !== 'undefined' && window.chatUI && Array.isArray(window.chatUI.presets)) ? window.chatUI.presets : [];
+        src.forEach(p => {
+            const o = document.createElement('option'); o.value = p.name; o.textContent = p.name; sel.appendChild(o);
+        });
+        if (!sel._b) {
+            sel._b = true;
+            sel.addEventListener('change', () => {
+                const name = sel.value;
+                if (!name) return;
+                chatApplyPreset(name);
+            });
+        }
+    } catch (_) {}
+}
+
+function chatApplyPreset(name) {
+    try {
+        const src = (typeof window !== 'undefined' && window.chatUI && Array.isArray(window.chatUI.presets)) ? window.chatUI.presets : [];
+        const p = src.find(x => x && x.name === name);
+        if (!p) return;
+        // System prompt: update first system message and textarea
+        const sys = String((p.messages && p.messages[0] && p.messages[0].content) || '');
+        const sysTa = document.getElementById('chat-system-prompt'); if (sysTa) sysTa.value = sys;
+        updateSystemPrompt();
+        // Sampling
+        const t = document.getElementById('chat-temp'); if (t) t.value = String(p.temperature ?? t.value || 0.7);
+        const m = document.getElementById('chat-max-tokens'); if (m) m.value = String(p.max_tokens ?? m.value || 1000);
+    } catch (_) {}
+}
+
 // ------------------------------------------------------------
 // Minimal Markdown Renderer (safe)
 // ------------------------------------------------------------
@@ -3934,26 +4201,59 @@ function renderMarkdownToElement(text, container) {
 }
 
 function appendPlainMarkdown(text, container) {
-    // paragraphs by double newline
-    const paras = String(text).split(/\n\n+/);
-    paras.forEach((p) => {
-        if (!p.trim()) return;
+    const src = String(text || '');
+    const blocks = src.split(/\n\n+/);
+    blocks.forEach((block) => {
+        const b = block.trimEnd(); if (!b.trim()) return;
+        const lines = b.split(/\n/);
+        // Detect list
+        if (lines.every(l => /^\s*([-*+]\s+|\d+\.\s+)/.test(l))) {
+            const ordered = lines[0].match(/^\s*\d+\./);
+            const ul = document.createElement(ordered ? 'ol' : 'ul');
+            lines.forEach(l => {
+                const item = l.replace(/^\s*([-*+]\s+|\d+\.\s+)/, '');
+                const li = document.createElement('li');
+                li.innerHTML = inlineMd(item);
+                ul.appendChild(li);
+            });
+            container.appendChild(ul);
+            return;
+        }
+        // Detect simple table (| col | col | with --- separator)
+        if (lines.length >= 2 && /\|/.test(lines[0]) && /^\s*\|?\s*:?[-]{3,}/.test(lines[1])) {
+            const table = document.createElement('table');
+            table.style.borderCollapse='collapse'; table.style.margin='6px 0';
+            const mkRow = (line, tag) => {
+                const tr = document.createElement('tr');
+                line.split('|').map(s => s.trim()).filter(Boolean).forEach(cell => {
+                    const td = document.createElement(tag);
+                    td.innerHTML = inlineMd(cell);
+                    td.style.border='1px solid var(--color-border)'; td.style.padding='4px 6px';
+                    tr.appendChild(td);
+                });
+                return tr;
+            };
+            table.appendChild(mkRow(lines[0], 'th'));
+            for (let i=2;i<lines.length;i++) table.appendChild(mkRow(lines[i], 'td'));
+            container.appendChild(table);
+            return;
+        }
+        // Paragraph
         const div = document.createElement('div');
-        // Inline transforms (safe)
-        let html = mdEscape(p);
-        // inline code `code`
-        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-        // bold **text**
-        html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-        // italic *text* (simple heuristic; avoids lookbehind)
-        html = html.replace(/(^|\s)\*([^*]+)\*(?=\s|$)/g, '$1<em>$2</em>');
-        // links [text](url)
-        html = html.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1<\/a>');
-        // line breaks
-        html = html.replace(/\n/g, '<br>');
-        div.innerHTML = html;
+        div.innerHTML = inlineMd(b).replace(/\n/g, '<br>');
         container.appendChild(div);
     });
+}
+
+function inlineMd(text) {
+    let html = mdEscape(String(text||''));
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/(^|\s)\*([^*]+)\*(?=\s|$)/g, '$1<em>$2</em>');
+    html = html.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1<\/a>');
+    // Autolink bare URLs
+    html = html.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1<\/a>');
+    return html;
 }
 
 // Very lightweight highlighter for common languages (json, js/ts, python)
@@ -4030,7 +4330,9 @@ function updateSystemPrompt() {
             const messagesDiv = document.getElementById('chat-messages');
             const systemMessageDiv = messagesDiv.querySelector('.chat-message.system');
             if (systemMessageDiv) {
-                systemMessageDiv.textContent = 'System: ' + newSystemPrompt;
+                const content = systemMessageDiv.querySelector('.content');
+                if (content) content.textContent = 'System: ' + newSystemPrompt;
+                else systemMessageDiv.textContent = 'System: ' + newSystemPrompt;
             }
 
             console.log('System prompt updated:', newSystemPrompt);
@@ -4056,17 +4358,15 @@ async function sendChatMessage() {
     const userMessage = input.value;
     input.value = '';
 
-    // Add user message to display
+    // Add user message to display (avatar + bubble)
     const userDiv = document.createElement('div');
     userDiv.className = 'chat-message user';
-    // Create user message elements safely
-    const userLabel = document.createElement('strong');
-    userLabel.textContent = 'User:';
-    const userContent = document.createElement('span');
-    userContent.textContent = userMessage;
-    userDiv.appendChild(userLabel);
-    userDiv.appendChild(document.createTextNode(' '));
-    userDiv.appendChild(userContent);
+    const uAvatar = chatCreateAvatar('user');
+    const uBubble = document.createElement('div'); uBubble.className = 'bubble';
+    const uContent = document.createElement('div'); uContent.className = 'content'; uContent.textContent = userMessage;
+    uBubble.appendChild(uContent);
+    userDiv.appendChild(uAvatar);
+    userDiv.appendChild(uBubble);
     messagesDiv.appendChild(userDiv);
 
     // Add to messages array with history limit
@@ -4079,23 +4379,45 @@ async function sendChatMessage() {
     // Create assistant message placeholder
     const assistantDiv = document.createElement('div');
     assistantDiv.className = 'chat-message assistant';
-    const assistantLabel = document.createElement('strong');
-    assistantLabel.textContent = 'Assistant:';
+    // Get current provider for avatar context
+    const providerSelectForAvatar = document.getElementById('chat-provider');
+    const providerForAvatar = providerSelectForAvatar ? providerSelectForAvatar.value : '';
+    const aAvatar = chatCreateAvatar('assistant', providerForAvatar);
+    const aBubble = document.createElement('div'); aBubble.className = 'bubble';
     const answerContainer = document.createElement('div');
     answerContainer.className = 'assistant-answer';
     answerContainer.textContent = 'Thinking...';
     const toolsContainer = document.createElement('div');
     toolsContainer.className = 'assistant-tools';
     toolsContainer.style.marginTop = '6px';
-    assistantDiv.appendChild(assistantLabel);
-    assistantDiv.appendChild(document.createTextNode(' '));
-    assistantDiv.appendChild(answerContainer);
-    assistantDiv.appendChild(toolsContainer);
+    aBubble.appendChild(answerContainer);
+    aBubble.appendChild(toolsContainer);
+    // Actions toolbar (copy/regenerate/edit)
+    const actions = document.createElement('div'); actions.className = 'message-actions';
+    const btnCopy = document.createElement('button'); btnCopy.className='btn btn-sm'; btnCopy.textContent='Copy'; btnCopy.addEventListener('click', async () => {
+        const raw = answerContainer.innerText || '';
+        const ok = await Utils.copyToClipboard(raw);
+        if (typeof Toast !== 'undefined') ok ? Toast.success('Copied') : Toast.error('Copy failed');
+    });
+    const btnReg = document.createElement('button'); btnReg.className='btn btn-sm'; btnReg.textContent='Regenerate'; btnReg.addEventListener('click', () => {
+        try { const inputEl=document.getElementById('chat-input'); if (inputEl) inputEl.value = String(userMessage||''); sendChatMessage(); } catch(_){}
+    });
+    const btnEdit = document.createElement('button'); btnEdit.className='btn btn-sm'; btnEdit.textContent='Edit'; btnEdit.addEventListener('click', () => {
+        try { const inputEl=document.getElementById('chat-input'); if (inputEl) inputEl.value = String(userMessage||''); inputEl.focus(); } catch(_){}
+    });
+    actions.appendChild(btnCopy); actions.appendChild(btnReg); actions.appendChild(btnEdit);
+    aBubble.appendChild(actions);
+    assistantDiv.appendChild(aAvatar);
+    assistantDiv.appendChild(aBubble);
     messagesDiv.appendChild(assistantDiv);
 
     // Smooth scrolling
     requestAnimationFrame(() => {
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        const lock = document.getElementById('chat-scroll-lock');
+        if (!(lock && lock.checked)) {
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        try { chatUpdateJumpLatest(messagesDiv); } catch (_) {}
     });
 
     try {
@@ -4157,6 +4479,7 @@ async function sendChatMessage() {
                         renderMarkdownToElement(assembled, answerContainer);
                         renderToolCalls(toolCallsAcc, toolsContainer);
                         renderToolResults(toolResultsAcc, toolsContainer);
+                        ensureAnswerCollapsible(answerContainer);
                     } catch (_) {}
                 });
             };
@@ -4170,7 +4493,9 @@ async function sendChatMessage() {
                         if (typeof delta === 'string' && delta.length > 0) {
                             assembled += delta;
                             scheduleRender();
-                            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                            const lock = document.getElementById('chat-scroll-lock');
+                            if (!(lock && lock.checked)) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                            try { chatUpdateJumpLatest(messagesDiv); } catch (_) {}
                         }
                         // Accumulate streamed tool calls
                         const dTools = evt?.choices?.[0]?.delta?.tool_calls;
@@ -4237,19 +4562,29 @@ async function sendChatMessage() {
                 chatMessages = [systemMsg, ...chatMessages.slice(-(MAX_CHAT_MESSAGES - 1))];
             }
 
-            // Rebuild assistantDiv contents with markdown + tools
+            // Rebuild assistantDiv contents with avatar, markdown + tools
             assistantDiv.innerHTML = '';
-            const label = document.createElement('strong');
-            label.textContent = 'Assistant:';
-            const ans = document.createElement('div');
+            const aAvatar2 = chatCreateAvatar('assistant', (document.getElementById('chat-provider')||{}).value || '');
+            const bubble2 = document.createElement('div'); bubble2.className = 'bubble';
+            const ans = document.createElement('div'); ans.className = 'assistant-answer';
             const tools = document.createElement('div');
             tools.className = 'assistant-tools';
             tools.style.marginTop = '6px';
             renderMarkdownToElement(assistantMessage || '', ans);
-            assistantDiv.appendChild(label);
-            assistantDiv.appendChild(document.createTextNode(' '));
-            assistantDiv.appendChild(ans);
-            assistantDiv.appendChild(tools);
+            ensureAnswerCollapsible(ans);
+            bubble2.appendChild(ans);
+            // Actions
+            try {
+                const actions = document.createElement('div'); actions.className='message-actions';
+                const btnCopy = document.createElement('button'); btnCopy.className='btn btn-sm'; btnCopy.textContent='Copy'; btnCopy.addEventListener('click', async ()=>{ const ok = await Utils.copyToClipboard(String(assistantMessage||'')); if (Toast?.success && ok) Toast.success('Copied'); });
+                const btnReg = document.createElement('button'); btnReg.className='btn btn-sm'; btnReg.textContent='Regenerate'; btnReg.addEventListener('click', ()=>{ try{ const inputEl=document.getElementById('chat-input'); if (inputEl) inputEl.value = String(userMessage||''); sendChatMessage(); }catch(_){}});
+                const btnEdit = document.createElement('button'); btnEdit.className='btn btn-sm'; btnEdit.textContent='Edit'; btnEdit.addEventListener('click', ()=>{ try{ const inputEl=document.getElementById('chat-input'); if (inputEl) inputEl.value = String(userMessage||''); inputEl.focus(); }catch(_){}});
+                actions.appendChild(btnCopy); actions.appendChild(btnReg); actions.appendChild(btnEdit);
+                bubble2.appendChild(actions);
+            } catch(_){}
+            bubble2.appendChild(tools);
+            assistantDiv.appendChild(aAvatar2);
+            assistantDiv.appendChild(bubble2);
             // Render tool calls if present in message
             try {
                 const tcs = response.choices[0].message.tool_calls;
@@ -4306,7 +4641,9 @@ async function sendChatMessage() {
     }
 
     requestAnimationFrame(() => {
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        const lock = document.getElementById('chat-scroll-lock');
+        if (!(lock && lock.checked)) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        try { chatUpdateJumpLatest(messagesDiv); } catch (_) {}
     });
 }
 
@@ -4323,7 +4660,9 @@ function clearChat() {
     const fragment = document.createDocumentFragment();
     const systemDiv = document.createElement('div');
     systemDiv.className = 'chat-message system';
-    systemDiv.textContent = 'System: ' + currentSystemPrompt;
+    const b = document.createElement('div'); b.className='bubble';
+    const c = document.createElement('div'); c.className='content'; c.textContent = 'System: ' + currentSystemPrompt;
+    b.appendChild(c); systemDiv.appendChild(b);
     fragment.appendChild(systemDiv);
     messagesDiv.innerHTML = '';
     messagesDiv.appendChild(fragment);
@@ -4422,17 +4761,18 @@ function renderToolCalls(toolCalls, container) {
     header.textContent = 'Tool calls:';
     container.appendChild(header);
     calls.forEach((tc, i) => {
-        const block = document.createElement('div');
-        block.className = 'tool-call-block';
-        block.style.borderLeft = '3px solid #ccc';
-        block.style.paddingLeft = '8px';
-        block.style.margin = '4px 0';
-        const name = document.createElement('div');
-        name.innerHTML = `<strong>${mdEscape(tc.name || 'function')}</strong>`;
-        block.appendChild(name);
+        const details = document.createElement('details');
+        details.className = 'tool-card tool-call';
+        const summary = document.createElement('summary');
+        summary.innerHTML = `<strong>${mdEscape(tc.name || 'function')}</strong>`;
+        details.appendChild(summary);
         const codeEl = createCodeBlockElement(String(tc.args || ''), 'json');
-        block.appendChild(codeEl);
-        container.appendChild(block);
+        details.appendChild(codeEl);
+        const actions = document.createElement('div'); actions.className = 'tool-actions';
+        const cont = document.createElement('button'); cont.className='btn btn-sm'; cont.textContent='Continue'; cont.addEventListener('click', ()=>{ try { continueConversation(); } catch(_){} });
+        actions.appendChild(cont);
+        details.appendChild(actions);
+        container.appendChild(details);
     });
 }
 
@@ -4451,18 +4791,34 @@ function renderToolResults(toolResults, container) {
         container.appendChild(header);
     }
     results.forEach((r) => {
-        const block = document.createElement('div');
-        block.className = 'tool-result-block';
-        block.style.borderLeft = '3px solid #ccc';
-        block.style.paddingLeft = '8px';
-        block.style.margin = '4px 0';
-        const name = document.createElement('div');
-        name.innerHTML = `<strong>${mdEscape(r.name || 'result')}</strong>`;
-        block.appendChild(name);
+        const details = document.createElement('details');
+        details.className = 'tool-card tool-result';
+        const summary = document.createElement('summary');
+        summary.innerHTML = `<strong>${mdEscape(r.name || 'result')}</strong>`;
+        details.appendChild(summary);
         const content = typeof r.content === 'string' ? r.content : JSON.stringify(r.content || r);
         const codeEl = createCodeBlockElement(content, 'json');
-        block.appendChild(codeEl);
-        container.appendChild(block);
+        details.appendChild(codeEl);
+        const actions = document.createElement('div'); actions.className='tool-actions';
+        const cont = document.createElement('button'); cont.className='btn btn-sm'; cont.textContent='Continue'; cont.addEventListener('click', ()=>{ try { continueConversation(); } catch(_){} });
+        actions.appendChild(cont);
+        details.appendChild(actions);
+        container.appendChild(details);
+        // Also mirror to the right-side tools log if present
+        try {
+            const log = document.getElementById('chat-tools-log');
+            if (log) {
+                const clone = details.cloneNode(true);
+                const btn = clone.querySelector('.tool-actions button');
+                if (btn && !btn._bound) {
+                    btn._bound = true;
+                    btn.addEventListener('click', () => {
+                        try { continueConversation(); } catch (_) {}
+                    });
+                }
+                log.appendChild(clone);
+            }
+        } catch(_){}
     });
 }
 
@@ -4499,6 +4855,96 @@ function maybeAutoContinueAfterTools(hadToolCalls, hadToolResults, streaming) {
     } catch (_) {}
 }
 
+// -----------------------------
+// Conversations side panel
+// -----------------------------
+async function chatLoadConversations(query) {
+    try {
+        const params = new URLSearchParams();
+        params.set('limit', '50');
+        const url = '/api/v1/chats?' + params.toString();
+        const res = await apiClient.makeRequest('GET', url);
+        const items = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : []);
+        const list = document.getElementById('chat-conversations-list');
+        if (!list) return;
+        list.innerHTML = '';
+        const q = String(query || '').toLowerCase();
+        items.forEach((it) => {
+            const id = String(it.id || it.chat_id || '');
+            const title = String(it.title || '(untitled)');
+            if (q && !title.toLowerCase().includes(q) && !id.includes(q)) return;
+            const row = document.createElement('div');
+            row.className = 'conv-item' + (chatConversationId && id === String(chatConversationId) ? ' active' : '');
+            const top = document.createElement('div'); top.className='conv-title'; top.textContent = title;
+            const meta = document.createElement('div'); meta.className='conv-meta'; meta.innerHTML = `<span>#${id}</span><span>${(it.updated_at||it.created_at||'').toString().slice(0,19).replace('T',' ')}</span>`;
+            const actions = document.createElement('div'); actions.className='conv-actions';
+            const btnOpen = document.createElement('button'); btnOpen.className='btn btn-sm'; btnOpen.textContent='Open'; btnOpen.addEventListener('click', (event)=>{ event.stopPropagation(); chatOpenConversation(id); });
+            const btnRename = document.createElement('button'); btnRename.className='btn btn-sm'; btnRename.textContent='Rename'; btnRename.addEventListener('click', async (event)=>{ event.stopPropagation(); const nt=prompt('New title', title); if(!nt) return; try{ await apiClient.makeRequest('PUT', `/api/v1/chats/${id}`, { body: { title: nt } }); chatLoadConversations(q); }catch(e){ if(Toast?.error) Toast.error('Rename failed'); }});
+            const btnStar = document.createElement('button'); btnStar.className='btn btn-sm'; btnStar.textContent= (it.rating && it.rating >=5) ? '★' : '☆'; btnStar.addEventListener('click', async (event)=>{ event.stopPropagation(); try{ const newRating = (it.rating && it.rating >=5) ? 0 : 5; await apiClient.makeRequest('PUT', `/api/v1/chats/${id}`, { body:{ rating:newRating } }); chatLoadConversations(q);}catch(e){ if(Toast?.error) Toast.error('Update failed'); }});
+            const btnDel = document.createElement('button'); btnDel.className='btn btn-sm btn-danger'; btnDel.textContent='Delete'; btnDel.addEventListener('click', async (event)=>{ event.stopPropagation(); if(!confirm('Delete this conversation?')) return; try{ await apiClient.makeRequest('DELETE', `/api/v1/chats/${id}`); chatLoadConversations(q); if (String(chatConversationId)===id) chatSetConversationId(null);}catch(e){ if(Toast?.error) Toast.error('Delete failed'); }});
+            actions.appendChild(btnOpen); actions.appendChild(btnRename); actions.appendChild(btnStar); actions.appendChild(btnDel);
+            row.appendChild(top); row.appendChild(meta); row.appendChild(actions);
+            row.addEventListener('click', (event)=>{ if (event.target && event.target.closest && event.target.closest('.conv-actions')) return; chatOpenConversation(id); });
+        list.appendChild(row);
+    });
+    } catch (e) {
+        const list = document.getElementById('chat-conversations-list');
+        if (list) { list.textContent = 'Failed to load conversations'; }
+    }
+}
+
+function chatHighlightConversation(id) {
+    try {
+        document.querySelectorAll('#chat-conversations-list .conv-item').forEach(el => {
+            if (!el) return;
+            const has = el.querySelector('.conv-meta')?.innerText?.includes(`#${id}`);
+            if (has) el.classList.add('active'); else el.classList.remove('active');
+        });
+    } catch (_) {}
+}
+
+async function chatOpenConversation(id) {
+    try {
+        chatSetConversationId(String(id));
+        chatHighlightConversation(String(id));
+        // Fetch conversation details with messages
+        const res = await apiClient.makeRequest('GET', `/api/v1/chats/${id}`);
+        const msgs = Array.isArray(res?.messages) ? res.messages : [];
+        // Rebuild chatMessages and DOM
+        const messagesDiv = document.getElementById('chat-messages');
+        if (!messagesDiv) return;
+        messagesDiv.innerHTML = '';
+        const frag = document.createDocumentFragment();
+        let arr = msgs.map((m) => ({ role: m.role, content: m.content }));
+        if (!arr.length) arr = [{ role: 'system', content: 'You are a helpful assistant.' }];
+        chatMessages = arr;
+        arr.forEach((m) => {
+            if (m.role === 'system') {
+                const row = document.createElement('div'); row.className='chat-message system';
+                const b = document.createElement('div'); b.className='bubble';
+                const c = document.createElement('div'); c.className='content'; c.textContent = 'System: ' + (typeof m.content === 'string' ? m.content : '');
+                b.appendChild(c); row.appendChild(b); frag.appendChild(row);
+            } else if (m.role === 'user') {
+                const row = document.createElement('div'); row.className='chat-message user';
+                const av = chatCreateAvatar('user'); const b = document.createElement('div'); b.className='bubble';
+                const c = document.createElement('div'); c.className='content'; c.textContent = typeof m.content === 'string' ? m.content : '';
+                b.appendChild(c); row.appendChild(av); row.appendChild(b); frag.appendChild(row);
+            } else {
+                const row = document.createElement('div'); row.className='chat-message assistant';
+                const av = chatCreateAvatar('assistant', (document.getElementById('chat-provider')||{}).value || ''); const b = document.createElement('div'); b.className='bubble';
+                const ans = document.createElement('div'); ans.className='assistant-answer';
+                renderMarkdownToElement(String(typeof m.content === 'string' ? m.content : ''), ans);
+                ensureAnswerCollapsible(ans);
+                b.appendChild(ans); row.appendChild(av); row.appendChild(b); frag.appendChild(row);
+            }
+        });
+        messagesDiv.appendChild(frag);
+        requestAnimationFrame(() => { try { messagesDiv.scrollTop = messagesDiv.scrollHeight; } catch(_){} });
+    } catch (e) {
+        if (typeof Toast !== 'undefined' && Toast.error) Toast.error('Failed to open conversation');
+    }
+}
+
 // Continue conversation without adding a new user message
 async function continueConversation() {
     const messagesDiv = document.getElementById('chat-messages');
@@ -4517,20 +4963,24 @@ async function continueConversation() {
     // Create assistant placeholder
     const assistantDiv = document.createElement('div');
     assistantDiv.className = 'chat-message assistant';
-    const assistantLabel = document.createElement('strong');
-    assistantLabel.textContent = 'Assistant:';
+    const aAvatar = chatCreateAvatar('assistant', (document.getElementById('chat-provider')||{}).value || '');
+    const bubble = document.createElement('div'); bubble.className = 'bubble';
     const answerContainer = document.createElement('div');
     answerContainer.className = 'assistant-answer';
     answerContainer.textContent = 'Continuing...';
     const toolsContainer = document.createElement('div');
     toolsContainer.className = 'assistant-tools';
     toolsContainer.style.marginTop = '6px';
-    assistantDiv.appendChild(assistantLabel);
-    assistantDiv.appendChild(document.createTextNode(' '));
-    assistantDiv.appendChild(answerContainer);
-    assistantDiv.appendChild(toolsContainer);
+    bubble.appendChild(answerContainer);
+    bubble.appendChild(toolsContainer);
+    assistantDiv.appendChild(aAvatar);
+    assistantDiv.appendChild(bubble);
     messagesDiv.appendChild(assistantDiv);
-    requestAnimationFrame(() => { messagesDiv.scrollTop = messagesDiv.scrollHeight; });
+    requestAnimationFrame(() => {
+        const lock = document.getElementById('chat-scroll-lock');
+        if (!(lock && lock.checked)) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        try { chatUpdateJumpLatest(messagesDiv); } catch (_) {}
+    });
 
     const requestPayload = {
         model: model,
@@ -4561,6 +5011,7 @@ async function continueConversation() {
                     renderMarkdownToElement(assembled, answerContainer);
                     renderToolCalls(toolCallsAcc, toolsContainer);
                     renderToolResults(toolResultsAcc, toolsContainer);
+                    ensureAnswerCollapsible(answerContainer);
                 } catch (_) {}
             });
         };
@@ -4574,7 +5025,9 @@ async function continueConversation() {
                     if (typeof delta === 'string' && delta.length > 0) {
                         assembled += delta;
                         scheduleRender();
-                        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                        const lock = document.getElementById('chat-scroll-lock');
+                        if (!(lock && lock.checked)) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                        try { chatUpdateJumpLatest(messagesDiv); } catch (_) {}
                     }
                     const dTools = evt?.choices?.[0]?.delta?.tool_calls;
                     if (Array.isArray(dTools) && dTools.length) {
@@ -5044,7 +5497,10 @@ function initializeChatCompletionsTab() {
         try { Utils.saveToStorage('chat-ui-selection', { provider: (pSel && pSel.value) || '', model: (mSel && mSel.value) || '' }); } catch (_) {}
     };
     if (pSel) pSel.addEventListener('change', persist);
-    if (mSel) mSel.addEventListener('change', persist);
+    if (mSel) mSel.addEventListener('change', () => {
+        persist();
+        try { chatUpdateRecentModels(mSel.value || ''); chatApplyRecentModelsToAllSelects(); } catch(_){}
+    });
 
     // Apply default Save to DB preference from server config if available
     try {
@@ -5080,6 +5536,42 @@ function initializeChatCompletionsTab() {
         if (tEl) tEl.addEventListener('change', persistSampling);
         if (pEl) pEl.addEventListener('change', persistSampling);
         if (mEl) mEl.addEventListener('change', persistSampling);
+    } catch (_) {}
+
+    // Bind new composer, jump-to-latest, presets and continue button
+    try { chatBindComposer(); } catch (_) {}
+    try { chatBindJumpLatest(); } catch (_) {}
+    try { chatBuildPresetsDropdown(); } catch (_) {}
+    try {
+        const cont = document.getElementById('chat-continue-btn');
+        if (cont && !cont._b) { cont._b = true; cont.addEventListener('click', () => { try { continueConversation(); } catch(_){} }); }
+    } catch (_) {}
+    // Conversations side panel
+    try {
+        const refresh = document.getElementById('chat-conv-refresh');
+        const btnNew = document.getElementById('chat-conv-new');
+        const search = document.getElementById('chat-conv-search');
+        if (refresh && !refresh._b) { refresh._b = true; refresh.addEventListener('click', () => chatLoadConversations(search && search.value || '')); }
+        if (btnNew && !btnNew._b) {
+            btnNew._b = true; btnNew.addEventListener('click', async () => {
+                try {
+                    const title = prompt('Title for new conversation:', 'New Conversation');
+                    const body = { title: title || 'New Conversation' };
+                    const res = await apiClient.makeRequest('POST', '/api/v1/chats', { body });
+                    if (res && (res.id || res.chat_id)) {
+                        const id = String(res.id || res.chat_id);
+                        chatSetConversationId(id);
+                        if (typeof Toast !== 'undefined' && Toast.success) Toast.success('Created conversation');
+                        chatLoadConversations(search && search.value || '');
+                    }
+                } catch (e) { if (typeof Toast !== 'undefined' && Toast.error) Toast.error('Create failed'); }
+            });
+        }
+        if (search && !search._b) {
+            search._b = true;
+            search.addEventListener('input', () => chatLoadConversations(search.value || ''));
+        }
+        chatLoadConversations('');
     } catch (_) {}
 }
 
@@ -5156,6 +5648,9 @@ async function populateModelDropdowns() {
                 select.value = defaultModel;
             }
         });
+
+        // Prepend Recently Used models if available
+        try { chatApplyRecentModelsToAllSelects(); } catch(_){}
 
         console.log(`Populated model dropdowns with ${providersInfo.total_configured} providers`);
 
@@ -5272,6 +5767,42 @@ function setupProviderChangeListeners() {
             filterModelsByProvider('chat-provider', 'chat-model');
         });
     }
+}
+
+// -----------------------------
+// Recently used models support
+// -----------------------------
+function chatUpdateRecentModels(val) {
+    try {
+        const key = 'chat-model-recent';
+        const raw = localStorage.getItem(key);
+        const arr = Array.isArray(JSON.parse(raw || '[]')) ? JSON.parse(raw || '[]') : [];
+        const v = String(val || ''); if (!v) return;
+        const next = [v, ...arr.filter((x) => x !== v)].slice(0, 6);
+        localStorage.setItem(key, JSON.stringify(next));
+    } catch (_) {}
+}
+
+function chatApplyRecentModelsToAllSelects() {
+    try {
+        document.querySelectorAll('.llm-model-select').forEach(s => chatApplyRecentModelsToSelect(s));
+    } catch (_) {}
+}
+
+function chatApplyRecentModelsToSelect(select) {
+    try {
+        if (!select) return;
+        const key = 'chat-model-recent';
+        const raw = localStorage.getItem(key);
+        const arr = Array.isArray(JSON.parse(raw || '[]')) ? JSON.parse(raw || '[]') : [];
+        // Remove existing recent group
+        Array.from(select.querySelectorAll('optgroup')).forEach((og) => { if ((og.label || '').toLowerCase() === 'recently used') og.remove(); });
+        if (!arr.length) return;
+        // Insert at top
+        const og = document.createElement('optgroup'); og.label = 'Recently Used';
+        arr.forEach((v) => { const o = document.createElement('option'); o.value = v; o.textContent = v.split('/')[1] || v; og.appendChild(o); });
+        select.insertBefore(og, select.firstChild);
+    } catch (_) {}
 }
 
 // ============================================================================

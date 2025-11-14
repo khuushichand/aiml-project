@@ -558,6 +558,107 @@ class MetricsRegistry:
                 labels=["strategy"],
             )
         )
+
+        # -----------------------------
+        # Chatbook/Templating/Commands metrics
+        # -----------------------------
+        # Template rendering
+        self.register_metric(
+            MetricDefinition(
+                name="template_render_success_total",
+                type=MetricType.COUNTER,
+                description="Successful template renders",
+                labels=["source"],  # source=dict|chatbook|unknown
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="template_render_failure_total",
+                type=MetricType.COUNTER,
+                description="Failed template renders",
+                labels=["source", "reason"],  # reason=parse|exception
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="template_render_timeout_total",
+                type=MetricType.COUNTER,
+                description="Template renders exceeding timeout threshold",
+                labels=["source"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="template_output_truncated_total",
+                type=MetricType.COUNTER,
+                description="Template outputs truncated due to cap",
+                labels=["source"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="template_render_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Template render duration in seconds",
+                unit="s",
+                labels=["source"],
+                buckets=[0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5]
+            )
+        )
+
+        # Command router
+        self.register_metric(
+            MetricDefinition(
+                name="chat_command_invoked_total",
+                type=MetricType.COUNTER,
+                description="Slash commands invoked",
+                labels=["command", "status"],  # status=success|error|rate_limited|denied
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="chat_command_errors_total",
+                type=MetricType.COUNTER,
+                description="Slash command errors",
+                labels=["command", "reason"],  # reason=exception|permission_denied|rate_limited
+            )
+        )
+
+        # Dictionary validator
+        self.register_metric(
+            MetricDefinition(
+                name="chat_dictionary_validate_requests_total",
+                type=MetricType.COUNTER,
+                description="Dictionary validation requests",
+                labels=["strict"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="chat_dictionary_validate_errors_total",
+                type=MetricType.COUNTER,
+                description="Dictionary validation errors by code",
+                labels=["code"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="chat_dictionary_validate_warnings_total",
+                type=MetricType.COUNTER,
+                description="Dictionary validation warnings by code",
+                labels=["code"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="chat_dictionary_validate_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Dictionary validation duration in seconds",
+                unit="s",
+                labels=["strict"],
+                buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1]
+            )
+        )
         self.register_metric(
             MetricDefinition(
                 name="rag_unsupported_claims_total",
