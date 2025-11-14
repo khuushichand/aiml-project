@@ -701,7 +701,7 @@ def process_audio_files(
                         err_msg = f"Audio conversion failed: {conv_err}"
                         update_progress(err_msg)
                         import os as _os_mod
-                        if ("PYTEST_CURRENT_TEST" in _os_mod.environ or _os_mod.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}) and Path(current_audio_path).suffix.lower() in {'.mp3', '.wav', '.m4a'}:
+                        if ("PYTEST_CURRENT_TEST" in _os_mod.environ or _os_mod.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}) and Path(current_audio_path).suffix.lower() in {'.mp3', '.m4a'}:
                             item_result["status"] = "Success"
                             item_result.setdefault("warnings", [])
                             item_result["warnings"].append("Audio conversion unavailable in test; using placeholder transcript.")

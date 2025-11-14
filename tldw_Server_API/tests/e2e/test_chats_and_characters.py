@@ -3,6 +3,7 @@ import pytest
 import httpx
 
 from .test_data import TestDataGenerator
+from .fixtures import authenticated_client, data_tracker
 
 
 def _sanitize_name(name: str) -> str:

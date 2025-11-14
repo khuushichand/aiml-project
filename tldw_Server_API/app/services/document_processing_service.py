@@ -136,12 +136,18 @@ async def process_documents(
                     req_headers.setdefault("Range", "bytes=0-0")
                     _fallback_to = float(os.getenv("DOC_PREFLIGHT_RANGE_TIMEOUT", "5"))
                     with sc0.stream("GET", url, headers=req_headers, timeout=_fallback_to) as resp:
+                        # Validate status: accept 2xx (including 206 Partial Content)
+                        status = getattr(resp, "status_code", getattr(resp, "status", None))
+                        if status is None or not (200 <= int(status) < 300):
+                            _last_err = RuntimeError(f"Preflight GET Range returned status {status} for {url}")
+                            # Force fallback path
+                            raise _last_err
                         head_headers = dict(resp.headers or {})
                 finally:
                     try:
                         sc0.close()
-                    except Exception:
-                        pass
+                    except Exception as cleanup_err:
+                        _logger.debug(f"Ignored client close error (preflight GET): {cleanup_err}")
             except Exception as e_gr:
                 _last_err = e_gr
                 _logger.debug("Preflight GET Range failed, trying single HEAD with retries=1 (no http2): {}", e_gr)
@@ -158,21 +164,25 @@ async def process_documents(
                             retry=RetryPolicy(attempts=1),
                         )
                         try:
+                            # Validate HEAD status
+                            status2 = getattr(head_resp2, "status_code", getattr(head_resp2, "status", None))
+                            if status2 is None or not (200 <= int(status2) < 300):
+                                raise RuntimeError(f"Preflight HEAD returned status {status2} for {url}")
                             head_headers = dict(head_resp2.headers or {})
                         finally:
                             try:
                                 head_resp2.close()
-                            except Exception:
-                                pass
+                            except Exception as cleanup_err:
+                                _logger.debug(f"Ignored response close error (preflight HEAD): {cleanup_err}")
                     finally:
                         try:
                             sc.close()
-                        except Exception:
-                            pass
+                        except Exception as cleanup_err:
+                            _logger.debug(f"Ignored client close error (preflight HEAD): {cleanup_err}")
                 except Exception as e2:
                     _last_err = e2
                     _logger.warning("All preflight attempts failed for URL {}: {}", url, e2)
-                    raise _last_err
+                    raise _last_err from e2
             try:
                 max_bytes = int(os.getenv("DOC_DOWNLOAD_MAX_BYTES", "52428800"))  # 50 MB default
                 cl = head_headers.get('content-length')
@@ -209,8 +219,8 @@ async def process_documents(
             except Exception as e:
                 try:
                     os.unlink(tmp_path)
-                except Exception:
-                    pass
+                except Exception as cleanup_err:
+                    logging.debug(f"Ignored tmp unlink error: {cleanup_err}")
                 raise RuntimeError(f"Download from '{url}' failed: {e}")
         except Exception as e:
             raise RuntimeError(f"Download from '{url}' failed: {str(e)}")

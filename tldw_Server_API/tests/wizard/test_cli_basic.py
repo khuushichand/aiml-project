@@ -35,4 +35,3 @@ def test_verify_json():
     assert data.get("command") == "verify"
     assert data.get("status") == "ok"
     assert "facts" in data
-

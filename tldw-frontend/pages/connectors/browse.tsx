@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { apiClient, getApiBaseUrl, buildAuthHeaders } from '@/lib/api'
 
 type Item = { id: string; name?: string; mimeType?: string; is_folder?: boolean; type?: string }
@@ -18,20 +18,20 @@ export default function Browse() {
 
   const canBrowse = useMemo(() => accountId > 0 && ['drive','notion'].includes(provider), [accountId, provider])
 
-  async function load(reset = false) {
+  const load = useCallback(async (reset = false, cursorArg?: string | null) => {
     if (!canBrowse) return
     setBusy(true); setError(null)
     try {
       const params: any = { account_id: accountId }
       if (parentId) params.parent_remote_id = parentId
-      if (cursor && !reset) params.cursor = cursor
+      if (!reset && cursorArg) params.cursor = cursorArg
       const j = await apiClient.get<any>(`/connectors/providers/${provider}/sources/browse`, { params })
       setItems(j?.items || [])
       setCursor(j?.next_cursor || null)
     } catch (e: any) {
       setError(e?.message || 'Browse failed')
     } finally { setBusy(false) }
-  }
+  }, [canBrowse, accountId, parentId, provider])
 
   useEffect(() => {
     const ping = async () => {
@@ -46,7 +46,7 @@ export default function Browse() {
     }
     ping()
     // re-run browsing when inputs change if enabled
-  }, [provider, accountId, parentId])
+  }, [load])
 
   async function addSource(item: Item) {
     const payload = {

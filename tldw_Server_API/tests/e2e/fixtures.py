@@ -572,8 +572,13 @@ def ensure_server_running(base_url: str = BASE_URL, timeout: int = SERVER_STARTU
     """
     # In in-process mode, probe the app directly without network
     if E2E_INPROCESS:
+        # Fail fast on app import/startup issues so CI surfaces real errors
         try:
             temp_client = _build_inprocess_httpx_client()
+        except Exception as e:  # App import/startup failure
+            pytest.fail(f"❌ Failed to initialize in-process ASGI client/app: {e}")
+
+        try:
             r = temp_client.get(f"{API_PREFIX}/health")
             # Treat 200 OK and 206 Partial Content as available
             if r.status_code in (200, 206):
@@ -590,9 +595,12 @@ def ensure_server_running(base_url: str = BASE_URL, timeout: int = SERVER_STARTU
             data = {"status": "ok", "auth_mode": os.getenv("AUTH_MODE", "single_user")}
             temp_client.close()
             return data
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            # Only skip for transient connectivity-style errors
+            pytest.skip(f"❌ In-process API app health check unavailable: {e}")
         except Exception as e:
-            # If even in-process health fails, skip to avoid false negatives
-            pytest.skip(f"❌ In-process API app unavailable: {e}")
+            # Any other runtime error should fail the suite to expose issues
+            pytest.fail(f"❌ In-process API app health check raised: {e}")
 
     health_url = f"{base_url}{API_PREFIX}/health"
     start_time = time.time()

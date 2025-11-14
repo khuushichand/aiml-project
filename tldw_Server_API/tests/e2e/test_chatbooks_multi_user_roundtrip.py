@@ -23,7 +23,7 @@ import pytest
 import httpx
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
-from .fixtures import APIClient, create_test_file, cleanup_test_file, AssertionHelpers
+from .fixtures import api_client, APIClient, create_test_file, cleanup_test_file, AssertionHelpers
 
 
 def _require_multi_user(api_client: APIClient):

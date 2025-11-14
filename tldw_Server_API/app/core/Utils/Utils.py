@@ -1,4 +1,4 @@
-    # Utils.py
+# Utils.py
 from __future__ import annotations
 #########################################
 # General Utilities Library
@@ -53,7 +53,6 @@ from tldw_Server_API.app.core.http_client import fetch, download, RetryPolicy, D
 import unicodedata
 from tqdm import tqdm
 from loguru import logger
-import requests
 #
 #######################################################################################################################
 #
@@ -1024,3 +1023,7 @@ def is_valid_date(date_string): # Placeholder
 
 def get_user_database_path():
     return None
+
+#
+# End of Utils.py
+#######################################################################################################################
