@@ -35,8 +35,8 @@ jobs:
       PYTHONUNBUFFERED: "1"
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -47,8 +47,28 @@ jobs:
         run: |
           mkdir -p "$MPLCONFIGDIR"
 
+
       - name: Cache pip
         uses: actions/cache@v4
+        
+      - name: Print server log (single-user)
+        if: failure()
+        env:
+          SERVER_LABEL: single
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pathlib, os
+          label = os.environ.get("SERVER_LABEL", "server")
+          log_path = pathlib.Path(f"server-{label}.log")
+          if log_path.exists():
+              print("===== server log (single-user) =====")
+              print(log_path.read_text(encoding="utf-8"))
+          PY
+      - name: Upload server log (single-user)
+        if: failure()
+        uses: actions/upload-artifact@v5
+
         with:
           path: |
             ~/.cache/pip
@@ -67,3 +87,43 @@ jobs:
         run: |
           python -m pytest tldw_Server_API/tests/e2e/ --critical-only -q
 
+      - name: Run E2E tests (multi-user) - exclude Jobs
+        env:
+          AUTH_MODE: multi_user
+        shell: bash
+        run: |
+          pytest -v -n 1 -m "multi_user and not jobs" --timeout=600 \
+            tldw_Server_API/tests/e2e/test_multi_user_onboarding.py
+
+      - name: Stop server (multi-user)
+        if: always()
+        env:
+          SERVER_LABEL: multi
+        shell: bash
+        run: |
+          if [ -f "tldw_Server_API/tests/scripts/server_lifecycle.py" ]; then
+            python tldw_Server_API/tests/scripts/server_lifecycle.py stop || true
+          else
+            echo "server_lifecycle.py not found; skipping stop for '${SERVER_LABEL}'";
+          fi
+
+      - name: Print server log (multi-user)
+        if: failure()
+        env:
+          SERVER_LABEL: multi
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pathlib, os
+          label = os.environ.get("SERVER_LABEL", "server")
+          log_path = pathlib.Path(f"server-{label}.log")
+          if log_path.exists():
+              print("===== server log (multi-user) =====")
+              print(log_path.read_text(encoding="utf-8"))
+          PY
+      - name: Upload server log (multi-user)
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: server-log-multi
+          path: server-multi.log
