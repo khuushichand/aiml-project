@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { apiClient } from '@/lib/api'
+import { apiClient, getApiBaseUrl, buildAuthHeaders } from '@/lib/api'
 
 type Source = {
   id: number; account_id: number; provider: 'drive' | 'notion'; remote_id: string; type: string; path?: string;
@@ -10,6 +10,7 @@ export default function Sources() {
   const [sources, setSources] = useState<Source[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<number | null>(null)
+  const [notEnabled, setNotEnabled] = useState(false)
 
   async function load() {
     setError(null)
@@ -20,7 +21,19 @@ export default function Sources() {
       setError(e?.message || 'Failed to load sources')
     }
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    const ping = async () => {
+      try {
+        const url = `${getApiBaseUrl()}/connectors/providers`
+        const resp = await fetch(url, { headers: buildAuthHeaders('GET') })
+        if (resp.status === 404) { setNotEnabled(true); return }
+        await load()
+      } catch {
+        await load()
+      }
+    }
+    ping()
+  }, [])
 
   async function toggleEnable(s: Source) {
     setBusy(s.id)
@@ -42,8 +55,13 @@ export default function Sources() {
   return (
     <div className="p-6 space-y-4">
       <h1 className="text-xl font-semibold">Sources</h1>
-      {error && <div className="text-red-600 text-sm">{error}</div>}
-      <div className="grid grid-cols-1 gap-2">
+      {notEnabled && (
+        <div className="rounded border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-800">
+          Connectors backend not enabled. This feature is optional and may be disabled on your server.
+        </div>
+      )}
+      {!notEnabled && error && <div className="text-red-600 text-sm">{error}</div>}
+      {!notEnabled && (<div className="grid grid-cols-1 gap-2">
         {sources.length === 0 && <div className="text-sm text-gray-500">No sources yet. Add from Browse.</div>}
         {sources.map(s => (
           <div key={s.id} className="flex items-center justify-between border rounded p-3">
@@ -57,7 +75,7 @@ export default function Sources() {
             </div>
           </div>
         ))}
-      </div>
+      </div>)}
     </div>
   )
 }

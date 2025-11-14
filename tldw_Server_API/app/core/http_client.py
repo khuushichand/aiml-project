@@ -803,6 +803,9 @@ async def afetch(
     last_exc: Optional[Exception] = None
     tm = get_tracing_manager()
     host_attr = _parse_host_from_url(url)
+    method_upper = str(method).upper()
+    _head_disable_h2_tried = False
+    _head_get_range_tried = False
 
     async def _do_once(ac: "httpx.AsyncClient", target_url: str) -> Tuple[Optional["httpx.Response"], str]:
         req_headers = _inject_trace_headers(headers)
@@ -864,7 +867,63 @@ async def afetch(
                     _validate_egress_or_raise(cur_url)
                     resp, reason = await _do_once(ac, cur_url)
                     if resp is None:
-                        # network exception occurred
+                        # Special HEAD fallbacks: disable HTTP/2, then GET with Range 0-0
+                        if method_upper == "HEAD":
+                            if not _head_disable_h2_tried:
+                                _head_disable_h2_tried = True
+                                try:
+                                    if need_close:
+                                        try:
+                                            await ac.aclose()
+                                        except Exception:
+                                            pass
+                                    ac = create_async_client(proxies=proxies, http2=False)
+                                    need_close = True
+                                    # Retry immediately inside same attempt
+                                    continue
+                                except Exception:
+                                    pass
+                            if not _head_get_range_tried:
+                                _head_get_range_tried = True
+                                try:
+                                    req_headers = _inject_trace_headers(headers)
+                                    try:
+                                        req_headers = _sanitize_accept_encoding_for_backend(req_headers, "httpx")
+                                    except Exception:
+                                        pass
+                                    req_headers.setdefault("Range", "bytes=0-0")
+                                    # Use a small per-request timeout specifically for this fallback
+                                    try:
+                                        _head_fb_to = float(os.getenv("HTTP_HEAD_RANGE_FALLBACK_TIMEOUT", "5"))
+                                    except Exception:
+                                        _head_fb_to = 5.0
+                                    r2 = await ac.request(
+                                        "GET",
+                                        cur_url,
+                                        headers=req_headers,
+                                        params=params,
+                                        json=json,
+                                        data=data,
+                                        files=files,
+                                        timeout=_head_fb_to,
+                                        follow_redirects=False,
+                                    )
+                                    try:
+                                        tm.set_attributes({"http.status_code": int(r2.status_code)})
+                                    except Exception:
+                                        pass
+                                    _log_outbound_request(
+                                        method="GET",
+                                        url=r2.request.url if hasattr(r2.request, "url") else cur_url,
+                                        status_code=int(r2.status_code),
+                                        start_time=t0,
+                                        attempt=attempt,
+                                        last_retry_delay_s=sleep_s,
+                                    )
+                                    return r2
+                                except Exception:
+                                    pass
+                        # network exception occurred (no HEAD fallback succeeded)
                         last_exc = NetworkError(reason)
                     else:
                         # Handle redirects explicitly to enforce per-hop egress
@@ -1039,6 +1098,9 @@ def _fetch_httpx_response(
     t0 = time.time()
     tm = get_tracing_manager()
     host_attr = _parse_host_from_url(url)
+    method_upper = str(method).upper()
+    _head_disable_h2_tried = False
+    _head_get_range_tried = False
 
     def _do_once(sc: "httpx.Client", target_url: str) -> Tuple[Optional["httpx.Response"], str]:
         req_headers = _inject_trace_headers(headers)
@@ -1097,6 +1159,61 @@ def _fetch_httpx_response(
                     _validate_egress_or_raise(cur_url)
                     resp, reason = _do_once(sc, cur_url)
                     if resp is None:
+                        if method_upper == "HEAD":
+                            if not _head_disable_h2_tried:
+                                _head_disable_h2_tried = True
+                                try:
+                                    if need_close:
+                                        try:
+                                            sc.close()
+                                        except Exception:
+                                            pass
+                                    sc = create_client(proxies=proxies, http2=False)
+                                    need_close = True
+                                    # Retry immediately within same attempt
+                                    continue
+                                except Exception:
+                                    pass
+                            if not _head_get_range_tried:
+                                _head_get_range_tried = True
+                                try:
+                                    req_headers = _inject_trace_headers(headers)
+                                    try:
+                                        req_headers = _sanitize_accept_encoding_for_backend(req_headers, "httpx")
+                                    except Exception:
+                                        pass
+                                    req_headers.setdefault("Range", "bytes=0-0")
+                                    # Use a small per-request timeout specifically for this fallback
+                                    try:
+                                        _head_fb_to = float(os.getenv("HTTP_HEAD_RANGE_FALLBACK_TIMEOUT", "5"))
+                                    except Exception:
+                                        _head_fb_to = 5.0
+                                    r2 = sc.request(
+                                        "GET",
+                                        cur_url,
+                                        headers=req_headers,
+                                        params=params,
+                                        json=json,
+                                        data=data,
+                                        files=files,
+                                        timeout=_head_fb_to,
+                                        follow_redirects=False,
+                                    )
+                                    try:
+                                        tm.set_attributes({"http.status_code": int(r2.status_code)})
+                                    except Exception:
+                                        pass
+                                    _log_outbound_request(
+                                        method="GET",
+                                        url=r2.request.url if hasattr(r2.request, "url") else cur_url,
+                                        status_code=int(r2.status_code),
+                                        start_time=t0,
+                                        attempt=attempt,
+                                        last_retry_delay_s=sleep_s,
+                                    )
+                                    return r2
+                                except Exception:
+                                    pass
                         should, rsn = _should_retry(method, None, NetworkError(reason), retry)
                         if not should or attempt == attempts:
                             raise NetworkError(reason)

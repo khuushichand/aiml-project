@@ -117,19 +117,80 @@ async def process_documents(
                     logging.warning(f"[file_security] non-strict: Egress check error: {_e}")
 
             # Validate with HEAD before download (size/MIME)
-            from tldw_Server_API.app.core.http_client import fetch as http_fetch, download as http_download, RetryPolicy
+            from tldw_Server_API.app.core.http_client import (
+                fetch as http_fetch,
+                download as http_download,
+                RetryPolicy,
+                create_client as http_create_client,
+            )
+            from loguru import logger as _logger
 
-            head = http_fetch(method="HEAD", url=url, headers=headers, timeout=60)
+            head_headers: dict = {}
+            _last_err: Optional[Exception] = None
+            try:
+                # First attempt: regular HEAD (HTTP/2 may be enabled by default)
+                head_resp = http_fetch(method="HEAD", url=url, headers=headers, timeout=60)
+                try:
+                    head_headers = dict(head_resp.headers or {})
+                finally:
+                    try:
+                        head_resp.close()
+                    except Exception:
+                        pass
+            except Exception as e1:
+                _last_err = e1
+                _logger.debug("Preflight HEAD failed, retrying with HTTP/2 disabled: {}", e1)
+                # Second attempt: HEAD with HTTP/2 disabled
+                try:
+                    sc = http_create_client(http2=False)
+                    try:
+                        head_resp2 = http_fetch(method="HEAD", url=url, headers=headers, timeout=60, client=sc)
+                        try:
+                            head_headers = dict(head_resp2.headers or {})
+                        finally:
+                            try:
+                                head_resp2.close()
+                            except Exception:
+                                pass
+                    finally:
+                        try:
+                            sc.close()
+                        except Exception:
+                            pass
+                except Exception as e2:
+                    _last_err = e2
+                    _logger.debug("Preflight HEAD (no http2) failed, trying streamed GET Range 0-0: {}", e2)
+                    # Final fallback: tiny streamed GET with Range to avoid full body download
+                    try:
+                        sc2 = http_create_client(http2=False)
+                        try:
+                            req_headers = dict(headers or {})
+                            # Ensure Range is set to fetch minimal bytes; many servers honor this
+                            req_headers.setdefault("Range", "bytes=0-0")
+                            # Use a small per-request timeout for the fallback probe
+                            _fallback_to = float(os.getenv("DOC_PREFLIGHT_RANGE_TIMEOUT", "5"))
+                            with sc2.stream("GET", url, headers=req_headers, timeout=_fallback_to) as resp:
+                                # Only capture headers; do not iterate body
+                                head_headers = dict(resp.headers or {})
+                        finally:
+                            try:
+                                sc2.close()
+                            except Exception:
+                                pass
+                    except Exception as e3:
+                        _logger.warning("All preflight attempts failed for URL {}: {}", url, e3)
+                        # Re-raise the last error to surface a clear failure
+                        raise _last_err or e3
             try:
                 max_bytes = int(os.getenv("DOC_DOWNLOAD_MAX_BYTES", "52428800"))  # 50 MB default
-                cl = head.headers.get('content-length')
+                cl = head_headers.get('content-length')
                 if cl and cl.isdigit() and int(cl) > max_bytes:
                     if _file_security_strict():
                         raise RuntimeError("Document too large")
                     else:
                         logging.warning("[file_security] non-strict: Document exceeds size; continuing")
                 allowed_mimes = [s.strip() for s in (os.getenv("DOC_DOWNLOAD_ALLOWED_MIME", "text/plain,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/html").split(",")) if s.strip()]
-                ct = head.headers.get('content-type', '')
+                ct = head_headers.get('content-type', '')
                 if allowed_mimes and ct:
                     mt = ct.split(';', 1)[0].strip().lower()
                     if not any(mt == a or (a.endswith('/*') and mt.startswith(a[:-1])) for a in allowed_mimes):

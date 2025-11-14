@@ -39,6 +39,20 @@ The `pages/api` directory is mapped to `/api/*`. Files in this directory are tre
 
 This project uses [`next/font`](https://nextjs.org/docs/pages/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Smoke Test
+
+Run a quick connectivity check against the API:
+
+```bash
+cd tldw-frontend
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000 \
+NEXT_PUBLIC_API_VERSION=v1 \
+NEXT_PUBLIC_X_API_KEY=your_api_key \
+npm run smoke
+```
+
+The script exercises providers, chat, RAG, audio voices, and connectors (optional). A 404 on connectors is expected if that module isn’t enabled on your server.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

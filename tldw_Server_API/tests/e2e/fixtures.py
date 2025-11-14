@@ -834,7 +834,7 @@ class AssertionHelpers:
             # Check for actual success, not errors
             if result.get("status") == "Error":
                 # Check if it's a duplicate error (might be acceptable in some tests)
-                if "already exists" in result.get("db_message", ""):
+                if "already exists" in (result.get("db_message") or ""):
                     # Return existing ID if available
                     if result.get("db_id"):
                         return result["db_id"]

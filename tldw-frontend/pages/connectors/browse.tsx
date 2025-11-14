@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { apiClient } from '@/lib/api'
+import { apiClient, getApiBaseUrl, buildAuthHeaders } from '@/lib/api'
 
 type Item = { id: string; name?: string; mimeType?: string; is_folder?: boolean; type?: string }
 
@@ -14,6 +14,7 @@ export default function Browse() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [parentId, setParentId] = useState<string | null>(null)
+  const [notEnabled, setNotEnabled] = useState(false)
 
   const canBrowse = useMemo(() => accountId > 0 && ['drive','notion'].includes(provider), [accountId, provider])
 
@@ -32,7 +33,20 @@ export default function Browse() {
     } finally { setBusy(false) }
   }
 
-  useEffect(() => { load(true) }, [provider, accountId, parentId])
+  useEffect(() => {
+    const ping = async () => {
+      try {
+        const url = `${getApiBaseUrl()}/connectors/providers`
+        const resp = await fetch(url, { headers: buildAuthHeaders('GET') })
+        if (resp.status === 404) { setNotEnabled(true); return }
+        await load(true)
+      } catch {
+        await load(true)
+      }
+    }
+    ping()
+    // re-run browsing when inputs change if enabled
+  }, [provider, accountId, parentId])
 
   async function addSource(item: Item) {
     const payload = {
@@ -50,7 +64,12 @@ export default function Browse() {
   return (
     <div className="p-6 space-y-4">
       <h1 className="text-xl font-semibold">Browse {provider} (Account {accountId})</h1>
-      {error && <div className="text-red-600 text-sm">{error}</div>}
+      {notEnabled && (
+        <div className="rounded border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-800">
+          Connectors backend not enabled. This feature is optional and may be disabled on your server.
+        </div>
+      )}
+      {!notEnabled && error && <div className="text-red-600 text-sm">{error}</div>}
       <div className="flex gap-2 items-center">
         <label className="text-sm">Provider</label>
         <select value={provider} onChange={e => setProvider(e.target.value as any)} className="border rounded px-2 py-1">
@@ -63,7 +82,7 @@ export default function Browse() {
         <input value={parentId || ''} onChange={e => setParentId(e.target.value || null)} className="border rounded px-2 py-1" placeholder={provider === 'drive' ? 'root or folder id' : 'database id (optional)'} />
         <button onClick={() => load(true)} disabled={busy} className="px-3 py-1 rounded bg-gray-800 text-white">Refresh</button>
       </div>
-      <div className="grid grid-cols-1 gap-2">
+      {!notEnabled && (<div className="grid grid-cols-1 gap-2">
         {items.map(it => (
           <div key={it.id} className="flex items-center justify-between border rounded p-2">
             <div>
@@ -78,7 +97,7 @@ export default function Browse() {
             </div>
           </div>
         ))}
-      </div>
+      </div>)}
     </div>
   )
 }
