@@ -250,48 +250,699 @@ jobs:
           python Helper_Scripts/download_embedding_models.py --target models/embeddings
           echo "TLDW_EMBEDDING_MODELS_DIR=models/embeddings" >> "$GITHUB_ENV"
 
-      - name: Run full test suite (Linux + PG) - exclude Jobs and E2E
-        if: matrix.python != '3.13'
-        run: |
-          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
-            --ignore=tldw_Server_API/tests/Jobs \
-            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
-            --junit-xml=test-results-linux-${{ matrix.python }}.xml
-        shell: bash
-
-      - name: Upload test results
-        if: always() && matrix.python != '3.13'
-        uses: actions/upload-artifact@v4
-        with:
-          name: full-suite-ubuntu-py${{ matrix.python }}
-          path: test-results-linux-${{ matrix.python }}.xml
-
-      - name: Prepare test outputs directory (Linux 3.13)
-        if: matrix.python == '3.13'
+      - name: Prepare test outputs directory (Linux ${{ matrix.python }})
         shell: bash
         run: |
           rm -f .coverage coverage.xml || true
-          mkdir -p "test-results-linux-3.13"
-      
-      - name: Run tests (Linux 3.13 - consolidated)
-        if: matrix.python == '3.13'
+          mkdir -p "test-results-linux-${{ matrix.python }}"
+
+      - name: Run tests (root-level files) [Linux ${{ matrix.python }}]
         shell: bash
         run: |
-          # Run the same suite in one go, preserving markers and coverage
-          pytest -q --maxfail=1 --disable-warnings \
-            -p pytest_cov -p pytest_asyncio.plugin \
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin \
             -m "not jobs and not e2e" \
-            --ignore=tldw_Server_API/tests/Jobs \
-            tldw_Server_API/tests \
-            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing \
-            --junit-xml="test-results-linux-3.13/pytest.xml"
+            tldw_Server_API/tests/test_*.py \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/root.xml"
 
-      - name: Upload test results (Linux 3.13)
-        if: always() && matrix.python == '3.13'
+      - name: Run tests (Admin) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Admin \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Admin.xml"
+
+      - name: Run tests (Audio) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Audio \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Audio.xml"
+
+      - name: Run tests (AudioJobs) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AudioJobs \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/AudioJobs.xml"
+
+      - name: Run tests (Audit) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Audit \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Audit.xml"
+
+      - name: Run tests (AuthNZ) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AuthNZ \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/AuthNZ.xml"
+
+      - name: Run tests (AuthNZ_Postgres) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AuthNZ_Postgres \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/AuthNZ_Postgres.xml"
+
+      - name: Run tests (AuthNZ_SQLite) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AuthNZ_SQLite \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/AuthNZ_SQLite.xml"
+
+      - name: Run tests (AuthNZ_Unit) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/AuthNZ_Unit \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/AuthNZ_Unit.xml"
+
+      - name: Run tests (ChaChaNotesDB) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/ChaChaNotesDB \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/ChaChaNotesDB.xml"
+
+      - name: Run tests (Character_Chat) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Character_Chat \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Character_Chat.xml"
+
+      - name: Run tests (Character_Chat_NEW) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Character_Chat_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Character_Chat_NEW.xml"
+
+      - name: Run tests (Characters) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Characters \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Characters.xml"
+
+      - name: Run tests (Chat) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Chat \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Chat.xml"
+
+      - name: Run tests (Chat_NEW) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Chat_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Chat_NEW.xml"
+
+      - name: Run tests (Chatbooks) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Chatbooks \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Chatbooks.xml"
+
+      - name: Run tests (ChromaDB) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/ChromaDB \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/ChromaDB.xml"
+
+      - name: Run tests (Chunking) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Chunking \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Chunking.xml"
+
+      - name: Run tests (Claims) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Claims \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Claims.xml"
+
+      - name: Run tests (Collections) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Collections \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Collections.xml"
+
+      - name: Run tests (Config) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Config \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Config.xml"
+
+      - name: Run tests (DB) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/DB \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/DB.xml"
+
+      - name: Run tests (DB_Management) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/DB_Management \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/DB_Management.xml"
+
+      - name: Run tests (Embeddings) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Embeddings \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Embeddings.xml"
+
+      - name: Run tests (Embeddings_NEW) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Embeddings_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Embeddings_NEW.xml"
+
+      - name: Run tests (Evaluations) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Evaluations \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Evaluations.xml"
+
+      - name: Run tests (External_Sources) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/External_Sources \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/External_Sources.xml"
+
+      - name: Run tests (Flashcards) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Flashcards \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Flashcards.xml"
+
+      - name: Run tests (Health) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Health \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Health.xml"
+
+      - name: Run tests (Helper_Scripts) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Helper_Scripts \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Helper_Scripts.xml"
+
+      - name: Run tests (Infrastructure) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Infrastructure \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Infrastructure.xml"
+
+      - name: Run tests (LLM_Adapters) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/LLM_Adapters \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/LLM_Adapters.xml"
+
+      - name: Run tests (LLM_Calls) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/LLM_Calls \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/LLM_Calls.xml"
+
+      - name: Run tests (LLM_Local) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/LLM_Local \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/LLM_Local.xml"
+
+      - name: Run tests (LLamaCpp) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/LLamaCpp \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/LLamaCpp.xml"
+
+      - name: Run tests (Local_LLM) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Local_LLM \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Local_LLM.xml"
+
+      - name: Run tests (Logging) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Logging \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Logging.xml"
+
+      - name: Run tests (MCP) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/MCP \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/MCP.xml"
+
+      - name: Run tests (MCP_unified) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/MCP_unified \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/MCP_unified.xml"
+
+      - name: Run tests (Media) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Media \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Media.xml"
+
+      - name: Run tests (MediaDB2) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/MediaDB2 \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/MediaDB2.xml"
+
+      - name: Run tests (MediaIngestion_NEW) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/MediaIngestion_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/MediaIngestion_NEW.xml"
+
+      - name: Run tests (Media_Ingestion_Modification) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Media_Ingestion_Modification \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Media_Ingestion_Modification.xml"
+
+      - name: Run tests (Metrics) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Metrics \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Metrics.xml"
+
+      - name: Run tests (Monitoring) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Monitoring \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Monitoring.xml"
+
+      - name: Run tests (Notes) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Notes \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Notes.xml"
+
+      - name: Run tests (Notes_NEW) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Notes_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Notes_NEW.xml"
+
+      - name: Run tests (Notifications) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Notifications \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Notifications.xml"
+
+      - name: Run tests (PaperSearch) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/PaperSearch \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/PaperSearch.xml"
+
+      - name: Run tests (Persona) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Persona \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Persona.xml"
+
+      - name: Run tests (Personalization) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Personalization \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Personalization.xml"
+
+      - name: Run tests (PrivilegeCatalog) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/PrivilegeCatalog \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/PrivilegeCatalog.xml"
+
+      - name: Run tests (Privileges) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Privileges \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Privileges.xml"
+
+      - name: Run tests (Prompt_Management) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Prompt_Management \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Prompt_Management.xml"
+
+      - name: Run tests (Prompt_Management_NEW) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Prompt_Management_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Prompt_Management_NEW.xml"
+
+      - name: Run tests (RAG) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/RAG \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/RAG.xml"
+
+      - name: Run tests (RAG_NEW) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/RAG_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/RAG_NEW.xml"
+
+      - name: Run tests (Research) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Research \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Research.xml"
+
+      - name: Run tests (Resource_Governance) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Resource_Governance \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Resource_Governance.xml"
+
+      - name: Run tests (STT) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/STT \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/STT.xml"
+
+      - name: Run tests (Security) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Security \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Security.xml"
+
+      - name: Run tests (Services) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Services \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Services.xml"
+
+      - name: Run tests (Setup) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Setup \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Setup.xml"
+
+      - name: Run tests (Streaming) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Streaming \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Streaming.xml"
+
+      - name: Run tests (TTS) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/TTS \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/TTS.xml"
+
+      - name: Run tests (TTS_NEW) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/TTS_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/TTS_NEW.xml"
+
+      - name: Run tests (Tools) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Tools \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Tools.xml"
+
+      - name: Run tests (Usage) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Usage \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Usage.xml"
+
+      - name: Run tests (Utils) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Utils \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Utils.xml"
+
+      - name: Run tests (VLM) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/VLM \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/VLM.xml"
+
+      - name: Run tests (VectorStores) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/VectorStores \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/VectorStores.xml"
+
+      - name: Run tests (Watchlists) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Watchlists \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Watchlists.xml"
+
+      - name: Run tests (WebScraping) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/WebScraping \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/WebScraping.xml"
+
+      - name: Run tests (WebSearch) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/WebSearch \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/WebSearch.xml"
+
+      - name: Run tests (Web_Scraping) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Web_Scraping \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Web_Scraping.xml"
+
+      - name: Run tests (Workflows) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Workflows \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/Workflows.xml"
+
+      - name: Run tests (helpers) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/helpers \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/helpers.xml"
+
+      - name: Run tests (http_client) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/http_client \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/http_client.xml"
+
+      - name: Run tests (integration) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/integration \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/integration.xml"
+
+      - name: Run tests (lint) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/lint \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/lint.xml"
+
+      - name: Run tests (prompt_studio) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/prompt_studio \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/prompt_studio.xml"
+
+      - name: Run tests (sandbox) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/sandbox \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/sandbox.xml"
+
+      - name: Run tests (sanity_tests) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/sanity_tests \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/sanity_tests.xml"
+
+      - name: Run tests (schemas) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/schemas \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/schemas.xml"
+
+      - name: Run tests (unit) [Linux ${{ matrix.python }}]
+        shell: bash
+        run: |
+          pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/unit \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="test-results-linux-${{ matrix.python }}/unit.xml"
+
+      - name: Upload test results (Linux ${{ matrix.python }})
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: full-suite-ubuntu-py3.13
-          path: test-results-linux-3.13
+          name: full-suite-ubuntu-py${{ matrix.python }}
+          path: test-results-linux-${{ matrix.python }}
 
       - name: Upload coverage artifact
         if: always()
