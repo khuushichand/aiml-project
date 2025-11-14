@@ -343,12 +343,14 @@ def normalize_request_provider_and_model(
                 # "z-ai/glm-4.6" to be preserved when api_provider is openrouter.
                 if provider_for_mapping == "openrouter":
                     request_data.model = resolved
+                    model_str = request_data.model
+                elif "/" in resolved and not allow_cross:
+                    resolved = None
                 else:
-                    if "/" in resolved and not allow_cross:
-                        request_data.model = resolved.split("/", 1)[1]
-                    else:
-                        request_data.model = resolved
-                model_str = request_data.model
+                    request_data.model = resolved
+                    model_str = request_data.model
+                if not resolved:
+                    resolved = None  # leave model_str untouched, no override applied
     except (AttributeError, KeyError, ValueError):
         # Expected lookup/attr issues: do not block request
         pass

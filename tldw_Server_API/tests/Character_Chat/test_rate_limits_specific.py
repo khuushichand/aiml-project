@@ -13,6 +13,10 @@ import asyncio
 
 from tldw_Server_API.app.core.config import clear_config_cache
 
+# Skip this module when TEST_MODE is enabled; limiter is permissive in TEST_MODE
+if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
+    pytest.skip("Character_Chat rate-limit tests require TEST_MODE=0", allow_module_level=True)
+
 
 @pytest.mark.asyncio
 async def test_max_messages_per_chat_limit():
@@ -194,3 +198,12 @@ async def test_chat_completion_per_minute_rate_limit():
             crl._rate_limiter = None
         except Exception:
             pass
+"""Skip these tests when TEST_MODE is enabled.
+
+These tests validate actual rate-limit enforcement. In TEST_MODE the
+Character Chat limiter is intentionally permissive to reduce flakiness,
+so expectations like 403/429 would not hold. CI runs a dedicated job
+with TEST_MODE=0 for these checks.
+"""
+if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
+    pytest.skip("Character_Chat rate-limit tests require TEST_MODE=0", allow_module_level=True)
