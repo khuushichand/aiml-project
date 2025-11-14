@@ -276,9 +276,17 @@
             Quick samples: <a href="/docs-static/Evals/samples/README.md" target="_blank" rel="noopener">Docs/Evals/samples</a>
         </div>
 
+        <div class="form-group" style="margin-top:10px;">
+          <button class="api-button" id="btnRagPipelineRenderLeaderboard">Render Leaderboard Preview</button>
+          <button class="api-button" id="btnRagPipelineExportCsv">Export Leaderboard CSV</button>
+          <button class="api-button" id="btnRagPipelineExportPerConfigCsv">Export Per-Config CSV</button>
+        </div>
+        <div id="ragPipelineRun_preview" style="overflow:auto; max-height:320px; border:1px solid var(--color-border); padding:8px; border-radius:6px; background: var(--color-surface-alt);"></div>
+
         <h3>Best Config Preset</h3>
         <div class="form-group">
             <button class="api-button" id="btnExtractBestConfig">Extract Best Config From Last Run</button>
+            <button class="api-button" id="btnApplyBestConfigToCreate">Apply Best Config to Create Payload</button>
         </div>
         <div class="form-group">
             <label for="ragPipelinePreset_name">Preset Name:</label>
@@ -503,6 +511,21 @@
       <button class="api-button" id="btnEvalRunExportPerConfigCsv">Export Per-Config CSV</button>
     </div>
     <div id="evalRunGet_preview" style="overflow:auto; max-height:320px; border:1px solid var(--color-border); padding:8px; border-radius:6px; background: var(--color-surface-alt);"></div>
+
+    <h3 style="margin-top:12px;">Save Best Config as Preset</h3>
+    <div class="form-group">
+      <label for="evalRunPreset_name">Preset Name:</label>
+      <input type="text" id="evalRunPreset_name" placeholder="rag_pipeline_best">
+      <button class="api-button" id="btnEvalRunSaveBestPreset">Save Best Config (Server)</button>
+      <button class="api-button" id="btnEvalRunSaveBestPresetLocal">Save Best Config (Local)</button>
+    </div>
+
+    <h3 style="margin-top:12px;">Use Local Preset</h3>
+    <div class="form-group">
+      <button class="api-button" id="btnEvalRunLocalPresetRefresh">Refresh</button>
+      <select id="evalRunLocalPreset_select" style="min-width: 240px;"></select>
+      <button class="api-button" id="btnEvalRunApplyLocalPreset">Apply Selected to Create Payload</button>
+    </div>
   </div>
 </div>
 

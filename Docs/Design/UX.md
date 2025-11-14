@@ -74,7 +74,17 @@ https://medium.com/ui-for-ai/diving-deep-into-ai-use-cases-77f36bfb7d47
 https://www.nngroup.com/articles/ai-work-study-guide/
 https://www.lukew.com/ff/entry.asp?2132?ref=sidebar
 https://uxdesign.cc/building-better-logins-a-ux-and-accessibility-guide-for-developers-9bb356f0a132
+https://pangrampangram.com/blogs/journal/typographic-hierarchy?ref=sidebar
+https://www.daybreak.studio/writing/adaline-typography?ref=sidebar
+https://www.a11y-collective.com/blog/accessible-writing/?ref=sidebar
+https://uxdesign.cc/right-narratives-shape-lasting-products-9a50e28caae9
+https://posthog.com/newsletter/building-ai-features
 
+
+
+https://uxdesign.cc/designing-the-jarvis-moment-8f1a2f201d4a
+https://uxdesign.cc/making-medical-appointments-this-month-made-me-miss-phone-trees-e1bc3757e505
+https://uxdesign.cc/when-innovation-deceives-escaping-the-value-mirage-bcbf5511aecf
 https://ieeexplore.ieee.org/document/5387632
 https://www.growthmates.news/p/how-an-ai-powered-user-onboardin
 https://www.nngroup.com/articles/serial-task-switching/g

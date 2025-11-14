@@ -21,6 +21,16 @@ def _enable_adapters(monkeypatch):
     monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     # Avoid endpoint-internal mock path that bypasses provider handlers
     monkeypatch.delenv("TEST_MODE", raising=False)
+    # Ensure suite-level env overrides from other tests don't hijack base URL.
+    # When a real API key is present, this test should talk to the real OpenAI API.
+    for name in (
+        "OPENAI_API_BASE_URL",
+        "OPENAI_API_BASE",
+        "OPENAI_BASE_URL",
+        "MOCK_OPENAI_BASE_URL",
+        "CUSTOM_OPENAI_API_IP",
+    ):
+        monkeypatch.delenv(name, raising=False)
     yield
 
 

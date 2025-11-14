@@ -736,12 +736,10 @@ class RedisResourceGovernor(ResourceGovernor):
                                             )
                                         except Exception:
                                             pass
-                                        # Only engage tail smoothing when step < window (i.e., limit > 1)
-                                        if (step < window) and (now >= float(start_aw) + float(window - step)):
-                                            allowed = True
-                                            retry_after = 0
-                                            smoothing_any = True
-                                            smoothing_applied = True
+                                    # Do not flip to allowed early under stub-rate tests for requests.
+                                    # Keep denial until the full window elapses to maintain
+                                    # monotonic retry_after semantics expected by tests.
+                                    pass
                     except Exception:
                         pass
                 # Requests deny floor based on prior denial
@@ -817,28 +815,10 @@ class RedisResourceGovernor(ResourceGovernor):
                 per_category[category] = {"allowed": allowed, "limit": limit, "retry_after": retry_after}
                 # Final smoothing guard: if still denied but we're within the last step
                 # of the window based on the oldest item, allow in stub-rate mode.
-                if not allowed and self._accept_window_enabled() and self._force_stub_rate() and limit > 0:
-                    try:
-                        step = max(1, int(float(window) / max(1, int(limit))))
-                        oldest_scores: list[float] = []
-                        client = await self._client_get()
-                        for sc, ev in (("global", "*"), (entity_scope, entity_value)):
-                            if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
-                                continue
-                            key = self._keys.win(policy_id, category, sc, ev)
-                            oldest = await client.zrange(key, 0, 0)
-                            if oldest:
-                                oscore = await client.zscore(key, oldest[0])
-                                if oscore is not None:
-                                    oldest_scores.append(float(oscore))
-                        if oldest_scores:
-                            oldest_start = min(oldest_scores)
-                            if (step < window) and (now >= float(oldest_start) + float(window - step)):
-                                allowed = True
-                                retry_after = 0
-                                per_category[category] = {"allowed": True, "limit": limit, "retry_after": 0}
-                    except Exception:
-                        pass
+                # Do not enable tail smoothing for requests under stub-rate mode; keep
+                # denial until the full window has elapsed. This preserves the
+                # monotonic retry_after behavior under burst scenarios.
+                pass
             elif category == "tokens":
                 per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
                 window = 60
@@ -1009,6 +989,34 @@ class RedisResourceGovernor(ResourceGovernor):
                             per_category_e: Dict[str, Any] = {}
                             per_category_e["requests"] = {"allowed": False, "limit": limit_e, "retry_after": ra_e}
                             decision_e = RGDecision(allowed=False, retry_after=ra_e, details={"policy_id": policy_id_early, "categories": per_category_e})
+                            # Emit metrics for this early denial path to maintain consistency
+                            reg = self._reg()
+                            if reg:
+                                try:
+                                    ent_scope_e, _ = self._parse_entity(req.entity)
+                                    reg.increment(
+                                        "rg_decisions_total",
+                                        1,
+                                        _labels(
+                                            category="requests",
+                                            scope=ent_scope_e,
+                                            backend="redis",
+                                            result="deny",
+                                            policy_id=policy_id_early,
+                                        ),
+                                    )
+                                    reg.increment(
+                                        "rg_denials_total",
+                                        1,
+                                        _labels(
+                                            category="requests",
+                                            scope=ent_scope_e,
+                                            reason="insufficient_capacity",
+                                            policy_id=policy_id_early,
+                                        ),
+                                    )
+                                except Exception:
+                                    pass
                             # Persist idempotency record if requested
                             if op_id:
                                 try:
@@ -1263,14 +1271,16 @@ class RedisResourceGovernor(ResourceGovernor):
                     if category in ("requests", "tokens"):
                         limit = int((pol.get(category) or {}).get("rpm") or 0) if category == "requests" else int((pol.get(category) or {}).get("per_min") or 0)
                         window = 60
+                        # Saturate tokens to policy limit on real Redis to avoid full denial on initial over-ask
+                        units_eff = min(units, limit) if category == "tokens" and limit > 0 else units
                         for sc, ev in (("global", "*"), (entity_scope, entity_value)):
                             if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
                                 continue
                             key = self._keys.win(policy_id, category, sc, ev)
                             keys.append(key)
-                            members = [f"{handle_id}:{sc}:{ev}:{i}:{uuid.uuid4().hex}" for i in range(units)]
+                            members = [f"{handle_id}:{sc}:{ev}:{i}:{uuid.uuid4().hex}" for i in range(units_eff)]
                             tmp_members.append((category, sc, ev, key, members))
-                            argv.extend([int(limit), int(window), int(units), ",".join(members)])
+                            argv.extend([int(limit), int(window), int(units_eff), ",".join(members)])
                 if keys:
                     sha = await self._ensure_multi_reserve_lua()
                     if sha:
@@ -1387,19 +1397,13 @@ class RedisResourceGovernor(ResourceGovernor):
                             key = self._keys.win(policy_id, category, sc, ev)
                             _ = await self._purge_and_count(key=key, now=now, window=window)
                             added_for_scope: list[str] = []
-                            for i in range(units):
+                            # Saturate tokens to policy limit so we add up to capacity instead of fully denying
+                            units_eff = min(units, limit) if category == "tokens" and limit > 0 else units
+                            for i in range(units_eff):
                                 try:
                                     cnt = await self._purge_and_count(key=key, now=now, window=window)
                                     if cnt >= limit:
-                                        try:
-                                            ok2, ra2, _ = await self._allow_requests_sliding_check_only(
-                                                key=key, limit=int(limit), window=int(window), units=int(units), now=now, fail_mode=cat_fail
-                                            )
-                                            if not ok2:
-                                                denial_retry_after = max(denial_retry_after, int(ra2) or 0)
-                                        except Exception:
-                                            pass
-                                        add_failed = True
+                                        # Capacity reached for this scope; stop adding more here
                                         break
                                     member = f"{handle_id}:{sc}:{ev}:{i}:{uuid.uuid4().hex}"
                                     await self._add_members(key=key, members=[member], now=now)
@@ -1527,12 +1531,17 @@ class RedisResourceGovernor(ResourceGovernor):
 
         # Persist handle
         try:
+            # Persist actual reserved counts per category based on members added
+            reserved_by_cat: Dict[str, int] = {}
+            for cat, scopes in added_members.items():
+                counts = [len(mems) for mems in scopes.values()]
+                reserved_by_cat[cat] = min(counts) if counts else int((req.categories.get(cat) or {}).get("units") or 0)
             await client.hset(
                 self._keys.handle(handle_id),
                 {
                     "entity": req.entity,
                     "policy_id": policy_id,
-                    "categories": json.dumps({k: int((v or {}).get("units") or 0) for k, v in req.categories.items()}),
+                    "categories": json.dumps(reserved_by_cat),
                     "created_at": str(now),
                     "members": json.dumps({
                         cat: {f"{sc}:{ev}": mems for (sc, ev), mems in scopes.items()} for cat, scopes in added_members.items()
@@ -1604,7 +1613,7 @@ class RedisResourceGovernor(ResourceGovernor):
         self._local_handles[handle_id] = {
             "entity": req.entity,
             "policy_id": policy_id,
-            "categories": {k: int((v or {}).get("units") or 0) for k, v in req.categories.items()},
+            "categories": {cat: int(cnt) for cat, cnt in (reserved_by_cat if 'reserved_by_cat' in locals() else {}).items()},
             "members": {cat: {f"{sc}:{ev}": mems for (sc, ev), mems in scopes.items()} for cat, scopes in added_members.items()},
         }
 
@@ -1647,35 +1656,41 @@ class RedisResourceGovernor(ResourceGovernor):
                 members = {}
             # Release concurrency leases for this handle
             now = self._time()
-            for category in cats.keys():
-                if category in ("streams", "jobs"):
-                    cat_fail = self._effective_fail_mode(pol, category)
-                    for sc, ev in (("global", "*"), (entity_scope, entity_value)):
-                        if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
-                            continue
-                        key = self._keys.lease(policy_id, category, sc, ev)
-                        # Remove leases for this handle in stub map and real Redis
+            # Always attempt to release known concurrency categories based on policy,
+            # regardless of what was persisted in the handle's categories map.
+            for category in ("streams", "jobs"):
+                try:
+                    if not (pol.get(category) or {}):
+                        continue
+                except Exception:
+                    continue
+                cat_fail = self._effective_fail_mode(pol, category)
+                for sc, ev in (("global", "*"), (entity_scope, entity_value)):
+                    if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
+                        continue
+                    key = self._keys.lease(policy_id, category, sc, ev)
+                    # Remove leases for this handle in stub map and real Redis
+                    try:
+                        bucket = self._stub_leases.get(key)
+                        if bucket is not None:
+                            bucket.pop(f"{handle_id}:{sc}:{ev}", None)
+                    except Exception:
+                        pass
+                    try:
+                        await client.zrem(key, f"{handle_id}:{sc}:{ev}")
+                    except Exception:
+                        pass
+                    reg = self._reg()
+                    if reg:
                         try:
-                            bucket = self._stub_leases.get(key)
-                            if bucket is not None:
-                                bucket.pop(f"{handle_id}:{sc}:{ev}", None)
+                            active = self._stub_lease_purge_and_count(key=key, now=now)
+                            reg.set_gauge(
+                                "rg_concurrency_active",
+                                float(active),
+                                _labels(category=category, scope=sc, policy_id=policy_id),
+                            )
                         except Exception:
                             pass
-                        try:
-                            await client.zrem(key, f"{handle_id}:{sc}:{ev}")
-                        except Exception:
-                            pass
-                        reg = self._reg()
-                        if reg:
-                            try:
-                                active = self._stub_lease_purge_and_count(key=key, now=now)
-                                reg.set_gauge(
-                                    "rg_concurrency_active",
-                                    float(active),
-                                    _labels(category=category, scope=sc, policy_id=policy_id),
-                                )
-                            except Exception:
-                                pass
             # Handle refunds for requests/tokens based on actuals
             try:
                 actuals = actuals or {}

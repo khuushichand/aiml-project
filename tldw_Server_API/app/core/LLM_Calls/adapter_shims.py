@@ -94,21 +94,26 @@ def openai_chat_handler(
 
     Accepts extra kwargs (e.g., 'topp') to remain resilient to PROVIDER_PARAM_MAP drift.
     """
-    # Honor test monkeypatching of legacy chat_with_openai directly to avoid network in tests
+    # Honor explicit test monkeypatching of legacy chat_with_openai to avoid network
+    # Only delegate when the target appears to come from a tests module or is a
+    # clearly marked test double (function name starting with "_fake"). This avoids
+    # infinite recursion when the public function simply forwards back to this shim.
     try:
         from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_openai", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
-            # Prefer patched callable whenever running under pytest, even if
-            # module name heuristics fail (CI/packaging differences).
+            _fname = getattr(_patched, "__name__", "") or ""
             if (
-                os.getenv("PYTEST_CURRENT_TEST")
-                or _modname.startswith("tldw_Server_API.tests")
+                _modname.startswith("tldw_Server_API.tests")
                 or _modname.startswith("tests")
                 or ".tests." in _modname
+                or _fname.startswith("_fake")
             ):
-                logger.debug(f"adapter_shims.openai_chat_handler: using monkeypatched chat_with_openai from {_modname}")
+                logger.debug(
+                    "adapter_shims.openai_chat_handler: using monkeypatched chat_with_openai from {}",
+                    _modname,
+                )
                 return _patched(
                     input_data=input_data,
                     model=model,

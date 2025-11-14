@@ -12,6 +12,10 @@ Shared fixtures for Resource_Governance tests.
 import os
 import pytest
 
+# Re-export AuthNZ Postgres fixtures (e.g., test_db_pool, isolated_test_environment)
+# so Resource_Governance tests can use the same database setup helpers.
+pytest_plugins = ("tldw_Server_API.tests.AuthNZ.conftest",)
+
 
 @pytest.fixture(autouse=True)
 def rg_test_purge_env(monkeypatch):

@@ -48,6 +48,17 @@ def check_permission(user: User, permission: str) -> bool:
     if is_single_user_mode():
         return True
 
+    # Prefer permission claims already attached to the request user to avoid
+    # re-querying the RBAC store and to ensure consistency with the token's
+    # authenticated context (especially in tests where multiple DB pools may
+    # exist).
+    try:
+        perms = getattr(user, "permissions", None)
+        if isinstance(perms, list) and permission in perms:
+            return True
+    except Exception:
+        pass
+
     try:
         user_db = get_user_database()
         return user_db.has_permission(user.id, permission)
@@ -76,6 +87,16 @@ def check_role(user: User, role: str) -> bool:
     # In single-user mode, treat as admin
     if is_single_user_mode():
         return role in ['admin', 'user']
+
+    # Prefer role claims already attached to the request user for fast-path
+    # checks and to avoid depending on a potentially stale UserDatabase
+    # singleton that may point at a different backend during tests.
+    try:
+        roles = getattr(user, "roles", None)
+        if isinstance(roles, list) and role in roles:
+            return True
+    except Exception:
+        pass
 
     try:
         user_db = get_user_database()
