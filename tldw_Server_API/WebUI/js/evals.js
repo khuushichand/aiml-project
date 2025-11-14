@@ -263,13 +263,45 @@
       const rag = cfg.rag || {};
       const tr = _createEl('tr');
       const modes = [retr.search_mode, rerk.strategy].filter(Boolean).join(' + ');
-      tr.innerHTML = '<td style="padding:6px;">'+(idx+1)+'</td>'+
-        '<td style="padding:6px;">'+(row.config_id || '')+'</td>'+
-        '<td style="padding:6px; text-align:right;">'+(Number(row.config_score||0).toFixed(3))+'</td>'+
-        '<td style="padding:6px; text-align:right;">'+(Number(row.overall||0).toFixed(3))+'</td>'+
-        '<td style="padding:6px; text-align:right;">'+(Number(row.latency_ms||0).toFixed(0))+'</td>'+
-        '<td style="padding:6px;">'+(modes||'')+'</td>'+
-        '<td style="padding:6px;">'+(Array.isArray(rag.model)? rag.model[0] : (rag.model||''))+'</td>';
+      // Safe cell creation with textContent to avoid HTML injection
+      const tdIdx = document.createElement('td');
+      tdIdx.style.padding = '6px';
+      tdIdx.textContent = idx+1;
+
+      const tdConfigId = document.createElement('td');
+      tdConfigId.style.padding = '6px';
+      tdConfigId.textContent = row.config_id || '';
+
+      const tdScore = document.createElement('td');
+      tdScore.style.padding = '6px';
+      tdScore.style.textAlign = 'right';
+      tdScore.textContent = Number(row.config_score||0).toFixed(3);
+
+      const tdOverall = document.createElement('td');
+      tdOverall.style.padding = '6px';
+      tdOverall.style.textAlign = 'right';
+      tdOverall.textContent = Number(row.overall||0).toFixed(3);
+
+      const tdLatency = document.createElement('td');
+      tdLatency.style.padding = '6px';
+      tdLatency.style.textAlign = 'right';
+      tdLatency.textContent = Number(row.latency_ms||0).toFixed(0);
+
+      const tdModes = document.createElement('td');
+      tdModes.style.padding = '6px';
+      tdModes.textContent = modes || '';
+
+      const tdModel = document.createElement('td');
+      tdModel.style.padding = '6px';
+      tdModel.textContent = Array.isArray(rag.model)? rag.model[0] : (rag.model||'');
+
+      tr.appendChild(tdIdx);
+      tr.appendChild(tdConfigId);
+      tr.appendChild(tdScore);
+      tr.appendChild(tdOverall);
+      tr.appendChild(tdLatency);
+      tr.appendChild(tdModes);
+      tr.appendChild(tdModel);
       tbody.appendChild(tr);
     });
     table.appendChild(tbody);
