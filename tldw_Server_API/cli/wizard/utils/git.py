@@ -26,6 +26,6 @@ def changed_or_untracked_files(base: Path) -> List[str]:
             if len(parts) == 2:
                 files.append(parts[1])
         return files
-    except Exception:
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError):
         return []
 
