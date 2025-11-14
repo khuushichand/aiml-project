@@ -111,8 +111,8 @@ def test_chat_completions_streaming_via_adapter(monkeypatch, client, auth_token)
             assert ct.startswith("text/event-stream")
             lines = list(resp.iter_lines())
             # Should include chunks and single DONE
-            assert any(l.startswith("data: ") and "[DONE]" not in l for l in lines)
-            assert sum(1 for l in lines if l.strip().lower() == "data: [done]") == 1
+            assert any(line.startswith("data: ") and "[DONE]" not in line for line in lines)
+            assert sum(1 for line in lines if line.strip().lower() == "data: [done]") == 1
     else:
         chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "openai": "sk-adapter-test-key"}
         import tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls as llm_calls
@@ -132,5 +132,5 @@ def test_chat_completions_streaming_via_adapter(monkeypatch, client, auth_token)
             assert ct.startswith("text/event-stream")
             lines = list(resp.iter_lines())
             # Should include chunks and single DONE
-            assert any(l.startswith("data: ") and "[DONE]" not in l for l in lines)
-            assert sum(1 for l in lines if l.strip().lower() == "data: [done]") == 1
+            assert any(line.startswith("data: ") and "[DONE]" not in line for line in lines)
+            assert sum(1 for line in lines if line.strip().lower() == "data: [done]") == 1
