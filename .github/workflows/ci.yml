@@ -47,10 +47,10 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
@@ -112,7 +112,7 @@ jobs:
       TLDW_TEST_POSTGRES_REQUIRED: '1'
     steps:
       - name: Checkout
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Install FFmpeg and PortAudio (Linux)
         uses: ./.github/actions/setup-ffmpeg
@@ -1279,21 +1279,21 @@ jobs:
 
       - name: Upload test results (Linux ${{ matrix.python }})
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: full-suite-ubuntu-py${{ matrix.python }}
           path: test-results-linux-${{ matrix.python }}
 
       - name: Upload coverage artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-ubuntu-py${{ matrix.python }}
           path: coverage.xml
 
       - name: Upload coverage to Codecov (Ubuntu 3.12)
         if: matrix.python == '3.12'
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           file: ./coverage.xml
           flags: fullsuite
@@ -1331,7 +1331,7 @@ jobs:
       DISABLE_HEAVY_STARTUP: '1'
     steps:
       - name: Checkout
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Install FFmpeg (multi-OS)
         uses: ./.github/actions/setup-ffmpeg
@@ -2484,14 +2484,14 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: full-suite-${{ matrix.os }}-py3.12
           path: test-results-${{ matrix.os }}-3.12
 
       - name: Upload coverage artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage-${{ matrix.os }}-py3.12
           path: coverage.xml

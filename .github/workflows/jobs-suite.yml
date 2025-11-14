@@ -31,7 +31,7 @@ jobs:
       RUN_JOBS: '1'
     steps:
       - name: Checkout
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Setup Python and deps (with uv)
         uses: ./.github/actions/setup-python-deps
@@ -73,14 +73,14 @@ jobs:
 
       - name: Upload test results (SQLite)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: jobs-sqlite-results
           path: test-results-jobs-sqlite.xml
 
       - name: Upload coverage (SQLite)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: jobs-sqlite-coverage
           path: coverage.xml
@@ -118,7 +118,7 @@ jobs:
       RUN_JOBS: '1'
     steps:
       - name: Checkout
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Setup Python and deps (with uv)
         uses: ./.github/actions/setup-python-deps
@@ -184,14 +184,14 @@ jobs:
 
       - name: Upload test results (Postgres)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: jobs-postgres-results
           path: test-results-jobs-postgres.xml
 
       - name: Upload coverage (Postgres)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: jobs-postgres-coverage
           path: coverage.xml
