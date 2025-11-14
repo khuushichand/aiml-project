@@ -127,24 +127,36 @@ async def process_documents(
 
             head_headers: dict = {}
             _last_err: Optional[Exception] = None
+            # Prefer a tiny GET with Range over HEAD for preflight, to handle servers that
+            # mishandle HEAD or HTTP/2. Keep body discard by using stream() and not reading.
             try:
-                # First attempt: regular HEAD (HTTP/2 may be enabled by default)
-                head_resp = http_fetch(method="HEAD", url=url, headers=headers, timeout=60)
+                sc0 = http_create_client()
                 try:
-                    head_headers = dict(head_resp.headers or {})
+                    req_headers = dict(headers or {})
+                    req_headers.setdefault("Range", "bytes=0-0")
+                    _fallback_to = float(os.getenv("DOC_PREFLIGHT_RANGE_TIMEOUT", "5"))
+                    with sc0.stream("GET", url, headers=req_headers, timeout=_fallback_to) as resp:
+                        head_headers = dict(resp.headers or {})
                 finally:
                     try:
-                        head_resp.close()
+                        sc0.close()
                     except Exception:
                         pass
-            except Exception as e1:
-                _last_err = e1
-                _logger.debug("Preflight HEAD failed, retrying with HTTP/2 disabled: {}", e1)
-                # Second attempt: HEAD with HTTP/2 disabled
+            except Exception as e_gr:
+                _last_err = e_gr
+                _logger.debug("Preflight GET Range failed, trying single HEAD with retries=1 (no http2): {}", e_gr)
+                # As a best-effort fallback, try a single HEAD with http2 disabled and limited retries
                 try:
                     sc = http_create_client(http2=False)
                     try:
-                        head_resp2 = http_fetch(method="HEAD", url=url, headers=headers, timeout=60, client=sc)
+                        head_resp2 = http_fetch(
+                            method="HEAD",
+                            url=url,
+                            headers=headers,
+                            timeout=60,
+                            client=sc,
+                            retry=RetryPolicy(attempts=1),
+                        )
                         try:
                             head_headers = dict(head_resp2.headers or {})
                         finally:
@@ -159,28 +171,8 @@ async def process_documents(
                             pass
                 except Exception as e2:
                     _last_err = e2
-                    _logger.debug("Preflight HEAD (no http2) failed, trying streamed GET Range 0-0: {}", e2)
-                    # Final fallback: tiny streamed GET with Range to avoid full body download
-                    try:
-                        sc2 = http_create_client(http2=False)
-                        try:
-                            req_headers = dict(headers or {})
-                            # Ensure Range is set to fetch minimal bytes; many servers honor this
-                            req_headers.setdefault("Range", "bytes=0-0")
-                            # Use a small per-request timeout for the fallback probe
-                            _fallback_to = float(os.getenv("DOC_PREFLIGHT_RANGE_TIMEOUT", "5"))
-                            with sc2.stream("GET", url, headers=req_headers, timeout=_fallback_to) as resp:
-                                # Only capture headers; do not iterate body
-                                head_headers = dict(resp.headers or {})
-                        finally:
-                            try:
-                                sc2.close()
-                            except Exception:
-                                pass
-                    except Exception as e3:
-                        _logger.warning("All preflight attempts failed for URL {}: {}", url, e3)
-                        # Re-raise the last error to surface a clear failure
-                        raise _last_err or e3
+                    _logger.warning("All preflight attempts failed for URL {}: {}", url, e2)
+                    raise _last_err
             try:
                 max_bytes = int(os.getenv("DOC_DOWNLOAD_MAX_BYTES", "52428800"))  # 50 MB default
                 cl = head_headers.get('content-length')

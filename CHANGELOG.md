@@ -20,6 +20,20 @@ and this project adheres to Some kind of Versioning
 
 
 
+## [0.1.5] - 2025-11-13
+### Fixed 
+- Ollama API system_prompt
+- Other stuff
+
+### Added
+- Updated WebUI
+- Added PRD/initial work for cli installer/setup wizard
+  - Auto-title notes
+- Notes Graph CRUD
+- Documentation/PRDs
+- (From Gemini) New Chatbook Tools: Implemented a suite of new tools for Chatbooks, including sandboxed template variables for dynamic content in chat dictionary replacements, user-invoked slash commands (e.g., /time, /weather) for pre-LLM context enrichment, and a comprehensive dictionary validation tool (CLI and API) to lint schemas, regexes, and template syntax.
+
+
 ## [0.1.4] - 2025-11-9
 ### Fixed 
 - Numpy requirement in base install

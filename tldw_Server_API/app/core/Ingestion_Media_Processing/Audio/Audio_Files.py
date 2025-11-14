@@ -680,38 +680,43 @@ def process_audio_files(
                 if not current_audio_path or not Path(current_audio_path).exists():
                      raise RuntimeError("Audio file path is missing or invalid after download/copy check.")
 
-                # 2. Convert to WAV using the library function
-                update_progress(f"Converting '{Path(current_audio_path).name}' to WAV...")
-                try:
-                    # Always overwrite in temp dir context
-                    wav_file_path = convert_to_wav(current_audio_path, overwrite=True)
-                    # ... (path checking logic - ensure wav_file_path is valid) ...
-                    if not wav_file_path or not Path(wav_file_path).exists():
-                         raise TranscriptionConversionError(f"convert_to_wav did not return a valid path or file does not exist: {wav_file_path}")
-                    item_temp_files.append(wav_file_path) # Mark WAV for potential cleanup
-                    item_result["processing_source"] = wav_file_path # Update source
-                    update_progress(f"Conversion to WAV successful: {Path(wav_file_path).name}")
-                except (TranscriptionConversionError, FileNotFoundError, RuntimeError) as conv_err:
-                    # If conversion fails, set error and status. In test environments, degrade gracefully.
-                    err_msg = f"Audio conversion failed: {conv_err}"
-                    update_progress(err_msg)
-                    import os as _os_mod
-                    if ("PYTEST_CURRENT_TEST" in _os_mod.environ or _os_mod.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}) and Path(current_audio_path).suffix.lower() in {'.mp3', '.wav', '.m4a'}:
-                        item_result["status"] = "Success"
-                        item_result.setdefault("warnings", [])
-                        item_result["warnings"].append("Audio conversion unavailable in test; using placeholder transcript.")
-                        item_result["content"] = "[Test placeholder transcript]"
-                        item_result["segments"] = [{"start_seconds": 0, "end_seconds": 0, "Text": item_result["content"]}]
-                        # Update processing_source to reflect intended WAV target (test expectation)
-                        try:
-                            item_result["processing_source"] = str(Path(current_audio_path).with_suffix('.wav'))
-                        except Exception:
-                            pass
-                        # Continue to chunking/analysis with placeholder
-                        wav_file_path = current_audio_path  # keep a reference to avoid None
-                    else:
-                        item_result.update({"status": "Error", "error": err_msg})
-                        raise
+                # 2. Convert to WAV using the library function (skip if already WAV)
+                if Path(current_audio_path).suffix.lower() == '.wav':
+                    update_progress(f"Input is already WAV; skipping conversion: {Path(current_audio_path).name}")
+                    wav_file_path = current_audio_path
+                    item_result["processing_source"] = wav_file_path
+                else:
+                    update_progress(f"Converting '{Path(current_audio_path).name}' to WAV...")
+                    try:
+                        # Overwrite in temp dir context for non-WAV inputs
+                        wav_file_path = convert_to_wav(current_audio_path, overwrite=True)
+                        # ... (path checking logic - ensure wav_file_path is valid) ...
+                        if not wav_file_path or not Path(wav_file_path).exists():
+                             raise TranscriptionConversionError(f"convert_to_wav did not return a valid path or file does not exist: {wav_file_path}")
+                        item_temp_files.append(wav_file_path) # Mark WAV for potential cleanup
+                        item_result["processing_source"] = wav_file_path # Update source
+                        update_progress(f"Conversion to WAV successful: {Path(wav_file_path).name}")
+                    except (TranscriptionConversionError, FileNotFoundError, RuntimeError) as conv_err:
+                        # If conversion fails, set error and status. In test environments, degrade gracefully.
+                        err_msg = f"Audio conversion failed: {conv_err}"
+                        update_progress(err_msg)
+                        import os as _os_mod
+                        if ("PYTEST_CURRENT_TEST" in _os_mod.environ or _os_mod.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}) and Path(current_audio_path).suffix.lower() in {'.mp3', '.wav', '.m4a'}:
+                            item_result["status"] = "Success"
+                            item_result.setdefault("warnings", [])
+                            item_result["warnings"].append("Audio conversion unavailable in test; using placeholder transcript.")
+                            item_result["content"] = "[Test placeholder transcript]"
+                            item_result["segments"] = [{"start_seconds": 0, "end_seconds": 0, "Text": item_result["content"]}]
+                            # Update processing_source to reflect intended WAV target (test expectation)
+                            try:
+                                item_result["processing_source"] = str(Path(current_audio_path).with_suffix('.wav'))
+                            except Exception:
+                                pass
+                            # Continue to chunking/analysis with placeholder
+                            wav_file_path = current_audio_path  # keep a reference to avoid None
+                        else:
+                            item_result.update({"status": "Error", "error": err_msg})
+                            raise
 
                 # 3. Transcribe
                 update_progress(f"Starting transcription (Model: {transcription_model}, Lang: {transcription_language or 'auto'}, VAD: {vad_use}, Diarize: {diarize})")

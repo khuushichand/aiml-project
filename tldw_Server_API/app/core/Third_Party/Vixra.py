@@ -27,8 +27,9 @@ PDF_BASE = "https://vixra.org/pdf/{suffix}"
 
 def _try_pdf(url: str) -> Optional[str]:
     try:
-        r = fetch(method="HEAD", url=url, timeout=15, allow_redirects=True)
-        if r.status_code == 200:
+        # Prefer a tiny GET with Range to preflight content-type without fetching the body
+        r = fetch(method="GET", url=url, timeout=15, allow_redirects=True, headers={"Range": "bytes=0-0"})
+        if getattr(r, "status_code", 0) == 200 or getattr(r, "status_code", 0) == 206:
             ct = (r.headers.get("content-type") or "").lower()
             if "pdf" in ct or url.lower().endswith(".pdf"):
                 return url

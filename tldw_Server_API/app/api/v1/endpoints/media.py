@@ -827,7 +827,7 @@ def get_add_media_form(
     # api_key removed - SECURITY: Never accept API keys from client
     use_cookies: bool = Form(False, description="Use cookies for URL download requests"),
     cookies: Optional[str] = Form(None, description="Cookie string if `use_cookies` is True"),
-    transcription_model: str = Form("deepdml/faster-distil-whisper-large-v3.5", description="Transcription model"),
+    transcription_model: str = Form("large-v3", description="Transcription model"),
     transcription_language: str = Form("en", description="Transcription language"),
     diarize: bool = Form(False, description="Enable speaker diarization"),
     timestamp_option: bool = Form(True, description="Include timestamps in transcription"),
@@ -2349,25 +2349,17 @@ async def search_media_items(
                 pagination=pagination_info
             )
 
-            # ETag Generation
-            response_json = response_obj.model_dump_json()
+            # Build payload and ETag; include legacy 'results' alias for compatibility
+            payload_dict = response_obj.model_dump()
+            payload_dict["results"] = payload_dict.get("items", [])
+
+            response_json = json.dumps(payload_dict)
             current_etag = hashlib.md5(response_json.encode('utf-8')).hexdigest()
 
             if if_none_match == current_etag:
                 return Response(status_code=status.HTTP_304_NOT_MODIFIED)
 
-            # Return full response with ETag header
-            # FastAPI's default JSONResponse will be used if you return a Pydantic model
-            # To add custom headers, you might need to construct the response explicitly
-            custom_response = response_obj # Return the Pydantic model directly
-            # If you need to return a custom Response object to set headers with Pydantic model:
-            # from fastapi.responses import JSONResponse
-            # custom_response = JSONResponse(content=response_obj.model_dump(), headers={"ETag": current_etag})
-            # However, FastAPI has a way to add headers to responses from path operations.
-            # For simplicity here, we'll rely on returning the Pydantic model and let you
-            # explore middleware or response parameters for headers if needed, or:
-            final_response = Response(content=response_json, media_type="application/json", headers={"ETag": current_etag})
-            return final_response
+            return Response(content=response_json, media_type="application/json", headers={"ETag": current_etag})
 
 
         except ValidationError as ve:
@@ -8653,11 +8645,17 @@ async def _download_url_async(
             final_url = url
             if not test_mode_active:
                 try:
-                    head = await _m_afetch(method="HEAD", url=url, client=None, timeout=60.0)
+                    _probe_headers = {"Range": "bytes=0-0"}
+                    probe = await _m_afetch(method="GET", url=url, headers=_probe_headers, client=None, timeout=60.0)
                     try:
-                        final_url = str(getattr(head, "request", head).url)
+                        final_url = str(getattr(probe, "request", probe).url)
                     except Exception:
                         final_url = url
+                    finally:
+                        try:
+                            await probe.aclose()
+                        except Exception:
+                            pass
                 except Exception:
                     final_url = url
             async with client.stream("GET", final_url, follow_redirects=False, timeout=60.0) as get_resp:
@@ -8771,7 +8769,8 @@ async def _download_url_async(
         # Fallback: no client provided. Prefer HEAD for naming; if it fails, stream download with a fresh client.
         response = None
         try:
-            head_resp = await _m_afetch(method="HEAD", url=url, timeout=60.0)
+            _probe_headers = {"Range": "bytes=0-0"}
+            head_resp = await _m_afetch(method="GET", url=url, headers=_probe_headers, timeout=60.0)
 
             class _RespLike:
                 def __init__(self, u, headers):
@@ -8787,6 +8786,10 @@ async def _download_url_async(
             if resolved_url is None:
                 resolved_url = httpx.URL(url)
             response = _RespLike(resolved_url, head_resp.headers)
+            try:
+                await head_resp.aclose()
+            except Exception:
+                pass
         except Exception:
             response = None
 

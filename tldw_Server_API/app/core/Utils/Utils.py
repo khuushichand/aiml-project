@@ -403,10 +403,10 @@ def smart_download(url: str, tmp_dir: Path) -> Path:
     parsed = urlparse(url)
     guessed_ext = Path(parsed.path).suffix.lower()
 
-    # ---------- 2) if no ext, probe HEAD  -----------------------------------
+    # ---------- 2) if no ext, probe with GET Range (prefer over HEAD)  ------
     if not guessed_ext:
         try:
-            head = fetch(method="HEAD", url=url, allow_redirects=True, timeout=10)
+            head = fetch(method="GET", url=url, allow_redirects=True, timeout=10, headers={"Range": "bytes=0-0"})
             ctype = head.headers.get("content-type", "")
             guessed_ext = mimetypes.guess_extension(ctype.split(";")[0].strip()) or ""
         except Exception:

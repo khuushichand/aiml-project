@@ -112,13 +112,14 @@ async def _download_pdf_bytes(
         # Fallback to standard async client path below
         pass
 
-    # 1) HEAD check for content-type (best-effort)
+    # 1) Preflight using GET with Range: bytes=0-0 (prefer over HEAD)
     try:
-        r = await _http_afetch(method="HEAD", url=url, headers=headers or {}, timeout=timeout)
+        _hdrs = dict(headers or {})
+        _hdrs.setdefault("Range", "bytes=0-0")
+        r = await _http_afetch(method="GET", url=url, headers=_hdrs, timeout=timeout)
         try:
             ctype = (r.headers.get("content-type") or "").lower()
         finally:
-            # ensure the response is closed
             try:
                 await r.aclose()
             except Exception:
@@ -128,11 +129,10 @@ async def _download_pdf_bytes(
             if enforce_pdf and not is_pdf:
                 raise HTTPException(status_code=415, detail=f"Expected application/pdf; got {ctype}")
             if not is_pdf:
-                # Some providers respond with octet-stream; be lenient but log
                 logger.warning(f"PDF download content-type not 'application/pdf': {ctype}; continuing")
     except Exception as e:
-        # HEAD may fail on some endpoints; log and proceed to GET
-        logger.debug(f"HEAD check failed for {url}: {e}")
+        # Preflight may fail; log and proceed to GET download
+        logger.debug(f"Preflight GET Range failed for {url}: {e}")
 
     # 2) Stream download to a temp path, then read bytes
     tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
