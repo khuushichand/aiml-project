@@ -271,20 +271,19 @@ class TestKokoroAdapterMock:
             await adapter.generate(request)
 
     async def test_text_length_validation(self):
-        """Test text length validation"""
+        """Kokoro has no hard max length; pacing is enforced via pauses"""
         adapter = KokoroAdapter({})
 
-        # Text exceeding limit
-        long_text = "a" * 600  # Exceeds 500 character limit
-        request = TTSRequest(
-            text=long_text,
-            voice="af_bella",
-            format=AudioFormat.WAV
-        )
+        # Construct a long input exceeding the default pause interval (500 words)
+        long_text_words = " ".join(["word"] * 550)
+        processed = adapter.preprocess_text(long_text_words)
 
-        # Should be validated during generation
+        # Expect at least one pause tag inserted
+        assert processed.count('[pause=1.1]') >= 1
+
+        # Capabilities should advertise a large maximum
         caps = await adapter.get_capabilities()
-        assert len(long_text) > caps.max_text_length
+        assert caps.max_text_length >= len(processed)
 
     async def test_cleanup_on_close(self):
         """Test resource cleanup on close"""

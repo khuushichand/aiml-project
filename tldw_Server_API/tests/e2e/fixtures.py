@@ -551,7 +551,16 @@ class APIClient:
             json=data,
         )
         response.raise_for_status()
-        return response.json()
+        payload = response.json() or {}
+        # Back-compat: normalize unified response -> legacy keys expected by some tests
+        docs = payload.get("documents") or payload.get("results") or payload.get("items") or []
+        if "results" not in payload:
+            payload["results"] = docs
+        if "documents" not in payload:
+            payload["documents"] = docs
+        if "success" not in payload:
+            payload["success"] = (response.status_code == 200) and (not bool(payload.get("errors")))
+        return payload
 
     def rag_advanced_search(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Perform advanced RAG search via the unified endpoint.
@@ -575,7 +584,16 @@ class APIClient:
             json=cfg,
         )
         response.raise_for_status()
-        return response.json()
+        payload = response.json() or {}
+        # Back-compat: normalize unified response -> legacy keys expected by some tests
+        docs = payload.get("documents") or payload.get("results") or payload.get("items") or []
+        if "results" not in payload:
+            payload["results"] = docs
+        if "documents" not in payload:
+            payload["documents"] = docs
+        if "success" not in payload:
+            payload["success"] = (response.status_code == 200) and (not bool(payload.get("errors")))
+        return payload
 
     # Health check
     def health_check(self) -> Dict[str, Any]:

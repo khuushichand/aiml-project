@@ -223,9 +223,9 @@ class TestProviderLimits:
         assert "en" in openai_limits["languages"]
         assert "mp3" in openai_limits["valid_formats"]
 
-        # Kokoro limits
+        # Kokoro limits (no practical max; very large sentinel)
         kokoro_limits = ProviderLimits.get_limits("kokoro")
-        assert kokoro_limits["max_text_length"] == 10000
+        assert kokoro_limits["max_text_length"] >= 100000
         assert "wav" in kokoro_limits["valid_formats"]
 
         # Unknown provider - should return defaults

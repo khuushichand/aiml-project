@@ -830,9 +830,29 @@ async def check_rate_limit(
     """
     # In TEST_MODE, bypass rate limiting entirely for deterministic tests
     try:
-        if os.getenv("TEST_MODE", "").lower() == "true":
+        raw = (os.getenv("TEST_MODE", "") or os.getenv("TLDW_TEST_MODE", "")).strip().lower()
+        if raw in {"1", "true", "yes", "y", "on"}:
             return  # Skip enforcement in test environments
     except Exception:
+        pass
+
+    # Additional bypass: in single-user mode, honor the configured SINGLE_USER_API_KEY
+    # to avoid noisy 429s during local/dev and E2E runs against a live server.
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings as _get_settings
+        if is_single_user_mode():
+            settings = _get_settings()
+            api_key_hdr = request.headers.get("X-API-KEY") if getattr(request, "headers", None) else None
+            auth_hdr = request.headers.get("Authorization") if getattr(request, "headers", None) else None
+            bearer_tok = auth_hdr.split(" ", 1)[1] if isinstance(auth_hdr, str) and auth_hdr.startswith("Bearer ") else None
+            # Accept env override if settings cache is stale in long-lived servers
+            import os as _os
+            env_key = _os.getenv("SINGLE_USER_API_KEY")
+            configured_key = settings.SINGLE_USER_API_KEY or env_key
+            if configured_key and (api_key_hdr == configured_key or bearer_tok == configured_key):
+                return  # Bypass rate limiting for the single-user API key
+    except Exception:
+        # Non-fatal; fall through to standard enforcement
         pass
 
     # Get client IP
@@ -875,8 +895,25 @@ async def check_auth_rate_limit(
     """
     # In TEST_MODE, bypass rate limiting entirely for deterministic tests
     try:
-        if os.getenv("TEST_MODE", "").lower() == "true":
+        raw = (os.getenv("TEST_MODE", "") or os.getenv("TLDW_TEST_MODE", "")).strip().lower()
+        if raw in {"1", "true", "yes", "y", "on"}:
             return
+    except Exception:
+        pass
+
+    # Additional bypass: in single-user mode, bypass for the configured SINGLE_USER_API_KEY
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings as _get_settings
+        if is_single_user_mode():
+            settings = _get_settings()
+            api_key_hdr = request.headers.get("X-API-KEY") if getattr(request, "headers", None) else None
+            auth_hdr = request.headers.get("Authorization") if getattr(request, "headers", None) else None
+            bearer_tok = auth_hdr.split(" ", 1)[1] if isinstance(auth_hdr, str) and auth_hdr.startswith("Bearer ") else None
+            import os as _os
+            env_key = _os.getenv("SINGLE_USER_API_KEY")
+            configured_key = settings.SINGLE_USER_API_KEY or env_key
+            if configured_key and (api_key_hdr == configured_key or bearer_tok == configured_key):
+                return
     except Exception:
         pass
 

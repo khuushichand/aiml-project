@@ -432,7 +432,7 @@ class KokoroAdapter(TTSAdapter):
                 AudioFormat.WAV,
                 AudioFormat.OPUS
             },
-            max_text_length=500,
+            max_text_length=1000000,
             supports_streaming=True,
             supports_voice_cloning=False,
             supports_emotion_control=False,
