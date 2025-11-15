@@ -214,6 +214,7 @@ jobs:
           TEST_MODE: 'true'
           DISABLE_HEAVY_STARTUP: '0'
           DEFER_HEAVY_STARTUP: '1'
+          STARTUP_TRACE: '1'
           MCP_DEBUG: '1'
           # Start the ultra-minimal app for faster, less brittle smoke
           ULTRA_MINIMAL_APP: '1'
@@ -228,6 +229,7 @@ jobs:
         env:
           SERVER_LABEL: smoke
           E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
+          SMOKE_STARTUP_TIMEOUT_SECONDS: '180'
         shell: bash
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
@@ -269,6 +271,9 @@ jobs:
           TEST_MODE: 'true'
           DISABLE_HEAVY_STARTUP: '0'
           DEFER_HEAVY_STARTUP: '1'
+          STARTUP_TRACE: '1'
+          # Keep content (media/notes) on SQLite for smoke to avoid PG content migrations
+          TLDW_CONTENT_DB_BACKEND: 'sqlite'
           MCP_DEBUG: '1'
           # Start the ultra-minimal app for faster, less brittle smoke
           ULTRA_MINIMAL_APP: '1'
