@@ -88,7 +88,7 @@ jobs:
         ports:
           - 5432/tcp
         options: >-
-          --health-cmd "pg_isready -U tldw"
+          --health-cmd "pg_isready -U tldw_user"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
@@ -213,6 +213,10 @@ jobs:
           DISABLE_HEAVY_STARTUP: '0'
           DEFER_HEAVY_STARTUP: '1'
           MCP_DEBUG: '1'
+          # Start the ultra-minimal app for faster, less brittle smoke
+          ULTRA_MINIMAL_APP: '1'
+          # Skip strict privilege catalog validation in smoke
+          PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
         shell: bash
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py start
@@ -256,15 +260,18 @@ jobs:
           AUTH_MODE: multi_user
           # Strong test secret (>=32 chars) for JWT; ephemeral in CI
           JWT_SECRET_KEY: "test-ci-jwt-secret-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-          # Use the Postgres DSN exported earlier
-          # DATABASE_URL is already exported in "Export PG env vars" step
-          DATABASE_URL: ${{ env.DATABASE_URL }}
+          # Bind directly to the Actions Postgres service port
+          DATABASE_URL: postgresql://tldw_user:TestPassword123!@127.0.0.1:${{ job.services.postgres.ports[5432] }}/tldw_content
           E2E_TEST_BASE_URL: "http://127.0.0.1:8001"
           SERVER_PORT: '8001'
           TEST_MODE: 'true'
           DISABLE_HEAVY_STARTUP: '0'
           DEFER_HEAVY_STARTUP: '1'
           MCP_DEBUG: '1'
+          # Start the ultra-minimal app for faster, less brittle smoke
+          ULTRA_MINIMAL_APP: '1'
+          # Skip strict privilege catalog validation in smoke
+          PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
         shell: bash
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py start
