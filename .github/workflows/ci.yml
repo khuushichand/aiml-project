@@ -210,7 +210,9 @@ jobs:
           SINGLE_USER_API_KEY: "smoke-ci-key-12345"
           E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
           TEST_MODE: 'true'
-          DISABLE_HEAVY_STARTUP: '1'
+          DISABLE_HEAVY_STARTUP: '0'
+          DEFER_HEAVY_STARTUP: '1'
+          MCP_DEBUG: '1'
         shell: bash
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py start
@@ -256,9 +258,13 @@ jobs:
           JWT_SECRET_KEY: "test-ci-jwt-secret-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
           # Use the Postgres DSN exported earlier
           # DATABASE_URL is already exported in "Export PG env vars" step
-          E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          E2E_TEST_BASE_URL: "http://127.0.0.1:8001"
+          SERVER_PORT: '8001'
           TEST_MODE: 'true'
-          DISABLE_HEAVY_STARTUP: '1'
+          DISABLE_HEAVY_STARTUP: '0'
+          DEFER_HEAVY_STARTUP: '1'
+          MCP_DEBUG: '1'
         shell: bash
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py start
@@ -267,7 +273,7 @@ jobs:
         if: always()
         env:
           SERVER_LABEL: smoke-mu
-          E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
+          E2E_TEST_BASE_URL: "http://127.0.0.1:8001"
           SMOKE_STARTUP_TIMEOUT_SECONDS: '180'
         shell: bash
         run: |
