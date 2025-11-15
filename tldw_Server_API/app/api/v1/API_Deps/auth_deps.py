@@ -33,6 +33,7 @@ from tldw_Server_API.app.core.DB_Management.Users_DB import get_users_db
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
+from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
@@ -828,13 +829,9 @@ async def check_rate_limit(
     Raises:
         HTTPException: If rate limit exceeded
     """
-    # In TEST_MODE, bypass rate limiting entirely for deterministic tests
-    try:
-        raw = (os.getenv("TEST_MODE", "") or os.getenv("TLDW_TEST_MODE", "")).strip().lower()
-        if raw in {"1", "true", "yes", "y", "on"}:
-            return  # Skip enforcement in test environments
-    except Exception:
-        pass
+    # In test mode, bypass rate limiting entirely for deterministic tests
+    if _is_test_mode():
+        return  # Skip enforcement in test environments
 
     # Additional bypass: in single-user mode, honor the configured SINGLE_USER_API_KEY
     # to avoid noisy 429s during local/dev and E2E runs against a live server.
@@ -893,13 +890,9 @@ async def check_auth_rate_limit(
     Raises:
         HTTPException: If rate limit exceeded
     """
-    # In TEST_MODE, bypass rate limiting entirely for deterministic tests
-    try:
-        raw = (os.getenv("TEST_MODE", "") or os.getenv("TLDW_TEST_MODE", "")).strip().lower()
-        if raw in {"1", "true", "yes", "y", "on"}:
-            return
-    except Exception:
-        pass
+    # In test mode, bypass rate limiting entirely for deterministic tests
+    if _is_test_mode():
+        return
 
     # Additional bypass: in single-user mode, bypass for the configured SINGLE_USER_API_KEY
     try:

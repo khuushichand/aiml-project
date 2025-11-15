@@ -15,6 +15,12 @@ https://arxiv.org/pdf/2506.00054
 https://arxiv.org/abs/2507.05093
 https://arxiv.org/abs/2507.02962
 https://arxiv.org/abs/2507.05713
+https://docs.kiln.tech/docs/evaluations/evaluate-rag-accuracy-q-and-a-evals
+https://arxiv.org/html/2507.06554v2#S5
+https://arxiv.org/abs/2507.07426
+https://arxiv.org/html/2507.04055v2#S4
+https://arxiv.org/html/2511.07328v1
+https://jxnl.co/writing/2025/09/11/the-rag-mistakes-that-are-killing-your-ai-skylar-payne/
 
 
 https://huggingface.co/datasets/isaacus/open-australian-legal-corpus

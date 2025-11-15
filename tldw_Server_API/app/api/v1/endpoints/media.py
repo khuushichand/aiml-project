@@ -1475,9 +1475,11 @@ async def patch_metadata(
                             "VALUES (?, ?, ?, ?, ?, ?)"
                         )
                     db.execute_query(ident_sql, (dv_id, _doi, _pmid, _pmcid, _arxiv, _s2id), connection=conn)
-                except Exception:
-                    # Identifier table may not exist in older DBs; ignore
-                    pass
+                except (sqlite3.OperationalError, DatabaseError) as e:
+                        logger.debug("Identifier index update skipped (missing table/unsupported upsert): %s", e)
+                except Exception as e:
+                    logger.error("Identifier index update failed for dv_id=%s: %s", dv_id, e, exc_info=True)
+                    raise
             # Return updated rich details for consistency
             details = get_full_media_details_rich2(
                 db_instance=db,
@@ -9121,28 +9123,23 @@ async def _download_url_async(
             target_path = target_dir / f"{base_name}_{counter}{suffix}"
             counter += 1
 
-        # Stream bytes from the same GET response to disk to honor the patched client in tests
-        tmp_path = target_path.with_suffix(target_path.suffix + ".part")
+        # Download the body using the standard streaming path to avoid code duplication
+        temp_client = _m_create_async_client()
         try:
-            tmp_path.parent.mkdir(parents=True, exist_ok=True)
-            async with aiofiles.open(tmp_path, "wb") as f:
-                async for chunk in get_resp.aiter_bytes():
-                    if not chunk:
-                        continue
-                    await f.write(chunk)
-            # Atomic rename to final path
-            tmp_path.replace(target_path)
-        except Exception as _werr:
-            # Cleanup partial file on error
+            return await _download_url_async(
+                client=temp_client,
+                url=str(response.url),
+                target_dir=target_dir,
+                allowed_extensions=allowed_extensions,
+                check_extension=check_extension,
+                disallow_content_types=disallow_content_types,
+                allow_redirects=allow_redirects,
+            )
+        finally:
             try:
-                if tmp_path.exists():
-                    tmp_path.unlink()
+                await temp_client.aclose()
             except Exception:
                 pass
-            raise
-
-        logger.info(f"Successfully downloaded {url} to {target_path}")
-        return target_path
 
     except httpx.HTTPStatusError as e:
         logger.error(

@@ -48,7 +48,7 @@ Constraints: Maintain single‑endpoint control (`/api/v1/rag/search`), predicta
 3. Diversity enforcement
    - Ensure MMR gets weight in `hybrid` reranker to reduce redundancy.
 4. Intent‑adaptive hybrid mixing
-   - Enable `enable_intent_routing=true` to auto adjust `hybrid_alpha` for lexical vs semantic queries.
+   - Enable `enable_intent_routing=true` to auto-adjust `hybrid_alpha` for lexical vs semantic queries.
 5. Corpus‑aware synonyms
    - Encourage `index_namespace` in requests; wire synonyms registry usage by default when present.
 6. Safer defaults
@@ -62,21 +62,21 @@ Constraints: Maintain single‑endpoint control (`/api/v1/rag/search`), predicta
 9. Precomputed late‑interaction index
    - Precompute and store paragraph/span embeddings at ingestion; query‑time uses cached vectors for fast “best‑span” scoring.
 10. Numeric grounding boost
-   - Unit‑normalization and token presence checks to lightly boost spans with matching normalized numerics.
+  - Unit‑normalization and token presence checks to lightly boost spans with matching normalized numerics.
 11. Temporal heuristics, clearer knobs
-   - Promote `auto_temporal_filters`; expose range in metadata and make behavior explicit.
+  - Promote `auto_temporal_filters`; expose range in metadata and make behavior explicit.
 12. Corpus‑learned synonyms
-   - Batch miner to auto‑update `synonyms_registry` from co‑occurrence/PMI and headings; versioned per corpus.
+  - Batch miner to auto‑update `synonyms_registry` from co‑occurrence/PMI and headings; versioned per corpus.
 
 ### Phase 3 — Ranking/Fusion Learning & Multi‑hop
 13. Learned fusion + abstention calibration
-   - Lightweight logistic calibrator on features (bm25 norm, vec sim, recency, CE score, MMR pos, source quality) to yield fused score and abstention threshold; train from feedback/eval logs.
+  - Lightweight logistic calibrator on features (bm25 norm, vec sim, recency, CE score, MMR pos, source quality) to yield fused score and abstention threshold; train from feedback/eval logs.
 14. Guided query decomposition orchestration
-   - First‑class sub‑query workflow for “why/how/compare/timeline”; retrieve per sub‑goal, then synthesize + verify.
+  - First‑class sub‑query workflow for “why/how/compare/timeline”; retrieve per sub‑goal, then synthesize + verify.
 
 ### Phase 4 — Graph‑Augmented Retrieval (Optional)
 15. Graph neighborhoods retrieval
-   - Build per‑corpus lightweight entity/section graph; retrieve by communities and blend with text retrieval for multi‑hop questions.
+  - Build per‑corpus lightweight entity/section graph; retrieve by communities and blend with text retrieval for multi‑hop questions.
 
 ## 6) Functional Requirements
 
@@ -220,4 +220,3 @@ Instrumentation
   - `expand_query=true` with `["multi_query","synonym","domain"]`
   - `top_k=30`, `reranking_strategy="hybrid"`, `enable_query_decomposition=true`
   - Optional: `enable_prf=true`
-

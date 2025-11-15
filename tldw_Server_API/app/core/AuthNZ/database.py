@@ -92,7 +92,31 @@ class DatabasePool:
 
                 else:
                     # SQLite for single-user mode or fallback
-                    self.db_path, self._sqlite_uri, self._sqlite_fs_path = self._resolve_sqlite_paths(self.settings.DATABASE_URL)
+                    # Defensive hardening: if AUTH_MODE is single_user but DATABASE_URL
+                    # is a non-sqlite scheme (e.g., a Postgres DSN leaked from CI),
+                    # ignore it and fall back to the default SQLite users DB.
+                    _raw_url = self.settings.DATABASE_URL
+                    try:
+                        _p = urlparse(_raw_url)
+                        _sch = (_p.scheme or "").lower()
+                    except Exception:
+                        _sch = ""
+                    if (
+                        str(getattr(self.settings, "AUTH_MODE", "single_user")).strip().lower() == "single_user"
+                        and _sch
+                        and not _sch.startswith("sqlite")
+                        and not _sch.startswith("file")
+                    ):
+                        try:
+                            logger.warning(
+                                "Single-user mode: ignoring non-sqlite DATABASE_URL '%s'; using sqlite:///./Databases/users.db",
+                                _raw_url,
+                            )
+                        except Exception:
+                            pass
+                        _raw_url = "sqlite:///./Databases/users.db"
+
+                    self.db_path, self._sqlite_uri, self._sqlite_fs_path = self._resolve_sqlite_paths(_raw_url)
 
                     # Ensure directory exists
                     if self._sqlite_fs_path and self._sqlite_fs_path != ":memory:":
@@ -123,9 +147,37 @@ class DatabasePool:
 
     @staticmethod
     def _resolve_sqlite_paths(url: str) -> tuple[str, bool, Optional[str]]:
-        """Resolve sqlite connection string, uri flag, and filesystem path."""
+        """Resolve sqlite connection string, uri flag, and filesystem path.
+
+        Defensive behavior: when running in single-user mode and provided URL
+        is not a sqlite/file scheme, fall back to the default SQLite users DB
+        path instead of treating the URL as a filesystem path.
+        """
+        # Determine auth mode to decide fallback handling for non-sqlite schemes
+        try:
+            from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings  # local import to avoid cycles
+            _auth_mode = str(getattr(_get_settings(), "AUTH_MODE", "single_user")).strip().lower()
+        except Exception:
+            _auth_mode = "single_user"
+
         parsed = urlparse(url)
         scheme = (parsed.scheme or "").lower()
+        if (
+            _auth_mode == "single_user"
+            and scheme
+            and not scheme.startswith("sqlite")
+            and not scheme.startswith("file")
+        ):
+            try:
+                logger.warning(
+                    "Single-user mode: DATABASE_URL '%s' is non-sqlite; using default SQLite path instead",
+                    url,
+                )
+            except Exception:
+                pass
+            url = "sqlite:///./Databases/users.db"
+            parsed = urlparse(url)
+            scheme = (parsed.scheme or "").lower()
         if scheme.startswith("file"):
             fs_path = parsed.path or ""
             if fs_path.startswith("//"):

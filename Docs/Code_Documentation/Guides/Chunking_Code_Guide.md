@@ -49,8 +49,9 @@ Chunker (synchronous)
   - Memory‑efficient generator for whole‑text inputs when you don’t need metadata.
 - chunk_text_hierarchical_tree(...), flatten_hierarchical(...) → section/block tree and flattening with ancestry.
 - chunk_text_hierarchical_flat(...) → convenience wrapper returning flat {text, metadata}.
-- chunk_file_stream(file_path, method=None, max_size=None, overlap=None, language=None, buffer_size=8192, **options) → Generator[str]
+- chunk_file_stream(file_path, method=None, max_size=None, overlap=None, language=None, buffer_size=8192, encoding='utf-8', **options) → Generator[str]
   - Streaming for very large files; see “Streaming” below.
+  - Note: encoding is passed to file reads (defaults to 'utf-8') so callers can adjust text decoding if needed.
 
 AsyncChunker (asynchronous)
 - async methods mirror the above for I/O‑heavy paths and streaming text sources.
