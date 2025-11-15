@@ -136,13 +136,15 @@ jobs:
           # Collect fixtures from the entire tests tree so top-level conftest is loaded
           FIXTURES_OUTPUT="$(pytest --fixtures -q tldw_Server_API/tests || true)"
           echo "Checking for 'test_user_credentials' fixture in e2e suite..."
+          TMPFILE=$(mktemp)
+          # Write to a temp file to avoid SIGPIPE issues with set -o pipefail when using -q matchers
+          printf "%s\n" "$FIXTURES_OUTPUT" > "$TMPFILE"
           if command -v rg >/dev/null 2>&1; then
-            # pytest --fixtures -q prints names with optional scope/location, e.g.
-            # "test_user_credentials [session scope] -- path:line". Match by word boundary.
-            echo "$FIXTURES_OUTPUT" | rg -q '^test_user_credentials\b' || { echo 'Fixture test_user_credentials not found'; exit 1; }
+            rg -q '^test_user_credentials\b' "$TMPFILE" || { echo 'Fixture test_user_credentials not found'; rm -f "$TMPFILE"; exit 1; }
           else
-            echo "$FIXTURES_OUTPUT" | grep -q '^test_user_credentials\b' || { echo 'Fixture test_user_credentials not found'; exit 1; }
+            grep -q '^test_user_credentials\b' "$TMPFILE" || { echo 'Fixture test_user_credentials not found'; rm -f "$TMPFILE"; exit 1; }
           fi
+          rm -f "$TMPFILE"
 
       - name: Install pg client and wait for PG
         uses: ./.github/actions/wait-for-postgres
