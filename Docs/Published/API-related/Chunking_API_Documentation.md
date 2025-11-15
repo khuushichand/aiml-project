@@ -285,6 +285,34 @@ Example response (trimmed):
     "code": {
       "code_mode": ["auto", "ast", "heuristic"],
       "language_hints": {"py": "python", "js": "javascript", "jsx": "javascript", "ts": "typescript", "tsx": "typescript"}
+    },
+    "tokens": {
+      "tokenizer_name_or_path": "gpt2",
+      "add_special_tokens": [true, false]
+    },
+    "json": {
+      "preserve_metadata": [true, false],
+      "single_metadata_reference": [true, false],
+      "metadata_reference_key": "__meta_ref__",
+      "json_chunkable_data_key": "data"
+    },
+    "xml": {
+      "preserve_metadata": [true, false]
+    },
+    "structure_aware": {
+      "preserve_tables": [true, false],
+      "preserve_code_blocks": [true, false],
+      "preserve_headers": [true, false],
+      "preserve_lists": [true, false],
+      "table_serialization": ["markdown", "entity", "narrative"],
+      "contextual_header_mode": ["none", "simple", "contextual"],
+      "max_breadcrumb_levels": 6
+    },
+    "propositions": {
+      "engine": ["heuristic", "spacy", "llm", "auto"],
+      "aggressiveness": [0, 1, 2],
+      "min_proposition_length": 15,
+      "prompt_profile": ["generic", "claimify", "gemma_aps"]
     }
   }
 }
