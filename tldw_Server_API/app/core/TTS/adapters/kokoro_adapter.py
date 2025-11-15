@@ -162,6 +162,23 @@ class KokoroAdapter(TTSAdapter):
 
         # Performance settings
         self.sample_rate = self.config.get("sample_rate", 24000)
+        # Pause insertion pacing (configurable)
+        try:
+            self.pause_interval_words = int(
+                self.config.get("pause_interval_words")
+                or (self.config.get("extra_params", {}) or {}).get("pause_interval_words")
+                or 500
+            )
+        except Exception:
+            self.pause_interval_words = 500
+        try:
+            self.pause_tag = str(
+                self.config.get("pause_tag")
+                or (self.config.get("extra_params", {}) or {}).get("pause_tag")
+                or "[pause=1.1]"
+            )
+        except Exception:
+            self.pause_tag = "[pause=1.1]"
 
         # Model instances
         self.kokoro_instance = None
@@ -410,11 +427,10 @@ class KokoroAdapter(TTSAdapter):
             supported_languages={"en-us", "en-gb", "en"},
             supported_voices=all_voices,
             supported_formats={
+                # Align with validator: mp3, wav, opus
                 AudioFormat.MP3,
                 AudioFormat.WAV,
-                AudioFormat.OPUS,
-                AudioFormat.FLAC,
-                AudioFormat.PCM
+                AudioFormat.OPUS
             },
             max_text_length=500,
             supports_streaming=True,
@@ -505,24 +521,32 @@ class KokoroAdapter(TTSAdapter):
 
         # Import StreamingAudioWriter for format conversion
         from tldw_Server_API.app.core.TTS.streaming_audio_writer import StreamingAudioWriter
-
-        # Create audio writer for target format
-        writer = StreamingAudioWriter(
-            format=request.format.value,
-            sample_rate=self.sample_rate,
-            channels=1
-        )
+        # Defer writer creation until first chunk to honor source SR
+        writer = None
 
         try:
             chunk_count = 0
             # Stream audio chunks
             if self.use_onnx:
-                stream_iter = self.kokoro_instance.create_stream(
+                base_iter = self.kokoro_instance.create_stream(
                     text,
                     voice=voice,
                     speed=request.speed,
                     lang=lang
                 )
+                # Wrap sync iterators into async for uniform consumption
+                import inspect
+                if hasattr(base_iter, "__aiter__") or inspect.isasyncgen(base_iter):
+                    stream_iter = base_iter
+                else:
+                    def _sync_source():
+                        for item in base_iter:
+                            yield item
+
+                    async def _async_wrap():
+                        for item in _sync_source():
+                            yield item
+                    stream_iter = _async_wrap()
             else:
                 # Use Kokoro PyTorch pipeline if available
                 try:
@@ -544,8 +568,8 @@ class KokoroAdapter(TTSAdapter):
                             voice_path = candidate
                 except Exception:
                     pass
-                # Pick pipeline by language code (first letter fallback)
-                lang_code = lang.split('-')[0][0] if '-' in lang else (lang[0] if lang else 'e')
+                # Pick pipeline by language code (use primary tag like 'en')
+                lang_code = lang.split('-')[0] if lang else 'en'
                 key = lang_code
                 if key not in self.kokoro_pt_pipelines:
                     self.kokoro_pt_pipelines[key] = KPipeline(
@@ -570,6 +594,18 @@ class KokoroAdapter(TTSAdapter):
                 if samples_chunk is not None and len(samples_chunk) > 0:
                     chunk_count += 1
 
+                    # Create writer on first chunk so we can pass the true SR
+                    if writer is None:
+                        try:
+                            effective_sr = int(sr_chunk) if sr_chunk else self.sample_rate
+                        except Exception:
+                            effective_sr = self.sample_rate
+                        writer = StreamingAudioWriter(
+                            format=request.format.value,
+                            sample_rate=effective_sr,
+                            channels=1,
+                        )
+
                     # Normalize float32 samples to int16
                     normalized_chunk = self.audio_normalizer.normalize(
                         samples_chunk,
@@ -583,10 +619,11 @@ class KokoroAdapter(TTSAdapter):
                         logger.debug(f"{self.provider_name}: Yielded chunk {chunk_count}, {len(encoded_bytes)} bytes")
 
             # Finalize stream
-            final_bytes = writer.write_chunk(finalize=True)
-            if final_bytes:
-                yield final_bytes
-                logger.debug(f"{self.provider_name}: Yielded final chunk, {len(final_bytes)} bytes")
+            if writer is not None:
+                final_bytes = writer.write_chunk(finalize=True)
+                if final_bytes:
+                    yield final_bytes
+                    logger.debug(f"{self.provider_name}: Yielded final chunk, {len(final_bytes)} bytes")
 
             logger.info(f"{self.provider_name}: Successfully streamed {chunk_count} chunks")
 
@@ -594,7 +631,11 @@ class KokoroAdapter(TTSAdapter):
             logger.error(f"{self.provider_name} streaming error: {e}")
             raise
         finally:
-            writer.close()
+            try:
+                if writer is not None:
+                    writer.close()
+            except Exception:
+                pass
 
     async def _generate_complete_kokoro(
         self,
@@ -622,10 +663,16 @@ class KokoroAdapter(TTSAdapter):
             # This is a mixed voice, return as-is for Kokoro to handle
             return voice
 
-        # Map generic voice names to Kokoro voices
-        if voice not in self.VOICES:
-            # Try to find a suitable voice
-            voice = self.map_voice(voice)
+        # Accept known voices (static or dynamically discovered)
+        try:
+            dynamic_ids = {v.id for v in self._dynamic_voices}
+        except Exception:
+            dynamic_ids = set()
+        if voice in self.VOICES or voice in dynamic_ids:
+            return voice
+
+        # Map generic voice names to Kokoro voices when unknown
+        voice = self.map_voice(voice)
 
         return voice
 
@@ -737,6 +784,7 @@ class KokoroAdapter(TTSAdapter):
             "young_female": "af_sky",
             "deep_male": "am_michael",
             "warm": "af_heart",
+            # Historical mapping kept for compatibility; note this id is not in static VOICES
             "child": "af_nicole",
         }
 
@@ -751,10 +799,43 @@ class KokoroAdapter(TTSAdapter):
         if self.normalize_text:
             # Basic normalization (Kokoro handles most of this internally)
             text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
-            text = re.sub(r'["""]', '"', text)  # Normalize quotes
-            text = re.sub(r'['']', "'", text)  # Normalize apostrophes
+            # Normalize quotes/apostrophes
+            text = text.replace('“', '"').replace('”', '"').replace('‟', '"')
+            text = text.replace('‘', "'").replace('’', "'")
+
+        # Insert periodic pause tags to keep very long inputs paced
+        try:
+            text = self._insert_pause_tags(text, words_between=self.pause_interval_words, pause_tag=self.pause_tag)
+        except Exception:
+            pass
 
         return text
+
+    def _insert_pause_tags(self, text: str, words_between: int = 500, pause_tag: str = '[pause=1.1]') -> str:
+        """Ensure a pause tag appears at least every N words.
+
+        - Splits on whitespace and inserts a pause marker every `words_between` tokens.
+        - Respects existing pause markers by splitting and processing each section independently.
+        """
+        # If already contains pause tags, process sections separately so spacing is preserved
+        if pause_tag in text:
+            parts = text.split(pause_tag)
+            processed = [self._insert_pause_tags(p, words_between, pause_tag) for p in parts]
+            return (pause_tag).join(processed)
+
+        words = text.split()
+        if len(words) <= words_between:
+            return text
+
+        out = []
+        cnt = 0
+        for w in words:
+            out.append(w)
+            cnt += 1
+            if cnt >= words_between:
+                out.append(pause_tag)
+                cnt = 0
+        return ' '.join(out)
 
     def chunk_text(self, text: str) -> List[str]:
         """

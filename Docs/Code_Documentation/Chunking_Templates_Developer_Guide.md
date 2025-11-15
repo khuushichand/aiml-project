@@ -4,6 +4,8 @@
 
 The Chunking Templates system provides a flexible, extensible framework for defining reusable document chunking strategies. This guide covers the architecture, implementation details, and how to extend the system.
 
+See also: Guides/Chunking_Code_Guide.md for the core Chunker APIs and streaming/hierarchical behaviors used by templates.
+
 ## Architecture
 
 ### Component Overview

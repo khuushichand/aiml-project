@@ -1306,13 +1306,15 @@ async def search_by_metadata(
 
         # Normalize identifier filters where applicable (doi/pmid/pmcid/arxiv_id)
         norm_fields = {"doi", "pmid", "pmcid", "arxiv_id", "DOI", "PMID", "PMCID", "arXiv", "ArXiv"}
+        canonical_order = ("doi", "pmid", "pmcid", "arxiv_id", "s2_paper_id")
         normalized_filters = []
         for f in (flt_list or []):
             try:
-                if f.get('field') in norm_fields:
-                    norm = normalize_safe_metadata({f['field']: f.get('value')})
-                    # Map canonical key if different (e.g., DOI->doi)
-                    key = next(iter(norm.keys())) if norm else f['field']
+                fld = f.get('field')
+                if fld in norm_fields:
+                    norm = normalize_safe_metadata({fld: f.get('value')})
+                    # Prefer canonical lowercase identifier keys when present
+                    key = next((k for k in canonical_order if k in norm), (fld or '').lower())
                     val = norm.get(key, f.get('value'))
                     normalized_filters.append({'field': key, 'op': f.get('op', 'icontains'), 'value': val})
                 else:
@@ -1435,11 +1437,23 @@ async def patch_metadata(
             # Use the same connection from the transaction context and keep identifier index in sync
             with db.transaction() as conn:
                 # Backend-aware execution (placeholder conversion handled by execute_query)
-                db.execute_query(
-                    "UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0",
-                    (new_meta_json, dv_id),
-                    connection=conn,
-                )
+                # Bump version to satisfy sync trigger and refresh last_modified
+                try:
+                    now_ts = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                except Exception:
+                    now_ts = None
+                if now_ts is not None:
+                    db.execute_query(
+                        "UPDATE DocumentVersions SET safe_metadata=?, version=version+1, last_modified=? WHERE id=? AND deleted=0",
+                        (new_meta_json, now_ts, dv_id),
+                        connection=conn,
+                    )
+                else:
+                    db.execute_query(
+                        "UPDATE DocumentVersions SET safe_metadata=?, version=version+1 WHERE id=? AND deleted=0",
+                        (new_meta_json, dv_id),
+                        connection=conn,
+                    )
                 # Maintain identifier index using backend-specific upsert
                 try:
                     _doi = new_meta.get('doi') or new_meta.get('DOI')
@@ -1530,11 +1544,23 @@ async def put_version_metadata(
         except Exception:
             raise HTTPException(status_code=400, detail="safe_metadata is not JSON-serializable")
         with db.transaction() as conn:
-            db.execute_query(
-                "UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0",
-                (smj, dv_id),
-                connection=conn,
-            )
+            # Bump version to satisfy sync trigger and refresh last_modified
+            try:
+                now_ts = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+            except Exception:
+                now_ts = None
+            if now_ts is not None:
+                db.execute_query(
+                    "UPDATE DocumentVersions SET safe_metadata=?, version=version+1, last_modified=? WHERE id=? AND deleted=0",
+                    (smj, now_ts, dv_id),
+                    connection=conn,
+                )
+            else:
+                db.execute_query(
+                    "UPDATE DocumentVersions SET safe_metadata=?, version=version+1 WHERE id=? AND deleted=0",
+                    (smj, dv_id),
+                    connection=conn,
+                )
             # Sync identifier index for this version using backend-specific upsert
             try:
                 _doi = new_meta.get('doi') or new_meta.get('DOI')
@@ -1609,7 +1635,9 @@ async def get_by_identifier(
         for f in raw_filters:
             try:
                 norm = normalize_safe_metadata({f['field']: f['value']}) if f['field'] != 's2_paper_id' else {f['field']: f['value']}
-                key = next(iter(norm.keys())) if norm else f['field']
+                # Prefer canonical lowercase identifier keys when present
+                canonical_order = ("doi", "pmid", "pmcid", "arxiv_id", "s2_paper_id")
+                key = next((k for k in canonical_order if k in norm), (f['field'] or '').lower())
                 val = norm.get(key, f['value'])
                 flt_list.append({'field': key, 'op': f['op'], 'value': val})
             except ValueError as ve:
@@ -1721,11 +1749,23 @@ async def create_or_update_version_advanced(
             # Update latest safe_metadata only
             dv_id = latest.get('id')
             with db.transaction() as conn:
-                db.execute_query(
-                    "UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0",
-                    (smj, dv_id),
-                    connection=conn,
-                )
+                # Bump version to satisfy sync trigger and refresh last_modified
+                try:
+                    now_ts = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+                except Exception:
+                    now_ts = None
+                if now_ts is not None:
+                    db.execute_query(
+                        "UPDATE DocumentVersions SET safe_metadata=?, version=version+1, last_modified=? WHERE id=? AND deleted=0",
+                        (smj, now_ts, dv_id),
+                        connection=conn,
+                    )
+                else:
+                    db.execute_query(
+                        "UPDATE DocumentVersions SET safe_metadata=?, version=version+1 WHERE id=? AND deleted=0",
+                        (smj, dv_id),
+                        connection=conn,
+                    )
                 # Keep identifier index updated for metadata-search using backend-specific upsert
                 try:
                     _doi = merged_sm.get('doi') if isinstance(merged_sm, dict) else None

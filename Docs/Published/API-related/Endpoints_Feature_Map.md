@@ -67,6 +67,11 @@ Note: This map focuses on the most important, stable routes. Many modules expose
   "/api/v1/chat": [
     {"method": "POST", "path": "/completions", "summary": "OpenAI-compatible chat completions"}
   ],
+  "/api/v1/chunking": [
+    {"method": "POST", "path": "/chunk_text", "summary": "Chunk raw text"},
+    {"method": "POST", "path": "/chunk_file", "summary": "Chunk uploaded file"},
+    {"method": "GET",  "path": "/capabilities", "summary": "Chunking capabilities"}
+  ],
   "/api/v1/characters": [
     {"method": "GET",  "path": "/", "summary": "List characters"},
     {"method": "POST", "path": "/", "summary": "Create character"},

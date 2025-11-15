@@ -202,6 +202,18 @@ Notes:
 """
 ```
 
+## Choosing Chunking for RAG
+
+- Default (general text): use `words` with `max_size≈400`, `overlap≈200` via `Chunker.process_text`. These defaults balance semantic continuity and redundancy.
+- Long/structured docs: prefer `hierarchical=True` or `structure_aware` to preserve headings, lists, tables, and code fences. Embed the flattened rows for better retrieval and re‑ranking.
+- Sentences: for QA-style matching or when sentence boundaries matter, use `method="sentences"` with smaller windows (e.g., 8–10) and small overlap (e.g., 2).
+- Tokens: when you must align to model token windows, use `method="tokens"` and pass `tokenizer_name_or_path`. Offsets come from tokenizer `offset_mapping` when available; a robust fallback is used otherwise.
+- Propositions: for claim/fact retrieval, use `method="propositions"`. Defaults for engine and tuning live in `tldw_Server_API/app/core/Chunking/__init__.py` (`DEFAULT_CHUNK_OPTIONS`). LLM‑based extraction requires wiring `llm_call_func`/`llm_config`.
+- Code: use `method="code"` with `code_mode="ast"` for Python (auto‑routes to AST if language hints start with `py`). This yields structure‑aligned chunks.
+- JSON/XML: enable `preserve_metadata` and `single_metadata_reference` to avoid repeating large metadata objects; adjust `metadata_reference_key` as needed.
+- Streaming vs. generator: for very large files on disk use `chunk_file_stream`; for whole in‑memory text without metadata, prefer `chunk_text_generator`. For normalized rows with metadata, use `process_text`.
+- Discoverability: `GET /api/v1/chunking/capabilities` returns the runtime set of methods and defaults. See also `Docs/Code_Documentation/Guides/Chunking_Code_Guide.md`.
+
 ### Using the Job-Based System
 
 ```python

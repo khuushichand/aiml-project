@@ -9,7 +9,7 @@ See also:
 
 ## Scope & Goals
 - Turn raw text or structured inputs into smaller, useful “chunks” with stable metadata.
-- Support multiple chunking methods (words/sentences/paragraphs/tokens/semantic/json/xml/ebook_chapters/propositions/rolling_summarize/structure_aware/code).
+- Support multiple chunking methods (words/sentences/paragraphs/tokens/semantic/json/xml/ebook_chapters/propositions/rolling_summarize/structure_aware/fixed_size/code).
 - Provide hierarchical splitting, streaming helpers, and a template pipeline.
 - Integrate with unified Metrics, security logging, and AuthNZ patterns.
 
@@ -45,6 +45,8 @@ Chunker (synchronous)
   - Thin wrapper around a single strategy; for exact offsets prefer chunk_text_with_metadata or process_text.
 - chunk_text_with_metadata(...) → List[ChunkResult]
   - Strategy outputs with precise offsets, counts, indices.
+- chunk_text_generator(text, method=None, max_size=None, overlap=None, language=None, **options) → Generator[str]
+  - Memory‑efficient generator for whole‑text inputs when you don’t need metadata.
 - chunk_text_hierarchical_tree(...), flatten_hierarchical(...) → section/block tree and flattening with ancestry.
 - chunk_text_hierarchical_flat(...) → convenience wrapper returning flat {text, metadata}.
 - chunk_file_stream(file_path, method=None, max_size=None, overlap=None, language=None, buffer_size=8192, **options) → Generator[str]
@@ -70,6 +72,10 @@ chunks = ck.chunk_text_with_metadata(
 for r in chunks:
     print(r.text, r.metadata.start_char, r.metadata.end_char)
 ```
+
+Whole‑text generator vs. file streaming
+- Prefer `chunk_text_generator` when you already have the full text in memory and only need strings (no metadata) in a streaming fashion.
+- Prefer `chunk_file_stream` for very large files where you don’t want to load the entire file; it reads buffers from disk and carries overlap forward between buffers.
 
 End‑to‑end normalized rows (recommended for app code)
 ```python
@@ -141,11 +147,12 @@ When to use: long documents with headings/lists/code blocks where preserving str
 ## Streaming
 
 - chunk_file_stream (sync) and AsyncChunker.chunk_stream (async) support large inputs.
-- Overlap semantics differ by method:
-  - words: with overlap>0, trailing overlap tokens from the last chunk carry forward; without overlap, the full last chunk is withheld and joined with the next buffer.
-  - sentences and others: overlap>0 withholds the final chunk for boundary dedupe; overlap=0 withholds the last chunk per buffer as the carry.
-- Boundaries use method‑aware separators to avoid fragmenting tokens (space for words, newlines for structure‑heavy kinds).
-- For exact offset fidelity, prefer chunk_text_with_metadata or process_text (streaming yields strings).
+- Overlap behavior is carry‑forward, not withholding:
+  - For overlap > 0, the chunker computes an overlap buffer from the tail of the previous processed segment (method‑aware: words, sentences, paragraphs, tokens) and prefixes it to the next segment before chunking. Previously emitted chunks are not dropped; duplicates around buffer boundaries are expected by design when using overlap.
+  - For overlap = 0, no carry is used. The next segment starts at a split point; the prior segment’s last chunk is not withheld.
+- Streaming chooses split points near the flush threshold and avoids breaking tokens for words/sentences. Joining uses a space for words when needed.
+- If you have the whole text but want low‑memory iteration, use chunk_text_generator.
+- For exact offset fidelity, prefer chunk_text_with_metadata or process_text (streaming/generator yield strings).
 
 ## Options & Defaults
 
@@ -160,6 +167,12 @@ Global defaults come from ChunkerConfig and DEFAULT_CHUNK_OPTIONS. Common per‑
 - timecode_map: list of {start_offset, end_offset, start_time, end_time}
 - adaptive, base_adaptive_chunk_size, min_adaptive_chunk_size, max_adaptive_chunk_size, adaptive_overlap, base_overlap, max_adaptive_overlap
 - code_mode: for method="code" → "auto" | "ast" | "heuristic"
+
+Metadata keys note
+- process_text normalizes outgoing metadata and sets both max_size/overlap and max_size_setting/overlap_setting for compatibility. Consumers should prefer max_size and overlap but be tolerant of either set.
+
+Defaults reference
+- See defaults and proposition-related knobs in tldw_Server_API/app/core/Chunking/__init__.py: DEFAULT_CHUNK_OPTIONS (e.g., proposition_engine, proposition_aggressiveness, proposition_min_proposition_length, proposition_prompt_profile).
 
 Config.txt overrides (optional) under [Chunking]
 - max_streaming_flush_threshold_chars, regex_timeout_seconds, regex_disable_multiprocessing, regex_simple_only, strict_grapheme_end_expansion, json_single_metadata_reference, json_metadata_reference_key
@@ -241,4 +254,3 @@ async def chunk_endpoint(body: dict = Body(...)):
 ---
 
 Questions or proposals? Open a PR and attach a short design note under Docs/Design/; include tests and briefly update this guide.
-

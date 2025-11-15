@@ -6525,11 +6525,20 @@ def get_full_media_details_rich(
                         safe_md = _json.loads(safe_md)
                     except Exception:
                         safe_md = None
+                # Ensure created_at is a datetime for response model
+                created_at_val = rv.get("created_at")
+                if isinstance(created_at_val, str):
+                    try:
+                        from datetime import datetime as _dt
+                        created_at_val = _dt.fromisoformat(created_at_val.replace('Z', '+00:00'))
+                    except Exception:
+                        # Leave as-is; Pydantic may still coerce common formats
+                        pass
                 versions_list.append({
                     "uuid": rv.get("uuid"),
                     "media_id": rv.get("media_id"),
                     "version_number": rv.get("version_number"),
-                    "created_at": rv.get("created_at"),
+                    "created_at": created_at_val,
                     "prompt": rv.get("prompt"),
                     "analysis_content": rv.get("analysis_content"),
                     "safe_metadata": safe_md,
@@ -6539,6 +6548,23 @@ def get_full_media_details_rich(
             versions_list = []
 
     # Build response dict matching MediaDetailResponse structure
+    # Ensure timestamps is a list[str] if present (handle JSON-encoded strings gracefully)
+    raw_timestamps = media.get("timestamps", []) or []
+    if isinstance(raw_timestamps, str):
+        try:
+            import json as _json
+            parsed_ts = _json.loads(raw_timestamps)
+            if isinstance(parsed_ts, list):
+                # Coerce items to strings for safety
+                raw_timestamps = [str(x) for x in parsed_ts]
+            else:
+                raw_timestamps = []
+        except Exception:
+            raw_timestamps = []
+    elif isinstance(raw_timestamps, list):
+        raw_timestamps = [str(x) for x in raw_timestamps]
+    else:
+        raw_timestamps = []
     return {
         "media_id": media_id,
         "source": {
@@ -6560,7 +6586,7 @@ def get_full_media_details_rich(
             "word_count": word_count,
         },
         "keywords": keywords,
-        "timestamps": media.get("timestamps", []) or [],
+        "timestamps": raw_timestamps,
         "versions": versions_list,
     }
 
