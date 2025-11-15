@@ -26,7 +26,7 @@ Navigation:
 **Quick Map (Where Things Live)**
 - API layer
   - Router: `tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:1`
-  - Split routers: CRUD `.../evaluations_crud.py:1`, datasets `.../evaluations_datasets.py:1`, webhooks `.../evaluations_webhooks.py:1`, rag pipeline `.../evaluations_rag_pipeline.py:1`
+  - Split routers: CRUD `.../evaluations_crud.py:1`, datasets `.../evaluations_datasets.py:1`, webhooks `.../evaluations_webhooks.py:1`, rag pipeline `.../evaluations_rag_pipeline.py:1`, embeddings A/B `.../evaluations_embeddings_abtest.py:1`
   - Auth/rate helpers: `tldw_Server_API/app/api/v1/endpoints/evaluations_auth.py:1`
   - Schemas: `tldw_Server_API/app/api/v1/schemas/evaluation_schemas_unified.py:1`, embeddings A/B `tldw_Server_API/app/api/v1/schemas/embeddings_abtest_schemas.py:1`
 - Core services
@@ -43,6 +43,7 @@ Navigation:
 - CLI
   - Entry: `tldw_Server_API/cli/evals_cli.py:1`
   - Commands: `tldw_Server_API/cli/commands/evaluation.py:1`, `.../webhooks.py:1`, `.../testing.py:1`
+  - Domain‑specific (module): `tldw_Server_API/app/core/Evaluations/cli/evals_cli.py:1`, `.../evals_cli_enhanced.py:1`, `.../benchmark_cli.py:1`
 - Tests (good references)
   - Integration: `tldw_Server_API/tests/Evaluations/integration/test_api_endpoints.py:1`, `.../test_rate_limits_endpoint.py:1`
   - Runner/pipeline: `tldw_Server_API/tests/Evaluations/test_rag_pipeline_runner.py:1`
@@ -58,13 +59,16 @@ Navigation:
 - OCR: `POST /ocr`, `POST /ocr-pdf`
 - RAG pipeline presets/cleanup: `POST /rag/pipeline/presets`, `GET /rag/pipeline/presets`, `GET /rag/pipeline/presets/{name}`, `DELETE /rag/pipeline/presets/{name}`, `POST /rag/pipeline/cleanup`
 - Embeddings A/B (selected): `POST /embeddings/abtest`, `POST /embeddings/abtest/{test_id}/run`, `GET /embeddings/abtest/{test_id}`, `GET /embeddings/abtest/{test_id}/events`, `GET /embeddings/abtest/{test_id}/export`
+  - More A/B endpoints: `GET /embeddings/abtest/{test_id}/results`, `GET /embeddings/abtest/{test_id}/significance`, `DELETE /embeddings/abtest/{test_id}`
 - Webhooks: `POST /webhooks`, `GET /webhooks`, `DELETE /webhooks`, `POST /webhooks/test`
 - Admin: `POST /admin/idempotency/cleanup`
 - Health/Metrics/Rate: `GET /health`, `GET /metrics`, `GET /rate-limits`
+ - History: `POST /history`
 
 Auth
 - Single‑user: send `X-API-KEY`; Multi‑user: `Authorization: Bearer <JWT>`.
 - Heavy endpoints can require admin when `EVALS_HEAVY_ADMIN_ONLY=true`.
+ - Scopes: selected endpoints (rag pipeline, embeddings A/B) require `workflows` scope via `require_token_scope`.
 
 **Architecture & Data Flow**
 - Request comes into `evaluations_unified.py` → validates via Pydantic schemas and `evaluations_auth.py`.
@@ -78,6 +82,7 @@ Auth
 - Core tables: `evaluations`, `evaluation_runs`, `datasets`
 - Unified/aux tables: `internal_evaluations`, `pipeline_presets`, `ephemeral_collections`, `webhook_registrations`, `idempotency_keys`
 - Embeddings A/B: `embedding_abtests`, `embedding_abtest_arms`, `embedding_abtest_queries`, `embedding_abtest_results`
+ - Webhooks delivery log: `webhook_deliveries`
 - Manager: `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:1` (SQLite or Postgres via content backend)
 
 **Working Programmatically**
@@ -188,4 +193,3 @@ curl -sS -X POST "$API/evaluations/datasets" -H "X-API-KEY: $KEY" -H "Content-Ty
 - Primary config file: `tldw_Server_API/Config_Files/evaluations_config.yaml:1` (tiers, quotas, TTLs, delivery)
 - Env toggles (selected): `EVALS_HEAVY_ADMIN_ONLY`, `TEST_MODE`, `EVALUATIONS_TEST_DB_PATH`, `EVALS_ABTEST_PERSISTENCE`, provider API keys.
 - DB path resolution is per‑user via `db_path_utils`; single‑user defaults to `Databases/evaluations.db`.
-

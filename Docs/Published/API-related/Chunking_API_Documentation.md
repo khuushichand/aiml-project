@@ -71,6 +71,78 @@ Example response (truncated):
 }
 ```
 
+OpenAPI schema (request/response)
+```
+openapi: 3.0.3
+info:
+  title: Chunk Text
+  version: 1.0.0
+paths:
+  /api/v1/chunking/chunk_text:
+    post:
+      summary: Chunk raw text and return normalized chunks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text_content:
+                  type: string
+                file_name:
+                  type: string
+                  nullable: true
+                options:
+                  type: object
+                  description: Chunking parameters
+                  properties:
+                    template_name:
+                      type: string
+                    method:
+                      type: string
+                      description: words|sentences|paragraphs|tokens|semantic|json|xml|ebook_chapters|propositions|rolling_summarize|structure_aware|fixed_size|code
+                    max_size:
+                      type: integer
+                      minimum: 1
+                    overlap:
+                      type: integer
+                      minimum: 0
+                    language:
+                      type: string
+                    tokenizer_name_or_path:
+                      type: string
+                    code_mode:
+                      type: string
+                      enum: [auto, ast, heuristic]
+                  additionalProperties: true
+              required: [text_content]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chunks:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        text:
+                          type: string
+                        metadata:
+                          type: object
+                          additionalProperties: true
+                  original_file_name:
+                    type: string
+                    nullable: true
+                  applied_options:
+                    type: object
+                    additionalProperties: true
+```
+
 Example (template-based):
 ```
 {

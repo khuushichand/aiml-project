@@ -247,6 +247,55 @@ jobs:
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py stop || true
 
+      # --- Multi-user smoke (Postgres-backed) ---
+      - name: Smoke start server (multi-user, Postgres)
+        env:
+          SERVER_LABEL: smoke-mu
+          AUTH_MODE: multi_user
+          # Strong test secret (>=32 chars) for JWT; ephemeral in CI
+          JWT_SECRET_KEY: "test-ci-jwt-secret-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+          # Use the Postgres DSN exported earlier
+          # DATABASE_URL is already exported in "Export PG env vars" step
+          E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
+          TEST_MODE: 'true'
+          DISABLE_HEAVY_STARTUP: '1'
+        shell: bash
+        run: |
+          python tldw_Server_API/tests/scripts/server_lifecycle.py start
+
+      - name: Smoke health check (multi-user)
+        if: always()
+        env:
+          SERVER_LABEL: smoke-mu
+          E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
+          SMOKE_STARTUP_TIMEOUT_SECONDS: '180'
+        shell: bash
+        run: |
+          python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
+
+      - name: Print smoke (multi-user) server log on failure
+        if: failure()
+        env:
+          SERVER_LABEL: smoke-mu
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, pathlib
+          label = os.environ.get('SERVER_LABEL','smoke-mu')
+          p = pathlib.Path(f'server-{label}.log')
+          if p.exists():
+              print('===== smoke (multi-user) server log =====')
+              print(p.read_text(encoding='utf-8'))
+          PY
+
+      - name: Smoke stop server (multi-user)
+        if: always()
+        env:
+          SERVER_LABEL: smoke-mu
+        shell: bash
+        run: |
+          python tldw_Server_API/tests/scripts/server_lifecycle.py stop || true
+
       - name: Cache embedding models
         uses: actions/cache@v4
         with:
