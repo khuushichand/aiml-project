@@ -503,7 +503,7 @@ else:
 #
 # Research/Paper Search and heavy routers/imports
 # In minimal test-app mode, import only what is needed for lightweight tests.
-if False and _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
+if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     # Research Endpoint (lightweight subset for tests)
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
     # Paper Search Endpoint (provider-specific)
@@ -3087,7 +3087,7 @@ async def api_metrics():
     return registry.get_all_metrics()
 
 # Router for health monitoring endpoints (NEW)
-if _MINIMAL_TEST_APP and False:
+if _MINIMAL_TEST_APP:
     # Minimal set for paper_search tests
     app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
     app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
@@ -3358,16 +3358,20 @@ else:
         _include_if_enabled("outputs", _outputs_router, prefix=f"{API_V1_PREFIX}", tags=["outputs"])
     except Exception as _e:
         logger.warning(f"Outputs endpoint not available: {_e}")
-    _include_if_enabled("embeddings", embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
-    _include_if_enabled("vector-stores", vector_stores_router, prefix=f"{API_V1_PREFIX}", tags=["vector-stores"])
+    if 'embeddings_router' in locals():
+        _include_if_enabled("embeddings", embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
+    if 'vector_stores_router' in locals():
+        _include_if_enabled("vector-stores", vector_stores_router, prefix=f"{API_V1_PREFIX}", tags=["vector-stores"])
     # External connectors (Drive/Notion) scaffold
     try:
         from tldw_Server_API.app.api.v1.endpoints.connectors import router as connectors_router
         _include_if_enabled("connectors", connectors_router, prefix=f"{API_V1_PREFIX}", tags=["connectors"], default_stable=False)
     except Exception as _conn_e:
         logger.warning(f"Connectors endpoints unavailable; skipping import: {_conn_e}")
-    _include_if_enabled("claims", claims_router, prefix=f"{API_V1_PREFIX}")
-    _include_if_enabled("media-embeddings", media_embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["media-embeddings"])
+    if 'claims_router' in locals():
+        _include_if_enabled("claims", claims_router, prefix=f"{API_V1_PREFIX}")
+    if 'media_embeddings_router' in locals():
+        _include_if_enabled("media-embeddings", media_embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["media-embeddings"])
     try:
         # Unified items endpoint
         from tldw_Server_API.app.api.v1.endpoints.items import router as _items_router

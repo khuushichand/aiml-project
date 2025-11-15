@@ -218,8 +218,8 @@ jobs:
           DEFER_HEAVY_STARTUP: '1'
           STARTUP_TRACE: '1'
           MCP_DEBUG: '1'
-          # Start the ultra-minimal app for faster, less brittle smoke
-          ULTRA_MINIMAL_APP: '1'
+          # Start the minimal test app profile for smoke
+          MINIMAL_TEST_APP: '1'
           # Skip strict privilege catalog validation in smoke
           PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
         shell: bash
@@ -277,8 +277,8 @@ jobs:
           # Keep content (media/notes) on SQLite for smoke to avoid PG content migrations
           TLDW_CONTENT_DB_BACKEND: 'sqlite'
           MCP_DEBUG: '1'
-          # Start the ultra-minimal app for faster, less brittle smoke
-          ULTRA_MINIMAL_APP: '1'
+          # Start the minimal test app profile for smoke
+          MINIMAL_TEST_APP: '1'
           # Skip strict privilege catalog validation in smoke
           PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
         shell: bash
