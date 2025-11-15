@@ -92,6 +92,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     check_media_exists,
     fetch_keywords_for_media,
 )
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.ingestion_claims import (
     extract_claims_for_chunks,
     store_claims,
@@ -1433,20 +1434,33 @@ async def patch_metadata(
                 raise HTTPException(status_code=500, detail="Latest version record missing identifier")
             # Use the same connection from the transaction context and keep identifier index in sync
             with db.transaction() as conn:
-                conn.execute(
+                # Backend-aware execution (placeholder conversion handled by execute_query)
+                db.execute_query(
                     "UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0",
-                    (new_meta_json, dv_id)
+                    (new_meta_json, dv_id),
+                    connection=conn,
                 )
+                # Maintain identifier index using backend-specific upsert
                 try:
                     _doi = new_meta.get('doi') or new_meta.get('DOI')
                     _pmid = new_meta.get('pmid') or new_meta.get('PMID')
                     _pmcid = new_meta.get('pmcid') or new_meta.get('PMCID')
                     _arxiv = new_meta.get('arxiv_id') or new_meta.get('arxiv') or new_meta.get('ArXiv')
                     _s2id = new_meta.get('s2_paper_id') or new_meta.get('paperId')
-                    conn.execute(
-                        "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) VALUES (?, ?, ?, ?, ?, ?)",
-                        (dv_id, _doi, _pmid, _pmcid, _arxiv, _s2id),
-                    )
+                    if db.backend_type == BackendType.POSTGRESQL:
+                        ident_sql = (
+                            "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
+                            "VALUES (?, ?, ?, ?, ?, ?) "
+                            "ON CONFLICT (dv_id) DO UPDATE SET "
+                            "doi = EXCLUDED.doi, pmid = EXCLUDED.pmid, pmcid = EXCLUDED.pmcid, "
+                            "arxiv_id = EXCLUDED.arxiv_id, s2_paper_id = EXCLUDED.s2_paper_id"
+                        )
+                    else:
+                        ident_sql = (
+                            "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
+                            "VALUES (?, ?, ?, ?, ?, ?)"
+                        )
+                    db.execute_query(ident_sql, (dv_id, _doi, _pmid, _pmcid, _arxiv, _s2id), connection=conn)
                 except Exception:
                     # Identifier table may not exist in older DBs; ignore
                     pass
@@ -1516,21 +1530,32 @@ async def put_version_metadata(
         except Exception:
             raise HTTPException(status_code=400, detail="safe_metadata is not JSON-serializable")
         with db.transaction() as conn:
-            conn.execute(
+            db.execute_query(
                 "UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0",
-                (smj, dv_id)
+                (smj, dv_id),
+                connection=conn,
             )
-            # Sync identifier index for this version
+            # Sync identifier index for this version using backend-specific upsert
             try:
                 _doi = new_meta.get('doi') or new_meta.get('DOI')
                 _pmid = new_meta.get('pmid') or new_meta.get('PMID')
                 _pmcid = new_meta.get('pmcid') or new_meta.get('PMCID')
                 _arxiv = new_meta.get('arxiv_id') or new_meta.get('arxiv') or new_meta.get('ArXiv')
                 _s2id = new_meta.get('s2_paper_id') or new_meta.get('paperId')
-                conn.execute(
-                    "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) VALUES (?, ?, ?, ?, ?, ?)",
-                    (dv_id, _doi, _pmid, _pmcid, _arxiv, _s2id),
-                )
+                if db.backend_type == BackendType.POSTGRESQL:
+                    ident_sql = (
+                        "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT (dv_id) DO UPDATE SET "
+                        "doi = EXCLUDED.doi, pmid = EXCLUDED.pmid, pmcid = EXCLUDED.pmcid, "
+                        "arxiv_id = EXCLUDED.arxiv_id, s2_paper_id = EXCLUDED.s2_paper_id"
+                    )
+                else:
+                    ident_sql = (
+                        "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?)"
+                    )
+                db.execute_query(ident_sql, (dv_id, _doi, _pmid, _pmcid, _arxiv, _s2id), connection=conn)
             except Exception:
                 pass
         # Return updated rich details for consistency
@@ -1696,21 +1721,32 @@ async def create_or_update_version_advanced(
             # Update latest safe_metadata only
             dv_id = latest.get('id')
             with db.transaction() as conn:
-                conn.execute(
+                db.execute_query(
                     "UPDATE DocumentVersions SET safe_metadata=? WHERE id=? AND deleted=0",
-                    (smj, dv_id)
+                    (smj, dv_id),
+                    connection=conn,
                 )
-                # Keep identifier index updated for metadata-search
+                # Keep identifier index updated for metadata-search using backend-specific upsert
                 try:
                     _doi = merged_sm.get('doi') if isinstance(merged_sm, dict) else None
                     _pmid = merged_sm.get('pmid') if isinstance(merged_sm, dict) else None
                     _pmcid = merged_sm.get('pmcid') if isinstance(merged_sm, dict) else None
                     _arxiv = (merged_sm.get('arxiv_id') if isinstance(merged_sm, dict) else None)
                     _s2id = (merged_sm.get('s2_paper_id') if isinstance(merged_sm, dict) else None)
-                    conn.execute(
-                        "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) VALUES (?, ?, ?, ?, ?, ?)",
-                        (dv_id, _doi, _pmid, _pmcid, _arxiv, _s2id),
-                    )
+                    if db.backend_type == BackendType.POSTGRESQL:
+                        ident_sql = (
+                            "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
+                            "VALUES (?, ?, ?, ?, ?, ?) "
+                            "ON CONFLICT (dv_id) DO UPDATE SET "
+                            "doi = EXCLUDED.doi, pmid = EXCLUDED.pmid, pmcid = EXCLUDED.pmcid, "
+                            "arxiv_id = EXCLUDED.arxiv_id, s2_paper_id = EXCLUDED.s2_paper_id"
+                        )
+                    else:
+                        ident_sql = (
+                            "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
+                            "VALUES (?, ?, ?, ?, ?, ?)"
+                        )
+                    db.execute_query(ident_sql, (dv_id, _doi, _pmid, _pmcid, _arxiv, _s2id), connection=conn)
                 except Exception:
                     pass
             # Return updated rich details for consistency

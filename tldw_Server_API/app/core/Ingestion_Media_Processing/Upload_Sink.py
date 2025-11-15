@@ -956,8 +956,14 @@ class FileValidator:
         except Exception as e:
             logging.warning(f"Bleach not available or failed ({e}); falling back to tag stripping.")
             try:
-                return re.sub(r"<[^>]+>", " ", html_content)
+                # Prefer the preprocessed (script/style/comments removed) content if available
+                try:
+                    _pre = preprocessed  # type: ignore[name-defined]
+                except Exception:
+                    _pre = html_content
+                return re.sub(r"<[^>]+>", " ", _pre)
             except Exception:
+                # As a last resort, return the original content
                 return html_content
 
     def sanitize_xml_content(self, xml_content: str, config: Optional[Dict] = None) -> str:
