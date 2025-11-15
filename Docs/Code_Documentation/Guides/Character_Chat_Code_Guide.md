@@ -40,13 +40,17 @@ See also: `tldw_Server_API/app/core/Character_Chat/README.md` for a focused modu
 Each router resolves the per-user DB via `get_chacha_db_for_user` and the authenticated user via `get_request_user`.
 
 ## Core Concepts & Data Flow
-- Per-user isolation: Every request uses a user-scoped `CharactersRAGDB` that reads/writes `ChaChaNotes.db` under `Databases/user_databases/<user_id>/`.
+- Per-user isolation and storage path: Every request uses a user-scoped `CharactersRAGDB`. Character Chat resolves the base directory from `USER_DB_BASE_DIR` and stores the DB at `USER_DB_BASE_DIR/<user_id>/ChaChaNotes.db`. If not configured, Character Chat falls back to `./app_data/user_databases_fallback/<user_id>/ChaChaNotes.db`. Other modules that use `DatabasePaths` may default to `Databases/user_databases/<user_id>/ChaChaNotes.db` when unset. For consistency across modules, set `USER_DB_BASE_DIR` in settings or env.
 - Characters: Stored with textual fields and optional image bytes. JSON-like fields (`alternate_greetings`, `tags`, `extensions`) are normalized when stored.
 - Placeholders: Strings may contain `{{char}}`, `{{user}}`, `<CHAR>`, `<USER>`. Utilities replace them at render time.
 - Conversations & Messages: Conversations are UUID-identified. Messages reference `conversation_id` and keep `sender` as a string; utilities map sender→role.
 - World Books (Lorebooks): Keyword-based snippets that can be injected as system/context messages based on recent message windows, priorities, budgets.
-- Chat Dictionary: Pattern-based (regex or literal) replacements with probabilities/cooldowns. Applied to text prior to sending to providers.
+- Chat Dictionary: Pattern-based (regex or literal) replacements with probabilities/cooldowns. Pre-generation dictionary application is handled by the Chat module path (`/api/v1/chat/completions`) via `chat()`. The Character Chat `/complete-v2` path calls `chat_api_call()` directly and does not apply dictionaries by default. Use the Chat endpoint when you need pre-gen dictionary processing.
 - Rate Limiting: Guards character operations, chat creation, message volume, and completion frequency (per-user).
+- Default character: The DB dependency ensures a default “Helpful AI Assistant” character exists per user on first initialization.
+
+Notes on images and attachments:
+- API message listings include `has_image` flags but do not return raw attachment bytes. Use library helpers like `retrieve_conversation_messages_for_ui(..., rich_output=true)` for in-process rich UI shaping when needed.
 
 ## Key Helpers (What to Call)
 - Characters
@@ -62,6 +66,7 @@ Each router resolves the per-user DB via `get_chacha_db_for_user` and the authen
   - `retrieve_conversation_messages_for_ui(db, conversation_id, ...)` → `[(user, assistant)]` or rich
   - `map_sender_to_role(sender, character_name)` → `"user"|"assistant"|"system"|"tool"`
   - `replace_placeholders(text, char_name, user_name)` → `str`
+  - `retrieve_conversation_messages_for_ui(..., rich_output=True)` → rich UI format including attachment metadata
 - World Book & Dictionary
   - See `world_book_manager.py` and `chat_dictionary.py` for CRUD and processing routines.
 - Rate Limiting
@@ -142,7 +147,7 @@ GET /api/v1/characters/filter?tags=wizard&tags=fantasy&match_all=false
 
 8) Chat dictionary basics
 - Manage groups/entries under `chat.py` endpoints (create/list/export/import/statistics)
-- Apply before provider calls to alter text with probabilities, cooldowns, and budgets.
+- Pre-generation application occurs in the Chat module path (`/api/v1/chat/completions`). The Character Chat `/complete-v2` flow does not apply dictionaries by default; use the Chat endpoint if you need dictionary processing before provider calls.
 
 ## API Examples (curl/httpx)
 
@@ -234,6 +239,8 @@ curl -sS -X POST "$API/chats/<CHAT_ID>/completions/persist" \
   }'
 ```
 
+Callout: When `stream=true`, assistant content is never persisted during `/complete-v2` (even if `save_to_db=true`). Use `/{chat_id}/completions/persist` to store the streamed result.
+
 6) Character search and rate-limit status
 ```bash
 curl -sS "$API/characters/search/?query=wizard" -H "X-API-KEY: $KEY"
@@ -244,17 +251,19 @@ curl -sS "$API/characters/rate-limit-status" -H "X-API-KEY: $KEY"
 - Add card formats: extend `character_validation.py` and `character_io.py` (parsing + normalization), wire through facade exports if needed.
 - Customize role mapping: adjust `map_sender_to_role` and alias constants in `character_utils.py`.
 - Message metadata/tool-calls: store via endpoints that accept `tool_calls` and retrieve with `db.get_message_metadata(message_id)` (see `character_messages.py`).
-- Rate limits: tune in `character_rate_limiter.py` or via env/settings (`CHARACTER_RATE_LIMIT_*`, `MAX_*`).
+- Rate limits: tune in `character_rate_limiter.py` or via env/settings (`CHARACTER_RATE_LIMIT_*`, `MAX_*`). Defaults (current): `MAX_CHATS_PER_USER=100`, `MAX_MESSAGES_PER_CHAT=1000`, `MAX_CHAT_COMPLETIONS_PER_MINUTE=20`, `MAX_MESSAGE_SENDS_PER_MINUTE=60`.
 - Provider integration: Character Chat builds standard OpenAI-style `messages` for `/api/v1/chat/completions`. Extend provider logic in the Chat module (`core/Chat/*`).
+ - Dictionary application: Pre-gen dictionary logic lives in the Chat module (`chat()`); Character Chat `/complete-v2` does not apply it by default.
 
 ## Error Handling & Guardrails
 - Validation: Pydantic schemas enforce inputs; import/path errors surface as `InputError`/`ConflictError` mapped to HTTP 400/409.
 - Optimistic locking: Most updates require `expected_version` to avoid lost updates; endpoints return 409 on mismatch.
 - Rate limits: 403 on caps (e.g., max chats/messages), 429 on per-minute throttles, 413 on large uploads/images.
 - Placeholders: Replacement happens close to render; DB always stores canonical raw values.
+- Tool-calls retrieval: `include_tool_calls=true` enriches the standard messages response. The `format_for_completions=true` output is OpenAI-style and does not include `tool_calls` objects.
 
 ## Settings & Environment Flags
-- Rate limiting: `CHARACTER_RATE_LIMIT_ENABLED`, `CHARACTER_RATE_LIMIT_OPS`, `CHARACTER_RATE_LIMIT_WINDOW`, `MAX_CHARACTERS_PER_USER`, `MAX_CHATS_PER_USER`, `MAX_MESSAGES_PER_CHAT`, `MAX_CHAT_COMPLETIONS_PER_MINUTE`, `MAX_MESSAGE_SENDS_PER_MINUTE`
+- Rate limiting: `CHARACTER_RATE_LIMIT_ENABLED`, `CHARACTER_RATE_LIMIT_OPS`, `CHARACTER_RATE_LIMIT_WINDOW`, `MAX_CHARACTERS_PER_USER`, `MAX_CHATS_PER_USER` (default 100), `MAX_MESSAGES_PER_CHAT` (default 1000), `MAX_CHAT_COMPLETIONS_PER_MINUTE` (default 20), `MAX_MESSAGE_SENDS_PER_MINUTE` (default 60)
 - Redis: `REDIS_ENABLED`, `REDIS_URL`
 - Test mode: `TEST_MODE=1` relaxes rate limits and disables heavy workers
 - Local LLM toggles used by completion paths: `ENABLE_LOCAL_LLM_PROVIDER`, `ALLOW_LOCAL_LLM_CALLS`, `DISABLE_OFFLINE_SIM`
@@ -278,6 +287,8 @@ python -m pytest tldw_Server_API/tests/Character_Chat_NEW -v
 - JSON fields: `tags`, `alternate_greetings`, `extensions` accept strings or lists/dicts; validators normalize but verify types before writing.
 - Pagination windows: World book scanning depends on message windows and budgets; incorrect `limit/offset` can change injected context.
  - Persistence & ownership: API endpoints set `client_id` automatically for conversations/messages. If you insert via DB helpers directly, ensure `client_id` is populated (string user ID); ownership checks depend on it.
+ - Default character: The dependency ensures a per-user default “Helpful AI Assistant” is present; don’t assume an empty character list on fresh DBs.
+ - Streaming persistence: For `/complete-v2`, `save_to_db` is ignored when `stream=true`; use `/{chat_id}/completions/persist`.
 
 ## Reference Endpoints (selection)
 - Characters: list/create/update/delete/import/filter, world books sub-routes — `tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py`

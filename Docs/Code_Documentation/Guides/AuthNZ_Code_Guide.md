@@ -17,11 +17,12 @@ See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentati
 - Sessions + blacklist: `tldw_Server_API/app/core/AuthNZ/session_manager.py`, `tldw_Server_API/app/core/AuthNZ/token_blacklist.py`
 - API keys + Virtual keys: `tldw_Server_API/app/core/AuthNZ/api_key_manager.py`, `tldw_Server_API/app/core/AuthNZ/virtual_keys.py`
 - RBAC/orgs/teams/permissions: `tldw_Server_API/app/core/AuthNZ/permissions.py`, `tldw_Server_API/app/core/AuthNZ/rbac.py`, `tldw_Server_API/app/core/AuthNZ/orgs_teams.py`, `tldw_Server_API/app/core/AuthNZ/privilege_catalog.py`
-- Guardrails/middleware: `tldw_Server_API/app/core/AuthNZ/rate_limiter.py`, `tldw_Server_API/app/core/AuthNZ/llm_budget_middleware.py`, `tldw_Server_API/app/core/AuthNZ/csrf_protection.py`, `tldw_Server_API/app/core/AuthNZ/security_headers.py`, `tldw_Server_API/app/core/AuthNZ/usage_logging_middleware.py`
 - Guardrails/middleware: `tldw_Server_API/app/core/AuthNZ/rate_limiter.py`, `tldw_Server_API/app/core/AuthNZ/llm_budget_middleware.py`, `tldw_Server_API/app/core/AuthNZ/llm_budget_guard.py`, `tldw_Server_API/app/core/AuthNZ/csrf_protection.py`, `tldw_Server_API/app/core/AuthNZ/security_headers.py`, `tldw_Server_API/app/core/AuthNZ/usage_logging_middleware.py`
+- Auth flows/support: `tldw_Server_API/app/core/AuthNZ/password_service.py`, `tldw_Server_API/app/core/AuthNZ/mfa_service.py`, `tldw_Server_API/app/core/AuthNZ/email_service.py`
 - Endpoint DI (use these): `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py`
 - Auth endpoints: `tldw_Server_API/app/api/v1/endpoints/auth.py`, `tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py`
 - Admin + RBAC mgmt: `tldw_Server_API/app/api/v1/endpoints/admin.py`, `.../users.py`, `.../privileges.py`, `.../register.py`
+- Debug helpers: `tldw_Server_API/app/api/v1/endpoints/authnz_debug.py`
 
 ## Modes & Request Flow
 
@@ -39,8 +40,29 @@ See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentati
 
 ### API Keys & Virtual Keys
 - API keys provide non-JWT authentication; can be scoped, rotated, expire, and audited.
-- Virtual keys are short-lived scoped JWTs minted by authenticated users for automation/integrations.
-  - Virtual key authentication requires multi-user mode; in single-user mode, bearer JWTs are not accepted by `get_current_user`.
+- Virtual keys (JWT) are short-lived scoped tokens minted by authenticated users for automation/integrations. Validation works in both modes when JWT is configured. In single-user mode the JWT service derives a surrogate secret from `SINGLE_USER_API_KEY`, so bearer JWTs can be validated; API keys remain the simplest option when operating single-user.
+
+JWT virtual keys support additional constraints via claims (enforced with `auth_deps.require_token_scope`, not in `get_current_user`):
+- `allowed_endpoints`: list of endpoint codes (e.g., `chat.completions`)
+- `allowed_methods`: HTTP methods allowlist (e.g., `["POST"]`)
+- `allowed_paths`: path prefixes allowlist (e.g., `["/api/v1/chat/"]`)
+- `count_as` + `max_calls` or `max_runs`: simple per-token quotas
+- `schedule_id` + scheduler match options (when used with workflow scheduling)
+
+### Virtual Keys: API Keys vs JWTs
+
+- Virtual API Keys (DB-backed)
+  - Created/stored via `api_key_manager.py` in `api_keys` (may be flagged `is_virtual`).
+  - Authenticate with `X-API-KEY` (or Bearer); validated by `APIKeyManager.validate_api_key`.
+  - Budgets/allowlists enforced by `llm_budget_middleware.py`/`llm_budget_guard.py` (day/month token/usd, allowed endpoints/providers/models, IP allowlists, optional per-key rate_limit).
+  - Rotate/revoke; only HMAC-SHA256 key hashes stored (no plaintext).
+  - Best for longer-lived integrations/service accounts.
+
+- Virtual JWTs (short-lived tokens)
+  - Minted with `JWTService.create_virtual_access_token(...)`; not stored server-side.
+  - Authenticate with Bearer; claim-level enforcement is applied via `auth_deps.require_token_scope` (allowed_endpoints/methods/paths, quotas via `count_as` + `max_calls`/`max_runs`, optional `schedule_id`).
+  - Work in both modes (single-user derives a surrogate secret; multi-user uses configured JWT secrets/keys).
+  - Best for ephemeral, scoped automation (e.g., scheduled workflows) where rotation and narrow scope are required.
 
 ## Using Dependencies in Endpoints
 
@@ -72,10 +94,55 @@ async def limited_route(user=Depends(get_current_user)):
     return {"ok": True}
 ```
 
+Scoped token/key enforcement:
+- Use `require_token_scope(scope, endpoint_id=..., count_as=...)` to enforce virtual-key constraints on a route. It validates JWT claims when a bearer is present and applies equivalent metadata-based checks when only `X-API-KEY` is provided (allowed endpoints/methods/paths and optional per-key quotas).
+
+Example (scoped automation endpoint):
+```python
+from fastapi import Depends
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_current_user, require_token_scope
+)
+
+@router.post("/workflows/run", dependencies=[Depends(require_token_scope(
+    scope="workflows",
+    endpoint_id="workflows.run",
+    count_as="run",
+))])
+async def run_workflow(user=Depends(get_current_user)):
+    return {"ok": True}
+```
+
 Notes:
 - `get_current_user` handles single-user mode first, then API key, then JWT.
 - `PermissionChecker` honors soft-enforce via `RBAC_SOFT_ENFORCE` and never logs secrets.
 - `check_rate_limit` uses a token bucket; see Rate Limiting below.
+
+Also handy DI:
+- `get_optional_current_user` for optional auth
+- `require_admin` and `require_role("role")` for simple role gating
+
+Examples:
+```python
+from fastapi import Depends
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_optional_current_user, require_admin, require_role
+)
+
+@router.get("/maybe-auth")
+async def maybe_auth(user=Depends(get_optional_current_user)):
+    if user:
+        return {"hello": user.get("username")}
+    return {"hello": "anonymous"}
+
+@router.get("/admin-only")
+async def admin_only(user=Depends(require_admin)):
+    return {"ok": True, "as": "admin"}
+
+@router.get("/viewer-only")
+async def viewer_only(user=Depends(require_role("viewer"))):
+    return {"ok": True, "as": "viewer"}
+```
 
 ## Sessions, Tokens, Revocation
 
@@ -120,7 +187,22 @@ assert await mgr.validate_api_key(api_key=rec["api_key"])  # returns user contex
 - Endpoint helper: `check_rate_limit` extracts a stable client identity (IP or user) and enforces limits; authentication routes use `check_auth_rate_limit` with stricter defaults.
 - LLM budgets: `llm_budget_middleware.py` and `llm_budget_guard.py` enforce endpoint/provider/model quotas when configured. Settings are `LLM_BUDGET_ENFORCE` (on/off) and `LLM_BUDGET_ENDPOINTS` (paths).
 
-Example: custom rate limit per endpoint
+RBAC-aware selector (logging-only for now):
+- `auth_deps.rbac_rate_limit(resource)` logs the strictest configured limit selected for a user/role-resource pair; it does not enforce yet (use `check_rate_limit` for enforcement).
+
+Example: RBAC resource-aware logging (no enforcement)
+```python
+from fastapi import Depends
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_current_user, rbac_rate_limit
+)
+
+@router.get("/send", dependencies=[Depends(rbac_rate_limit("chat.send"))])
+async def send_message(user=Depends(get_current_user)):
+    return {"ok": True}
+```
+
+Example: custom rate limit per endpoint (IP-keyed; for per-user, pass your own identifier)
 ```python
 from fastapi import Depends, Request, HTTPException, status
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
@@ -135,6 +217,29 @@ async def tight_route(user=Depends(get_current_user)):
     return {"ok": True}
 ```
 
+Example: per-user rate limit
+```python
+from fastapi import Depends, HTTPException, status
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_rate_limiter_dep, get_current_user
+)
+
+async def limit_user_60rpm(user=Depends(get_current_user), limiter=Depends(get_rate_limiter_dep)):
+    # Use a user-scoped identifier; choose a stable endpoint label
+    identifier = f"user:{user['id']}"
+    allowed, meta = await limiter.check_rate_limit(identifier, endpoint="example:user", limit=60, window_minutes=1)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=meta.get("error", "Too many requests"),
+            headers={"Retry-After": str(meta.get("retry_after", 60))}
+        )
+
+@router.get("/tight-user", dependencies=[Depends(limit_user_60rpm)])
+async def tight_user(user=Depends(get_current_user)):
+    return {"ok": True}
+```
+
 ## Settings & Initialization
 
 - Central source: `settings.py` (via `get_settings()`), with env + optional project config overrides.
@@ -144,6 +249,15 @@ async def tight_route(user=Depends(get_current_user)):
   - `python -m tldw_Server_API.app.core.AuthNZ.run_migrations`
   - `python -m tldw_Server_API.app.core.AuthNZ.initialize`
 - DB detection: `database.py` chooses Postgres in multi-user when `DATABASE_URL` is `postgres*`; else SQLite.
+
+Notes:
+- The self-service minting endpoint `POST /api/v1/auth/virtual-key` is available only in multi-user mode. In single-user mode you can still create scoped JWTs programmatically via `JWTService.create_virtual_access_token(...)`, but API keys are usually simpler.
+- Optional JWT issuer/audience enforcement is supported via `JWT_ISSUER` and `JWT_AUDIENCE`. Dual-validation during rotations is supported with `JWT_SECONDARY_SECRET` (HS) or `JWT_SECONDARY_PUBLIC_KEY` (RS/ES).
+
+Operator references:
+- JWT rotation runbook: `Docs/Deployment/Operations/JWT_Rotation_Runbook.md`
+- AuthNZ settings/env vars (AuthNZ section): `Docs/Operations/Env_Vars.md`
+- Authentication setup guide: `Docs/Published/User_Guides/Authentication_Setup.md`
 
 ## Database Backends
 
@@ -205,6 +319,7 @@ async def mint_vk(user=Depends(get_current_user)):
 ## Testing Notes
 
 - TEST_MODE (`TEST_MODE=1`) disables rate limiting by default and enables deterministic secrets/keys. Some DI dependencies return lightweight stubs to keep tests fast and deterministic.
+- In TEST_MODE, `get_session_manager_dep` returns a stub `SessionManager` and `get_rate_limiter_dep` returns a disabled limiter stub to avoid DB/Redis work and keep tests deterministic.
 - Postgres-dependent tests use a provisioned container unless `TLDW_TEST_NO_DOCKER=1`; see `tldw_Server_API/tests/AuthNZ_Postgres/` and project test README.
 - Many endpoint utilities add test-only diagnostics headers for clarity (e.g., `X-TLDW-DB`, `X-TLDW-CSRF-Enabled`).
 
@@ -220,7 +335,7 @@ async def mint_vk(user=Depends(get_current_user)):
 - JWT misconfig in multi-user: ensure `JWT_SECRET_KEY` length >= 32 (HS*) or set RSA/EC keys for (RS*/ES*).
 - Single-user without key: set `SINGLE_USER_API_KEY` (a deterministic test key is used under TEST_MODE).
 - Session key persistence failures: ensure `Config_Files/session_encryption.key` is writable and not a symlink to an invalid location.
-- Virtual keys require multi-user mode.
+- Virtual key JWTs do not require multi-user mode (they’re accepted in single-user when JWT is configured; a surrogate secret is derived from `SINGLE_USER_API_KEY`).
 - LLM budget enforcement depends on `LLM_BUDGET_*` settings and middleware placement.
 - When using `get_db_transaction` with Postgres connections, `?` placeholders are not supported. Use `$1,$2,...` or route SQL through `DatabasePool.execute`/`fetch*` for automatic normalization (outside explicit transactions).
 

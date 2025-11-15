@@ -2,6 +2,8 @@
 
 Note: This README is aligned to the project’s 3-section template. The original content is preserved below under section 3 to avoid any loss of information.
 
+Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
+
 ## 1. Descriptive of Current Feature Set
 
 - Purpose: Export, import, preview, and manage user content as portable chatbooks (ZIP + manifest), with multi-user isolation, quotas, and async job processing.
@@ -36,6 +38,35 @@ Note: This README is aligned to the project’s 3-section template. The original
 - Architecture & Flow:
   - API → Service (`chatbook_service.py`) → Validators/Quota → ZIP/manifest I/O → Jobs backend (core or Prompt Studio)
   - Per-user directories under `TLDW_USER_DATA_PATH` (or defaults) with strict path sanitization and safe file handling
+
+  Request/Job Flow (ASCII):
+  ```text
+  Export (sync)
+  -----------
+  Client
+    → POST /api/v1/chatbooks/export (async_mode=false)
+      → Validate (ChatbookValidator) + Quotas (QuotaManager)
+      → Service collects content → writes manifest + files → creates ZIP in exports/
+      → Persist completed ExportJob (download_url + expires_at)
+      ← 200 { job_id, download_url }
+
+  Export (async)
+  --------------
+  Client
+    → POST /api/v1/chatbooks/export (async_mode=true)
+      → Create ExportJob (pending)
+      → Enqueue core Jobs (domain=chatbooks) OR create Prompt Studio job
+      ← 200 { job_id }
+      Worker (core or PS)
+        → process → write ZIP → update job (output_path, download_url, expires_at, status=completed)
+
+  Import (sync/async)
+  -------------------
+  Client
+    → POST /api/v1/chatbooks/import (multipart file)
+      → Save to per-user temp → Validate ZIP → Secure extract → Import selections
+      → Sync: return counts/warnings; Async: create ImportJob + process in background
+  ```
 - Key Components:
   - `chatbook_service.py` (export/import/preview, job state, signed URLs)
   - `chatbook_validators.py` (file/ZIP/manifest validation), `quota_manager.py` (tier limits)

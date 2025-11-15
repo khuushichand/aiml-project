@@ -2276,7 +2276,9 @@ def parse_advanced_query(search_request: SearchRequest) -> Dict:
     tags=["Media Management"],
     response_model=MediaListResponse
 )
-@limiter.limit("30/minute")  # Adjust rate limit as needed
+# Use a higher rate limit during automated tests to avoid false 429s under load
+_SEARCH_RATE_LIMIT = "600/minute" if _is_test_mode() else "30/minute"
+@limiter.limit(_SEARCH_RATE_LIMIT)
 async def search_media_items(
         request: Request,
         search_params: SearchRequest,

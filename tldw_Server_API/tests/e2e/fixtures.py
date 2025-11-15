@@ -427,7 +427,46 @@ class APIClient:
 
     # Character endpoints
     def import_character(self, character_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Import a character card."""
+        """Create/import a character from JSON data.
+
+        Uses the JSON create endpoint (`POST /api/v1/characters/`) when a dict is provided,
+        mapping legacy sample keys to the CharacterCreate schema. This avoids sending JSON to
+        the file-only import endpoint.
+        """
+        if isinstance(character_data, dict):
+            # Map common sample fields to CharacterCreate
+            def _extract_image_base64(val: Optional[str]) -> Optional[str]:
+                if not isinstance(val, str):
+                    return None
+                # Strip data URI prefix if present
+                if val.startswith("data:") and "," in val:
+                    return val.split(",", 1)[1]
+                return val
+
+            payload = {
+                "name": character_data.get("name"),
+                "description": character_data.get("description"),
+                "personality": character_data.get("personality"),
+                "scenario": character_data.get("scenario"),
+                "system_prompt": character_data.get("system_prompt"),
+                "post_history_instructions": character_data.get("post_history_instructions"),
+                # Legacy keys from sample_character_card
+                "first_message": character_data.get("first_message") or character_data.get("first_mes"),
+                "message_example": character_data.get("message_example") or character_data.get("mes_example"),
+                "creator_notes": character_data.get("creator_notes"),
+                "alternate_greetings": character_data.get("alternate_greetings"),
+                "tags": character_data.get("tags"),
+                "creator": character_data.get("creator"),
+                "character_version": character_data.get("character_version") or character_data.get("version"),
+                "extensions": character_data.get("extensions"),
+                "image_base64": _extract_image_base64(character_data.get("image_base64") or character_data.get("avatar")),
+            }
+            # POST to JSON create endpoint
+            resp = self.client.post(f"{API_PREFIX}/characters/", json=payload)
+            resp.raise_for_status()
+            return resp.json()
+
+        # Fallback (should rarely be used): try file-import endpoint if non-dict provided
         response = self.client.post(
             f"{API_PREFIX}/characters/import",
             json=character_data

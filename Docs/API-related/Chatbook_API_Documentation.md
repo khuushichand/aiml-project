@@ -4,6 +4,8 @@
 
 The Chatbook API provides functionality for exporting and importing collections of content (conversations, notes, characters, etc.) in a portable archive format. This enables users to backup, share, and migrate their data between instances or users.
 
+Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
+
 ## Auth + Rate Limits
 - Single-user: `X-API-KEY: <key>`
 - Multi-user: `Authorization: Bearer <JWT>`
@@ -42,6 +44,26 @@ A Chatbook is a portable archive format (`.chatbook` file) that contains:
 - **Job Management**: Track progress of export/import operations
 - **Security**: File validation, size limits, and path traversal protection
 - **User Isolation**: Content is automatically scoped to authenticated users
+
+### Request Flow (ASCII)
+
+```text
+Export (sync)
+  Client → POST /api/v1/chatbooks/export (async_mode=false)
+         → Validate + Quotas → Service writes manifest+files → ZIP → ExportJob completed
+         ← 200 { job_id, download_url }
+
+Export (async)
+  Client → POST /api/v1/chatbooks/export (async_mode=true)
+         → ExportJob pending → enqueue core Jobs (domain=chatbooks) or Prompt Studio
+         ← 200 { job_id }
+  Worker → process → write ZIP → update job (download_url, expires_at, status)
+
+Import (sync/async)
+  Client → POST /api/v1/chatbooks/import (multipart)
+         → Save temp → Validate ZIP → Secure extract → Import selections
+         ← Sync: { success, imported_items, warnings } or Async: { job_id }
+```
 
 ## Authentication
 

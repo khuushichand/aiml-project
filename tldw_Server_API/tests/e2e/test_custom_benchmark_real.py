@@ -60,22 +60,32 @@ class TestRealBenchmarkWorkflow:
 
     def test_user_creates_benchmark(self):
         """Test a user creating a custom benchmark through the UI/API."""
-        # User fills out form to create a benchmark
-        benchmark_data = {
-            "name": f"My Test Benchmark {uuid.uuid4().hex[:8]}",
-            "description": "A benchmark I created to test my models",
-            "type": "custom",
-            "questions": self.benchmark_questions,
-            "config": {
-                "model_config": {
-                    "temperature": 0.7,
-                    "max_tokens": 150
+        # User fills out form to create a benchmark (unified Evaluations API shape)
+        # Map legacy fields to CreateEvaluationRequest: name, eval_type, eval_spec, dataset
+        safe_name = f"My_Test_Benchmark_{uuid.uuid4().hex[:8]}"  # underscores only per schema
+        dataset_samples = [
+            {
+                "input": {
+                    "question": q["question"],
+                    "category": q.get("category"),
+                    "difficulty": q.get("difficulty"),
                 },
-                "scoring": {
-                    "method": "similarity",  # More realistic than exact match
-                    "threshold": 0.8
-                }
+                "expected": q.get("expected_answer"),
+                "metadata": {"id": q.get("id")}
             }
+            for q in self.benchmark_questions
+        ]
+        benchmark_data = {
+            "name": safe_name,
+            "description": "A benchmark I created to test my models",
+            "eval_type": "custom",
+            "eval_spec": {
+                "model": "gpt-3.5-turbo",
+                "temperature": 0.7
+            },
+            "dataset": dataset_samples,
+            # Optional: attach tags via metadata if desired
+            "metadata": {"project": "e2e", "tags": ["custom", "user"]}
         }
 
         try:
@@ -165,8 +175,9 @@ class TestRealBenchmarkWorkflow:
 
         # User refreshes page or clicks to check results
         try:
+            # Unified API exposes run detail at /api/v1/evaluations/runs/{run_id}
             response = self.client.client.get(
-                f"/api/v1/evaluations/{TestRealBenchmarkWorkflow.eval_id}/runs/{TestRealBenchmarkWorkflow.run_id}"
+                f"/api/v1/evaluations/runs/{TestRealBenchmarkWorkflow.run_id}"
             )
 
             if response.status_code == 200:
