@@ -28,13 +28,20 @@ from test_data import TestDataGenerator
 RATE_LIMIT_DELAY = 0.5
 
 
+def _maybe_sleep(seconds: float) -> None:
+    """Sleep only when TEST_MODE is not set (helps CI speed)."""
+    import os as _os
+    if not _os.getenv("TEST_MODE"):
+        time.sleep(seconds)
+
+
 class TestDatabaseTransactions:
     """Test database transaction atomicity and rollback scenarios."""
 
     def test_transaction_rollback_on_failure(self, api_client, data_tracker):
         """Test that failed operations don't leave partial data."""
-        # Add delay to avoid rate limiting from previous tests
-        time.sleep(1.0)
+        # Add delay to avoid rate limiting from previous tests (skip in TEST_MODE)
+        _maybe_sleep(0.2)
 
         # Create initial media item
         content = "Test content for transaction rollback testing"
@@ -121,7 +128,7 @@ class TestDatabaseTransactions:
             operations = []
 
             # Create note 1
-            time.sleep(RATE_LIMIT_DELAY)  # Add delay to avoid rate limiting
+            _maybe_sleep(RATE_LIMIT_DELAY)
             note1 = api_client.create_note(
                 title="Note 1",
                 content=f"Related to media {media_id}"
@@ -129,7 +136,7 @@ class TestDatabaseTransactions:
             operations.append(("note", note1.get("id") or note1.get("note_id")))
 
             # Create note 2
-            time.sleep(RATE_LIMIT_DELAY)  # Add delay to avoid rate limiting
+            _maybe_sleep(RATE_LIMIT_DELAY)
             note2 = api_client.create_note(
                 title="Note 2",
                 content=f"Also related to media {media_id}"

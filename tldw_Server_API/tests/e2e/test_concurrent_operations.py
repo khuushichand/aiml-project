@@ -34,6 +34,14 @@ from fixtures import (
 from test_data import TestDataGenerator
 
 
+def _maybe_sleep(seconds: float) -> None:
+    """Sleep only when TEST_MODE is not set (helps CI speed)."""
+    import os as _os
+    import time as _time
+    if not _os.getenv("TEST_MODE"):
+        _time.sleep(seconds)
+
+
 class ConcurrentTestHelper:
     """Helper utilities for concurrent testing."""
 
@@ -425,7 +433,7 @@ class TestConcurrentUploads:
             )
 
             # Immediately upload small file
-            time.sleep(0.1)  # Small delay to ensure first upload started
+            _maybe_sleep(0.1)  # Small delay to ensure first upload started
 
             small_response = authenticated_client.upload_media(
                 file_path=small_file,
@@ -458,7 +466,7 @@ class TestConcurrentCRUD:
     def test_concurrent_note_updates(self, authenticated_client, data_tracker):
         """Test multiple concurrent updates to the same note."""
         # Add small delay to avoid rate limiting from previous tests
-        time.sleep(0.5)
+        _maybe_sleep(0.2)
 
         # Create a note
         note_response = authenticated_client.create_note(
@@ -617,7 +625,7 @@ class TestConcurrentCRUD:
     def test_create_update_delete_race(self, authenticated_client, data_tracker):
         """Test race condition between create, update, and delete operations."""
         # Add delay to avoid rate limiting from previous tests
-        time.sleep(1)
+        _maybe_sleep(0.2)
 
         results = {
             'created': [],
@@ -674,7 +682,7 @@ class TestConcurrentCRUD:
                 futures.append(future)
 
             # Wait for creates to start
-            time.sleep(0.1)
+            _maybe_sleep(0.1)
 
             # Get created note IDs and schedule updates/deletes
             created_ids = []
@@ -889,7 +897,7 @@ class TestLoadPatterns:
             while time.time() - start_time < 20:
                 future = executor.submit(mixed_operation)
                 futures.append(future)
-                time.sleep(0.1)  # Space out submissions
+                _maybe_sleep(0.1)  # Space out submissions
 
             # Collect results
             for future in as_completed(futures):
@@ -1062,7 +1070,7 @@ class TestStateConsistency:
             read_futures = [executor.submit(read_note) for _ in range(10)]
 
             # Give readers a head start
-            time.sleep(0.1)
+            _maybe_sleep(0.1)
 
             # Delete while reading
             delete_future = executor.submit(delete_note)
@@ -1094,7 +1102,7 @@ class TestStateConsistency:
 
         for i in range(3):
             if i > 0:
-                time.sleep(0.5)  # Add delay between creations
+                _maybe_sleep(0.2)  # Add small delay between creations
             response = authenticated_client.create_note(
                 title=f"Isolation Test {i}",
                 content=f"Initial content {i}",

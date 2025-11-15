@@ -257,6 +257,23 @@ streams_unified = true
 # (Chat-Module.chat_stream_channel_maxsize takes precedence when present)
 # chat_stream_channel_maxsize = 100
 
+[HTTP]
+# Control outbound HTTP redirect behavior for the server's HTTP client
+# (env overrides: HTTP_ALLOW_REDIRECTS, HTTP_MAX_REDIRECTS,
+#                  HTTP_ALLOW_CROSS_HOST_REDIRECTS, HTTP_ALLOW_SCHEME_DOWNGRADE)
+
+# Whether simple GET/HEAD helpers may follow redirects (default: true)
+allow_redirects = true
+
+# Maximum number of redirects to follow before failing (default: 5)
+max_redirects = 5
+
+# Allow redirects to a different host (default: false for safety)
+allow_cross_host_redirects = false
+
+# Allow scheme downgrade (https -> http) (default: false for safety)
+allow_scheme_downgrade = false
+
 [Embeddings]
 embedding_provider = huggingface
 embedding_model = Qwen/Qwen3-Embedding-0.6B

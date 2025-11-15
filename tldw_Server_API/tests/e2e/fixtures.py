@@ -502,6 +502,12 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
+    def delete_chat(self, chat_id: str) -> None:
+        """Delete a chat session (soft delete)."""
+        r = self.client.delete(f"{API_PREFIX}/chats/{chat_id}")
+        if r.status_code not in (200, 204):
+            r.raise_for_status()
+
     # RAG/Search endpoints
     def search_media(self, query: str, limit: int = 10) -> Dict[str, Any]:
         """Search media content."""
@@ -654,6 +660,8 @@ def ensure_server_running(base_url: str = BASE_URL, timeout: int = SERVER_STARTU
                 # Treat 200 OK and 206 Partial Content (degraded) as "server is up"
                 if response.status_code in (200, 206):
                     health_data = response.json()
+                    # Ensure auth_mode is present for tests; infer from environment when absent
+                    health_data.setdefault("auth_mode", os.getenv("AUTH_MODE", "single_user"))
                     print(f"✅ API server is running in {health_data.get('auth_mode', 'unknown')} mode")
                     return health_data
         except (httpx.ConnectError, httpx.TimeoutException) as e:
@@ -853,14 +861,72 @@ class TestDataTracker:
         for file_path in self.files:
             cleanup_test_file(file_path)
 
+    def cleanup_resources(self, preserve: bool = False):
+        """Clean up server-side resources created during tests.
+
+        Args:
+            preserve: When True, do not delete resources (useful for debugging).
+        """
+        if preserve:
+            print("[e2e] Preserving server-side resources (E2E_PRESERVE_ARTIFACTS=1)")
+            return
+
+        client = getattr(self, "_client", None)
+        if client is None:
+            return
+
+        # Delete prompts first (usually independent)
+        for pid in list(self.prompt_ids):
+            try:
+                client.delete_prompt(pid)
+            except Exception:
+                pass
+
+        # Delete notes
+        for nid in list(self.note_ids):
+            try:
+                client.delete_note(nid)
+            except Exception:
+                pass
+
+        # Delete chat sessions
+        for cid in list(self.chat_ids):
+            try:
+                client.delete_chat(cid)
+            except Exception:
+                pass
+
+        # Delete characters
+        for cid in list(self.character_ids):
+            try:
+                client.delete_character(cid)
+            except Exception:
+                pass
+
+        # Delete media last
+        for mid in list(self.media_ids):
+            try:
+                client.delete_media(mid)
+            except Exception:
+                pass
+
 
 @pytest.fixture(scope="session")
-def data_tracker():
+def data_tracker(api_client):
     """Create a data tracker for the test session."""
     tracker = TestDataTracker()
+    # Attach client for cleanup
+    tracker._client = api_client  # type: ignore[attr-defined]
     yield tracker
     # Cleanup files after tests
     tracker.cleanup_files()
+    # Optionally cleanup server-side resources unless preservation requested
+    preserve = str(os.getenv("E2E_PRESERVE_ARTIFACTS", "")).strip().lower() in {"1", "true", "yes", "on"}
+    try:
+        tracker.cleanup_resources(preserve=preserve)
+    except Exception as _e:
+        # Never fail session teardown due to cleanup issues
+        print(f"[e2e] Cleanup warning: {str(_e)[:200]}")
 
 
 # ============================================================================

@@ -19,6 +19,14 @@ and this project adheres to Some kind of Versioning
 - If clients still post bodies to the legacy endpoint, they will start receiving `422` after this change. Migrate clients to the successor endpoints above.
 
 
+## [0.1.6] - 2025-11-14
+### Fixed 
+- HTTP-redirect loop
+- test bugs
+
+### Added
+- Option for HTTP redirect adherence in media ingestion endpoints added in config.txt
+
 
 ## [0.1.5] - 2025-11-13
 ### Fixed 

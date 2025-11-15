@@ -12,6 +12,7 @@ import hashlib
 import re
 from functools import wraps
 from typing import Any, Dict, List, Optional
+import weakref
 #
 # Third-party Libraries
 import numpy as np
@@ -824,6 +825,12 @@ class ONNXEmbedder:
         os.makedirs(self.model_specific_onnx_dir, exist_ok=True)
         self.onnx_model_file_path = os.path.join(self.model_specific_onnx_dir, "model.onnx")  # Standard name by optimum
 
+        # Initialize critical attributes early so __del__/finalizers are safe even if setup fails
+        self.session: Optional[ort.InferenceSession] = None
+        self.unload_timer: Optional[threading.Timer] = None
+        self.last_used_time: float = 0.0
+        self.device_providers = config.onnx_providers
+
         # Tokenizer is usually stored with the ONNX model by optimum (lazy import)
         _, AutoTokenizer = _import_transformers()
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -833,10 +840,38 @@ class ONNXEmbedder:
             trust_remote_code=config.trust_remote_code,
         )
 
-        self.session: Optional[ort.InferenceSession] = None
-        self.unload_timer: Optional[threading.Timer] = None
-        self.last_used_time: float = 0.0
-        self.device_providers = config.onnx_providers
+        # Register a finalizer to safely cancel timers and release session without relying on __del__
+        def _finalize_onnx(obj_ref: "weakref.ReferenceType[ONNXEmbedder]") -> None:
+            obj = obj_ref() if callable(obj_ref) else None
+            if obj is None:
+                return
+            try:
+                # Avoid logging in finalizer; interpreter may be shutting down
+                t = getattr(obj, "unload_timer", None)
+                if t is not None:
+                    try:
+                        t.cancel()
+                    except Exception:
+                        pass
+                    try:
+                        obj.unload_timer = None
+                    except Exception:
+                        pass
+                # Release ONNX session without logging; ORT will clean up on GC
+                if getattr(obj, "session", None) is not None:
+                    try:
+                        obj.session = None
+                    except Exception:
+                        pass
+            except Exception:
+                # Never raise from finalizer
+                pass
+
+        try:
+            self._finalizer = weakref.finalize(self, _finalize_onnx, weakref.ref(self))
+        except Exception:
+            # Non-fatal if finalizer cannot be registered
+            self._finalizer = None  # type: ignore[assignment]
 
         log_counter("onnx_embedder_init", labels={"model_id": self.model_identifier})
         logging.info(f"ONNXEmbedder initialized for {model_identifier} (model: {config.model_name_or_path})")
@@ -1018,10 +1053,16 @@ class ONNXEmbedder:
         return embeddings_np.astype(np.float32)  # Ensure float32 output
 
     def __del__(self):
-        logging.debug(f"ONNXEmbedder {self.model_identifier} is being deleted.")
-        if self.unload_timer:
-            self.unload_timer.cancel()
-            self.unload_timer = None
+        # Delegate cleanup to the weakref finalizer; keep defensive and quiet
+        try:
+            fin = getattr(self, "_finalizer", None)
+            if fin is not None:
+                try:
+                    fin()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
 
 # Global limiter instance. Parameters (20 calls per 60s) are fixed.

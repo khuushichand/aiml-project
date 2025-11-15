@@ -40,9 +40,10 @@ Navigation:
 - Export: `POST /export` — sync returns download URL; async returns job id.
 - Import: `POST /import` — sync returns results; async returns job id.
 - Preview: `POST /preview` — parse and validate `manifest.json` without importing.
-- Jobs: `GET /export/jobs`, `GET /export/jobs/{id}`, `GET /import/jobs`, `GET /import/jobs/{id}`
-- Cancel: `DELETE /export/jobs/{id}`, `DELETE /import/jobs/{id}`
-- Download: `GET /download/{job_id}` — optional signed URLs, ownership enforced.
+- Jobs: `GET /export/jobs`, `GET /export/jobs/{job_id}`, `GET /import/jobs`, `GET /import/jobs/{job_id}`
+- List jobs support filters/pagination: `status`, `limit`, `offset`, `order_by`, `order_desc`.
+- Cancel: `DELETE /export/jobs/{job_id}`, `DELETE /import/jobs/{job_id}`
+- Download: `GET /download/{job_id}` — optional signed URLs, ownership enforced (when enabled, token = HMAC-SHA256 of `"{job_id}:{exp}"` using `CHATBOOKS_SIGNING_SECRET`).
 - Cleanup: `POST /cleanup` — remove expired export files.
 - Health: `GET /health` — storage base existence/writability.
 
@@ -72,6 +73,8 @@ Navigation:
 - Prompt Studio backend (optional)
   - Enable with `CHATBOOKS_JOBS_BACKEND=prompt_studio` (deprecated: `TLDW_USE_PROMPT_STUDIO_QUEUE=true`).
   - Adapter: `ChatbooksPSJobAdapter` mirrors status to PS; an external PS worker is expected to process jobs.
+  
+  Cancellation semantics: the core worker checks for cancellation before starting a job (pre-flight) and applies best-effort in-flight cancellation via job lease/cancel flags.
 
 **Data Model (Selected)**
 - Enums: `ContentType`, `ExportStatus`, `ImportStatus`, `ConflictResolution`, `ChatbookVersion`.
@@ -109,7 +112,7 @@ Navigation:
 - Preview
   - `service.preview_chatbook(file_path)` parses and validates the manifest without DB writes.
 - Jobs & status
-  - `service.list_export_jobs()`, `service.get_export_job(id)`, `service.cancel_export_job(id)`; analogous import methods.
+  - `service.list_export_jobs()`, `service.get_export_job(job_id)`, `service.cancel_export_job(job_id)`; analogous import methods.
 
 **Storage & Paths**
 - Base directory selection:
@@ -121,6 +124,8 @@ Navigation:
 - Jobs backend:
   - `CHATBOOKS_JOBS_BACKEND`: `core` (default) or `prompt_studio`.
   - `TLDW_JOBS_BACKEND`: legacy global setting; `CHATBOOKS_JOBS_BACKEND` takes precedence for the Chatbooks domain.
+  - Precedence: `CHATBOOKS_JOBS_BACKEND` > `TLDW_JOBS_BACKEND` > deprecated `TLDW_USE_PROMPT_STUDIO_QUEUE`.
+  - `CHATBOOKS_CORE_WORKER_ENABLED`: `true|false` controls starting the core worker when backend=`core` (default true).
 - Downloads:
   - `CHATBOOKS_SIGNED_URLS=true` and `CHATBOOKS_SIGNING_SECRET=<secret>` to require `token` + `exp` on `/download/{job_id}`.
   - `CHATBOOKS_URL_TTL_SECONDS` (default 86400) controls `expires_at` and URL token expiry.
@@ -131,6 +136,7 @@ Navigation:
 - Endpoints emit unified audit events for key actions:
   - Export start/completion (sync), Import start/completion (sync), Download, and Cleanup.
 - Service code avoids logging secrets; download enforces ownership and logs security violations for traversal attempts via the unified audit service.
+- Metrics: increments warning counters (e.g., `app_warning_events_total`) in endpoints and worker for observability; queue metrics are exposed via the core Jobs module.
 
 **API Usage Examples (curl)**
 - Setup
@@ -140,10 +146,12 @@ Navigation:
   - `curl -sS -X POST "$API/chatbooks/export" -H 'Content-Type: application/json' -H "X-API-KEY: $KEY" -d '{"name":"My Chatbook","description":"Demo","content_selections":{"conversation":["<conv_id>"]},"async_mode":false}'`
 - List export jobs
   - `curl -sS "$API/chatbooks/export/jobs" -H "X-API-KEY: $KEY"`
+  - With filters/pagination: `curl -sS "$API/chatbooks/export/jobs?status=completed&limit=20&offset=0&order_by=created_at&order_desc=true" -H "X-API-KEY: $KEY"`
 - Download
   - `curl -OJ "$API/chatbooks/download/<job_id>" -H "X-API-KEY: $KEY"`
 - Import (sync)
   - `curl -sS -X POST "$API/chatbooks/import" -H "X-API-KEY: $KEY" -F "file=@/path/to/file.chatbook" -F 'conflict_resolution=skip' -F 'async_mode=false'`
+  - Note: Import options are sent as multipart form fields alongside the uploaded file.
 - Preview
   - `curl -sS -X POST "$API/chatbooks/preview" -H "X-API-KEY: $KEY" -F "file=@/path/to/file.chatbook"`
 

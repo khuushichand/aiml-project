@@ -50,6 +50,8 @@ def pytest_configure(config):
     """Register custom markers."""
     for marker in pytest_markers:
         config.addinivalue_line("markers", marker)
+    # Additional marker for explicit rate-limit verification tests
+    config.addinivalue_line("markers", "rate_limits: Tests that verify rate limiting behavior")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -58,6 +60,7 @@ def pytest_collection_modifyitems(config, items):
     # Check environment to determine which tests to skip
     auth_mode = os.getenv("E2E_AUTH_MODE", "auto")  # auto, single_user, multi_user
     skip_slow = config.getoption("--skip-slow", default=False)
+    run_slow = config.getoption("--run-slow", default=False)
     run_critical_only = config.getoption("--critical-only", default=False)
 
     # Get auth mode from API if auto
@@ -78,7 +81,7 @@ def pytest_collection_modifyitems(config, items):
                 ))
 
         # Skip slow tests if requested
-        if skip_slow and "slow" in item.keywords:
+        if skip_slow and not run_slow and "slow" in item.keywords:
             item.add_marker(pytest.mark.skip(
                 reason="Slow test skipped (use --run-slow to include)"
             ))
@@ -125,4 +128,40 @@ def pytest_addoption(parser):
         choices=["auto", "single_user", "multi_user"],
         help="Force specific auth mode for testing"
     )
+    # Alias to include slow tests (pairs with --skip-slow default behavior)
+    parser.addoption(
+        "--run-slow",
+        action="store_true",
+        default=False,
+        help="Include tests marked as slow"
+    )
 
+# Attach the shared test results dict to config so sessionfinish can print a summary
+@pytest.fixture(scope="session", autouse=True)
+def _attach_results_to_config(test_results, request):
+    request.config._test_results = test_results  # type: ignore[attr-defined]
+    yield
+
+# For tests that validate rate limiting, temporarily disable the global TEST_MODE
+# env that turns off rate limits. Controlled via @pytest.mark.rate_limits
+@pytest.fixture(autouse=True)
+def _rate_limit_env_toggle(request):
+    if request.node.get_closest_marker("rate_limits"):
+        original_test_mode = os.environ.get("TEST_MODE")
+        original_testing = os.environ.get("TESTING")
+        # Remove flags that disable rate limiting
+        os.environ.pop("TEST_MODE", None)
+        os.environ.pop("TESTING", None)
+        try:
+            yield
+        finally:
+            if original_test_mode is None:
+                os.environ.pop("TEST_MODE", None)
+            else:
+                os.environ["TEST_MODE"] = original_test_mode
+            if original_testing is None:
+                os.environ.pop("TESTING", None)
+            else:
+                os.environ["TESTING"] = original_testing
+    else:
+        yield
