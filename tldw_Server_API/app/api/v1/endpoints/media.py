@@ -8729,11 +8729,8 @@ async def _download_url_async(
             except Exception:
                 _host = ""
                 _u = None
-            # Force a deterministic "unsupported/extension" failure for example.com in test mode
-            if test_mode_active and _host in {"example.com", "www.example.com"}:
-                allowed_list = ', '.join(sorted(allowed_extensions or [])) or '*'
-                raise ValueError(
-                    f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type 'text/html' unsupported for this endpoint")
+            # Avoid hard-coded failures for example.com when a client is supplied;
+            # tests commonly use example.com with MockTransport.
             # Simulate redirect behavior for httpstat.us in tests to avoid network egress
             if test_mode_active and _host in {"httpstat.us", "www.httpstat.us"}:
                 raise ValueError(
@@ -8824,43 +8821,45 @@ async def _download_url_async(
                 # Cross-host redirects configurable (default disabled)
                 return bool(allow_cross_host)
 
-            # Follow redirects (headers-only) to find final download URL
-            while True:
-                r = await client.request("GET", cur_url, follow_redirects=False, timeout=30.0)
-                try:
-                    # Some servers return 3xx without error on raise_for_status; tolerate
+            # Follow redirects (headers-only) to find final download URL, if the client supports request()
+            supports_request = hasattr(client, "request") and callable(getattr(client, "request", None))
+            if supports_request:
+                while True:
+                    r = await client.request("GET", cur_url, follow_redirects=False, timeout=30.0)
                     try:
-                        r.raise_for_status()
-                    except Exception:
-                        pass
-                    sc = int(getattr(r, "status_code", 200) or 200)
-                    if 300 <= sc < 400:
-                        if not allow_redirects:
-                            raise ValueError(f"Redirect encountered while downloading {cur_url}; redirects disabled.")
-                        loc = r.headers.get("location")
-                        if not loc:
-                            raise ValueError("Redirect without Location header")
+                        # Some servers return 3xx without error on raise_for_status; tolerate
                         try:
-                            nxt = str(r.request.url.join(httpx.URL(loc)))
+                            r.raise_for_status()
                         except Exception:
+                            pass
+                        sc = int(getattr(r, "status_code", 200) or 200)
+                        if 300 <= sc < 400:
+                            if not allow_redirects:
+                                raise ValueError(f"Redirect encountered while downloading {cur_url}; redirects disabled.")
+                            loc = r.headers.get("location")
+                            if not loc:
+                                raise ValueError("Redirect without Location header")
                             try:
-                                nxt = str(httpx.URL(loc))
+                                nxt = str(r.request.url.join(httpx.URL(loc)))
                             except Exception:
-                                raise ValueError("Invalid redirect Location header")
-                        if not _redirect_allowed(cur_url, nxt):
-                            raise ValueError("Redirect not allowed by policy (cross-host or downgrade)")
-                        redirects += 1
-                        if redirects > max_redirects:
-                            raise ValueError("Too many redirects")
-                        cur_url = nxt
-                        continue
-                    # Non-redirect: use this URL for streaming
-                    break
-                finally:
-                    try:
-                        await r.aclose()
-                    except Exception:
-                        pass
+                                try:
+                                    nxt = str(httpx.URL(loc))
+                                except Exception:
+                                    raise ValueError("Invalid redirect Location header")
+                            if not _redirect_allowed(cur_url, nxt):
+                                raise ValueError("Redirect not allowed by policy (cross-host or downgrade)")
+                            redirects += 1
+                            if redirects > max_redirects:
+                                raise ValueError("Too many redirects")
+                            cur_url = nxt
+                            continue
+                        # Non-redirect: use this URL for streaming
+                        break
+                    finally:
+                        try:
+                            await r.aclose()
+                        except Exception:
+                            pass
 
             async with client.stream("GET", cur_url, follow_redirects=False, timeout=60.0) as get_resp:
                 # Rely on raise_for_status; some test stubs don't expose status_code

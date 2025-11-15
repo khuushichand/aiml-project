@@ -152,6 +152,43 @@ Example (template-based):
 }
 ```
 
+Hierarchical splitting examples
+
+- Using a template (recommended): Define boundaries in a template once, then reference it via `options.template_name` as shown above. See the Templates API doc for create/update operations.
+
+- Minimal template JSON with custom boundaries (for use with Templates Apply):
+```
+{
+  "name": "chapters_and_appendices",
+  "description": "Chapters and appendices with headings",
+  "base_method": "sentences",
+  "default_options": {"language": "en"},
+  "stages": [],
+  "metadata": {},
+  "chunking": {
+    "method": "sentences",
+    "config": {"max_size": 8, "overlap": 2, "hierarchical": true,
+      "hierarchical_template": {
+        "boundaries": [
+          {"kind": "chapter",   "pattern": "^Chapter\\s+\\d+\\b",  "flags": "im"},
+          {"kind": "appendix",  "pattern": "^Appendix\\s+[A-Z]\\b", "flags": "im"}
+        ]
+      }
+    }
+  }
+}
+```
+Apply via Templates API:
+```
+POST /api/v1/chunking/templates/apply
+{
+  "template_name": "chapters_and_appendices",
+  "text": "... document text ...",
+  "override_options": {"max_size": 10}
+}
+```
+Notes: Allowed flags are only `i` and `m`. Max 20 rules; max pattern length 256 chars.
+
 ### 2) POST /chunk_file
 
 Upload a file via multipart form-data and return chunks.
@@ -168,6 +205,63 @@ curl -X POST "http://localhost:8000/api/v1/chunking/chunk_file" \
 ```
 
 Response shape matches `POST /chunk_text`.
+
+OpenAPI schema (multipart request)
+```
+openapi: 3.0.3
+info:
+  title: Chunk File
+  version: 1.0.0
+paths:
+  /api/v1/chunking/chunk_file:
+    post:
+      summary: Upload a file and return normalized chunks
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                method:
+                  type: string
+                max_size:
+                  type: integer
+                  minimum: 1
+                overlap:
+                  type: integer
+                  minimum: 0
+                language:
+                  type: string
+                  nullable: true
+                tokenizer_name_or_path:
+                  type: string
+                  nullable: true
+                code_mode:
+                  type: string
+                  enum: [auto, ast, heuristic]
+              required: [file]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chunks:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        text: {type: string}
+                        metadata: {type: object, additionalProperties: true}
+                  original_file_name: {type: string}
+                  applied_options: {type: object, additionalProperties: true}
+```
 
 ### 3) GET /capabilities
 

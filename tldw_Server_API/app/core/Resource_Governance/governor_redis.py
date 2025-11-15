@@ -1218,78 +1218,82 @@ class RedisResourceGovernor(ResourceGovernor):
 
         dec = await self.check(req)
         if not dec.allowed:
-            try:
-                logger.debug("RG reserve denied at pre-add check: decision={d}", d=dec.__dict__)
-            except Exception:
-                pass
-            # Emit denial metrics redundantly to ensure visibility for tests
-            reg = self._reg()
-            if reg:
+            # Only short-circuit on pre-check denial when the denied category is
+            # requests. For tokens, continue to reservation to allow saturation
+            # up to capacity (initial over-asks admitted partially).
+            cats_bm = (dec.details or {}).get("categories") or {}
+            has_requests_denial = any(
+                (name == "requests") and (not bool((info or {}).get("allowed"))) for name, info in cats_bm.items()
+            )
+            if has_requests_denial and ("requests" in req.categories):
                 try:
-                    entity_scope_b, _ = self._parse_entity(req.entity)
-                    cats_bm = (dec.details or {}).get("categories") or {}
-                    for cat_name, cat_info in cats_bm.items():
-                        if not bool(cat_info.get("allowed")):
-                            reg.increment(
-                                "rg_denials_total",
-                                1,
-                                _labels(category=cat_name, scope=entity_scope_b, reason="insufficient_capacity", policy_id=dec.details.get("policy_id") or req.tags.get("policy_id") or "default"),
-                            )
+                    logger.debug("RG reserve denied at pre-add check: decision={d}", d=dec.__dict__)
                 except Exception:
                     pass
-            # Establish backoff for denied categories to ensure deny-until-expiry across
-            # subsequent attempts within the window, even if counts wobble.
-            try:
-                now_b = self._time()
-                policy_id_b = dec.details.get("policy_id") or req.tags.get("policy_id") or "default"
-                cats_b = (dec.details or {}).get("categories") or {}
-                for cat_name, cat_info in cats_b.items():
+                # Emit denial metrics redundantly to ensure visibility for tests
+                reg = self._reg()
+                if reg:
                     try:
-                        if not bool(cat_info.get("allowed") is False):
-                            continue
-                        ra_b = int(cat_info.get("retry_after") or 0)
-                        if ra_b <= 0:
-                            continue
-                        # Memory backoff
-                        key_b = (self._keys.ns, policy_id_b, req.entity, cat_name)
-                        self._stub_backoff_until[key_b] = now_b + float(ra_b)
-                        # Requests-specific deny-until floor: use policy window (60s)
-                        if cat_name == "requests":
-                            try:
-                                pol_b = self._get_policy(policy_id_b)
-                                win = int((pol_b.get("requests") or {}).get("window") or 60)
-                            except Exception:
-                                win = 60
-                            # Prefer RA if reasonable, otherwise full window for stability
-                            floor_s = int(ra_b) if int(ra_b) >= 2 else int(win)
-                            self._requests_deny_until[(self._keys.ns, policy_id_b, req.entity)] = now_b + float(floor_s)
-                            try:
-                                logger.debug(
-                                    "RG set deny-until: policy_id={pid} entity={ent} now={now} floor_s={floor} deny_until={du}",
-                                    pid=policy_id_b,
-                                    ent=req.entity,
-                                    now=now_b,
-                                    floor=floor_s,
-                                    du=self._requests_deny_until.get((self._keys.ns, policy_id_b, req.entity)),
+                        entity_scope_b, _ = self._parse_entity(req.entity)
+                        for cat_name, cat_info in cats_bm.items():
+                            if not bool(cat_info.get("allowed")):
+                                reg.increment(
+                                    "rg_denials_total",
+                                    1,
+                                    _labels(category=cat_name, scope=entity_scope_b, reason="insufficient_capacity", policy_id=dec.details.get("policy_id") or req.tags.get("policy_id") or "default"),
                                 )
+                    except Exception:
+                        pass
+                # Establish backoff for denied categories
+                try:
+                    now_b = self._time()
+                    policy_id_b = dec.details.get("policy_id") or req.tags.get("policy_id") or "default"
+                    for cat_name, cat_info in cats_bm.items():
+                        try:
+                            if not bool(cat_info.get("allowed") is False):
+                                continue
+                            ra_b = int(cat_info.get("retry_after") or 0)
+                            if ra_b <= 0:
+                                continue
+                            # Memory backoff
+                            key_b = (self._keys.ns, policy_id_b, req.entity, cat_name)
+                            self._stub_backoff_until[key_b] = now_b + float(ra_b)
+                            # Requests-specific deny-until floor
+                            if cat_name == "requests":
+                                try:
+                                    pol_b = self._get_policy(policy_id_b)
+                                    win = int((pol_b.get("requests") or {}).get("window") or 60)
+                                except Exception:
+                                    win = 60
+                                floor_s = int(ra_b) if int(ra_b) >= 2 else int(win)
+                                self._requests_deny_until[(self._keys.ns, policy_id_b, req.entity)] = now_b + float(floor_s)
+                                try:
+                                    logger.debug(
+                                        "RG set deny-until: policy_id={pid} entity={ent} now={now} floor_s={floor} deny_until={du}",
+                                        pid=policy_id_b,
+                                        ent=req.entity,
+                                        now=now_b,
+                                        floor=floor_s,
+                                        du=self._requests_deny_until.get((self._keys.ns, policy_id_b, req.entity)),
+                                    )
+                                except Exception:
+                                    pass
+                            # Redis TTL backoff (best-effort)
+                            try:
+                                client_b = await self._client_get()
+                                await client_b.set(self._keys.backoff(policy_id_b, cat_name, req.entity), "1", ex=int(ra_b))
                             except Exception:
                                 pass
-                        # Redis TTL backoff (best-effort)
-                        try:
-                            client_b = await self._client_get()
-                            await client_b.set(self._keys.backoff(policy_id_b, cat_name, req.entity), "1", ex=int(ra_b))
                         except Exception:
-                            pass
-                    except Exception:
-                        continue
-            except Exception:
-                pass
-            if op_id:
-                try:
-                    await client.set(self._keys.op(op_id), json.dumps({"type": "reserve", "decision": dec.__dict__, "handle_id": None}), ex=86400)
+                            continue
                 except Exception:
                     pass
-            return dec, None
+                if op_id:
+                    try:
+                        await client.set(self._keys.op(op_id), json.dumps({"type": "reserve", "decision": dec.__dict__, "handle_id": None}), ex=86400)
+                    except Exception:
+                        pass
+                return dec, None
 
         now = self._time()
         # If stub-rate smoothing was applied in check(), honor it by returning
