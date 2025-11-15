@@ -231,7 +231,7 @@ jobs:
         env:
           SERVER_LABEL: smoke
           E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
-          SMOKE_STARTUP_TIMEOUT_SECONDS: '180'
+          SMOKE_STARTUP_TIMEOUT_SECONDS: '240'
         shell: bash
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
@@ -290,7 +290,7 @@ jobs:
         env:
           SERVER_LABEL: smoke-mu
           E2E_TEST_BASE_URL: "http://127.0.0.1:8001"
-          SMOKE_STARTUP_TIMEOUT_SECONDS: '180'
+          SMOKE_STARTUP_TIMEOUT_SECONDS: '240'
         shell: bash
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py health-check

@@ -3332,18 +3332,25 @@ else:
         _include_if_enabled("audio-jobs", audio_jobs_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-jobs"])
     if _HAS_AUDIO:
         _include_if_enabled("audio-websocket", audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
-    _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    # Guard optional routers that may not be imported in ULTRA_MINIMAL_APP
+    if 'chat_router' in locals():
+        _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
     # Tools (MCP-backed server tool execution) - include if initial guarded import succeeded
     if 'tools_router' in locals() and tools_router is not None:
         _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"], default_stable=False)
-    _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
-    _include_if_enabled("character-chat-sessions", character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
-    _include_if_enabled("character-messages", character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
-    _include_if_enabled("metrics", metrics_router, prefix=f"{API_V1_PREFIX}", tags=["metrics"])
+    if 'character_router' in locals():
+        _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
+    if 'character_chat_sessions_router' in locals():
+        _include_if_enabled("character-chat-sessions", character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
+    if 'character_messages_router' in locals():
+        _include_if_enabled("character-messages", character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
+    if 'metrics_router' in locals():
+        _include_if_enabled("metrics", metrics_router, prefix=f"{API_V1_PREFIX}", tags=["metrics"])
     if _HAS_CHUNKING and 'chunking_router' in locals():
         _include_if_enabled("chunking", chunking_router, prefix=f"{API_V1_PREFIX}/chunking", tags=["chunking"])
-    _include_if_enabled("chunking-templates", chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["chunking-templates"])
-    if _HAS_OUTPUT_TEMPLATES:
+    if 'chunking_templates_router' in locals():
+        _include_if_enabled("chunking-templates", chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["chunking-templates"])
+    if _HAS_OUTPUT_TEMPLATES and 'outputs_templates_router' in locals():
         _include_if_enabled("outputs-templates", outputs_templates_router, prefix=f"{API_V1_PREFIX}", tags=["outputs-templates"])
     try:
         # Optional outputs artifacts endpoint
