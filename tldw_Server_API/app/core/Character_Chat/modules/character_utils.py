@@ -130,6 +130,22 @@ def get_character_list_for_ui(db: CharactersRAGDB, limit: int = 1000) -> List[Di
 
 # --- Sender to Role Normalization ---
 
+def sanitize_sender_name(name: Optional[str]) -> str:
+    """Sanitize a display name for use as the DB 'sender' field.
+
+    - Replace spaces with underscores
+    - Strip characters that commonly interfere with parsing or storage
+      (angle brackets, pipes, slashes, backslashes)
+    - Preserve original casing (tests and UI display expect this)
+    """
+    if not name:
+        return "Assistant"
+    s = str(name)
+    s = s.replace(" ", "_")
+    for ch in ("<", ">", "|", "\\", "/"):
+        s = s.replace(ch, "")
+    return s
+
 # --- Sender alias constants (centralized for reuse) ---
 # Expose canonical alias sets for consistent sender-role handling across modules.
 USER_SENDER_ALIASES = {
@@ -171,6 +187,7 @@ __all__ = [
     "extract_character_id_from_ui_choice",
     "get_character_list_for_ui",
     "map_sender_to_role",
+    "sanitize_sender_name",
     # constants
     "USER_SENDER_ALIASES",
     "CHAR_SENDER_ALIASES",

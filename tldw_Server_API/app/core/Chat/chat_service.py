@@ -27,6 +27,7 @@ from tldw_Server_API.app.core.Chat.chat_helpers import (
     get_or_create_conversation,
 )
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import replace_placeholders
+from tldw_Server_API.app.core.Character_Chat.modules.character_utils import sanitize_sender_name
 from tldw_Server_API.app.core.Chat.prompt_template_manager import (
     DEFAULT_RAW_PASSTHROUGH_TEMPLATE,
     load_template,
@@ -749,7 +750,7 @@ async def build_context_and_messages(
             if msg_parts:
                 hist_entry = {"role": role, "content": msg_parts}
                 if role == "assistant" and character_card and character_card.get("name"):
-                    name = character_card.get("name", "").replace(" ", "_").replace("<", "").replace(">", "").replace("|", "").replace("\\", "").replace("/", "")
+                    name = sanitize_sender_name(character_card.get("name"))
                     if name:
                         hist_entry["name"] = name
 
@@ -785,12 +786,13 @@ async def build_context_and_messages(
         msg_dict = msg_model.model_dump(exclude_none=True)
         msg_for_db = msg_dict.copy()
         if msg_model.role == "assistant" and character_card:
-            msg_for_db["name"] = character_card.get("name", "Assistant")
+            # Persist assistant sender as sanitized character name
+            msg_for_db["name"] = sanitize_sender_name(character_card.get("name", "Assistant"))
         if should_persist:
             await save_message_fn(chat_db, conv_id, msg_for_db, use_transaction=True)
         msg_for_llm = msg_dict.copy()
         if msg_model.role == "assistant" and character_card and character_card.get("name"):
-            name = character_card.get("name", "").replace(" ", "_").replace("<", "").replace(">", "").replace("|", "").replace("\\", "").replace("/", "")
+            name = sanitize_sender_name(character_card.get("name"))
             if name:
                 msg_for_llm["name"] = name
         current_turn.append(msg_for_llm)

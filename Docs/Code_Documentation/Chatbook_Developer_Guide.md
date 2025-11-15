@@ -836,9 +836,12 @@ openapi-generator generate -i chatbooks_openapi.yaml -g typescript-axios -o ./sd
 ```python
 def _batch_insert_conversations(self, conversations: List[Dict]):
     """Insert multiple conversations efficiently."""
+    # Cross-backend placeholder guidance:
+    # - Prefer Postgres-style placeholders ($1,$2,...); project adapters normalize to SQLite automatically.
+    # - If using raw sqlite3, switch placeholders to "?".
     self.db.execute_many(
         """INSERT INTO conversations (id, title, content, user_id)
-           VALUES (?, ?, ?, ?)""",
+           VALUES ($1, $2, $3, $4)""",
         [(c['id'], c['title'], c['content'], self.user_id)
          for c in conversations]
     )

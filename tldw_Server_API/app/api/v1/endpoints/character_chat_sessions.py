@@ -216,7 +216,10 @@ async def create_chat_session(
         # Optionally seed the chat with a greeting (first_message or alternate)
         if seed_first_message:
             try:
-                char_name = character.get('name') or 'Assistant'
+                raw_name = character.get('name') or 'Assistant'
+                char_name = str(raw_name).replace(' ', '_')
+                for _ch in ("<", ">", "|", "\\", "/"):
+                    char_name = char_name.replace(_ch, "")
                 choice_text: Optional[str] = None
                 if greeting_strategy in {"alternate_random", "alternate_index"}:
                     ag = character.get('alternate_greetings')
@@ -960,11 +963,18 @@ async def character_chat_completion(
                         content_to_store = f"{assistant_text}\n\n[tool_calls]: {json.dumps(assistant_tool_calls)}"
                     except Exception:
                         pass
+                # Use character name as the assistant sender (sanitized) for DB storage
+                char_card = db.get_character_card_by_id(conversation.get('character_id')) or {}
+                raw_name = (char_card.get('name') or 'Assistant') if isinstance(char_card, dict) else 'Assistant'
+                # Inline sanitize to avoid import-time issues
+                assistant_sender = str(raw_name).replace(' ', '_')
+                for _ch in ("<", ">", "|", "\\", "/"):
+                    assistant_sender = assistant_sender.replace(_ch, "")
                 db.add_message({
                     'id': assistant_msg_id,
                     'conversation_id': chat_id,
                     'parent_message_id': appended_user_id,
-                    'sender': 'assistant',
+                    'sender': assistant_sender,
                     'content': content_to_store,
                     'client_id': str(current_user.id),
                     'version': 1
@@ -1452,11 +1462,17 @@ async def persist_streamed_assistant_message(
             logger.debug("Non-fatal: message cap check skipped in persist endpoint")
 
         assistant_msg_id = str(uuid.uuid4())
+        # Resolve assistant sender as sanitized character name
+        char_card = db.get_character_card_by_id(conversation.get('character_id')) or {}
+        raw_name = (char_card.get('name') or 'Assistant') if isinstance(char_card, dict) else 'Assistant'
+        assistant_sender = str(raw_name).replace(' ', '_')
+        for _ch in ("<", ">", "|", "\\", "/"):
+            assistant_sender = assistant_sender.replace(_ch, "")
         db.add_message({
             'id': assistant_msg_id,
             'conversation_id': chat_id,
             'parent_message_id': body.user_message_id,
-            'sender': 'assistant',
+            'sender': assistant_sender,
             'content': body.assistant_content,
             'ranking': body.ranking if getattr(body, 'ranking', None) is not None else None,
             'client_id': str(current_user.id),
