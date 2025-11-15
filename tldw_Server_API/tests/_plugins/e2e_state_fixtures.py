@@ -12,14 +12,28 @@ import pytest
 
 # Session-scoped fixture to store test results
 @pytest.fixture(scope="session")
-def test_results():
-    """Store test results across the session for reporting."""
+def test_results(request):
+    """Store test results across the session for reporting.
+
+    Also attach the dict to session config so session-level hooks
+    (pytest_sessionfinish) can read it for summary output.
+    """
     results = {
         "passed": [],
         "failed": [],
         "skipped": [],
         "errors": [],
     }
+    # Wire into the session config for access in pytest_sessionfinish
+    try:
+        request.session.config._test_results = results  # type: ignore[attr-defined]
+    except Exception:
+        # Some older pytest configurations expose a global config; ignore if unavailable
+        try:  # pragma: no cover - defensive
+            import pytest as _pytest
+            _pytest.config._test_results = results  # type: ignore[attr-defined]
+        except Exception:
+            pass
     return results
 
 
@@ -70,7 +84,7 @@ def test_workflow_state(shared_media_state):
         def has_embeddings(self, media_id: int) -> bool:
             return media_id in self._shared["generated_embeddings"]
 
-        def get_or_create_user(self, user_id: str, user_data: Dict[str, Any] = None):
+        def get_or_create_user(self, user_id: str, user_data: Dict[str, Any] | None = None):
             if user_id not in self._shared["test_users"]:
                 self._shared["test_users"][user_id] = user_data or {}
             return self._shared["test_users"][user_id]
@@ -109,6 +123,9 @@ def ensure_embeddings(test_workflow_state):
                 print(f"Failed to generate embeddings: {response.text}")
                 return False
         except Exception as e:
+            # Broad except is intentional: this fixture runs in diverse environments
+            # (live server, in-process app, varied auth modes). We prefer tests to
+            # continue and record the failure rather than crash the entire session.
             print(f"Error generating embeddings: {e}")
             return False
 
@@ -118,6 +135,7 @@ def ensure_embeddings(test_workflow_state):
 # Lightweight reporting hooks (no heavy work at import-time)
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
+    del call  # explicitly unused in this wrapper; report pulled from outcome
     outcome = yield
     report = outcome.get_result()
     if report.when == "call":
@@ -140,6 +158,7 @@ def pytest_runtest_makereport(item, call):
 
 
 def pytest_sessionfinish(session, exitstatus):
+    del exitstatus  # not used; present to match pytest hook signature
     # Only generate report if tests were run and results captured
     if hasattr(session.config, "_test_results"):
         results = session.config._test_results
@@ -162,4 +181,3 @@ __all__ = [
     "test_workflow_state",
     "ensure_embeddings",
 ]
-

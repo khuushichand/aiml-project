@@ -23,26 +23,27 @@ def _yield_file(path: str) -> Generator[str, None, None]:
     finally:
         try:
             cleanup_test_file(path)
-        except Exception:
-            pass
+        except Exception as e:
+            # Visible but non-fatal in tests: cleanup failures shouldn't mask test results
+            print(f"[media_fixtures] Warning: failed to cleanup temp file {path}: {e}")
 
 
 @pytest.fixture
 def test_text_file() -> Generator[str, None, None]:  # pragma: no cover - fixture wrapper
     """Provide a path to a temporary text file and clean it up after use."""
-    return _yield_file(create_test_file("Sample test content\n", suffix=".txt"))
+    yield from _yield_file(create_test_file("Sample test content\n", suffix=".txt"))
 
 
 @pytest.fixture
 def test_pdf_file() -> Generator[str, None, None]:  # pragma: no cover - fixture wrapper
     """Provide a path to a temporary PDF file and clean it up after use."""
-    return _yield_file(create_test_pdf())
+    yield from _yield_file(create_test_pdf())
 
 
 @pytest.fixture
 def test_audio_file() -> Generator[str, None, None]:  # pragma: no cover - fixture wrapper
     """Provide a path to a temporary audio file and clean it up after use."""
-    return _yield_file(create_test_audio())
+    yield from _yield_file(create_test_audio())
 
 
 __all__ = [

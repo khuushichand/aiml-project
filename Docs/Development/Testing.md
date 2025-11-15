@@ -10,6 +10,8 @@ Plugin Layout
 
 - `tldw_Server_API/tests/_plugins/e2e_fixtures.py`
   - Exposes end‑to‑end fixtures (API clients, credentials, trackers).
+- `tldw_Server_API/tests/_plugins/e2e_state_fixtures.py`
+  - Session/test run state helpers used by e2e suites (shared state, teardown coordination).
 - `tldw_Server_API/tests/_plugins/chat_fixtures.py`
   - Chat helpers and authenticated client wrappers (pre‑existing).
 - `tldw_Server_API/tests/_plugins/media_fixtures.py`
@@ -24,6 +26,7 @@ Each test suite declares plugins explicitly via `pytest_plugins` in its local
 ```
 pytest_plugins = [
     "tldw_Server_API.tests._plugins.e2e_fixtures",
+    "tldw_Server_API.tests._plugins.e2e_state_fixtures",
     "tldw_Server_API.tests._plugins.chat_fixtures",
     "tldw_Server_API.tests._plugins.media_fixtures",
 ]
@@ -78,4 +81,3 @@ pytest --fixtures -q tldw_Server_API/tests/e2e | rg -q '^test_user_credentials$'
 
 It fails the build if `test_user_credentials` is not registered, catching
 regressions where a plugin stops exposing required fixtures.
-
