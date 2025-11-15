@@ -18,7 +18,7 @@ This guide walks a brand-new user through the shortest path to a working local d
 | Requirement | Notes |
 |-------------|-------|
 | **OS** | Linux, macOS, WSL2, or Windows with Python build tools |
-| **Python** | 3.11+ (3.12/3.13 tested) |
+| **Python** | 3.10+ (3.11–3.13 recommended/tested) |
 | **System packages** | `ffmpeg`, `portaudio/pyaudio` (macOS) or `python3-pyaudio` (Linux) for audio capture |
 | **Disk** | Plan for SQLite DBs under `Databases/` plus media storage |
 | **GPU (optional)** | Enables faster STT/LLM backends; fallback CPU works |
@@ -58,7 +58,7 @@ pip install -e .
 ```
 
 ### 3.2 Configure auth + provider settings
-Create `.env` (or extend if it already exists):
+Create `.env` (or extend if it already exists). The most important part is setting a **non-default** API key:
 ```bash
 cat > .env <<'EOF'
 AUTH_MODE=single_user
@@ -71,11 +71,16 @@ EOF
 ```
 You can also keep large provider configs in `tldw_Server_API/Config_Files/config.txt`.
 
+> Important: Replace `CHANGE_ME_TO_SECURE_API_KEY` with a strong random value before continuing.  
+> - **Option A (simple)**: run `python -c "import secrets; print(secrets.token_urlsafe(32))"` and paste the result into `SINGLE_USER_API_KEY`.  
+> - **Option B (rotate later)**: once you have a working `.env`, you can re-run the initializer (below), answer `y` to the “Generate new secure keys?” prompt to print fresh values, then paste them into `.env` and re-run the initializer.
+
 ### 3.3 Initialize AuthNZ and databases
 ```bash
 python -m tldw_Server_API.app.core.AuthNZ.initialize
 ```
-This validates the environment, seeds the AuthNZ DB, and prints the API key for single-user mode if not set.
+This validates the environment and seeds the AuthNZ DB.  
+The command is **interactive**: run it in a terminal and answer the prompts (you can safely answer `N` to optional steps like starting background services). If it reports configuration issues (e.g., placeholder API keys), edit `.env` and run it again.
 
 ### 3.4 Run the API
 ```bash
@@ -222,7 +227,7 @@ You can set which provider the Chat API uses when a request does not specify one
 
 If you prefer containers (or are on Windows without build tools):
 ```bash
-# Base stack (SQLite users DB + Redis + app)
+# Base stack (app + Redis (+ Postgres service, used in multi-user mode))
 docker compose -f Dockerfiles/docker-compose.yml up -d --build
 
 # Multi-user/Postgres mode
@@ -236,6 +241,7 @@ After the containers are up, initialize AuthNZ inside the app container:
 docker compose -f Dockerfiles/docker-compose.yml exec app \
   python -m tldw_Server_API.app.core.AuthNZ.initialize
 ```
+- Note: This command is **interactive**; run it in a shell attached to the container and answer the prompts (you can safely answer `N` to optional steps).
 - Check logs: `docker compose -f Dockerfiles/docker-compose.yml logs -f app`
 - Optional overlays: `docker-compose.dev.yml` (unified streaming), `docker-compose.pg.yml` (pgvector/pgbouncer), proxy variants.
 
@@ -246,7 +252,7 @@ The `tldw-frontend/` directory hosts the current Next.js client.
 ```bash
 cd tldw-frontend
 cp .env.local.example .env.local        # set NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
-echo "NEXT_PUBLIC_X_API_KEY=CHANGE_ME_TO_SECURE_API_KEY" >> .env.local
+echo "NEXT_PUBLIC_X_API_KEY=CHANGE_ME_TO_SECURE_API_KEY" >> .env.local  # replace with your actual API key
 npm install
 npm run dev -- -p 8080
 ```
@@ -256,17 +262,18 @@ Open http://localhost:8080 to use the UI. CORS defaults allow 8080, so matching 
 
 ## 7. Process Your First Media File
 Once the API is running:
-1. Place a sample file under `Samples/` (the repo already includes several fixtures).
-2. Use the media ingestion endpoint:
+1. Pick a local media file you own (for example, an MP3 or MP4) and note its full path, e.g. `/path/to/your_audio_file.mp3`.
+2. Use the persistent media ingestion endpoint:
 ```bash
-curl -X POST "http://127.0.0.1:8000/api/v1/media/process" \
+curl -X POST "http://127.0.0.1:8000/api/v1/media/add" \
   -H "X-API-KEY: CHANGE_ME_TO_SECURE_API_KEY" \
-  -F "source_type=file" \
-  -F "file=@Samples/sample_audio.mp3" \
+  -F "media_type=audio" \
   -F "title=Sample Audio" \
-  -F "tags=demo,quickstart"
+  -F "keywords=demo,quickstart" \
+  -F "perform_analysis=true" \
+  -F "files=@/path/to/your_audio_file.mp3"
 ```
-3. Track progress via `/api/v1/media/status/{job_id}` (returned from the process call) or use `/api/v1/media/search` once ingestion finishes.
+3. After ingestion, confirm it’s stored by querying the media index, for example via the `/api/v1/media/search` endpoint from the OpenAPI docs (searching by title or keyword).
 
 ---
 

@@ -403,7 +403,8 @@ class PromptExecutor:
                 field_name = field.get("name")
                 if field_name:
                     # Simple extraction (can be improved)
-                    pattern = f"{field_name}[:\s]+(.*?)(?:\n|$)"
+                    # Use a raw f-string to avoid invalid escape warnings (e.g., "\s")
+                    pattern = rf"{field_name}[:\s]+(.*?)(?:\n|$)"
                     match = re.search(pattern, output, re.IGNORECASE)
                     if match:
                         parsed[field_name] = match.group(1).strip()

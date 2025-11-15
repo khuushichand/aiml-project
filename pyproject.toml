@@ -560,6 +560,12 @@ plugins = [
     "tldw_Server_API.tests._plugins.postgres",
     # Optional pgvector fixtures (skipped gracefully if unavailable)
     "tldw_Server_API.tests.helpers.pgvector",
+    # E2E suite fixtures/state shared across tests
+    "tldw_Server_API.tests._plugins.e2e_fixtures",
+    "tldw_Server_API.tests._plugins.e2e_state_fixtures",
+    "tldw_Server_API.tests._plugins.media_fixtures",
+    # AuthNZ fixtures used across Resource_Governance and other suites
+    "tldw_Server_API.tests.AuthNZ.conftest",
 ]
 addopts = [
     "--strict-markers",

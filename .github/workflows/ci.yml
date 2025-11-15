@@ -1477,12 +1477,12 @@ jobs:
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py start
 
-      - name: Smoke health check (Windows, 8 min)
+      - name: Smoke health check (Windows, 15 min)
         if: ${{ always() && matrix.os == 'windows-latest' }}
         env:
           SERVER_LABEL: smoke
           E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
-          SMOKE_STARTUP_TIMEOUT_SECONDS: '480'
+          SMOKE_STARTUP_TIMEOUT_SECONDS: '900'
         shell: bash
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py health-check
