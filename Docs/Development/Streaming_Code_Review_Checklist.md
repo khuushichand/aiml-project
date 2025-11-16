@@ -9,5 +9,6 @@ Short, high-signal items for PR reviewers touching SSE/WS streaming code.
 - Close codes: map errors per PRD (e.g., `quota_exceeded` → frame + close `1008`; idle timeout → `1001`).
 
 References
-- PRD: `Docs/Design/Stream_Abstraction_PRD.md`
+- PRD: `Docs/Product/Completed/Stream_Abstraction_PRD.md`
 - Streams API: `tldw_Server_API/app/core/Streaming/streams.py`
+- Smoke helper: `Helper_Scripts/streaming_unified_smoke.py` (run against a dev/staging server with `STREAMS_UNIFIED=1` to verify Chat SSE, Embeddings SSE, and Audio WS after streaming-related changes).

@@ -1,0 +1,8 @@
+MINIMAL_TEST_APP=1
+['GET'] /api/v1/media/{media_id}/embeddings/status
+['POST'] /api/v1/media/{media_id}/embeddings
+['POST'] /api/v1/media/embeddings/batch
+['POST'] /api/v1/media/embeddings/search
+['DELETE'] /api/v1/media/{media_id}/embeddings
+['GET'] /api/v1/media/embeddings/jobs/{job_id}
+['GET'] /api/v1/media/embeddings/jobs

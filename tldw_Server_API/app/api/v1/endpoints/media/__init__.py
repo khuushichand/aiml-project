@@ -5,29 +5,27 @@ from typing import Any, Dict
 
 from fastapi import APIRouter
 
-# NOTE: This package currently acts as a thin compatibility
-# shim over the legacy monolithic implementation in
-# `_legacy_media.py`. All existing imports of
-# `tldw_Server_API.app.api.v1.endpoints.media` continue to
-# work, and selected internals are re-exported for tests.
+# NOTE: This package currently acts as a compatibility shim
+# over the legacy monolithic implementation in `_legacy_media.py`.
+# All existing imports of
+# `tldw_Server_API.app.api.v1.endpoints.media` continue to work,
+# and selected internals are re-exported for tests.
 
 _legacy_media = import_module("tldw_Server_API.app.api.v1.endpoints._legacy_media")
 
 legacy_router: APIRouter = getattr(_legacy_media, "router")
 
 # New modular routers take precedence for overlapping paths by
-# prepending their routes ahead of the legacy ones.
+# being included ahead of the legacy router. This keeps route
+# resolution order well-defined without mutating the legacy
+# router in place.
 from . import item, listing, versions
 
-legacy_router.routes = (
-    list(listing.router.routes)
-    + list(item.router.routes)
-    + list(versions.router.routes)
-    + list(legacy_router.routes)
-)
-
-# Public router used by main application.
-router: APIRouter = legacy_router
+router: APIRouter = APIRouter()
+router.include_router(listing.router)
+router.include_router(item.router)
+router.include_router(versions.router)
+router.include_router(legacy_router)
 
 # Commonly imported helpers (kept explicit for type checkers).
 _download_url_async = getattr(_legacy_media, "_download_url_async")

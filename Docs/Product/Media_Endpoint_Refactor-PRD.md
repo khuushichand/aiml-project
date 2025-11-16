@@ -5,6 +5,18 @@
 - Status: Draft (v1)
 - Target Version: v0.2.x
 
+## Current Implementation Status
+
+- Stage 1 (Skeleton & Utilities): **Complete**
+  - `endpoints/media/` package and compatibility shim in place.
+  - Shared utilities added under `api/v1/utils/` (`cache.py`, `http_errors.py`, `request_parsing.py`) with unit tests.
+- Stage 2 (Read-Only Endpoints): **In Progress – core routes migrated**
+  - `GET /api/v1/media` → `media/listing.py` and `GET /api/v1/media/{media_id}` → `media/item.py`, preserving TEST_MODE diagnostics and response shapes; added deterministic ETags.
+  - Versions `GET /{media_id}/versions` and `GET /{media_id}/versions/{version}` → `media/versions.py` with existing DB logic and JSON unchanged.
+  - `GET /metadata-search`, `GET /by-identifier`, `POST /search`, `GET /transcription-models` → `media/listing.py`, preserving normalization and envelopes and adding ETag support.
+  - Router shim (`media/__init__.py`) defines a new `APIRouter` that includes `listing`, `item`, and `versions` routers ahead of `_legacy_media.router`, so new read-only routes override the monolith while all other `/media` routes still use the legacy implementation.
+  - Follow-ups: align pytest harnesses (MediaDB2 metadata tests, media list/versions tests) with the new router wiring and add explicit ETag/cache invalidation tests.
+
 ## Background
 
 - Current media endpoints live in a monolithic module with broad responsibilities: request parsing, auth/RBAC, rate limits, caching, input sourcing, processing orchestration, persistence, and response shaping.
@@ -246,17 +258,24 @@ This table serves as a migration checklist to ensure the compatibility shim cont
 - Stage 0: PRD Sign‑Off
   - Deliverable: Approved PRD.
   - Exit: Stakeholder sign-off, plus inventory of external imports/patches of `media.py` helpers to inform shim re-exports.
-- Stage 1: Skeleton & Utilities
+- Stage 1: Skeleton & Utilities **(Status: Complete)**
   - Create `endpoints/media/` package with `__init__.py` exporting router.
   - Add `api/v1/utils/cache.py`, `utils/http_errors.py`, `utils/request_parsing.py`.
   - Keep `endpoints/media.py` as shim importing router from package.
   - Tests: unit tests for cache and parsing utilities.
-- Stage 2: Read‑Only Endpoints
+- Stage 2: Read‑Only Endpoints **(Status: In Progress – core routes migrated)**
   - Move `GET /api/v1/media` and `GET /api/v1/media/{media_id}` to `listing.py` and `item.py`.
+    - Implemented in `media/listing.py` (`GET /`) and `media/item.py` (`GET /{media_id:int}`), preserving TEST_MODE headers/logs and response shapes; added deterministic ETag support via `utils/cache`.
   - Move versions `GET /{media_id}/versions` and `GET /{media_id}/versions/{version}` to `versions.py`.
+    - Implemented in `media/versions.py` (`GET /{media_id:int}/versions`, `GET /{media_id:int}/versions/{version_number:int}`) with existing DB queries and JSON structure untouched.
   - Move `GET /metadata-search`, `GET /by-identifier`, `POST /search`, and `GET /transcription-models` into `listing.py`.
+    - Implemented in `media/listing.py` (`GET /metadata-search`, `GET /by-identifier`, `POST /search`, `GET /transcription-models`) using the same normalization and batch response envelopes; ETags now use `utils/cache.generate_etag`.
   - Apply cache decorator/ETag support for list/detail/search as implemented in `cache.py`.
+    - Implemented as stateless ETag calculation + `If-None-Match` handling; Redis-backed response caching remains in `_legacy_media` for now.
+  - Router wiring:
+    - `media/__init__.py` now prepends new `listing`, `item`, and `versions` routes ahead of `_legacy_media.router` while preserving all existing imports/monkeypatch points (`cache`, `_download_url_async`, `_save_uploaded_files`, etc.).
   - Tests: run Media list/detail/version/search tests; verify ETag behavior on list/detail/search and cache invalidation after updates.
+    - Status: new handlers pass direct ASGI client probes; selected pytest suites (`MediaDB2` metadata tests, `Media_Ingestion_Modification` list/versions tests) are still being reconciled with the new router wiring.
 - Stage 3: Process‑Only Endpoints
   - Create core orchestrator: `pipeline.py`, `input_sourcing.py`, `result_normalization.py`.
   - Move `process_code`, `process_documents`, `process_pdfs`, `process_ebooks`, `process_emails`, `process_videos`, `process_audios` into dedicated files; handlers delegate to orchestrator.
