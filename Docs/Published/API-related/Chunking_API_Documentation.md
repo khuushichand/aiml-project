@@ -6,7 +6,7 @@ The Chunking API exposes endpoints to split text or files into smaller, semantic
 
 ## Base URL
 
-```
+```bash
 http://localhost:8000/api/v1/chunking
 ```
 
@@ -23,7 +23,7 @@ Authentication follows the server’s AuthNZ mode:
 Chunk raw text and return normalized chunks with metadata.
 
 Request body (JSON):
-```
+```json
 {
   "text_content": "... your text ...",
   "file_name": "sample.txt",
@@ -42,7 +42,7 @@ Notes
 - `applied_options` in the response shows effective options after defaults/overrides.
 
 Example response (truncated):
-```
+```json
 {
   "chunks": [
     {
@@ -72,7 +72,7 @@ Example response (truncated):
 ```
 
 OpenAPI schema (request/response)
-```
+```yaml
 openapi: 3.0.3
 info:
   title: Chunk Text
@@ -144,7 +144,7 @@ paths:
 ```
 
 Example (template-based):
-```
+```json
 {
   "text_content": "# Title\n...",
   "file_name": "paper.md",
@@ -157,7 +157,7 @@ Hierarchical splitting examples
 - Using a template (recommended): Define boundaries in a template once, then reference it via `options.template_name` as shown above. See the Templates API doc for create/update operations.
 
 - Minimal template JSON with custom boundaries (for use with Templates Apply):
-```
+```json
 {
   "name": "chapters_and_appendices",
   "description": "Chapters and appendices with headings",
@@ -179,7 +179,7 @@ Hierarchical splitting examples
 }
 ```
 Apply via Templates API:
-```
+```bash
 POST /api/v1/chunking/templates/apply
 {
   "template_name": "chapters_and_appendices",
@@ -194,7 +194,7 @@ Notes: Allowed flags are only `i` and `m`. Max 20 rules; max pattern length 256 
 Upload a file via multipart form-data and return chunks.
 
 Example request:
-```
+```bash
 curl -X POST "http://localhost:8000/api/v1/chunking/chunk_file" \
   -H "Authorization: Bearer <JWT>" \
   -F file=@/path/to/large.txt \
@@ -207,7 +207,7 @@ curl -X POST "http://localhost:8000/api/v1/chunking/chunk_file" \
 Response shape matches `POST /chunk_text`.
 
 OpenAPI schema (multipart request)
-```
+```yaml
 openapi: 3.0.3
 info:
   title: Chunk File

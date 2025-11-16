@@ -1461,7 +1461,8 @@ async def patch_metadata(
                     _pmcid = new_meta.get('pmcid') or new_meta.get('PMCID')
                     _arxiv = new_meta.get('arxiv_id') or new_meta.get('arxiv') or new_meta.get('ArXiv')
                     _s2id = new_meta.get('s2_paper_id') or new_meta.get('paperId')
-                    if db.backend_type == BackendType.POSTGRESQL:
+                    backend = db.backend_type() if callable(db.backend_type) else db.backend_type
+                    if backend == BackendType.POSTGRESQL:
                         ident_sql = (
                             "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
                             "VALUES (?, ?, ?, ?, ?, ?) "
@@ -1570,7 +1571,8 @@ async def put_version_metadata(
                 _pmcid = new_meta.get('pmcid') or new_meta.get('PMCID')
                 _arxiv = new_meta.get('arxiv_id') or new_meta.get('arxiv') or new_meta.get('ArXiv')
                 _s2id = new_meta.get('s2_paper_id') or new_meta.get('paperId')
-                if db.backend_type == BackendType.POSTGRESQL:
+                backend = db.backend_type() if callable(db.backend_type) else db.backend_type
+                if backend == BackendType.POSTGRESQL:
                     ident_sql = (
                         "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
                         "VALUES (?, ?, ?, ?, ?, ?) "
@@ -1775,7 +1777,8 @@ async def create_or_update_version_advanced(
                     _pmcid = merged_sm.get('pmcid') if isinstance(merged_sm, dict) else None
                     _arxiv = (merged_sm.get('arxiv_id') if isinstance(merged_sm, dict) else None)
                     _s2id = (merged_sm.get('s2_paper_id') if isinstance(merged_sm, dict) else None)
-                    if db.backend_type == BackendType.POSTGRESQL:
+                    backend = db.backend_type() if callable(db.backend_type) else db.backend_type
+                    if backend == BackendType.POSTGRESQL:
                         ident_sql = (
                             "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
                             "VALUES (?, ?, ?, ?, ?, ?) "

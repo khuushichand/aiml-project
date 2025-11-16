@@ -7,17 +7,6 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture(scope="session", autouse=True)
-def preserve_app_state():
-    # Override chat_fixtures.preserve_app_state to avoid early app import
-    yield
-
-
-@pytest.fixture(autouse=True)
-def reset_app_overrides():
-    # Override chat_fixtures.reset_app_overrides for these tests
-    yield
-
 @pytest.fixture()
 def client_with_user(monkeypatch):
     async def override_user():
