@@ -4,6 +4,7 @@ from importlib import import_module
 from typing import Any, Dict
 
 from fastapi import APIRouter
+from loguru import logger
 
 # NOTE: This package currently acts as a compatibility shim
 # over the legacy monolithic implementation in `_legacy_media.py`.
@@ -11,29 +12,56 @@ from fastapi import APIRouter
 # `tldw_Server_API.app.api.v1.endpoints.media` continue to work,
 # and selected internals are re-exported for tests.
 
-_legacy_media = import_module("tldw_Server_API.app.api.v1.endpoints._legacy_media")
-
-legacy_router: APIRouter = getattr(_legacy_media, "router")
+try:
+    _legacy_media = import_module("tldw_Server_API.app.api.v1.endpoints._legacy_media")
+    legacy_router: APIRouter = getattr(_legacy_media, "router")
+except Exception as _legacy_import_err:  # noqa: BLE001
+    # In ultra-minimal or dependency-stubbed test profiles (e.g. torch/dill
+    # stubs), the legacy media module may fail to import due to optional
+    # audio/ML dependencies. In that case, fall back to a read-only router
+    # that still exposes the modularized endpoints (list/detail/versions,
+    # metadata search, etc.) so focused tests can run.
+    logger.warning(
+        "Legacy media module unavailable; falling back to read-only media router "
+        "subset only: {}",
+        _legacy_import_err,
+    )
+    _legacy_media = None  # type: ignore[assignment]
+    legacy_router = APIRouter()
 
 # New modular routers take precedence for overlapping paths by
-# being included ahead of the legacy router. This keeps route
-# resolution order well-defined without mutating the legacy
-# router in place.
+# prepending their routes ahead of the legacy ones. This keeps
+# the effective router object compatible with existing imports
+# while allowing gradual extraction into submodules.
 from . import item, listing, versions
 
-router: APIRouter = APIRouter()
-router.include_router(listing.router)
-router.include_router(item.router)
-router.include_router(versions.router)
-router.include_router(legacy_router)
+if legacy_router.routes:
+    legacy_router.routes = (
+        list(listing.router.routes)
+        + list(item.router.routes)
+        + list(versions.router.routes)
+        + list(legacy_router.routes)
+    )
+    # Public router used by main application when legacy module is available.
+    router: APIRouter = legacy_router
+else:
+    # Fallback: expose only the modular, read-only endpoints.
+    router = APIRouter()
+    router.include_router(listing.router)
+    router.include_router(item.router)
+    router.include_router(versions.router)
 
 # Commonly imported helpers (kept explicit for type checkers).
-_download_url_async = getattr(_legacy_media, "_download_url_async")
-_save_uploaded_files = getattr(_legacy_media, "_save_uploaded_files")
-
-# Shared cache reference; tests monkeypatch `media.cache` and we
-# propagate that into the legacy module on each call that uses it.
-cache = getattr(_legacy_media, "cache", None)
+if _legacy_media is not None:
+    _download_url_async = getattr(_legacy_media, "_download_url_async")
+    _save_uploaded_files = getattr(_legacy_media, "_save_uploaded_files")
+    # Shared cache reference; tests monkeypatch `media.cache` and we
+    # propagate that into the legacy module on each call that uses it.
+    cache = getattr(_legacy_media, "cache", None)
+else:  # pragma: no cover - only used in ultra-minimal test profiles
+    _download_url_async = None  # type: ignore[assignment]
+    _save_uploaded_files = None  # type: ignore[assignment]
+    cache = None
 
 
 def cache_response(key: str, response: Dict) -> None:
@@ -41,9 +69,12 @@ def cache_response(key: str, response: Dict) -> None:
     Delegate cache_response to the legacy module while honoring
     monkeypatches of `media.cache` in tests.
     """
+    if _legacy_media is None:
+        return
     setattr(_legacy_media, "cache", cache)
-    legacy_cache_response = getattr(_legacy_media, "cache_response")
-    legacy_cache_response(key, response)
+    legacy_cache_response = getattr(_legacy_media, "cache_response", None)
+    if legacy_cache_response is not None:
+        legacy_cache_response(key, response)
 
 
 def invalidate_cache(media_id: int) -> None:
@@ -51,9 +82,12 @@ def invalidate_cache(media_id: int) -> None:
     Delegate invalidate_cache to the legacy module while honoring
     monkeypatches of `media.cache` in tests.
     """
+    if _legacy_media is None:
+        return
     setattr(_legacy_media, "cache", cache)
-    legacy_invalidate = getattr(_legacy_media, "invalidate_cache")
-    legacy_invalidate(media_id)
+    legacy_invalidate = getattr(_legacy_media, "invalidate_cache", None)
+    if legacy_invalidate is not None:
+        legacy_invalidate(media_id)
 
 
 def __getattr__(name: str) -> Any:
@@ -64,6 +98,8 @@ def __getattr__(name: str) -> Any:
     integrations that import internal helpers directly
     from `endpoints.media`.
     """
+    if _legacy_media is None:
+        raise AttributeError(name)
     return getattr(_legacy_media, name)
 
 

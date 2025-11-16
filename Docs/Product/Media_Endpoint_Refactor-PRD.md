@@ -14,7 +14,7 @@
   - `GET /api/v1/media` → `media/listing.py` and `GET /api/v1/media/{media_id}` → `media/item.py`, preserving TEST_MODE diagnostics and response shapes; added deterministic ETags.
   - Versions `GET /{media_id}/versions` and `GET /{media_id}/versions/{version}` → `media/versions.py` with existing DB logic and JSON unchanged.
   - `GET /metadata-search`, `GET /by-identifier`, `POST /search`, `GET /transcription-models` → `media/listing.py`, preserving normalization and envelopes and adding ETag support.
-  - Router shim (`media/__init__.py`) defines a new `APIRouter` that includes `listing`, `item`, and `versions` routers ahead of `_legacy_media.router`, so new read-only routes override the monolith while all other `/media` routes still use the legacy implementation.
+  - Router shim (`media/__init__.py`) prepends new `listing`/`item`/`versions` routes ahead of `_legacy_media.router` so all other `/media` routes still use the monolith.
   - Follow-ups: align pytest harnesses (MediaDB2 metadata tests, media list/versions tests) with the new router wiring and add explicit ETag/cache invalidation tests.
 
 ## Background
@@ -276,15 +276,32 @@ This table serves as a migration checklist to ensure the compatibility shim cont
     - `media/__init__.py` now prepends new `listing`, `item`, and `versions` routes ahead of `_legacy_media.router` while preserving all existing imports/monkeypatch points (`cache`, `_download_url_async`, `_save_uploaded_files`, etc.).
   - Tests: run Media list/detail/version/search tests; verify ETag behavior on list/detail/search and cache invalidation after updates.
     - Status: new handlers pass direct ASGI client probes; selected pytest suites (`MediaDB2` metadata tests, `Media_Ingestion_Modification` list/versions tests) are still being reconciled with the new router wiring.
-- Stage 3: Process‑Only Endpoints
-  - Create core orchestrator: `pipeline.py`, `input_sourcing.py`, `result_normalization.py`.
-  - Move `process_code`, `process_documents`, `process_pdfs`, `process_ebooks`, `process_emails`, `process_videos`, `process_audios` into dedicated files; handlers delegate to orchestrator.
-  - Tests: adapt existing tests; add unit tests for input sourcing, normalization, and HTTP status code semantics for partial success.
-- Stage 4: Persistence Path (`/add`)
-  - Create `persistence.py` with transactional DB writes, keyword tagging, claims storage.
-  - Extract `/add` endpoint to `add.py`; reuse orchestrator for processing and call persistence layer.
-  - Preserve quotas, metrics, and claims feature flags.
-  - Tests: `/add` end-to-end tests; quota, error mapping, and cache invalidation coverage.
+- Stage 3: Process‑Only Endpoints **(Status: Not Started – design only)**
+  - Current state:
+    - All process-only routes (e.g., `POST /api/v1/media/process-code`, `.../process-documents`, `.../process-pdfs`, `.../process-ebooks`, `.../process-emails`, `.../process-videos`, `.../process-audios`, MediaWiki/web-scraping “process” variants) live in `_legacy_media.py`.
+    - They already implement the partial‑success semantics described in **API Compatibility & Behavior** (200/207/400/500 with per-item result entries and existing batch envelopes).
+  - Target design:
+    - Add core orchestrator modules under `tldw_Server_API/app/core/Ingestion_Media_Processing/`: `pipeline.py`, `input_sourcing.py`, `result_normalization.py` (internal‑only models; must preserve current JSON envelopes).
+    - Add per‑type endpoint modules under `tldw_Server_API/app/api/v1/endpoints/media/` (e.g., `process_code.py`, `process_documents.py`, `process_pdfs.py`, `process_ebooks.py`, `process_emails.py`, `process_videos.py`, `process_audios.py`, `mediawiki.py`) whose handlers:
+      - Parse/coerce inputs via shared helpers.
+      - Delegate to the orchestrator.
+      - Preserve existing batch response structure and HTTP status code semantics for partial success.
+  - Tests (reference for implementers):
+    - Reuse and adapt existing process‑endpoint tests under `tldw_Server_API/tests/Media` and MediaWiki/web-scraping suites, and add focused unit tests for input sourcing, normalization, and error mapping in the new core modules.
+- Stage 4: Persistence Path (`/add`) **(Status: Not Started – design only)**
+  - Current state:
+    - `/api/v1/media/add` is implemented as `add_media` in `_legacy_media.py` and is responsible for ingesting inputs (URLs/uploads), processing them, enforcing quotas and RBAC, persisting media + versions, and emitting usage/metrics/claims events.
+    - Multiple integration suites exercise this behavior (e.g., `tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_add_endpoint*.py`, `tests/AuthNZ/integration/test_media_permission_enforcement.py`, and contextual ingestion tests under `tests/Media_Ingestion_Modification/`).
+  - Target design:
+    - Add `persistence.py` under `tldw_Server_API/app/core/Ingestion_Media_Processing/` to encapsulate transactional DB writes, keyword tagging, identifier index maintenance, and claims storage, using `MediaDatabase` and existing DB helpers.
+    - Extract `/add` into `tldw_Server_API/app/api/v1/endpoints/media/add.py`; handlers should:
+      - Delegate processing to the Stage 3 orchestrator.
+      - Delegate all DB mutations to `persistence.py`.
+      - Preserve quotas, metrics, usage events, and claims feature flags as wired today in `_legacy_media.add_media`.
+  - Tests:
+    - Keep all existing `/add` integration tests green while gradually switching to the new modules, and add targeted tests for quota enforcement, error mapping, and cache invalidation (list/detail/search) after create/update/rollback.
+    - Add regression tests ensuring no `db_instance must be a Database object` errors surface for media write endpoints (e.g., `PATCH /api/v1/media/{media_id}/metadata`, `PUT /api/v1/media/{media_id}/versions/{version}/metadata`, `POST /api/v1/media/{media_id}/versions/advanced`, and `/api/v1/media/add`), including under minimal test app profiles.
+    - Add tests that explicitly assert expected success codes (200/201) for version creation/update and `/add` flows when using `client_with_single_user` and related fixtures, to guard against unintended 401s caused by auth/DB wiring changes.
 - Stage 5: Web Scraping
   - Move `/process-web-scraping` handler to `web_scrape.py`; ensure it delegates to `services/web_scraping_service`.
   - Move `/ingest-web-content` handler to `web_scrape.py`; share request normalization and orchestration with the process-only handler while preserving DB persistence behavior.
