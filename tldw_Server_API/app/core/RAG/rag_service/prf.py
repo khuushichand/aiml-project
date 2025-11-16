@@ -121,7 +121,7 @@ async def apply_prf(
                 "doc_seed_count": len(seeds),
             }
 
-        expanded_query = f\"{query} {' '.join(selected)}\".strip()
+        expanded_query = f"{query} {' '.join(selected)}".strip()
         meta: Dict[str, Any] = {
             "enabled": True,
             "base_query": query,
