@@ -13,8 +13,21 @@ from fastapi import APIRouter
 
 _legacy_media = import_module("tldw_Server_API.app.api.v1.endpoints._legacy_media")
 
+legacy_router: APIRouter = getattr(_legacy_media, "router")
+
+# New modular routers take precedence for overlapping paths by
+# prepending their routes ahead of the legacy ones.
+from . import item, listing, versions
+
+legacy_router.routes = (
+    list(listing.router.routes)
+    + list(item.router.routes)
+    + list(versions.router.routes)
+    + list(legacy_router.routes)
+)
+
 # Public router used by main application.
-router: APIRouter = getattr(_legacy_media, "router")
+router: APIRouter = legacy_router
 
 # Commonly imported helpers (kept explicit for type checkers).
 _download_url_async = getattr(_legacy_media, "_download_url_async")
@@ -64,4 +77,3 @@ __all__ = [
     "cache_response",
     "invalidate_cache",
 ]
-
