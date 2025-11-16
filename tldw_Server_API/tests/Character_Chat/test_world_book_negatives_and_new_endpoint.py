@@ -245,14 +245,19 @@ async def test_complete_v2_operational_and_persists():
             assert r.status_code == 200
             data = r.json()
             assert data.get("saved") is True
-            # Offline sim echoes last user content; assistant_content should match
-            assert data.get("assistant_content")
+            # Offline sim echoes last user content; assistant_content should be non-empty
+            assistant_content = data.get("assistant_content")
+            assert assistant_content
 
             # Verify messages persisted
             r = await client.get(f"/api/v1/chats/{chat_id}/messages", headers=headers)
             assert r.status_code == 200
             msgs = r.json().get("messages", [])
             assert any(m.get("sender") == "user" and m.get("content") == "Hello there" for m in msgs)
-            assert any(m.get("sender") == "assistant" and isinstance(m.get("content"), str) for m in msgs)
+            # Assistant messages are stored under the character's name rather than the literal 'assistant'
+            assert any(
+                m.get("sender") != "user" and m.get("content") == assistant_content
+                for m in msgs
+            )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

@@ -464,6 +464,23 @@ class JWTService:
         except Exception:
             return None
 
+
+_jwt_service: Optional["JWTService"] = None
+
+
+def get_jwt_service() -> JWTService:
+    """Get JWT service singleton instance."""
+    global _jwt_service
+    if not _jwt_service:
+        _jwt_service = JWTService()
+    return _jwt_service
+
+
+def reset_jwt_service() -> None:
+    """Reset the cached JWTService singleton (used primarily in tests)."""
+    global _jwt_service
+    _jwt_service = None
+
     def create_password_reset_token(
         self,
         user_id: int,

@@ -591,12 +591,14 @@ async def isolated_test_environment(monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.services.registration_service import reset_registration_service
     from tldw_Server_API.app.core.Audit.unified_audit_service import shutdown_audit_service
+    from tldw_Server_API.app.core.DB_Management.Users_DB import reset_users_db
 
     await reset_db_pool()
     await reset_session_manager()
     reset_settings()
     await reset_registration_service()
     await shutdown_audit_service()
+    await reset_users_db()
 
     # 5.1 Skip forcing a DatabasePool into the app to avoid cross-event-loop issues.
     #     Let the FastAPI app create its own pool within its own loop when handling requests.
@@ -624,6 +626,7 @@ async def isolated_test_environment(monkeypatch):
     reset_settings()
     await reset_registration_service()
     await shutdown_audit_service()
+    await reset_users_db()
 
     # 9. Drop the unique database
     cleanup_conn = await asyncpg.connect(

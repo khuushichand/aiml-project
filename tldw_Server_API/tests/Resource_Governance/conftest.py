@@ -1,7 +1,7 @@
 """
 Shared fixtures for Resource_Governance tests.
 
-- Re-export AuthNZ Postgres fixtures (e.g., test_db_pool)
+- Re-export AuthNZ Postgres fixtures (e.g., setup_test_database, test_db_pool)
 - Ensure lease purge is enabled in Redis RG during tests to reduce flakiness
   by setting RG_TEST_PURGE_LEASES_BEFORE_RESERVE=1. This makes the Redis
   governor perform a best-effort purge of expired leases for the policy
@@ -12,22 +12,23 @@ Shared fixtures for Resource_Governance tests.
 import os
 import pytest
 
+# Re-export AuthNZ Postgres fixtures so Resource_Governance tests that rely on
+# database-backed policy/admin helpers can use the same infrastructure as the
+# AuthNZ suites.
+from tldw_Server_API.tests.AuthNZ.conftest import (  # noqa: F401
+    setup_test_database,
+    clean_database,
+    test_db_pool,
+    isolated_test_environment,
+)
+
 
 @pytest.fixture(autouse=True)
 def rg_test_purge_env(monkeypatch):
-    """Enable pre-reserve lease purge for all RG tests via env.
-
-    Prefer using a fixture over relying on module defaults so each test module
-    runs with predictable cleanup behavior. Tests that need to override can
-    clear or change this env var locally.
-    """
+    """Enable pre-reserve lease purge for all RG tests via env."""
     monkeypatch.setenv("RG_TEST_PURGE_LEASES_BEFORE_RESERVE", "1")
-    # Some tests may rely on a default Redis URL; prefer localhost explicitly
     if not os.getenv("REDIS_URL"):
         monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379")
-    # Ensure a Postgres DSN is present consistent with AuthNZ Postgres tests.
-    # This does not start Postgres; it only standardizes DSN discovery so RG
-    # Postgres-backed tests can use the shared test_db_pool fixture.
     if not (os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL")):
         host = os.getenv("TEST_DB_HOST", "localhost")
         port = os.getenv("TEST_DB_PORT", "5432")

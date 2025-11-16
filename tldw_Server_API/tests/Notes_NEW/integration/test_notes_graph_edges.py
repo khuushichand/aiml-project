@@ -4,10 +4,11 @@ Integration tests for Notes Graph manual edge creation/deletion.
 Uses a temporary ChaChaNotes DB via dependency override and JWT-based scope checks.
 """
 
+import importlib
+
 import pytest
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings, get_settings
@@ -29,6 +30,9 @@ def client_with_graph_db(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("JWT_ALGORITHM", "HS256")
     monkeypatch.setenv("JWT_SECRET_KEY", "graph_edges_tests_secret_9876543210")
+    # Use full app profile so Notes + Notes Graph routes are included
+    monkeypatch.setenv("MINIMAL_TEST_APP", "0")
+    monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
     reset_settings()
 
     # Real temp ChaChaNotes DB
@@ -40,9 +44,14 @@ def client_with_graph_db(tmp_path, monkeypatch):
 
     # Inject per-user DB via dependency override
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+    from tldw_Server_API.app import main as app_main
 
     def override_db_dep():
         return db
+
+    # Reload app after env tweaks so router gating sees MINIMAL_TEST_APP=0
+    importlib.reload(app_main)
+    fastapi_app = app_main.app
 
     fastapi_app.dependency_overrides[get_request_user] = override_user
     fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_db_dep

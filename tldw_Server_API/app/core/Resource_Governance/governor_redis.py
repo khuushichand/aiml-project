@@ -426,14 +426,18 @@ class RedisResourceGovernor(ResourceGovernor):
             try:
                 client = await self._client_get()
                 is_stub = bool(getattr(client, "_tldw_is_stub", False)) or client.__class__.__name__ == "InMemoryAsyncRedis"
-                if not is_stub:
+                # Only use the Lua helper when the window is already full (count >= limit),
+                # so that the script remains non-mutating for this check-only path. When
+                # the window is not full or when running against the in-memory stub,
+                # approximate retry_after via the oldest member's score instead.
+                if not is_stub and limit > 0 and count >= limit:
                     # Try to estimate oldest score via Lua helper (non-mutating when window is full)
                     rng = await client.evalsha(await self._ensure_tokens_lua(), 1, key, int(limit), int(window), float(now))
                     # When window is full, eval returns [0, ra]
                     if isinstance(rng, (list, tuple)) and len(rng) >= 2 and int(rng[0]) == 0:
                         ra = int(rng[1])
                 else:
-                    # In stub, approximate RA via oldest member score when full
+                    # Approximate RA via oldest member score when full or nearly full
                     try:
                         members = await client.zrange(key, 0, 0)
                         if members:
@@ -1294,6 +1298,30 @@ class RedisResourceGovernor(ResourceGovernor):
                     except Exception:
                         pass
                 return dec, None
+
+        # If any concurrency category (streams/jobs) is denied, short-circuit and
+        # avoid acquiring leases or creating a handle. Concurrency denials should
+        # never return a handle.
+        try:
+            cats_cc = (dec.details or {}).get("categories") or {}
+            has_concurrency_denial = any(
+                (name in ("streams", "jobs")) and (not bool((info or {}).get("allowed")))
+                for name, info in cats_cc.items()
+            )
+            if has_concurrency_denial and any(cat in ("streams", "jobs") for cat in req.categories.keys()):
+                if op_id:
+                    try:
+                        await client.set(
+                            self._keys.op(op_id),
+                            json.dumps({"type": "reserve", "decision": dec.__dict__, "handle_id": None}),
+                            ex=86400,
+                        )
+                    except Exception:
+                        pass
+                return dec, None
+        except Exception:
+            # Never fail reserve due to diagnostics around concurrency categories.
+            pass
 
         now = self._time()
         # If stub-rate smoothing was applied in check(), honor it by returning

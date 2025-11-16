@@ -3170,6 +3170,27 @@ if _MINIMAL_TEST_APP:
         app.include_router(rag_unified_router, tags=["rag-unified"])
     except Exception as _rag_min_err:
         logger.debug(f"Skipping rag_unified router in minimal test app: {_rag_min_err}")
+    # Collections endpoints (treated as lightweight; always included in minimal app)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.outputs_templates import router as outputs_templates_router
+        app.include_router(outputs_templates_router, prefix=f"{API_V1_PREFIX}", tags=["outputs-templates"])
+    except Exception as _ot_min_err:
+        logger.debug(f"Skipping outputs_templates router in minimal test app: {_ot_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.outputs import router as outputs_router
+        app.include_router(outputs_router, prefix=f"{API_V1_PREFIX}", tags=["outputs"])
+    except Exception as _outputs_min_err:
+        logger.debug(f"Skipping outputs router in minimal test app: {_outputs_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.reading_highlights import router as reading_highlights_router
+        app.include_router(reading_highlights_router, prefix=f"{API_V1_PREFIX}", tags=["reading-highlights"])
+    except Exception as _rh_min_err:
+        logger.debug(f"Skipping reading_highlights router in minimal test app: {_rh_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.items import router as items_router
+        app.include_router(items_router, prefix=f"{API_V1_PREFIX}", tags=["items"])
+    except Exception as _items_min_err:
+        logger.debug(f"Skipping items router in minimal test app: {_items_min_err}")
     # Chatbooks endpoints (export/import, jobs, download)
     try:
         from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router

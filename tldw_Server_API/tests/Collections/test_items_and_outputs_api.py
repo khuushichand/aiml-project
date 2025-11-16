@@ -15,10 +15,25 @@ from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDat
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(scope="session", autouse=True)
+def preserve_app_state():
+    # Override chat_fixtures.preserve_app_state to avoid early app import
+    yield
+
+
+@pytest.fixture(autouse=True)
+def reset_app_overrides():
+    # Override chat_fixtures.reset_app_overrides for these tests
+    yield
+
+
 @pytest.fixture()
 def client_with_user(monkeypatch, tmp_path):
     async def override_user():
         return User(id=123, username="tester", email=None, is_active=True)
+
+    # Use full app profile for Collections/outputs endpoints
+    monkeypatch.setenv("MINIMAL_TEST_APP", "0")
 
     # Force per-user DB dir into project Databases/ for sandbox write allowance
     base_dir = Path.cwd() / "Databases" / "test_user_dbs"
