@@ -106,7 +106,7 @@ Symptoms:
 
 ### 1. Claim-First Permission Checks
 
-**Concept**
+### Concept
 
 - All runtime authorization checks should be pure functions of claims already attached to the principal.
 - DB access for authorization is reserved for:
@@ -114,7 +114,7 @@ Symptoms:
   - Guardrail/accounting operations (rate limits, budgets) as defined in the Principal-Governance and Resource_Governor PRDs.
   - Admin operations (managing roles/permissions).
 
-**Implementation Sketch**
+### Implementation Sketch
 
 - Strengthen the invariant that `User_DB_Handling` (or `get_auth_principal`) always:
   - Fetches roles and base permissions from RBAC tables.
@@ -135,13 +135,13 @@ Symptoms:
 
 ### 2. Unified Auth Dependencies
 
-**Concept**
+### Concept
 
 - Define a single “front door” dependency for auth:
   - `get_auth_principal(request: Request) -> AuthPrincipal`.
 - Build all other auth-related dependencies on top of it.
 
-**Implementation Sketch**
+### Implementation Sketch
 
 - Introduce `get_auth_principal` in AuthNZ (implementation aligned with Principal-Governance PRD).
   - It:
@@ -163,7 +163,7 @@ Symptoms:
 - Migrate existing dependencies:
   - `User_DB_Handling.get_request_user`, `auth_deps.get_current_user`, and any per-endpoint auth dependencies to call `get_auth_principal` or its wrappers.
 
-**Profiles & endpoint gating**
+### Profiles & endpoint gating
 
 - Endpoint availability (e.g., user registration/creation) is governed by deployment profile and configuration as defined in `User-Unification-PRD.md`:
   - In `local-single-user`, additional user creation is forbidden as a hard constraint; routes that create users MUST be disabled or return errors regardless of the caller’s admin status.
@@ -275,8 +275,8 @@ Symptoms:
 - Migrate a set of key endpoints (auth admin, media admin, RAG admin) to use them.
 - Update `UsageLoggingMiddleware` and `llm_budget_guard` to use `AuthPrincipal`.
  - Add route-level tests covering:
-  - Endpoints that require a user principal, ensuring `get_current_user` / `require_permissions` fail with 403 when invoked with a `service` or `anonymous` principal lacking `user_id`.
-  - Service-only endpoints (if any) that rely on `AuthPrincipal.kind=service` without requiring user-centric fields.
+   - Endpoints that require a user principal, ensuring `get_current_user` / `require_permissions` fail with 403 when invoked with a `service` or `anonymous` principal lacking `user_id`.
+   - Service-only endpoints (if any) that rely on `AuthPrincipal.kind=service` without requiring user-centric fields.
 
 ### Phase 4: Cleanup & Documentation
 

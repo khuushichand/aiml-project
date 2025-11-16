@@ -1465,32 +1465,34 @@ def load_comprehensive_config():
         _log_debug(f"HTTP env propagation skipped: {_http_env_err}")
 
     # Propagate egress policy settings from config.txt into env (if unset)
-    try:
-        if hasattr(config_parser, 'has_section') and config_parser.has_section('Egress'):
-            def _env_default_egress(name: str, opt: str):
-                try:
-                    v = config_parser.get('Egress', opt, fallback=None)
-                except Exception:
-                    v = None
-                if v is not None and os.getenv(name) is None:
-                    os.environ[name] = str(v)
+    if hasattr(config_parser, 'has_section') and config_parser.has_section('Egress'):
+        def _env_default_egress(name: str, opt: str):
+            try:
+                v = config_parser.get('Egress', opt, fallback=None)
+            except Exception:
+                v = None
+            if v is None:
+                return
+            v_str = str(v).strip()
+            if not v_str:
+                return
+            if os.getenv(name) is None:
+                os.environ[name] = v_str
 
-            # Global allow/deny lists
-            _env_default_egress('EGRESS_ALLOWLIST', 'egress_allowlist')
-            _env_default_egress('EGRESS_DENYLIST', 'egress_denylist')
+        # Global allow/deny lists
+        _env_default_egress('EGRESS_ALLOWLIST', 'egress_allowlist')
+        _env_default_egress('EGRESS_DENYLIST', 'egress_denylist')
 
-            # Workflows-specific allow/deny overrides
-            _env_default_egress('WORKFLOWS_EGRESS_ALLOWLIST', 'workflows_allowlist')
-            _env_default_egress('WORKFLOWS_EGRESS_DENYLIST', 'workflows_denylist')
+        # Workflows-specific allow/deny overrides
+        _env_default_egress('WORKFLOWS_EGRESS_ALLOWLIST', 'workflows_allowlist')
+        _env_default_egress('WORKFLOWS_EGRESS_DENYLIST', 'workflows_denylist')
 
-            # Port and profile controls
-            _env_default_egress('WORKFLOWS_EGRESS_ALLOWED_PORTS', 'allowed_ports')
-            _env_default_egress('WORKFLOWS_EGRESS_PROFILE', 'profile')
+        # Port and profile controls
+        _env_default_egress('WORKFLOWS_EGRESS_ALLOWED_PORTS', 'allowed_ports')
+        _env_default_egress('WORKFLOWS_EGRESS_PROFILE', 'profile')
 
-            # Private IP blocking toggle
-            _env_default_egress('WORKFLOWS_EGRESS_BLOCK_PRIVATE', 'block_private')
-    except Exception as _egress_env_err:
-        _log_debug(f"Egress env propagation skipped: {_egress_env_err}")
+        # Private IP blocking toggle
+        _env_default_egress('WORKFLOWS_EGRESS_BLOCK_PRIVATE', 'block_private')
 
     return config_parser
 

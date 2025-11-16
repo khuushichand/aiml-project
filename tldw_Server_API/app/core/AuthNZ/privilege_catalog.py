@@ -43,9 +43,9 @@ def _default_catalog_path() -> Path:
         from tldw_Server_API.app.core.Utils.Utils import get_project_root
 
         project_root = Path(get_project_root())
-    except Exception:
+    except (ImportError, ModuleNotFoundError, AttributeError):
         # Conservative fallback: walk up from this file if Utils is unavailable
-        project_root = Path(__file__).resolve().parents[5]
+        project_root = Path(__file__).resolve().parents[4]
 
     return (project_root / candidate).resolve()
 

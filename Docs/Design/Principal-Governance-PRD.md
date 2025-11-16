@@ -34,7 +34,7 @@ The goal is to make all request-time AuthNZ decisions flow through a single, exp
 - Each component re-derives identity and attaches partial context to `request.state` (user id, key id, orgs/teams, scope) with defensive try/except.
 - Single-user mode and multi-user mode diverge at the dependency level instead of at configuration.
 
-**Current compatibility surface**
+#### Current compatibility surface
 
 - Existing public dependencies (`auth_deps.get_current_user`, `User_DB_Handling.get_request_user`) are widely used across endpoints and tests.
 - They:
@@ -111,7 +111,7 @@ The goal is to make all request-time AuthNZ decisions flow through a single, exp
 
 Define a single principal model that is created as early as possible in the auth pipeline and reused everywhere.
 
-**Tentative shape**
+#### Tentative shape
 
 - Identity:
   - `subject_id: str` (e.g., “user:123”, “service:workflow-engine”, “api_key:42”).
@@ -135,7 +135,7 @@ Throughout this PRD:
 - `AuthPrincipal` refers to the identity and claims of the caller.
 - `AuthContext` refers to `AuthPrincipal` plus transient request metadata (e.g., IP, User-Agent, request id).
 
-**Creation flow**
+#### Creation flow
 
 - Single dependency `get_auth_principal(request: Request) -> AuthPrincipal`:
   - Detects credential:
@@ -149,7 +149,7 @@ Throughout this PRD:
   - Attaches principal to `request.state.auth` and sets `request.state.user_id`, `api_key_id`, etc. for backwards compatibility.
   - Sets content scope via `set_scope` using principal’s org/team context.
 
-**Integration**
+#### Integration
 
 - Refactor:
   - `User_DB_Handling.verify_jwt_and_fetch_user`.
@@ -169,7 +169,7 @@ Throughout this PRD:
 
 Introduce an AuthNZ-scoped governance interface that uses the principal model to enforce guardrails. `AuthGovernor` is an AuthNZ-specific façade over the shared `ResourceGovernor` described in `Resource_Governor_PRD.md`, providing AuthNZ-focused metric names, defaults, and integration points while delegating common rate-limit and quota mechanics to the underlying governor.
 
-**Tentative interface**
+#### Tentative interface
 
 - `AuthGovernor.check_and_increment(principal, metric, amount=1, window=None, scope=None) -> (allowed, metadata)`
   - `metric`: e.g., `"requests"`, `"login_attempts"`, `"llm_tokens"`, `"llm_usd"`.
@@ -177,7 +177,7 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
   - `scope`: optional string or tuple (e.g., endpoint path, key_id, org_id, team_id); default derived from principal + request.
   - `metadata`: includes current count, limit, bucket, retry-after, and any additional diagnostic info.
 
-**Semantics**
+#### Semantics
 
 - **Atomicity**:
   - Increments are atomic per `(principal, metric, window, scope)` within the backing store (single Redis command or single DB transaction).
@@ -188,7 +188,7 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
   - Calls are not implicitly idempotent; each invocation increments the counter.
   - Call sites that require deduplication should include an idempotency key in `scope` (or use future explicit idempotency support) so the governor can group/reuse increments if needed.
 
-**Guardrails mapped to metrics**
+#### Guardrails mapped to metrics
 
 - Guardrails must support per-org and per-team enforcement as first-class, not only per principal. Metrics may be keyed by principal alone, by org, by team, or by combinations (e.g., principal+org).
 
@@ -205,7 +205,7 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
 - Additional internal metrics:
   - `metric="password_resets"`, `registration_requests`, `admin_actions`, etc. as needed.
 
-**Storage & backends**
+#### Storage & backends
 
 - Reuse existing tables for v1:
   - `llm_usage_log` for LLM tokens/usd.

@@ -91,7 +91,7 @@ The goal is to reduce special-case handling, make the mental model “always mul
 
 ### 1. Single-User as a Bootstrap Profile
 
-**Concept**
+#### Concept
 
 - Single-user deployments are just multi-user deployments seeded with:
   - One admin user in `users`.
@@ -99,7 +99,7 @@ The goal is to reduce special-case handling, make the mental model “always mul
   - Optional one “service” token for internal automation (e.g., scheduler).
 - Registration/login endpoints and admin user-management endpoints are restricted by configuration.
 
-**Implementation Sketch**
+#### Implementation Sketch
 
 - Add a “bootstrap” function in `AuthNZ.initialize`:
   - Checks `AUTH_MODE` and a new setting like `SINGLE_USER_BOOTSTRAP_ENABLED`.
@@ -111,7 +111,7 @@ The goal is to reduce special-case handling, make the mental model “always mul
   - Single-user API key verification uses normal API-key code paths via `APIKeyManager`.
   - `AuthPrincipal` (from Principal-Governance PRD) always represents a user with claims; single-user is just a user with admin role and one API key.
 
-**Bootstrap semantics & idempotency**
+#### Bootstrap semantics & idempotency
 
 - **Existing `SINGLE_USER_API_KEY`**:
   - If `SINGLE_USER_API_KEY` is set, bootstrap MUST treat it as the canonical on-wire key.
@@ -129,7 +129,7 @@ The goal is to reduce special-case handling, make the mental model “always mul
     - Treats this as a misconfiguration (fail fast, recommended default), or
     - Proceeds in a documented “mixed” mode only if explicitly allowed by configuration.
 
-**Mode branching reduction**
+#### Mode branching reduction
 
 - `is_single_user_mode()` becomes:
   - Primarily a configuration signal for:
@@ -138,7 +138,7 @@ The goal is to reduce special-case handling, make the mental model “always mul
     - Feature gating UI/docs (e.g., “no multi-tenant UI in single-user profile”).
 - Permission functions no longer special-case single-user; they rely on claims on the principal.
 
-**Existing single-user dependencies (transitional state)**
+#### Existing single-user dependencies (transitional state)
 
 - Today, several AuthNZ components implement their own single-user mode handling:
   - `auth_deps.get_current_user` has dedicated branches for `SINGLE_USER_API_KEY` and synthetic single-user dicts.
@@ -151,12 +151,12 @@ The goal is to reduce special-case handling, make the mental model “always mul
 
 ### 2. DB Backend Unification via Repositories
 
-**Concept**
+#### Concept
 
 - Introduce a small “AuthNZ repository” layer that encapsulates all SQL and dialect specifics.
 - Business logic modules depend on repositories, not direct SQL or `conn.execute(...)`.
 
-**Repository contracts**
+#### Repository contracts
 
 - Repositories acquire connections via the shared `DatabasePool` abstraction; they do not open raw connections directly.
 - Repositories expose narrow, task-focused methods and hide Postgres/SQLite-specific SQL, placeholders, and JSON/TYPE differences.
@@ -165,7 +165,7 @@ The goal is to reduce special-case handling, make the mental model “always mul
   - Users, API keys, and core RBAC tables are covered by repositories.
   - Usage/metrics repositories (e.g., for `usage_log` / `llm_usage_log`) remain out of scope for this iteration and are future work.
 
-**Initial repositories (examples)**
+#### Initial repositories (examples)
 
 - `AuthnzUsersRepo`:
   - Methods:
@@ -184,7 +184,7 @@ The goal is to reduce special-case handling, make the mental model “always mul
 
 - `AuthnzOrgsTeamsRepo`, `AuthnzUsageRepo`, etc., added as needed.
 
-**Refactors**
+#### Refactors
 
 - Move DDL from:
   - `api_key_manager._create_tables`.
@@ -194,7 +194,7 @@ The goal is to reduce special-case handling, make the mental model “always mul
   - Migrations in `AuthNZ.migrations` / `pg_migrations_extra`.
   - Repository initialization helpers (for compatibility with existing migrations).
 
-**Backend detection**
+#### Backend detection
 
 - All backend detection and placeholder conversion (`$1` vs `?`) become internal to repositories or to `DatabasePool`.
 - Business logic modules stop branching on `if hasattr(conn,'fetchval')`.
@@ -217,7 +217,7 @@ Define and document profiles rather than modes:
 
 Internally, both share the same code paths; only bootstrap, DB URL, and enabled endpoints differ.
 
-**Profile matrix (behavior overview)**
+#### Profile matrix (behavior overview)
 
 | Feature / Capability        | local-single-user                | multi-user-postgres          |
 |----------------------------|----------------------------------|------------------------------|
@@ -344,7 +344,7 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
 - Single-user deployments are implemented as a constrained configuration of multi-user infrastructure; no separate auth code path is required.
 - The number of direct `is_single_user_mode()` checks in the codebase is significantly reduced and confined to a small set of coordination points.
 - At least API-key and user-related AuthNZ modules no longer contain inline dialect branches or DDL; they use repositories instead.
- - For both profiles, authentication headers, HTTP status codes (401/403), and error payloads remain compatible with current behavior, or any intentional changes are explicitly documented and tested.
+- For both profiles, authentication headers, HTTP status codes (401/403), and error payloads remain compatible with current behavior, or any intentional changes are explicitly documented and tested.
 
 ## Implementation Plan
 
