@@ -917,8 +917,9 @@ class FileValidator:
                 # Fallback: regex-based removal for script/style blocks
                 try:
                     import re as _re
-                    preprocessed = _re.sub(r"<script[^>]*>.*?</script>", " ", preprocessed, flags=_re.DOTALL | _re.IGNORECASE)
-                    preprocessed = _re.sub(r"<style[^>]*>.*?</style>", " ", preprocessed, flags=_re.DOTALL | _re.IGNORECASE)
+                    preprocessed = _re.sub(r"<script[^>]*>.*?</script\b[^>]*>", " ", preprocessed, flags=_re.DOTALL | _re.IGNORECASE)
+                    preprocessed = _re.sub(r"<style[^>]*>.*?</style\b[^>]*>", " ", preprocessed, flags=_re.DOTALL | _re.IGNORECASE)
+                    preprocessed = _re.sub(r"<noscript[^>]*>.*?</noscript\b[^>]*>", " ", preprocessed, flags=_re.DOTALL | _re.IGNORECASE)
                     preprocessed = _re.sub(r"<!--.*?-->", " ", preprocessed, flags=_re.DOTALL)
                 except Exception:
                     preprocessed = html_content
