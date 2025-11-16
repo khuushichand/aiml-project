@@ -134,7 +134,7 @@ async def apply_prf(
         logger.debug(f"PRF mined {len(selected)} terms from {len(seeds)} docs")  # pragma: no cover - debug log
         return expanded_query, meta
     except Exception as e:  # pragma: no cover - defensive
-        logger.warning(f\"PRF computation failed; returning original query: {e}\")
+        logger.warning(f"PRF computation failed; returning original query: {e}")
         return query, {
             "enabled": False,
             "base_query": query,
