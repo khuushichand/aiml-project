@@ -28,7 +28,7 @@ def reset_app_overrides():
 
 
 @pytest.fixture()
-def client_with_user(monkeypatch, tmp_path):
+def client_with_user(monkeypatch):
     async def override_user():
         return User(id=123, username="tester", email=None, is_active=True)
 
