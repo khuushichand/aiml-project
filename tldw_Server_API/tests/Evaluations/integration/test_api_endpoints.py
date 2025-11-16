@@ -3,10 +3,13 @@ Integration tests for Evaluation API endpoints.
 
 These tests use real components with no mocking - only external services
 like LLMs use cached responses for deterministic testing.
+
+Marked with ``evaluations`` so they only run in the
+opt-in Evaluations test suite (RUN_EVALUATIONS=1).
 """
 
 import pytest
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.evaluations]
 import json
 import asyncio
 import os

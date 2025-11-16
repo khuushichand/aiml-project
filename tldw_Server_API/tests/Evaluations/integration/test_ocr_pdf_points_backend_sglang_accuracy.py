@@ -5,6 +5,8 @@ import tempfile
 import pytest
 from fastapi.testclient import TestClient
 
+pytestmark = [pytest.mark.integration, pytest.mark.evaluations]
+
 
 def _sglang_available():
     url = os.getenv("POINTS_SGLANG_URL", "http://127.0.0.1:8081/v1/chat/completions")
@@ -18,7 +20,6 @@ def _sglang_available():
         return False
 
 
-@pytest.mark.integration
 @pytest.mark.requires_llm
 def test_points_sglang_accuracy():
     pytest.importorskip("requests")

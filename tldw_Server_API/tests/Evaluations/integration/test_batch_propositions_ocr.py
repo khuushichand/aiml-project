@@ -1,15 +1,18 @@
 import os
+
 import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
 
+pytestmark = [pytest.mark.integration, pytest.mark.evaluations]
+
 
 @pytest.fixture(autouse=True)
 def _setup_env(monkeypatch):
     # Allow tests to run without admin gating and use testing bypass
-    monkeypatch.setenv('EVALS_HEAVY_ADMIN_ONLY', 'false')
-    monkeypatch.setenv('TESTING', 'true')
+    monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "false")
+    monkeypatch.setenv("TESTING", "true")
 
 
 @pytest.fixture(scope="function")

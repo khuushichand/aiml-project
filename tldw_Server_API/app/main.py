@@ -3416,9 +3416,10 @@ else:
         _include_if_enabled("subscriptions-deprecated", _subs_legacy_router, prefix=f"{API_V1_PREFIX}", tags=["subscriptions-deprecated"])
     except Exception as _e:
         logger.warning(f"Legacy subscriptions shim not available: {_e}")
-    _include_if_enabled("notes", notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
+    # Include Notes Graph routes before generic notes routes so /graph is not shadowed by /{note_id}
     if _HAS_NOTES_GRAPH:
         _include_if_enabled("notes", notes_graph_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])  # /api/v1/notes/graph
+    _include_if_enabled("notes", notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
     _include_if_enabled("prompts", prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
     if _HAS_READING_HIGHLIGHTS:
         _include_if_enabled("reading-highlights", reading_highlights_router, prefix=f"{API_V1_PREFIX}", tags=["reading-highlights"])

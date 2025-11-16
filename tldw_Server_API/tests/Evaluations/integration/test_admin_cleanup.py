@@ -1,15 +1,18 @@
 import os
+
 import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
 
+pytestmark = [pytest.mark.integration, pytest.mark.evaluations]
+
 
 @pytest.fixture(autouse=True)
 def _setup_env(monkeypatch):
     # Bypass admin gating for tests and enable testing auth bypass
-    monkeypatch.setenv('EVALS_HEAVY_ADMIN_ONLY', 'false')
-    monkeypatch.setenv('TESTING', 'true')
+    monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "false")
+    monkeypatch.setenv("TESTING", "true")
 
 
 def test_admin_idempotency_cleanup_basic():
@@ -22,12 +25,12 @@ def test_admin_idempotency_cleanup_basic():
 
     # Shape assertions
     assert isinstance(j, dict)
-    assert 'deleted_total' in j
-    assert 'details' in j
-    assert isinstance(j['deleted_total'], int)
-    assert isinstance(j['details'], list)
-    for entry in j['details']:
+    assert "deleted_total" in j
+    assert "details" in j
+    assert isinstance(j["deleted_total"], int)
+    assert isinstance(j["details"], list)
+    for entry in j["details"]:
         assert isinstance(entry, dict)
-        assert 'user_id' in entry and 'deleted' in entry
-        assert isinstance(entry['user_id'], int)
-        assert isinstance(entry['deleted'], int)
+        assert "user_id" in entry and "deleted" in entry
+        assert isinstance(entry["user_id"], int)
+        assert isinstance(entry["deleted"], int)
