@@ -258,21 +258,72 @@ streams_unified = true
 # chat_stream_channel_maxsize = 100
 
 [HTTP]
-# Control outbound HTTP redirect behavior for the server's HTTP client
-# (env overrides: HTTP_ALLOW_REDIRECTS, HTTP_MAX_REDIRECTS,
-#                  HTTP_ALLOW_CROSS_HOST_REDIRECTS, HTTP_ALLOW_SCHEME_DOWNGRADE)
+# Centralized outbound HTTP client configuration
+# Env overrides: see [HTTP-Client] in Config_Files/README.md
 
-# Whether simple GET/HEAD helpers may follow redirects (default: true)
+# Core timeouts (seconds)
+connect_timeout = 5.0
+read_timeout = 30.0
+write_timeout = 30.0
+pool_timeout = 30.0
+
+# Retries & backoff
+retry_attempts = 3
+backoff_base_ms = 250
+backoff_cap_s = 30
+
+# Connection limits
+max_connections = 100
+max_keepalive_connections = 20
+
+# Redirect behavior for simple GET/HEAD helpers
 allow_redirects = true
-
-# Maximum number of redirects to follow before failing (default: 5)
 max_redirects = 5
 
-# Allow redirects to a different host (default: false for safety)
+# Redirect safety controls
 allow_cross_host_redirects = false
-
-# Allow scheme downgrade (https -> http) (default: false for safety)
 allow_scheme_downgrade = false
+
+# Trust system environment/proxies (HTTP_TRUST_ENV)
+trust_env = false
+
+# Optional override for the default User-Agent
+default_user_agent =
+
+# Optional maximum JSON payload size (bytes) for helpers that opt-in
+json_max_bytes =
+
+# Optional HTTP/3 toggle (currently a no-op; reserved for future use)
+http3_enabled = false
+
+# Proxy host allowlist (csv of hostnames/domains or URLs); deny-by-default when empty
+proxy_allowlist =
+
+# TLS minimum version enforcement
+enforce_tls_min_version = false
+tls_min_version = 1.2
+
+# Env-driven certificate pins (HTTP_CERT_PINS); format: host=pin1|pin2[,host2=pin3]
+cert_pins =
+
+[Egress]
+# Global egress allow/deny lists for outbound HTTP (including workflows and the HTTP client)
+# Comma-separated hostnames or domains; empty means "no constraint" in permissive profile.
+egress_allowlist =
+egress_denylist =
+
+# Workflows-specific allow/deny overrides (unioned with global lists)
+workflows_allowlist =
+workflows_denylist =
+
+# Allowed outbound ports (comma-separated integers; default: 80,443)
+allowed_ports = 80,443
+
+# Block private/reserved IP ranges by default (true/false)
+block_private = true
+
+# Egress profile: strict|permissive|custom (see Security/egress.py)
+profile =
 
 [Embeddings]
 embedding_provider = huggingface

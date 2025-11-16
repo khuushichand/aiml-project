@@ -1,6 +1,10 @@
 #!/bin/bash
 # Script to start the test server with proper environment variables
 
+# Always resolve paths relative to this script, not the caller's CWD
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
 echo "Starting test server with TEST_MODE enabled..."
 
 # Check if server is already running
@@ -34,7 +38,7 @@ trap cleanup INT TERM EXIT
 
 # Start the server
 echo "Starting server with API key: $SINGLE_USER_API_KEY"
-cd ../..
+cd "${REPO_ROOT}"
 
 # Start server and capture both stdout and stderr (use full module path)
 python -m uvicorn tldw_Server_API.app.main:app --reload --port 8000 2>&1 &
