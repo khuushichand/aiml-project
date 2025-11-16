@@ -57,8 +57,8 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
   - User context: `user()` → `{ id, display_name }` only (no email/tokens)
   - Optional provider plug-in: `weather(city=None)` (disabled by default; requires provider config)
 - Context source: TemplateContext capturing `user`, `chat` (character, conv), `request_meta` (safe, pre-sanitized subset such as coarse location/timezone but never raw IPs or sensitive headers), `env` (timezone/locale), `extra`.
-- Timezone handling: Use `zoneinfo` for timezone resolution with defaults from user profile (if available) or server config. Locale-aware formatting is deferred for now (no Babel requirement); Chatbooks may still specify `metadata.template_timezone`. `metadata.template_locale` is accepted but ignored unless Babel is installed and explicitly enabled later via a feature flag or explicit configuration.
-- Auto-detection: If a replacement contains `{{` or `{%`, it is treated as a template when feature flag is on.
+- Timezone handling: Use `zoneinfo` for timezone resolution with defaults from user profile (if available) or server config. Locale-aware formatting is deferred for now (no Babel requirement); Chatbooks may still specify `metadata.template_timezone`. `metadata.template_locale` is accepted but ignored unless Babel is installed and explicitly enabled later via a feature flag or explicit configuration. All built-in date/time helpers initially format in a fixed (English) locale; any future locale-aware formatting will be feature-flagged.
+- Auto-detection: If a replacement contains `{{`, it is treated as a template when the feature flag is on. Occurrences of `{%` are never considered valid for this feature; any template containing `{%` is rejected as a forbidden construct (`template_forbidden_construct`) and must use escaping to emit literal `{%`/`%}`.
 - Failure behavior: On template errors, log and fall back to the original text, never blocking chat. Enforce `MAX_TEMPLATE_OUTPUT_CHARS` and per-render timeout.
 
 ### 5.2 Usage in Chat Dictionaries
@@ -79,7 +79,7 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
   - Per-dictionary: when global templating is enabled, a dictionary-level `enable_templates=false` forces pass-through behavior for that dictionary even if template syntax is present; `enable_templates=true` forces rendering for that dictionary (subject to sandbox/validation).
   - Chatbooks: `metadata.template_mode` governs when Chatbook content is rendered (pass-through vs render-on-import/export) but does not override the global on/off switch for dictionary templating; it operates on top of the global/dictionary-level behavior.
 - Escaping and literal behavior:
-  - To render literal `{{`/`}}` or `{%`/`%}` in output, users can rely on Jinja expression escaping, e.g., `{{ '{{' }}` to emit `{{` and `{{ '}}' }}` to emit `}}`.
+  - To render literal `{{`/`}}` or `{%`/`%}` in output (since block/control tags are not allowed), users can rely on Jinja expression escaping, e.g., `{{ '{{' }}` to emit `{{` and `{{ '}}' }}` to emit `}}`.
   - For dictionaries that are heavy in curly braces and should never be treated as templates, set `enable_templates=false` at the dictionary level so that content is always treated as literal text even when `{{`/`{%` appear.
 
 ### 5.3 Usage in Chatbooks
@@ -121,11 +121,11 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
 
 - Validator workflows (summary):
 
-  | Workflow                         | `strict` value passed | Fatal behavior                                                                                                 | Typical usage                                                                                             |
-  |----------------------------------|------------------------|----------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
-  | CLI (`python -m ...validate`)    | `strict` flag from CLI (`--strict` → true; default false) | When `--strict` is set, any fatal error code (schema/regex safety/timeout/template parse/forbidden/output/size) should cause a non-zero exit code; otherwise exit code is based on CLI policy (e.g., always 0 or only on internal errors). | Local linting in dev/CI; treat `--strict` as “fail the build on serious issues”, surface all issues in JSON. |
-  | API `POST /chat/dictionaries/validate` | `strict` field from request (default false) | Never changes HTTP status: always 200 on successful validation. In `strict=true`, fatal codes are classified as errors (not warnings), but the caller decides whether to block on them. | Online tools, WebUI forms, and API clients that want structured reports without automatic rejection.      |
-  | Chatbooks import                 | Typically calls validator with `strict=false`, paired with `CHATBOOKS_IMPORT_DICT_STRICT` env flag | When `CHATBOOKS_IMPORT_DICT_STRICT` is enabled, any fatal error codes cause the offending dictionary to be skipped entirely; warnings are always non-fatal but are recorded in `ImportJob.warnings`. | Importing Chatbooks where malformed dictionaries should not block the whole import but should be skipped when strict mode is requested. |
+| Workflow                         | `strict` value passed | Fatal behavior                                                                                                 | Typical usage                                                                                             |
+|----------------------------------|------------------------|----------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
+| CLI (`python -m ...validate`)    | `strict` flag from CLI (`--strict` → true; default false) | When `--strict` is set, the presence of any fatal error code (schema/regex safety/timeout/template parse/forbidden/output/size) MUST cause a process exit code of 1; when `--strict` is not set, the CLI exits 0 unless an internal error occurs (internal errors SHOULD exit with a distinct non-zero code such as 2). | Local linting in dev/CI; treat `--strict` as “fail the build on serious issues”, surface all issues in JSON. |
+| API `POST /chat/dictionaries/validate` | `strict` field from request (default false) | Never changes HTTP status: always 200 on successful validation. In `strict=true`, fatal codes are classified as errors (not warnings), but the caller decides whether to block on them. | Online tools, WebUI forms, and API clients that want structured reports without automatic rejection.      |
+| Chatbooks import                 | Always calls validator with `strict=false`, paired with `CHATBOOKS_IMPORT_DICT_STRICT` env flag | When `CHATBOOKS_IMPORT_DICT_STRICT` is enabled, any fatal error codes cause the offending dictionary to be skipped entirely; warnings are always non-fatal but are recorded in `ImportJob.warnings`. Import workflows never fail the entire Chatbook solely due to dictionary issues; only the problematic dictionaries are skipped in strict mode. | Importing Chatbooks where malformed dictionaries should not block the whole import but should be skipped when strict mode is requested. |
 
 ## 6. Architecture & Components
 
@@ -202,12 +202,16 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
       ],
       "warnings": [{"code": "template_unknown_function", "field": "replacement", "message": "Unknown function: weather"}],
       "entry_stats": { "total": 25, "regex": 5, "literal": 20 },
-      "suggested_fixes": ["escape '.' in pattern 2"]
+      "suggested_fixes": ["escape '.' in pattern 2"],
+      "partial": false,
+      "partial_reason": null
     }
   - Status codes:
     - 200 on validation completion (with errors/warnings payload), including when validation finds issues (i.e., `ok=false` or non-empty `errors`/`warnings`).
     - 200 with `schema_invalid` in `errors` when an unknown or unsupported `schema_version` is provided.
     - 400 only for malformed request payload (e.g., request body not matching `ValidateDictionaryRequest` schema).
+  - Partial results:
+    - The response includes a `partial` flag (bool) and optional `partial_reason` field (e.g., `"max_entries"`, `"timeout"`) to indicate when validation short-circuited due to `CHAT_DICT_VALIDATE_MAX_ENTRIES` or time-budget limits while still returning a best-effort report.
 
 ## 8. Configuration
 
@@ -231,6 +235,7 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
  - `CHAT_COMMAND_INJECTION_MODE` (`system`|`preface`|`replace`, default `system`)
  - `WEATHER_UNITS` (`metric`|`imperial`, default `metric`), `WEATHER_LANG` (default `en`)
  - `ALLOW_IP_GEOLOCATION` (bool, default false), `GEO_PROVIDER` (optional; none used unless configured)
+ - `CHATBOOKS_IMPORT_DICT_STRICT` (bool, default false; when true, Chatbooks import skips dictionaries with fatal validation errors instead of importing them with warnings only).
 
 ## 9. Security & Privacy
 
@@ -238,7 +243,7 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
 - External calls (e.g., weather) disabled by default for templates; commands use short timeouts and strict rate limits.
 - Avoid logging sensitive content; log only metrics and minimal context (e.g., command name, city tokenized). The `user()` function only exposes `{id, display_name}`.
 - IP-based geolocation (when explicitly enabled via `ALLOW_IP_GEOLOCATION` and `GEO_PROVIDER`) is used only for transient resolution; raw IPs and geo provider responses are not persisted beyond request processing. Only coarse, non-PII location strings may be stored in logs or metadata.
-- Respect existing AuthNZ modes (single-user API key, JWT multi-user); use RBAC for tool/command endpoints if necessary.
+- Respect existing AuthNZ modes (single-user API key, JWT multi-user); use RBAC for tool/command endpoints if necessary. The new `GET /api/v1/chat/commands` and `POST /api/v1/chat/dictionaries/validate` endpoints require the same AuthNZ as other chat endpoints and are permission-gated via existing RBAC privileges (e.g., `chat.commands.list`, `chat.dictionaries.validate`).
 
 ## 10. Observability
 
@@ -272,12 +277,12 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
   - Bounded result size (short summaries; truncated to `CHAT_COMMANDS_MAX_CHARS`)
 - Validator performance:
   - The validator enforces an overall time budget per request (e.g., a few hundred milliseconds, configurable) and may cap the maximum number of entries processed per call to prevent abuse.
-  - When regex safety checks exceed the match-time budget for a given entry, the validator emits a `regex_timeout` issue for that entry and skips further expensive checks for it (and, if necessary, for remaining entries) while still returning a best-effort report.
+  - When regex safety checks exceed the match-time budget for a given entry, the validator emits a `regex_timeout` issue for that entry and skips further expensive checks for it (and, if necessary, for remaining entries) while still returning a best-effort report. In these cases, the response sets `partial=true` and provides a short `partial_reason` enum to signal that only a subset of entries was fully validated.
 
 ## 12. Error Handling
 
 - Template rendering errors: log + fallback to original text. Client applications (including the WebUI) may optionally surface a subtle warning (e.g., “template rendering failed; using raw text”) when they receive validator issues or detect repeated template failures, to help power users debug misconfigurations without disrupting normal chat flow.
-- Moderation ordering: Command-injected context is added as a separate `system` message part, bypasses user-input moderation, and is logged/audited with explicit system-origin metadata; downstream output moderation may still apply per deployment policy.
+- Moderation ordering: Command-injected context is added as a separate `system` message part, bypasses user-input moderation, and is logged/audited with explicit system-origin metadata; the resulting conversation (including injected parts) remains subject to any downstream output moderation applied by the deployment. When `CHAT_COMMAND_INJECTION_MODE=replace`, the synthetic message is still tagged with system-origin metadata for audit and moderation purposes.
 - Command errors/timeouts: prepend a short notice (optional) or silently skip; never block the chat flow. `/weather` yields a short “weather unavailable” notice when provider is not configured.
 - Audit metadata on injected parts includes: `{ origin: 'system', cmd: '/name', duration_ms, status: 'success'|'fallback'|'error' }`. Injected content is truncated to `CHAT_COMMANDS_MAX_CHARS`.
 - Validator: returns structured errors; Chatbooks import surfaces warnings and rejects only in strict mode or on fatals.
@@ -329,6 +334,8 @@ The work fits existing architecture and patterns, prioritizing safety and backwa
 - Do we allow user-defined custom functions via plugin mechanism? If yes, behind admin-only config.
 - Preferred default weather provider and location determination policy; privacy expectations for location data.
 
+For the initial implementation, adopt the recommendations above as defaults: template rendering applies only to dictionary replacements (not global user messages), no user-defined custom functions are supported, and OpenWeather (when configured) is the default weather provider. Alternative policies can be explored as follow-up iterations.
+
 ## 18. Risks & Mitigations
 
 - Risk: Template engine misuse to attempt code execution → Mitigation: Jinja sandbox, restricted globals, tests.
@@ -351,9 +358,10 @@ current_date: |
 
 ### Regex Capture Example
 ```
-pattern: /price\s+(\w+)/
+pattern: "price\\s+(\\w+)"
 replacement: "The product {{ match.group(1)|upper }} is on sale today ({{ now_tz('%b %d', tz='America/New_York') }})."
 ```
+- Regex patterns are plain Python regular expressions (no leading or trailing `/.../` delimiters); the example above uses a simple capture group for a product name.
 
 ### Slash Command Example
 - Input: `/weather Boston`
@@ -404,14 +412,14 @@ This implementation plan breaks delivery into clear engineering stages with flag
     - Sandboxed Jinja environment (StrictUndefined, expression-only, no macros/blocks, no autoescape)
     - Functions: `now`, `today`, `iso_now`, `now_tz`; `upper/lower/title/slugify`; gated `randint/choice` (seed support)
     - Context builder: accepts `user`, `chat`, `request_meta`, `env` (tz/locale), `extra`
-    - Options: `allow_random`, `allow_external_calls`, `max_output_chars`, `timeout_ms`
+    - Options: `allow_random`, `allow_external_calls`, `max_output_chars`, `timeout_ms`, `cache_max_entries`
 - Config
-  - Wire flags into central config: `CHAT_DICT_TEMPLATES_ENABLED`, `CHAT_DICT_TEMPLATES_ALLOW_RANDOM`, `TEMPLATES_ALLOW_EXTERNAL_CALLS`, `MAX_TEMPLATE_OUTPUT_CHARS`, `TEMPLATE_DEFAULT_TZ`, `TEMPLATE_DEFAULT_LOCALE`, `TEMPLATES_RANDOM_SEED`
+  - Wire flags into central config: `CHAT_DICT_TEMPLATES_ENABLED`, `CHAT_DICT_TEMPLATES_ALLOW_RANDOM`, `TEMPLATES_ALLOW_EXTERNAL_CALLS`, `MAX_TEMPLATE_OUTPUT_CHARS`, `TEMPLATE_RENDER_TIMEOUT_MS`, `TEMPLATE_CACHE_MAX_ENTRIES`, `TEMPLATE_DEFAULT_TZ`, `TEMPLATE_DEFAULT_LOCALE`, `TEMPLATES_RANDOM_SEED`
 - Tests
   - Unit: `tldw_Server_API/tests/Chat_NEW/unit/test_template_renderer.py`
-    - Rendering basics, timezone, locale, strict undefined, output cap, timeout, random gating and deterministic seeding
+    - Rendering basics, timezone, locale, strict undefined, output cap, timeout, random gating and deterministic seeding, AST allowlist enforcement (expression-only), `{%`/block-tag rejection, and literal escaping behavior
 - Acceptance
-  - All helper functions behave; sandbox rejects forbidden constructs; no side effects or global state
+  - All helper functions behave; sandbox rejects forbidden constructs (including any `{%` control tags); no side effects or global state
 
 ### Stage 2 — Dictionary Integration (Per-match Rendering)
 - Files
@@ -419,13 +427,13 @@ This implementation plan breaks delivery into clear engineering stages with flag
     - In `apply_replacement_once`, render replacements per match
       - Regex: `subn(lambda m: render(entry.content, ctx|{'match': m}))`
       - Literal: expose `matched_text` and render per replacement
-    - Add fast path when no template syntax present
+    - Add fast path when no template syntax present (based on `{{` detection only)
     - Build per-call template context (user/chat/env if available via caller)
 - Config
-  - Respect `CHAT_DICT_TEMPLATES_ENABLED` and random/external flags
+  - Respect `CHAT_DICT_TEMPLATES_ENABLED`, dictionary-level `enable_templates`, and random/external flags
 - Tests
   - Unit: `tldw_Server_API/tests/Chat_NEW/unit/test_chat_dictionary_templates.py`
-    - Regex groups and named groups work; literal matched_text works; disabled flag is no-op
+    - Regex groups and named groups work; literal matched_text works; global and per-dictionary template flags behave as specified; disabled flag is no-op
 - Acceptance
   - No change in behavior when feature flag off; measurable performance impact near-zero on non-templated entries
 
@@ -434,12 +442,12 @@ This implementation plan breaks delivery into clear engineering stages with flag
   - Add: `tldw_Server_API/app/core/Chat/validate_dictionary.py`
     - Public function `validate_dictionary(data, schema_version, strict=False)` returning structured report
     - CLI entrypoint: `python -m tldw_Server_API.app.core.Chat.validate_dictionary --file <path> [--strict]` (optional console script alias `tldw-dict-validate`)
-    - Safe-regex heuristics + optional match-time timeout using the third-party `regex` module (if installed); template parse in expression-only mode
+    - Safe-regex heuristics + optional match-time timeout using the third-party `regex` module (if installed); template parse in expression-only mode; `partial`/`partial_reason` reporting when validation short-circuits due to time/entry limits
 - Tests
   - Unit: `tldw_Server_API/tests/Chat_NEW/unit/test_dictionary_validator.py`
-    - Schema violations, regex invalid/unsafe/timeout, template parse errors, warnings in non-strict mode
+    - Schema violations, regex invalid/unsafe/timeout, template parse errors, expression-only enforcement (`template_forbidden_construct`), warnings in non-strict mode vs errors in strict mode, `partial`/`partial_reason` behavior when limits are hit, and CLI exit codes for `--strict` vs non-strict and internal-error paths
 - Acceptance
-  - CLI produces JSON summary with error taxonomy and exits non-zero in strict failures
+  - CLI produces JSON summary with error taxonomy; when invoked with `--strict`, any fatal error codes result in exit code 1, non-fatal issues exit 0, and internal errors use a distinct non-zero code (for example, 2); API responses populate `partial`/`partial_reason` correctly when validation short-circuits
 
 ### Stage 4 — Command Router Core
 - Files
@@ -465,17 +473,17 @@ This implementation plan breaks delivery into clear engineering stages with flag
 - Files
   - Update/Add: Chat endpoints (or new router)
     - `GET /api/v1/chat/commands`: list commands with `usage`, `args`, `requires_api_key`, `rate_limit`, `rbac_required` (RBAC-filtered)
-    - `POST /api/v1/chat/dictionaries/validate`: accepts `data`, `schema_version`, `strict`; returns structured report
-  - Update: Chatbooks import flow to invoke validator on embedded dictionaries; append warnings into `ImportJob.warnings`; respect strict mode
+    - `POST /api/v1/chat/dictionaries/validate`: accepts `data`, `schema_version`, `strict`; returns structured report with `partial`/`partial_reason`
+  - Update: Chatbooks import flow to invoke validator on embedded dictionaries; always call validator with `strict=false`; append findings into `ImportJob.warnings`; consult `CHATBOOKS_IMPORT_DICT_STRICT` to decide whether dictionaries with fatal errors are skipped while allowing the rest of the Chatbook to import
 - Tests
   - Integration: endpoints contract tests; Chatbooks import path populates warnings and respects strict failures
 - Acceptance
-  - Endpoints pass schema validation and RBAC; Chatbooks import produces validator results without performance regressions
+  - Endpoints pass schema validation and RBAC; validator endpoint returns `partial`/`partial_reason` as specified; Chatbooks import produces validator results without performance regressions and never fails the entire import solely due to dictionary validation errors (problematic dictionaries are skipped when `CHATBOOKS_IMPORT_DICT_STRICT=true`)
 
 ### Stage 6 — Hardening, Metrics, Docs
 - Files
   - Add metrics counters/histograms and log lines as specified
-  - Docs updates: `Docs/API-related/Chatbook_Features_API_Documentation.md` (append endpoints), WebUI notes, `.env.authnz.template`/config.txt knobs
+  - Docs updates: `Docs/API-related/Chatbook_Features_API_Documentation.md` and `Docs/Published/API-related/Chatbook_Features_API_Documentation.md` (append endpoints and tools interplay), `Docs/Product/Chatbooks_PRD.md` alignment notes, WebUI notes, `.env.authnz.template`/config.txt knobs
 - Tests
   - Smoke: run selected integration flows with flags on/off
 - Acceptance

@@ -1,0 +1,159 @@
+import pytest
+
+from tldw_Server_API.app.api.v1.utils import cache, http_errors, request_parsing
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    ConflictError,
+    DatabaseError,
+    InputError,
+    SchemaError,
+)
+
+
+pytestmark = pytest.mark.unit
+
+
+class _FakeRedis:
+    def __init__(self):
+        self.calls = []
+        self.kv = {}
+        self.sets = {}
+
+    # Basic KV
+    def setex(self, key, ttl, value):
+        self.calls.append(("setex", key, ttl, value))
+        self.kv[key] = value
+
+    def get(self, key):
+        self.calls.append(("get", key))
+        return self.kv.get(key)
+
+    def delete(self, *keys):
+        self.calls.append(("delete", keys))
+        deleted = 0
+        for k in keys:
+            k = k.decode() if isinstance(k, (bytes, bytearray)) else k
+            if k in self.kv:
+                del self.kv[k]
+                deleted += 1
+        return deleted
+
+    # Set ops
+    def sadd(self, key, member):
+        self.calls.append(("sadd", key, member))
+        self.sets.setdefault(key, set()).add(member)
+
+    def smembers(self, key):
+        self.calls.append(("smembers", key))
+        return set(self.sets.get(key, set()))
+
+    def expire(self, key, ttl):
+        self.calls.append(("expire", key, ttl))
+        return True
+
+    # Scan fallback
+    def scan(self, cursor=0, match=None, count=None):
+        self.calls.append(("scan", cursor, match, count))
+        return 0, []
+
+
+def test_build_cache_key_is_stable_and_drops_token():
+    params1 = {"page": "1", "token": "secret"}
+    params2 = {"token": "secret", "page": "1"}
+
+    key1 = cache.build_cache_key("/api/v1/media", params1)
+    key2 = cache.build_cache_key("/api/v1/media", params2)
+
+    assert key1 == key2
+    assert "token" not in key1
+
+    key3 = cache.build_cache_key("/api/v1/media", {"page": "2"})
+    assert key3 != key1
+
+
+def test_cache_response_and_get_cached_response_roundtrip():
+    fake = _FakeRedis()
+    payload = {"ok": True, "items": [1, 2, 3]}
+    key = "cache:/api/v1/media/123:abc"
+
+    etag = cache.cache_response(key, payload, client=fake, media_id=123)
+    assert etag
+
+    # Ensure index key updated
+    idx_key = "cacheidx:/api/v1/media/123"
+    assert idx_key in fake.sets
+    assert key in fake.sets[idx_key]
+
+    cached = cache.get_cached_response(key, client=fake)
+    assert cached is not None
+    cached_etag, cached_payload = cached
+    assert cached_etag == etag
+    assert cached_payload == payload
+
+
+def test_invalidate_media_cache_uses_index_and_scan():
+    class _ScanRedis(_FakeRedis):
+        def scan(self, cursor=0, match=None, count=None):
+            # Expose one extra key on first call when index already seeded
+            if cursor == 0 and match:
+                self.kv["cache:/api/v1/media/123:extra"] = "v"
+                return 0, ["cache:/api/v1/media/123:extra"]
+            return 0, []
+
+    fake = _ScanRedis()
+    key = "cache:/api/v1/media/123:abc123"
+    fake.setex(key, cache.CACHE_TTL, "v")
+    fake.sadd("cacheidx:/api/v1/media/123", key)
+
+    cache.invalidate_media_cache(123, client=fake)
+
+    # Both indexed and scanned keys should be removed
+    assert not any(k.startswith("cache:/api/v1/media/123:") for k in fake.kv.keys())
+
+
+def test_etag_and_if_none_match_parsing():
+    payload = {"a": 1, "b": 2}
+    etag = cache.generate_etag(payload)
+
+    header = f'W/"{etag}", "other"'
+    assert cache.is_not_modified(etag, header)
+
+    header_miss = '"somethingelse"'
+    assert not cache.is_not_modified(etag, header_miss)
+
+
+def test_request_parsing_to_bool_and_to_int():
+    assert request_parsing.to_bool("yes") is True
+    assert request_parsing.to_bool("No") is False
+    assert request_parsing.to_bool(None, default=True) is True
+
+    assert request_parsing.to_int("10") == 10
+    assert request_parsing.to_int("  ", default=5) == 5
+    assert request_parsing.to_int("not-a-number", default=None) is None
+
+
+def test_request_parsing_normalize_str_list_and_urls():
+    assert request_parsing.normalize_str_list("a, b; c d") == ["a", "b", "c", "d"]
+    assert request_parsing.normalize_str_list([" a ", ""]) == ["a"]
+
+    urls = request_parsing.normalize_urls([" https://a ", "https://b", "https://a"])
+    assert urls == ["https://a", "https://b"]
+
+
+def test_http_error_mapping_for_db_exceptions():
+    exc = InputError("bad")
+    http_exc = http_errors.map_db_error_to_http(exc)
+    assert http_exc.status_code == 400
+
+    exc = ConflictError()
+    http_exc = http_errors.map_db_error_to_http(exc)
+    assert http_exc.status_code == 409
+
+    exc = SchemaError("schema")
+    http_exc = http_errors.map_db_error_to_http(exc)
+    assert http_exc.status_code == 500
+    assert "schema" in str(exc)
+
+    exc = DatabaseError("db")
+    http_exc = http_errors.map_db_error_to_http(exc)
+    assert http_exc.status_code == 500
+

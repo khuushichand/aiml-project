@@ -668,6 +668,13 @@ GET `/api/v1/chat/documents/statistics`
 
 Export/import collections of chat-related content with job management and secure downloads.
 
+### Interplay with Chatbook Tools (Dictionaries & Templates)
+
+Chatbooks can include chat dictionaries and other template-aware content whose behavior is defined in the Chatbook Tools PRD and related APIs:
+- Embedded dictionaries are validated during `POST /api/v1/chatbooks/import` using the same validator exposed at `POST /api/v1/chat/dictionaries/validate`. Validation findings (schema/regex/template issues) appear as per-item warnings/errors in Chatbook import job results.
+- The `strict` flag in `/chat/dictionaries/validate` is not forwarded directly from Chatbooks; instead, import always calls the validator with `strict=false` and uses the `CHATBOOKS_IMPORT_DICT_STRICT` environment flag to decide whether dictionaries with fatal errors are skipped or imported with warnings.
+- Template-related manifest metadata (for example, `metadata.template_mode`, `metadata.template_defaults`, `metadata.template_timezone`, `metadata.template_locale`) is carried through in Chatbook exports/imports but evaluated according to the template renderer and flags documented in `Docs/Product/Chatbook-Tools-PRD.md`. Chatbooks themselves do not execute templates at import time unless explicitly configured via those tools-level settings.
+
 ### Base URL
 `/api/v1/chatbooks`
 

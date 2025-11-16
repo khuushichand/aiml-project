@@ -1,0 +1,90 @@
+## Chatbooks Export/Import — Implementation Plan
+
+This plan tracks staged implementation for Chatbooks export/import as specified in `Docs/Product/Chatbooks_PRD.md`. Each stage lists goals, success criteria, and concrete test notes. Update **Status** as work progresses.
+
+---
+
+## Stage 1: Core Export & Manifest v1
+**Goal**: Ship metadata-complete Chatbooks exports with manifest v1 and job plumbing.
+
+**Success Criteria**:
+- `POST /api/v1/chatbooks/export` (sync + async) produces a ZIP containing a valid `manifest.json` conforming to `Docs/Schemas/chatbooks_manifest_v1.json`.
+- Export pipeline covers the v1 scope: conversations (messages + image attachments), notes, characters, world books, dictionaries, generated docs, Prompt Studio prompts, media descriptors (including transcripts, media-linked prompts, optional media embeddings), and evaluation definitions with associated runs.
+- Jobs are persisted per user in ChaChaNotes with states `pending → in_progress → completed|failed|cancelled|expired|deleted`, and `GET /api/v1/chatbooks/*/jobs` returns consistent job metadata and scopes.
+- Signed download URLs (`CHATBOOKS_SIGNED_URLS`, `CHATBOOKS_SIGNING_SECRET`) work in multi-user/org modes; `GET /api/v1/chatbooks/download/{job_id}` returns either a ZIP file or a signed URL honoring `expires_at`.
+
+**Tests**:
+- Unit: manifest builder (per-type mappers and statistics), job model/state transitions, per-user storage path construction (`TLDW_USER_DATA_PATH`), signed URL HMAC generation and expiry handling.
+- Integration: end-to-end export for a user with mixed content types; verification of manifest counts and identities; retry/export of large-but-metadata-only archives; listing jobs by user and (for admins) by team/org.
+
+**Status**: Completed (per “What’s working now” in the PRD)
+
+---
+
+## Stage 2: Export Coverage Gaps (Embeddings, Evaluations, Citations)
+**Goal**: Close outstanding export TODOs for embeddings, evaluation runs, and conversation citation metadata.
+
+**Success Criteria**:
+- Embedding exports support explicit embedding sets beyond media-linked vectors, with stable `embedding_set_id` and `embedding_id` semantics preserved across export/import.
+- Evaluation exports add pagination/continuation support when `CHATBOOKS_EVAL_EXPORT_MAX_ROWS` is exceeded; continuation tokens are surfaced via API and captured in the manifest to allow multi-part exports of long-running experiments.
+- Conversation citation metadata is exported once upstream storage lands in ChaChaNotes; manifest entries include citation references in line with the v1 schema.
+- Manifest flags `truncated` and `max_rows` are populated consistently for any capped evaluation exports and are reflected both in manifest entries and API responses.
+
+**Tests**:
+- Unit: embedding-set selection and dedupe by `embedding_id`; evaluation run pagination and continuation token generation; citation serialization and schema validation.
+- Integration: exports from users with large evaluation histories and multiple embedding sets; reconstruction of evaluation subsets from multi-part exports; verification that truncated exports are correctly marked and discoverable to clients.
+
+**Status**: Not Started (open items listed under PRD “To-Do items surfaced during implementation”)
+
+---
+
+## Stage 3: Import Pipeline, Conflict Handling & Validation
+**Goal**: Implement robust import/preview flows with conflict strategies, validation, quotas, and provenance.
+
+**Success Criteria**:
+- `POST /api/v1/chatbooks/import` and `POST /api/v1/chatbooks/preview` accept v1 archives, apply `skip` / `overwrite` / `rename` / `merge` consistently per content type, and return per-item outcomes and warnings without partial silent failures.
+- Identity and ownership semantics match the PRD: imported entities are materialized under the importing user; organizations own artifacts across their teams/users; teams own artifacts created by their members; cross-scope imports respect role-based access controls.
+- ChatbookValidator is wired into import/preview to enforce file integrity, path sanitization, zip-bomb protection, and reference consistency (no dangling media/embedding references without manifest entries).
+- QuotaManager enforces Chatbooks-specific limits (tier-based storage, daily exports/imports, concurrent jobs, per-file caps), surfaces actionable errors, and respects overrides for privileged roles/service accounts.
+- Dictionary/templating validation from `Docs/Product/Chatbook-Tools-PRD.md` is integrated into Chatbooks import: embedded dictionaries are validated, `ImportJob.warnings` populated, and `CHATBOOKS_IMPORT_DICT_STRICT` semantics honored without blocking entire imports on dictionary-only issues.
+
+**Tests**:
+- Unit: conflict-resolution functions for each content type; ChatbookValidator scenarios (zip bombs, traversal attempts, missing references); quota checks with mocked tiers; dictionary validator wiring and strict/non-strict behavior.
+- Integration: import + preview of valid and invalid archives; conflict-strategy matrix across conversations/notes/prompts/characters/media/evaluations/embeddings; org/team-scope imports with correct ownership and audit logging; rate limits under load (SlowAPI configuration).
+
+**Status**: Not Started
+
+---
+
+## Stage 4: Observability, Health & SLOs
+**Goal**: Provide clear observability, health signals, and performance SLOs for Chatbooks jobs.
+
+**Success Criteria**:
+- Health endpoint `GET /api/v1/chatbooks/health` reflects storage readiness, background worker availability, and configuration sanity (for example, presence of `TLDW_USER_DATA_PATH`, signing secret when required).
+- Metrics are emitted for exports/imports (e.g., `chatbooks_exports_total`, `chatbooks_imports_failed_total`, `chatbooks_export_bytes_total`, latency histograms) and integrated into the existing metrics registry.
+- Logs include structured job context (user/team/org scope, job_id, kind, status transitions) and audit events are emitted for any cross-user operations in line with the AuthNZ/audit modules.
+- Performance targets from the PRD are validated on a reference setup (for example, ~4 vCPU, SSD-backed storage, local network) and documented as SLOs, including: async export throughput and import handling of 10k+ items under the stated time budgets.
+
+**Tests**:
+- Unit: health check components (storage, worker connectivity) and metrics registration; log/audit helpers for job operations.
+- Integration: simulated job loads with exports/imports under various sizes; verification that health/metrics reflect backlogs and failures; spot checks that SLOs are met on the reference environment.
+
+**Status**: Not Started
+
+---
+
+## Stage 5: Large Binary Bundling (v2)
+**Goal**: Add optional large-binary packaging for media artifacts while preserving v1 compatibility.
+
+**Success Criteria**:
+- Async exports can optionally bundle large media binaries (video/audio source files and other heavyweight artifacts) into Chatbooks archives with streaming ZIP creation and quota-aware storage usage.
+- Operators can configure whether large-binary bundling is enabled, and how retention/quota policies apply to these larger archives, without affecting v1 metadata-only behavior.
+- Manifest versioning cleanly distinguishes v1 (metadata-only for large media) from v2 (optional large-binary bundling) with migration helpers and backward-compatibility guarantees for v1 archives.
+- Import flows can rehydrate large media from bundled binaries when present, or fall back to existing metadata-only behavior when binaries are omitted, without changing ownership or provenance semantics.
+
+**Tests**:
+- Unit: streaming large-file writers, bundle-size accounting, and retention/quota calculations for large archives.
+- Integration: exports/imports with mixed small attachments and large media binaries; verification of offline rehydration from a v2 chatbook; compatibility tests confirming that v1-only manifests still import correctly after v2 is introduced.
+
+**Status**: Not Started
+
