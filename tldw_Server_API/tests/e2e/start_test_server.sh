@@ -43,7 +43,7 @@ trap cleanup INT TERM EXIT
 
 # Start the server
 echo "Starting server with API key: $SINGLE_USER_API_KEY"
-cd "${REPO_ROOT}"
+cd "${REPO_ROOT}" || { echo "Failed to cd to repo root: ${REPO_ROOT}" >&2; exit 1; }
 
 # Start server and capture both stdout and stderr (use full module path)
 python -m uvicorn tldw_Server_API.app.main:app --reload --port 8000 2>&1 &
