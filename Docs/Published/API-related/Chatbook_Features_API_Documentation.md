@@ -329,6 +329,11 @@ Response body:
 }
 ```
 
+Semantics:
+- `strict=false` (default) returns a report with `errors` and `warnings` but does not cause the API call itself to fail; callers decide how to handle issues.
+- `strict=true` is intended for server-side workflows (e.g., Chatbooks import) where certain error classes (schema, regex safety/timeouts, template parse/forbidden constructs, output/size limits) should be treated as fatal.
+- Unknown or unsupported `schema_version` values still return HTTP 200 with a `schema_invalid` error code in the response payload; HTTP 400 is reserved for malformed request bodies that do not match `ValidateDictionaryRequest`.
+
 ---
 
 Planned additions (not yet implemented): Clone dictionary, toggle active status, bulk add/update entries, search entries across dictionaries.
@@ -935,3 +940,7 @@ Response body:
   ]
 }
 ```
+
+Notes:
+- The `commands` list is filtered per-user based on AuthNZ/RBAC and deployment configuration. Commands whose backing providers are not configured (e.g., `weather` without a weather provider/API key) may be omitted entirely or returned but respond with a configurable “unavailable” message.
+- Clients should treat `GET /api/v1/chat/commands` as the per-session source of truth and avoid caching the list long-term, since RBAC or configuration changes can add or remove commands at any time.

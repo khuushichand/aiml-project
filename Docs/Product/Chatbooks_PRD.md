@@ -19,19 +19,22 @@ Chatbooks provide a portable, trustworthy backup format for all user knowledge a
 
 ## 3. Goals
 
-1. Deliver a single workflow that exports selected assets with a manifest-driven structure and associated binary artifacts.
+1. Deliver a single workflow that exports selected assets with a manifest-driven structure and associated binary artifacts (v1: metadata-complete exports with references for large media; v2: full large-binary bundling).
 2. Provide import tooling that respects ownership, handles conflicts, and records provenance.
 3. Offer synchronous (small) and asynchronous (large) flows usable via REST API, CLI/SDK, and WebUI.
 4. Enforce quotas, validation, and security controls so operators can trust shared artifacts.
 5. Expose job telemetry for monitoring and analytics.
 
+v1 (GA) focuses on metadata-complete, replayable exports/imports for all supported content types, bundling only small/attached binaries (for example, chat image attachments). Full packaging of large media binaries (video/audio source files and other heavyweight artifacts) is a staged v2 goal and is reflected in the Implementation Status section.
+
 ## 4. Non-Goals
 
 - Real-time sync between instances (batch import/export only).
 - In-place editing of chatbook contents.
-- Collaborative library UX (per-user packaging is the current scope).
+- Collaborative library UX (per-user packaging is the current scope; team/org personas use per-user chatbooks plus admin-driven imports, not a shared global library).
 - General-purpose ZIP ingestion beyond the chatbook schema.
 - Automatic resolution of complex cross-tenant version conflicts outside supported strategies.
+- Dedicated Chatbooks-level at-rest encryption; server-side encryption is handled by the underlying storage and deployment configuration.
 
 ## 5. Target Users & Core Use Cases
 
@@ -41,6 +44,8 @@ Chatbooks provide a portable, trustworthy backup format for all user knowledge a
 | Team Facilitator (small group admin) | Curate a “primer” (prompts, conversations, world books) to distribute and re-import to a shared environment. |
 | Field Analyst (air-gapped ops) | Prepare offline bundles containing prompts, summaries, embeddings for disconnected environments. |
 | Compliance Officer / Admin | Satisfy data portability requests, demonstrate retention expiry, manage export audit logs. |
+
+Team Facilitator and Compliance Officer / Admin personas operate within this per-user packaging model: shared/team/org scenarios are implemented via scoped exports/imports plus admin/owner overrides, not via a global shared chatbook library.
 
 ## 6. User Journeys
 
@@ -55,36 +60,65 @@ Chatbooks provide a portable, trustworthy backup format for all user knowledge a
    - `POST /api/v1/chatbooks/export` - accepts metadata, filters, sync/async flag; returns file (sync) or job reference (async) with download URL + expiry.
    - `POST /api/v1/chatbooks/import` - accepts upload, conflict strategy, async option; records warnings/errors per item.
    - `POST /api/v1/chatbooks/preview` - validates archive and returns manifest summary without persisting data.
-   - `GET/DELETE /api/v1/chatbooks/export/jobs[/id]` and `/import/jobs[/id]` - list, inspect, cancel jobs.
-   - `GET /api/v1/chatbooks/download/{job_id}` - serve completed exports with optional signed URL.
-   - `POST /api/v1/chatbooks/cleanup` - remove expired exports from storage.
+   - `GET /api/v1/chatbooks/export/jobs` and `/import/jobs` - list jobs in the caller’s scope (per-user by default; admins/org owners/team leads can add org/team/user filters).
+   - `GET /api/v1/chatbooks/export/jobs/{job_id}` and `/import/jobs/{job_id}` - inspect a single job.
+   - `DELETE /api/v1/chatbooks/export/jobs/{job_id}` and `/import/jobs/{job_id}` - cancel in-flight jobs or mark completed jobs as deleted within the caller’s permitted scope.
+   - `GET /api/v1/chatbooks/download/{job_id}` - serve completed exports; returns either a direct download or a signed URL (with `expires_at`, default 1 hour) depending on deployment mode.
+   - `POST /api/v1/chatbooks/cleanup` - authenticated cleanup of expired exports/imports; standard users can clean up their own jobs, while team leads/org owners/admins can clean up within their scopes.
    - `GET /api/v1/chatbooks/health` - report storage readiness and service status.
 
+   **Response shapes (high level)**
+   - `POST /api/v1/chatbooks/export` (async): `{"job_id", "status", "mode": "async", "download_url"?, "expires_at"?, "estimated_size_bytes"?, "created_at"}`.
+   - `POST /api/v1/chatbooks/import` (async): `{"job_id", "status", "mode": "async", "created_at"}`.
+   - `POST /api/v1/chatbooks/preview`: `{"manifest_version", "summary": {"counts": {per_type}, "estimated_size_bytes"?, "truncated_flags"?}}`.
+   - `GET /api/v1/chatbooks/*/jobs`: `{"jobs": [...], "next_page_token"?}` with each job including `{"job_id", "kind": "export"|"import", "status", "created_at", "updated_at", "scope": {"user_id", "team_id"?, "org_id"?}}`.
+   - `GET /api/v1/chatbooks/download/{job_id}`: either a ZIP file response or `{"download_url", "expires_at"}` when using signed URLs.
+
 2. **Manifest Schema**
-   - Versioned JSON describing metadata, content entries, relationships, file references, locale/timezone, export provenance (user, time, app version).
+   - Versioned JSON (`manifest_version`) describing metadata, content entries, relationships, file references, locale/timezone, export provenance (user, time, app version). The canonical JSON Schema lives in `Docs/Schemas/chatbooks_manifest_v1.json`.
    - Content coverage: conversations (messages, attachments, citations), notes, characters, world books, dictionaries, prompts, media descriptors, generated documents, embeddings, evaluation runs.
+   - Manifest entries include stable identity keys per content type and record conflict handling metadata (`conflict_strategy`, `source_instance_id`, `provenance`) so imports can apply `skip`/`overwrite`/`rename`/`merge` consistently.
+
+   **Identity keys & merge semantics (v1)**
+
+   | Content type | Identity key | `merge` behavior (v1) |
+   | --- | --- | --- |
+   | Conversations | `conversation_id` (UUID) | Append non-duplicate messages ordered by `created_at`; on message-id collisions, keep the existing message and import the conflicting message as a new revision with provenance. |
+   | Notes | `note_id` (UUID) | Add imported note content as a new revision; existing title/body remain, with imported content available in revision history. |
+   | Characters & World Books | `character_id` / `worldbook_id` (UUID) | Union tags/metadata; preserve existing core fields, attach imported description as an additional revision/version with provenance. |
+   | Prompts | `prompt_id` (UUID or slug) | Union tags and test cases; existing prompt body wins on field conflicts, imported body stored as an alternate/prior revision. |
+   | Media & Generated Docs | `media_id` / `doc_id` (UUID) | Union tags and metadata; maintain references to additional transcripts/derivatives without dropping existing ones. |
+   | Embeddings | `embedding_set_id` + `source_hash` | Union vectors; duplicates by `embedding_id` are skipped with per-vector warnings. |
+   | Evaluations | `evaluation_id` (UUID) | Union evaluation runs up to export caps; duplicates detected via `run_id` are skipped with per-run warnings. |
+
+   For content types not listed or where safe merging is ambiguous, `merge` behaves like `rename` by default (the imported entity is created with a new identifier and provenance).
 
 3. **Storage & Security**
    - Per-user directories under `TLDW_USER_DATA_PATH` (default `/var/lib/tldw/user_data/users/<id>/chatbooks/{exports,imports,temp}`) with sanitized names and 0700 permissions.
-   - Optional HMAC-signed download URLs (`CHATBOOKS_SIGNED_URLS`, `CHATBOOKS_SIGNING_SECRET`).
-   - Access control ensures users interact only with their own jobs/files; audit events emitted for key actions.
+   - HMAC-signed download URLs (`CHATBOOKS_SIGNED_URLS`, `CHATBOOKS_SIGNING_SECRET`); in `AUTH_MODE=multi_user` or when org features are enabled, signed URLs are required and default to enabled with 1-hour expiry (`expires_at`), extendable by privileged roles up to a configured maximum.
+   - Access control ensures users interact only with their own jobs/files by default; team leads can act on their team, org owners on their org, and admins across all users, with all cross-user operations emitting audit events including actor and target scopes.
+   - Cleanup and cross-user job operations (`POST /api/v1/chatbooks/cleanup`, job deletion for other users, org- or team-wide listing) are always authenticated and subject to these role scopes to avoid unbounded cleanup scans or job enumeration.
+   - Export archives are retained for a configurable period (`CHATBOOKS_EXPORT_RETENTION_DEFAULT_HOURS`, default 24h); after retention, archives are removed and jobs transition to `expired` while metadata is retained for audit unless explicitly deleted.
 
 4. **Job Processing**
-   - Export/import jobs persisted in ChaChaNotes DB with states `pending → in_progress → completed|failed|cancelled`.
+   - Export/import jobs persisted in each user’s ChaChaNotes DB with states `pending → in_progress → completed|failed|cancelled|expired|deleted`.
+   - `expired` indicates archives removed by retention/cleanup while metadata remains for audit; `deleted` indicates job metadata removed by privileged cleanup operations.
    - Async processing via core Jobs worker by default; optional Prompt Studio JobManager adapter when `CHATBOOKS_JOBS_BACKEND=prompt_studio`.
    - Lease renewal and retry semantics align with core Jobs standards.
 
 5. **Validation & Quotas**
    - ChatbookValidator applies file integrity checks, path sanitization, zip bomb protection, metadata bounds, and conflict detection.
    - QuotaManager enforces tier-based storage usage, daily operation limits, concurrent job caps, and per-file size caps. Errors are actionable and localized.
-   - Rate limiting (default 5 exports/minute) via SlowAPI limiter; configurable overrides for privileged roles.
+   - Missing or inconsistent references (for example, manifests referring to media or embeddings that are not present in the archive) are treated as validation errors and surfaced as per-item failures in job results rather than being silently dropped.
+   - Evaluation exports respect a configurable per-run row cap (`CHATBOOKS_EVAL_EXPORT_MAX_ROWS`, default 200). When truncation occurs, both manifest entries and API responses flag `truncated: true` and record the applied `max_rows`.
+   - Rate limiting (default 5 exports/minute and 5 imports/minute per user) via SlowAPI limiter; configurable overrides for privileged roles and service accounts.
 
 ## 8. Non-Functional Requirements
 
 - **Security:** Reject malicious archives (zip bombs, traversal). Never expose absolute filesystem paths. Avoid logging sensitive data.
-- **Reliability:** Async jobs recover from restarts (idempotent writes, lease renewal). Cleanup keeps storage bounded. Imports roll back or track partial writes safely.
+- **Reliability:** Async jobs recover from restarts (idempotent writes, lease renewal). Cleanup keeps storage bounded. Imports use a best-effort strategy with per-item status; partial failures are surfaced in job results instead of being silently dropped or rolled back wholesale.
 - **Performance:** Sync exports limited to manageable payloads (<128 MB default). Async exports stream ZIP creation to prevent memory spikes. Imports handle 10k+ items under 5 minutes using streaming I/O.
-- **Observability:** Structured Loguru logs with job context; audit trail entries for compliance. Health endpoint reflects storage readiness. Metrics hooks (post-GA) capture throughput/failures.
+- **Observability:** Structured Loguru logs with job context; audit trail entries for compliance. Health endpoint reflects storage readiness. Metrics hooks (post-GA) capture throughput/failures (for example, `chatbooks_exports_total`, `chatbooks_imports_failed_total`, `chatbooks_export_bytes_total`).
 - **Extensibility:** Adding content types requires updates to enums, schemas, service aggregators, and tests; manifest versioning ensures backward compatibility.
 
 ## 9. Dependencies & Integrations
@@ -121,16 +155,15 @@ Chatbooks provide a portable, trustworthy backup format for all user knowledge a
 
 ## 13. Open Questions
 
-1. Should signed URLs be mandatory for multi-user deployments?
-2. How should import warnings (renamed items, partial merges) be surfaced in the WebUI?
-3. Should export retention periods vary by user tier (current default 24h)?
-4. Do we need checksum verification across instances for compliance workflows?
-5. Should chatbooks support optional client-provided encryption (password-protected archives)?
+1. How should import warnings (renamed items, partial merges) be surfaced in the WebUI beyond basic job logs (for example, toasts vs detail views vs inline diffs)?
+2. Do we need checksum verification across instances for compliance workflows, and if so, at what granularity (per-file vs per-chatbook)?
+3. For optional client-provided encryption (password-protected archives), what UX/API and key management approach do we want?
+
 
 ## 14. Next Steps
 
 1. Circulate this PRD for stakeholder review (backend, security, product).
-2. Update the Doc’s “Last Updated” date and publish to internal knowledge base once approved.
+2. Update the document’s “Last Updated” date and publish to internal knowledge base once approved.
 3. Track open questions as backlog issues and prioritize for upcoming sprints.
 
 ## 15. Implementation Status & TODOs
@@ -143,6 +176,6 @@ Chatbooks provide a portable, trustworthy backup format for all user knowledge a
 **To-Do items surfaced during implementation**
 - Binary media payload export is still metadata-only; follow-up work is required to package large artifacts safely (streaming, quota-aware storage).
 - Explicit embedding exports beyond media vectors remain pending; current builds only capture embeddings discovered while exporting media records.
-- Evaluation run export is capped at the first 200 rows; add pagination/continuation support for long-running experiments.
+- Evaluation run export is currently capped using `CHATBOOKS_EVAL_EXPORT_MAX_ROWS` (default 200 rows per run); add pagination/continuation support for long-running experiments and expose continuation tokens via the API.
 - Conversation citation metadata is stubbed until upstream storage lands; revisit once citations are persisted in ChaChaNotes.
 - Import flows for prompts, media, evaluations, and derived embeddings need parity with the new export surface (conflict handling, quota application, validation).

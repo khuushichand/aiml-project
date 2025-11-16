@@ -26,6 +26,13 @@ export SINGLE_USER_API_KEY="${SINGLE_USER_API_KEY:-$SINGLE_USER_TEST_API_KEY}"
 # Expose the effective test API key via /api/v1/health for E2E fixtures
 export HEALTH_EXPOSE_TEST_API_KEY=true
 
+# Use an isolated per-run USER_DB_BASE_DIR so E2E tests exercise on-disk
+# persistence/locking without mutating the developer's local databases.
+# This directory is cleaned up in the trap on exit.
+TMP_USER_DB_BASE="$(mktemp -d "${REPO_ROOT}/Databases/user_databases_e2e_XXXXXX")"
+export USER_DB_BASE_DIR="${TMP_USER_DB_BASE}"
+echo "E2E USER_DB_BASE_DIR: ${USER_DB_BASE_DIR}"
+
 # Function to cleanup on exit
 cleanup() {
     echo ""
@@ -34,6 +41,11 @@ cleanup() {
         kill $SERVER_PID 2>/dev/null
         # Also kill any child processes
         pkill -P $SERVER_PID 2>/dev/null
+    fi
+    # Remove the temporary per-run USER_DB_BASE_DIR to avoid polluting the repo
+    if [ -n "$TMP_USER_DB_BASE" ] && [ -d "$TMP_USER_DB_BASE" ]; then
+        echo "Cleaning up E2E USER_DB_BASE_DIR: $TMP_USER_DB_BASE"
+        rm -rf "$TMP_USER_DB_BASE"
     fi
     exit 0
 }
