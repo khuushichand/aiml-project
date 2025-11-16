@@ -42,6 +42,10 @@ from . import (
     process_pdfs,
     process_ebooks,
     process_emails,
+    process_videos,
+    process_audios,
+    process_web_scraping,
+    process_mediawiki,
 )
 
 if legacy_router.routes:
@@ -54,6 +58,10 @@ if legacy_router.routes:
         + list(process_pdfs.router.routes)
         + list(process_ebooks.router.routes)
         + list(process_emails.router.routes)
+        + list(process_videos.router.routes)
+        + list(process_audios.router.routes)
+        + list(process_web_scraping.router.routes)
+        + list(process_mediawiki.router.routes)
         + list(legacy_router.routes)
     )
     # Public router used by main application when legacy module is available.

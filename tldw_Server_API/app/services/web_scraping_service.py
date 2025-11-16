@@ -51,7 +51,11 @@ async def process_web_scraping_task(
     mode: str = "persist",
     user_id: Optional[int] = None,
     user_agent: Optional[str] = None,
-    custom_headers: Optional[Dict[str, str]] = None
+    custom_headers: Optional[Dict[str, str]] = None,
+    # Crawl overrides from UI / WebScrapingRequest
+    crawl_strategy: Optional[str] = None,
+    include_external: Optional[bool] = None,
+    score_threshold: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Enhanced web scraping with production features:
@@ -98,7 +102,10 @@ async def process_web_scraping_task(
             priority=priority,
             user_id=user_id,
             user_agent=user_agent,
-            custom_headers=custom_headers
+            custom_headers=custom_headers,
+            crawl_strategy=crawl_strategy,
+            include_external=include_external,
+            score_threshold=score_threshold,
         )
 
         return result

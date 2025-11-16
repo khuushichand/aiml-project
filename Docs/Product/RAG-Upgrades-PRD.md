@@ -2,8 +2,8 @@
 
 - Owner: RAG/Backend
 - Stakeholders: API, WebUI, Evaluations, Embeddings
-- Status: Draft
-- Last updated: 2025-11-15
+- Status: In Progress
+- Last updated: 2025-11-16
 - Related docs: RAG core guide (tldw_Server_API/app/core/RAG/README.md), API ref (tldw_Server_API/app/core/RAG/API_DOCUMENTATION.md), Benchmarking (Docs/RAG/RAG_Benchmarks.md), Prior plans (Docs/Design/RAG_Plan.md, Docs/Design/RAG_Features_Evaluation_And_Plan.md, Docs/Design/RAG-Benchmarking.md)
 
 ## 1) Background & Problem Statement
@@ -253,3 +253,102 @@ mv_meta = (result.metadata or {}).get("multi_vector") or {}
   - `enabled`, `span_chars`, `stride`, `max_spans_per_doc`, `flattened`, `precomputed_spans`
 
 Clients (including the WebUI) can surface these fields in a debug/advanced pane to explain why particular documents were selected or why additional evidence was pulled in.
+
+## 20) Implementation Status & Remaining Work (2025-11-16)
+
+This section tracks which parts of the PRD are implemented vs remaining.
+
+### Phase 1 — Quick Wins
+
+Current:
+- Multi-vector spans with `mv_flatten_to_spans` are implemented via `advanced_retrieval.apply_multi_vector_passages` and integrated into `unified_rag_pipeline`; metadata is exposed under `metadata.multi_vector`.
+- Two-tier reranking (`reranking_strategy="two_tier"`) with calibrated probability, sentinel, and generation gating is implemented. Calibration is surfaced in `metadata.reranking_calibration`, and gating drives `metadata.generation_gate`.
+- Diversity-aware reranking exists via `DiversityReranker` and as part of `HybridReranker`.
+- Intent-adaptive hybrid mixing and query routing are implemented with `QueryAnalyzer` / `QueryRouter`, influencing `hybrid_alpha` and top-k when enabled.
+- Corpus-aware synonyms are supported via `index_namespace` and the `synonyms_registry` + query expansion helpers.
+- Safer defaults for hard citations and numeric fidelity are wired through env-driven guards in `unified_rag_pipeline`.
+- Adaptive rerun on low confidence is implemented as part of `enable_post_verification` + `adaptive_rerun_on_low_confidence`, with `metadata.post_verification` and `metadata.adaptive_rerun`.
+
+Remaining:
+- Tune and document “Precision” vs “Recall” presets more explicitly in docs/WebUI, including recommended combinations of reranking strategy, hybrid weights, and guardrail defaults.
+- Run and bake in benchmark-driven thresholds (MMR, intent routing, numeric fidelity defaults) instead of current heuristic values.
+
+### Phase 2 — Retrieval Quality & Stability
+
+Current:
+- PRF:
+  - `enable_prf`, `prf_terms`, `prf_sources`, `prf_alpha`, `prf_top_n` are exposed in API schemas and docs.
+  - `prf.apply_prf` mines terms/entities/numbers from top documents and returns `expanded_query` plus `metadata.prf`.
+  - `unified_rag_pipeline` runs an optional PRF second pass to fill up to `top_k` with deduped docs and records `second_pass_performed` / `second_pass_added`.
+- Precomputed spans:
+  - A no-op `apply_precomputed_spans` helper and `enable_precomputed_spans` flag are wired in; metadata `metadata.multi_vector.precomputed_spans` is emitted.
+- Numeric grounding:
+  - A numeric/table-aware boost is implemented via `enable_numeric_table_boost`, slightly boosting number-dense/table-like chunks and recording `metadata.numeric_table_boost`.
+- Temporal heuristics:
+  - `auto_temporal_filters` is implemented (relative dates, quarters, month/year) and records `metadata.temporal_filter`.
+- Synonyms:
+  - Static per-corpus synonyms are supported via config files and query expansion.
+
+Remaining:
+- PRF fusion:
+  - Implement explicit rank-fusion (e.g., RRF) between first-pass and PRF second-pass hits instead of only “fill remaining slots”.
+  - Extend `metadata.prf` with `fusion_method` and simple win-rate stats as sketched in the PRD.
+- Precomputed late-interaction:
+  - Add ingestion-time span/paragraph embedding storage in the embeddings layer (e.g., ChromaDB adapter).
+  - Implement `apply_precomputed_spans` to query span collections, compute best-span scores, and feed them into the multi-vector path.
+  - Return meaningful `metadata.multi_vector.precomputed_spans=True` (with parameters) instead of a placeholder.
+- Numeric grounding:
+  - Add unit-normalization and explicit numeric-token presence checks (beyond the current coarse boost) and attach granular metadata for those signals.
+- Corpus-learned synonyms:
+  - Implement a batch miner to update synonyms files from co-occurrence/PMI/headings per corpus, with simple versioning and operational controls.
+
+### Phase 3 — Ranking/Fusion Learning & Multi-hop
+
+Current:
+- Learned fusion + abstention:
+  - Two-Tier:
+    - Logistic calibrator over original score, CE score, LLM score + sentinel is implemented in `TwoTierReranker`.
+    - Calibration metadata is exposed via `metadata.reranking_calibration` (top_doc_prob, sentinel scores, thresholds, prob_margin, gated), and used to gate generation.
+  - Cross-encoder / hybrid:
+    - When `enable_learned_fusion=true` and `reranking_strategy` is `cross_encoder` or `hybrid`, `unified_rag_pipeline` computes a simple fused probability from the top rerank score using the same env-controlled logistic weights.
+    - `metadata.reranking_calibration` includes `fused_score`, `threshold`, `gated`, plus optional `enabled`, `version`, and `decision`.
+  - Abstention:
+    - When calibration gates generation, `abstention_policy` (for learned fusion) or `abstention_behavior` (for generic abstention) decides whether to continue, ask a clarifying question, or decline. The chosen `decision` is recorded in `metadata.reranking_calibration`, and `metadata.generation_gate` logs the gate.
+- Guided decomposition:
+  - Agentic path: `agentic_rag_pipeline` already supports multi-hop-style reading with subgoals and coverage/redundancy metrics.
+  - Unified pipeline:
+    - `enable_query_decomposition`, `max_subqueries`, `subquery_time_budget_sec`, `subquery_doc_budget` are implemented.
+    - The pipeline decomposes the query into subqueries (using QueryAnalyzer + agentic `_decompose_query` when available; otherwise a heuristic splitter), runs additional retrievals for secondary subqueries, and merges extra docs under strict time/doc budgets.
+    - `metadata.decomposition` includes `enabled`, optional `intent` / `complexity`, `subqueries` with `added_doc_ids`, `total_added`, and timing/budget info.
+
+Remaining:
+- Learned fusion:
+  - Add a real training loop for calibrator weights (per `calibrator_version`) using feedback/eval logs instead of static env defaults.
+  - Consider additional features (BM25 normalization, recency, source quality, MMR position) beyond the current score-only inputs.
+  - Add calibration-focused metrics/histograms (e.g., reliability diagrams, calibration error) per PRD.
+- Decomposition orchestration:
+  - Promote decomposition to a first-class multi-hop mode: per-subquery retrieval + optional per-subquery synthesis, followed by a final synthesis/verification step.
+  - Extend `metadata.decomposition` to optionally include per-subquery partial answers or evidence groupings, not just extra document IDs.
+
+### Phase 4 — Graph-Augmented Retrieval (Optional)
+
+Current:
+- Flags and schema entries exist (`enable_graph_retrieval`, `graph_version`, `graph_neighbors_k`, `graph_alpha`), but there is no graph-storage or retrieval implementation yet.
+
+Remaining:
+- Define and build graph indices per corpus (entities/sections/links).
+- Implement a graph retrieval path that, when enabled, retrieves graph neighbors and blends them with standard retrieval using `graph_alpha`.
+- Expose `metadata.graph_retrieval` (communities, neighbors_k, alpha, basic stats) and add minimal graph-related metrics.
+
+### Cross-Cutting: WebUI, Benchmarks, & Ops
+
+Current:
+- Core flags and metadata are documented in the RAG README and API docs; the server exposes the necessary toggles via `/api/v1/rag/search`.
+
+Remaining:
+- WebUI:
+  - Add checkboxes/controls for PRF, multi-vector/precomputed spans, learned fusion + abstention, and decomposition in the RAG tab.
+  - Surface `metadata.prf`, `metadata.multi_vector`, `metadata.reranking_calibration`, and `metadata.decomposition` in an advanced/debug view.
+- Benchmarking:
+  - Implement the ablation matrix described in this PRD (baseline vs +PRF, +precomputed spans, +learned fusion, +decomposition) using the existing RAG benchmarking scripts.
+  - Use results to finalize defaults for presets and environment knobs.
