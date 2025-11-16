@@ -164,51 +164,30 @@ def dummy_headers():
     # The actual value doesn't matter because get_request_user is mocked
     return {"token": "dummy_test_token_for_header"}
 
-# --- Authentication Override Fixture ---
-@pytest.fixture(scope="module")
-def override_auth_proc():
-    """Overrides the main get_request_user dependency for the processing tests."""
-    async def _override_get_request_user_proc_test():
-        logger.debug("--- AUTH OVERRIDE (Processing): Returning single_user_instance ---")
-        # Ensure the instance uses the correct ID from settings
-        _single_user_instance.id = settings.get("SINGLE_USER_FIXED_ID", 1)
-        return _single_user_instance
-    yield _override_get_request_user_proc_test
+@pytest.fixture()
+def client(client_user_only):
+    """
+    Use the shared single-user TestClient fixture for processing tests.
 
-# --- DB Override Fixture Function ---
-def override_get_media_db_for_user_proc(db_session):
-    """Dependency override factory for processing tests."""
-    def _override():
-        # logger.debug(f"--- DB OVERRIDE (Processing): Providing DB session: {db_session.db_path_str} ---")
-        yield db_session
-    return _override
-
-# --- Combined Client Fixture for Processing Tests ---
-@pytest.fixture(scope="module")
-def client(db_instance_session_proc, override_auth_proc):
-    """Provides a TestClient instance for the processing tests with overrides."""
+    This keeps auth and DB wiring consistent with the rest of the suite and
+    avoids duplicating dependency overrides here.
+    """
     # Ensure test media files exist (run once per module)
     required_files = [
-        SAMPLE_VIDEO_PATH, SAMPLE_AUDIO_PATH, SAMPLE_PDF_PATH, SAMPLE_EPUB_PATH,
-        SAMPLE_TXT_PATH, SAMPLE_MD_PATH, SAMPLE_HTML_PATH, SAMPLE_XML_PATH
+        SAMPLE_VIDEO_PATH,
+        SAMPLE_AUDIO_PATH,
+        SAMPLE_PDF_PATH,
+        SAMPLE_EPUB_PATH,
+        SAMPLE_TXT_PATH,
+        SAMPLE_MD_PATH,
+        SAMPLE_HTML_PATH,
+        SAMPLE_XML_PATH,
     ]
-    # Skip module if essential files are missing
     for f_path in required_files:
         if not f_path.exists():
             pytest.skip(f"Essential test file missing, skipping module: {f_path}")
-    # Optional files checked within tests (DOCX, RTF)
 
-    # Apply DB and Auth overrides specific to this module
-    app.dependency_overrides[get_media_db_for_user] = override_get_media_db_for_user_proc(db_instance_session_proc)
-    app.dependency_overrides[get_request_user] = override_auth_proc
-    logger.info("--- TestClient (Processing) created with DB and Auth overrides ---")
-
-    with TestClient(fastapi_app_instance) as c:
-        yield c
-
-    # Cleanup overrides after all tests in the module run
-    app.dependency_overrides.clear()
-    logger.info("--- TestClient (Processing) DB and Auth overrides cleared ---")
+    return client_user_only
 
 
 # --- Define the factory directly in the test file for isolation ---

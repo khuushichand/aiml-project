@@ -33,13 +33,27 @@ except Exception as _legacy_import_err:  # noqa: BLE001
 # prepending their routes ahead of the legacy ones. This keeps
 # the effective router object compatible with existing imports
 # while allowing gradual extraction into submodules.
-from . import item, listing, versions
+from . import (
+    item,
+    listing,
+    versions,
+    process_code,
+    process_documents,
+    process_pdfs,
+    process_ebooks,
+    process_emails,
+)
 
 if legacy_router.routes:
     legacy_router.routes = (
         list(listing.router.routes)
         + list(item.router.routes)
         + list(versions.router.routes)
+        + list(process_code.router.routes)
+        + list(process_documents.router.routes)
+        + list(process_pdfs.router.routes)
+        + list(process_ebooks.router.routes)
+        + list(process_emails.router.routes)
         + list(legacy_router.routes)
     )
     # Public router used by main application when legacy module is available.

@@ -650,11 +650,20 @@ Check health status of all RAG components.
 
 ### Learned Fusion & Calibration
 
+Learned fusion uses a lightweight calibrator over retrieval/rerank scores to produce a fused relevance probability and drive abstention when evidence is thin.
+
+- With `reranking_strategy="two_tier"`, the calibrator combines original retrieval score, cross-encoder score, and LLM score with a logistic map and a sentinel “irrelevant” passage.
+- With `reranking_strategy` in `["cross_encoder","hybrid"]` and `enable_learned_fusion=true`, a simpler calibrator maps the top rerank score through a logistic to obtain a fused probability (no sentinel).
+- In both cases:
+  - `metadata.reranking_calibration.fused_score` holds the fused probability.
+  - `metadata.reranking_calibration.gated` indicates whether generation was gated.
+  - When generation is gated, `abstention_policy` decides whether to continue, ask a clarifying question, or decline.
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `enable_learned_fusion` | boolean | false | Use learned fusion over retrieval and rerank scores |
-| `calibrator_version` | string | "default" | Calibrator configuration/version identifier |
-| `abstention_policy` | string | "continue" | Action when fused score is low: continue | ask | decline |
+| `enable_learned_fusion` | boolean | false | Use learned fusion over retrieval and rerank scores (Two-Tier and simpler cross-encoder/hybrid). |
+| `calibrator_version` | string | "default" | Calibrator configuration/version identifier (informational tag in metadata). |
+| `abstention_policy` | string | "continue" | Action when fused score is low and learned fusion is enabled: continue \| ask \| decline. |
 
 ### Query Decomposition & Multi-hop
 

@@ -124,3 +124,53 @@ async def test_unified_pipeline_two_tier_request_overrides_gate(monkeypatch):
             gate = res.metadata.get("generation_gate")
             assert isinstance(gate, dict)
             assert gate.get("reason") == "low_relevance_probability"
+
+
+@pytest.mark.asyncio
+async def test_two_tier_learned_fusion_abstention_policy_used(monkeypatch):
+    """
+    When enable_learned_fusion is true and abstention_policy is set, the
+    calibration metadata should include a decision and the generated answer
+    should follow that policy (e.g., ask a clarifying question).
+    """
+    # Force strict gating via request-level overrides
+    with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+        mock_retriever_instance = MagicMock()
+        mock_retriever_instance.retrieve = AsyncMock(return_value=[
+            Document(id="d1", content="alpha", metadata={}, source=DataSource.MEDIA_DB, score=0.2),
+            Document(id="d2", content="beta", metadata={}, source=DataSource.MEDIA_DB, score=0.1),
+        ])
+        mock_retriever.return_value = mock_retriever_instance
+
+        from tldw_Server_API.app.core.RAG.rag_service import advanced_reranking as ar
+
+        def _fake_create(strategy, cfg, llm_client=None):
+            if getattr(ar.RerankingStrategy, 'TWO_TIER') and strategy == ar.RerankingStrategy.TWO_TIER:
+                ce_map = {"d1": 0.20, "d2": 0.10, "sentinel:irrelevant": 0.02}
+                llm_map = {"d1": 0.40, "d2": 0.30, "sentinel:irrelevant": 0.05}
+                return ar.TwoTierReranker(cfg, cross_reranker=_FakeCross(cfg, ce_map), llm_reranker=_FakeLLM(cfg, llm_map))
+            return ar.create_reranker(strategy, cfg, llm_client=llm_client)
+
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.create_reranker', side_effect=_fake_create):
+            res = await unified_rag_pipeline(
+                query="What is RAG?",
+                enable_reranking=True,
+                reranking_strategy="two_tier",
+                enable_generation=True,
+                top_k=2,
+                rerank_min_relevance_prob=0.99,
+                rerank_sentinel_margin=0.50,
+                enable_learned_fusion=True,
+                abstention_policy="ask",
+            )
+
+            cal = res.metadata.get("reranking_calibration")
+            assert isinstance(cal, dict)
+            assert cal.get("strategy") == "two_tier"
+            assert cal.get("decision") == "ask"
+            # Generation should be gated and replaced with a clarifying question
+            gate = res.metadata.get("generation_gate")
+            assert isinstance(gate, dict)
+            assert gate.get("reason") == "low_relevance_probability"
+            assert isinstance(res.generated_answer, str)
+            assert "clarify" in res.generated_answer.lower()

@@ -184,7 +184,7 @@ Instrumentation
 ## 14) Acceptance Criteria
 
 - Phase 1 enabled in staging with doc updates; no regression in TP95 > +20% in Precision mode.
-- On internal benchmark suite, achieve: Recall@10 +8% and claim‑faithfulness +10% (target ranges above) with cost/latency within budgets.
+- On internal benchmark suite, achieve: Recall@10 +8% and claim-faithfulness +10% (target ranges above) with cost/latency within budgets.
 - API docs and WebUI helpers updated; feature flags documented.
 
 ## 15) Timeline (tentative)
@@ -200,13 +200,13 @@ Instrumentation
 - Unit: PRF term extraction; fusion correctness; calibrator decision boundaries; span metadata invariants.
 - Integration: `/rag/search` with each flag; budgets honored; metadata fields present.
 - E2E: Benchmark scripts (Docs/RAG/RAG_Benchmarks.md) plus new ablations; WebUI RAG tab flows.
-- Performance: Soak tests with flags; record per‑phase TP95 and timeouts.
+- Performance: Soak tests with flags; record per-phase TP95 and timeouts.
 
 ## 17) Open Questions
 
 - Which corpora benefit most from precomputed spans vs on‑the‑fly?
 - Minimum viable feature set for learned fusion before considering LTR?
-- Where to store calibrator artifacts and how to roll versions across multi‑env deployments?
+- Where to store calibrator artifacts and how to roll versions across multi-env deployments?
 
 ## 18) Presets (for Docs/WebUI)
 
@@ -220,3 +220,36 @@ Instrumentation
   - `expand_query=true` with `["multi_query","synonym","domain"]`
   - `top_k=30`, `reranking_strategy="hybrid"`, `enable_query_decomposition=true`
   - Optional: `enable_prf=true`
+
+## 19) Quick Usage Snippet (PRF + Multi-Vector)
+
+Example of enabling PRF and multi-vector spans together via the unified pipeline:
+
+```python
+from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
+
+result = await unified_rag_pipeline(
+    query="impact of Transformer models in 2024",
+    sources=["media_db"],
+    top_k=10,
+    enable_prf=True,
+    prf_terms=8,
+    prf_top_n=5,
+    enable_multi_vector_passages=True,
+    mv_flatten_to_spans=True,
+    enable_precomputed_spans=True,
+    enable_reranking=False,
+    enable_generation=False,
+)
+
+prf_meta = (result.metadata or {}).get("prf") or {}
+mv_meta = (result.metadata or {}).get("multi_vector") or {}
+```
+
+- `prf_meta` highlights how PRF behaved for the request:
+  - `enabled`, `base_query`, `expanded_query`, `terms_used`, `doc_seed_count`
+  - `second_pass_performed`, `second_pass_added` (documents filled by the PRF second pass)
+- `mv_meta` exposes how multi-vector spans were applied:
+  - `enabled`, `span_chars`, `stride`, `max_spans_per_doc`, `flattened`, `precomputed_spans`
+
+Clients (including the WebUI) can surface these fields in a debug/advanced pane to explain why particular documents were selected or why additional evidence was pulled in.

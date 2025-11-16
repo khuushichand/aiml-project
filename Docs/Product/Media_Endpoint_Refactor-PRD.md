@@ -16,6 +16,19 @@
   - `GET /metadata-search`, `GET /by-identifier`, `POST /search`, `GET /transcription-models` → `media/listing.py`, preserving normalization and envelopes and adding ETag support.
   - Router shim (`media/__init__.py`) prepends new `listing`/`item`/`versions` routes ahead of `_legacy_media.router` so all other `/media` routes still use the monolith.
   - Follow-ups: align pytest harnesses (MediaDB2 metadata tests, media list/versions tests) with the new router wiring and add explicit ETag/cache invalidation tests.
+- Stage 3 (Process-Only Endpoints): **In Progress – shared helpers + first endpoints modularized**
+  - Added core helpers under `tldw_Server_API/app/core/Ingestion_Media_Processing/`:
+    - `input_sourcing.py` (`TempDirManager`, `save_uploaded_files`) extracted from `_legacy_media.py` and now used by process-only endpoints via the `media` shim.
+    - `result_normalization.py` (`MediaItemProcessResponse`, `normalize_process_batch`) and `pipeline.py` (`ProcessItem`, `run_batch_processor`) for consistent batch handling; `run_batch_processor` mirrors existing counting semantics (`processed_count` counts `Success`, `errors_count` counts `Error`).
+  - Routed the first process-only endpoints through modular modules under `endpoints/media/` while preserving HTTP contracts:
+    - `process_code.py` and `process_documents.py` define thin routers for `/process-code` and `/process-documents` that delegate to the legacy implementations; `process-documents` resolves its validator via `media.file_validator_instance` so tests can patch validation through the shim.
+    - `process_pdfs.py` implements `/process-pdfs` as a modular endpoint using `TempDirManager` and `save_uploaded_files` for input sourcing and `run_batch_processor` to orchestrate `PDF_Processing_Lib.process_pdf_task`, keeping the legacy JSON envelope and 200/207/400 semantics intact.
+    - `process_ebooks.py` implements `/process-ebooks` as a modular endpoint using `TempDirManager`, `save_uploaded_files`, and `run_batch_processor` to orchestrate `_process_single_ebook`, preserving the legacy per-item result shape, success/warning/error counting, and 200/207/400 status semantics.
+  - Router shim:
+    - `media/__init__.py` now prepends `process_code`, `process_documents`, `process_pdfs`, and `process_ebooks` routes ahead of `_legacy_media.router` while keeping `_download_url_async`, `_save_uploaded_files`, `file_validator_instance`, `books`, and other internals reachable via `__getattr__` for tests.
+  - Auth/test wiring for media processing integration tests now reuses the shared single-user client fixtures (`client_user_only` / `client_with_single_user`).
+  - URL-acceptance and offline tests:
+    - `_download_url_async` includes TEST_MODE stubs for the W3C dummy PDF host (`www.w3.org`) and the public EPUB host (`filesamples.com`), copying bundled sample files under `tests/Media_Ingestion_Modification/test_media` so `/process-pdfs` and `/process-ebooks` tests do not require external network access.
 
 ## Background
 
@@ -276,15 +289,18 @@ This table serves as a migration checklist to ensure the compatibility shim cont
     - `media/__init__.py` now prepends new `listing`, `item`, and `versions` routes ahead of `_legacy_media.router` while preserving all existing imports/monkeypatch points (`cache`, `_download_url_async`, `_save_uploaded_files`, etc.).
   - Tests: run Media list/detail/version/search tests; verify ETag behavior on list/detail/search and cache invalidation after updates.
     - Status: new handlers pass direct ASGI client probes; selected pytest suites (`MediaDB2` metadata tests, `Media_Ingestion_Modification` list/versions tests) are still being reconciled with the new router wiring.
-- Stage 3: Process‑Only Endpoints **(Status: Not Started – design only)**
+- Stage 3: Process‑Only Endpoints **(Status: In Progress – helpers implemented)**
   - Current state:
-    - All process-only routes (e.g., `POST /api/v1/media/process-code`, `.../process-documents`, `.../process-pdfs`, `.../process-ebooks`, `.../process-emails`, `.../process-videos`, `.../process-audios`, MediaWiki/web-scraping “process” variants) live in `_legacy_media.py`.
-    - They already implement the partial‑success semantics described in **API Compatibility & Behavior** (200/207/400/500 with per-item result entries and existing batch envelopes).
-  - Target design:
-    - Add core orchestrator modules under `tldw_Server_API/app/core/Ingestion_Media_Processing/`: `pipeline.py`, `input_sourcing.py`, `result_normalization.py` (internal‑only models; must preserve current JSON envelopes).
+    - All process-only routes (e.g., `POST /api/v1/media/process-code`, `.../process-documents`, `.../process-pdfs`, `.../process-ebooks`, `.../process-emails`, `.../process-videos`, `.../process-audios`, MediaWiki/web-scraping “process” variants) still live in `_legacy_media.py` and continue to implement the partial‑success semantics described in **API Compatibility & Behavior** (200/207/400/500 with per-item result entries and existing batch envelopes).
+    - Core helpers have been extracted and wired:
+      - `tldw_Server_API/app/core/Ingestion_Media_Processing/input_sourcing.py` provides `TempDirManager` and `save_uploaded_files`, now used by `_legacy_media` and exposed via the `media` shim for tests.
+      - `tldw_Server_API/app/core/Ingestion_Media_Processing/result_normalization.py` adds `MediaItemProcessResponse` and `normalize_process_batch`; `process-code` uses this to keep success/warning entries first and counters consistent.
+      - `tldw_Server_API/app/core/Ingestion_Media_Processing/pipeline.py` introduces `ProcessItem` and `run_batch_processor` as a thin orchestration layer for future per-type modules.
+    - `process-documents` now resolves its validator via `media.file_validator_instance` (falling back to the default dependency) so existing tests that monkeypatch `media.file_validator_instance` continue to work after the extraction.
+  - Target design (remaining work):
     - Add per‑type endpoint modules under `tldw_Server_API/app/api/v1/endpoints/media/` (e.g., `process_code.py`, `process_documents.py`, `process_pdfs.py`, `process_ebooks.py`, `process_emails.py`, `process_videos.py`, `process_audios.py`, `mediawiki.py`) whose handlers:
-      - Parse/coerce inputs via shared helpers.
-      - Delegate to the orchestrator.
+      - Parse/coerce inputs via shared helpers (`request_parsing`, `input_sourcing`).
+      - Delegate processing to the Stage 3 orchestrator (`pipeline.run_batch_processor` and type-specific processors).
       - Preserve existing batch response structure and HTTP status code semantics for partial success.
   - Tests (reference for implementers):
     - Reuse and adapt existing process‑endpoint tests under `tldw_Server_API/tests/Media` and MediaWiki/web-scraping suites, and add focused unit tests for input sourcing, normalization, and error mapping in the new core modules.

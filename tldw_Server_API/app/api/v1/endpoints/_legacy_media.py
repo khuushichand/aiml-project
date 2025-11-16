@@ -101,6 +101,13 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     process_and_validate_file,
     FileValidationError,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
+    TempDirManager,
+    save_uploaded_files as _save_uploaded_files,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.result_normalization import (
+    normalize_process_batch,
+)
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_and_quota
@@ -493,15 +500,8 @@ async def process_code_endpoint(
                         })
                         batch["errors_count"] += 1
 
-    # Prefer success/warning entries first for readability and tests that inspect first item
-    try:
-        ordered_results = sorted(
-            batch["results"],
-            key=lambda r: 0 if str(r.get("status", "")).lower() in {"success", "warning"} else 1,
-        )
-        batch["results"] = ordered_results
-    except Exception:
-        pass
+    # Normalize batch ordering and ensure standard counters exist.
+    batch = normalize_process_batch(batch)
     final_status = status.HTTP_200_OK if (batch["processed_count"] > 0 and batch["errors_count"] == 0) else (
         status.HTTP_207_MULTI_STATUS if batch["results"] else status.HTTP_400_BAD_REQUEST
     )
@@ -2529,37 +2529,6 @@ async def search_media_items(
 
 # Per-User Media Ingestion and Analysis
 # FIXME - Ensure that each function processes multiple files/URLs at once
-class TempDirManager:
-    def __init__(self, prefix: str = "media_processing_", *, cleanup: bool = True):
-        self.temp_dir_path = None
-        self.prefix = prefix
-        self._cleanup = cleanup
-        self._created = False
-
-    def __enter__(self):
-        self.temp_dir_path = FilePath(tempfile.mkdtemp(prefix=self.prefix))
-        self._created = True
-        logging.info(f"Created temporary directory: {self.temp_dir_path}")
-        return self.temp_dir_path
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self._created and self.temp_dir_path and self._cleanup:
-            # remove the fragile exists-check and always try to clean up
-            try:
-                shutil.rmtree(self.temp_dir_path, ignore_errors=True)
-                logging.info(f"Cleaned up temporary directory: {self.temp_dir_path}")
-            except Exception as e:
-                logging.error(f"Failed to cleanup temporary directory {self.temp_dir_path}: {e}",
-                exc_info=True)
-        self.temp_dir_path = None
-        self._created = False
-
-    def get_path(self):
-         if not self._created:
-              raise RuntimeError("Temporary directory not created or already cleaned up.")
-         return self.temp_dir_path
-
-
 def _validate_inputs(media_type: MediaType, urls: Optional[List[str]], files: Optional[List[UploadFile]]):
     """Validates initial media type and presence of input sources."""
     # media_type validation is handled by Pydantic's Literal type
@@ -2574,341 +2543,6 @@ def _validate_inputs(media_type: MediaType, urls: Optional[List[str]], files: Op
     # to avoid aborting mixed batches prematurely. This ensures mixed inputs
     # (some URLs + some uploads) return 207 Multi-Status instead of a blanket 400.
 
-
-async def _save_uploaded_files(
-    files: List[UploadFile],
-    temp_dir: Path,
-    validator: FileValidator,
-    expected_media_type_key: Optional[str] = None,
-    allowed_extensions: Optional[List[str]] = None,
-    *,
-    skip_archive_scanning: bool = False,
-) -> Optional[Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]]:
-    """
-    Saves uploaded files to a temporary directory, validating them.
-    Requires a FileValidator instance.
-    """
-    """
-    Saves uploaded files to a temporary directory, optionally filtering by extension.
-
-    Args:
-        :param files: List of UploadFile objects from FastAPI.
-        :param temp_dir: The Path object representing the temporary directory to save files in.
-        :param expected_media_type_key: An optional key to check against the file's media type.
-        :param allowed_extensions: An optional list of allowed file extensions (e.g., ['.epub', '.pdf']).
-                           Comparison is case-insensitive. If None, all files are attempted.
-
-    Returns:
-        A tuple containing:
-        - processed_files: List of dicts for successfully saved files [{'path': Path, 'original_filename': str, 'input_ref': str}].
-        - file_handling_errors: List of dicts for files that failed validation or saving [{'original_filename': str, 'input_ref': str, 'status': str, 'error': str}].
-    """
-    processed_files: List[Dict[str, Any]] = []
-    file_handling_errors: List[Dict[str, Any]] = []
-    # Keep track of filenames used within this batch in the temp dir to avoid collisions
-    used_secure_names: Set[str] = set()
-
-    # Normalize allowed extensions for case-insensitive comparison (if provided)
-    normalized_allowed_extensions = {ext.lower().strip() for ext in allowed_extensions} if allowed_extensions else None
-    logger.debug(f"Allowed extensions for upload: {normalized_allowed_extensions}")
-
-    for file in files:
-        # Use original filename if available, otherwise generate a ref
-        # input_ref is primarily for logging/error correlation if filename is missing
-        original_filename = file.filename
-        input_ref = original_filename or f"upload_{uuid.uuid4()}"
-        local_file_path: Optional[Path] = None # Track path for potential cleanup on error
-
-        try:
-            if not original_filename:
-                logger.warning("Received file upload with no filename. Skipping.")
-                file_handling_errors.append({
-                    "original_filename": "N/A", # Indicate filename was missing
-                    "input_ref": input_ref,
-                    "status": "Error", # Use "Error" for consistency with other failures
-                    "error": "File uploaded without a filename."
-                })
-                continue # Skip to the next file in the loop
-
-            # --- Extension Validation ---
-            # Build multi-suffix candidates (e.g., .tar.gz)
-            suffixes = [s.lower() for s in FilePath(original_filename).suffixes]
-            candidates: List[str] = []
-            for idx in range(len(suffixes)):
-                joined = ''.join(suffixes[idx:])
-                if joined:
-                    candidates.append(joined)
-            file_extension = candidates[0] if candidates else FilePath(original_filename).suffix.lower()
-
-            # Block dangerous/executable file types for security
-            BLOCKED_EXTENSIONS = {
-                '.exe', '.bat', '.cmd', '.com', '.scr', '.vbs', '.vbe',
-                '.ws', '.wsf', '.wsc', '.wsh', '.ps1', '.ps1xml', '.ps2', '.ps2xml',
-                '.psc1', '.psc2', '.msh', '.msh1', '.msh2', '.mshxml', '.msh1xml',
-                '.msh2xml', '.scf', '.lnk', '.inf', '.reg', '.dll', '.app', '.sh',
-                '.csh', '.ksh', '.bash', '.zsh', '.fish', '.jar',
-                '.msi', '.dmg', '.pkg', '.deb', '.rpm', '.appimage', '.snap'
-            }
-            # Allow JavaScript files for code ingestion specifically when explicitly allowed
-            if expected_media_type_key == 'code' or (normalized_allowed_extensions and '.js' in normalized_allowed_extensions):
-                BLOCKED_EXTENSIONS.discard('.js')
-
-            if file_extension in BLOCKED_EXTENSIONS:
-                logger.warning(f"Rejecting potentially dangerous file type '{file_extension}' for file '{original_filename}'")
-                file_handling_errors.append({
-                    "original_filename": original_filename,
-                    "input_ref": input_ref,
-                    "status": "Error",
-                    "error": f"File type '{file_extension}' is not allowed for security reasons"
-                })
-                continue # Skip to the next file
-
-            # Honor allowed_extensions if provided by checking all candidate suffixes
-            if normalized_allowed_extensions and not any(c in normalized_allowed_extensions for c in candidates or [file_extension]):
-                logger.warning(f"Skipping file '{original_filename}' due to disallowed extension '{file_extension}'. Allowed: {allowed_extensions}")
-                file_handling_errors.append({
-                    "original_filename": original_filename,
-                    "input_ref": input_ref,
-                    "status": "Error",
-                    "error": f"Invalid file type ('{file_extension}'). Allowed extensions: {', '.join(allowed_extensions or [])}"
-                })
-                continue # Skip to the next file
-
-            # --- Sanitize and Create Unique Filename ---
-            original_stem = FilePath(original_filename).stem
-            # Cap total length (base + extension) to a conservative maximum (e.g., 200)
-            MAX_TOTAL_FILENAME_LEN = 200
-            secure_base = sanitize_filename(
-                original_stem,
-                max_total_length=MAX_TOTAL_FILENAME_LEN,
-                extension=file_extension,
-            )
-
-            # Construct filename and ensure uniqueness within the temp dir for this batch
-            def _build_filename(base: str, ext: str, suffix: str | None = None) -> str:
-                # Ensure total length <= MAX_TOTAL_FILENAME_LEN, preserving suffix and extension
-                suffix_txt = f"_{suffix}" if suffix else ""
-                reserved = len(suffix_txt) + len(ext)
-                available = MAX_TOTAL_FILENAME_LEN - reserved
-                trunc_base = base if len(base) <= available else base[: max(1, available)]
-                return f"{trunc_base}{suffix_txt}{ext}"
-
-            secure_filename = _build_filename(secure_base, file_extension)
-            counter = 0
-            temp_path_to_check = temp_dir / secure_filename
-            # Check against names already used *in this batch* and existing files (less likely but possible)
-            while secure_filename in used_secure_names or temp_path_to_check.exists():
-                counter += 1
-                secure_filename = _build_filename(secure_base, file_extension, str(counter))
-                temp_path_to_check = temp_dir / secure_filename
-                if counter > 100: # Safety break for edge cases
-                    raise OSError(f"Could not generate unique filename for {original_filename} after {counter} attempts.")
-
-            used_secure_names.add(secure_filename)
-            local_file_path = temp_dir / secure_filename
-
-            # --- Save File (stream chunks) ---
-            logger.info(f"Attempting to save uploaded file '{original_filename}' securely as: {local_file_path}")
-            # Prefer FileValidator defaults for size limits; infer media_type_key by extension candidates
-            inferred_media_key = None
-            if candidates:
-                # Reuse endpoint-level rough mapping similar to Upload_Sink
-                if any(c in {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv', '.mpg', '.mpeg'} for c in candidates):
-                    inferred_media_key = 'video'
-                elif any(c in {'.mp3', '.aac', '.flac', '.wav', '.ogg', '.m4a', '.wma'} for c in candidates):
-                    inferred_media_key = 'audio'
-                elif any(c in {'.pdf'} for c in candidates):
-                    inferred_media_key = 'pdf'
-                elif any(c in {'.epub', '.mobi', '.azw'} for c in candidates):
-                    inferred_media_key = 'ebook'
-                elif any(c in {'.eml', '.mbox', '.pst', '.ost'} for c in candidates):
-                    inferred_media_key = 'email'
-                elif any(c in {'.html', '.htm'} for c in candidates):
-                    inferred_media_key = 'html'
-                elif any(c in {'.xml', '.opml'} for c in candidates):
-                    inferred_media_key = 'xml'
-                elif any(c in {'.txt', '.md', '.docx', '.rtf', '.json'} for c in candidates):
-                    inferred_media_key = 'document'
-                elif any(c in {'.zip', '.tar', '.tgz', '.tar.gz', '.tbz2', '.tar.bz2', '.txz', '.tar.xz'} for c in candidates):
-                    inferred_media_key = 'archive'
-                elif any(c in {'.py', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.cs', '.java', '.kt', '.kts', '.swift', '.rs', '.go', '.rb', '.php', '.pl', '.lua', '.sql', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.ts', '.tsx', '.jsx', '.js'} for c in candidates):
-                    inferred_media_key = 'code'
-                else:
-                    inferred_media_key = None
-            # Pull limit from validator config; fallback to None (no pre-write cap)
-            max_cfg_bytes = None
-            try:
-                cfg = validator.get_media_config(inferred_media_key)
-                if cfg:
-                    if inferred_media_key == 'archive':
-                        # Use compressed archive file cap when available
-                        size_mb = cfg.get('archive_file_size_mb') or cfg.get('max_size_mb')
-                    else:
-                        size_mb = cfg.get('max_size_mb')
-                    if isinstance(size_mb, (int, float)):
-                        max_cfg_bytes = int(size_mb) * 1024 * 1024
-            except Exception:
-                max_cfg_bytes = None
-
-            written = 0
-            try:
-                async with aiofiles.open(local_file_path, 'wb') as buffer:
-                    while True:
-                        chunk = await file.read(1024 * 1024)  # 1MB
-                        if not chunk:
-                            break
-                        written += len(chunk)
-                        if max_cfg_bytes and written > max_cfg_bytes:
-                            raise ValueError(f"File size ({written} bytes) exceeds maximum allowed size ({max_cfg_bytes} bytes) for {inferred_media_key or 'file'}")
-                        await buffer.write(chunk)
-            except Exception as write_err:
-                # Cleanup and report
-                try:
-                    local_file_path.unlink(missing_ok=True)
-                except OSError as unlink_err:
-                    logger.warning(
-                        f"Failed to remove partially written upload file: {local_file_path}: {unlink_err}",
-                        exc_info=True,
-                    )
-                file_handling_errors.append({
-                    "original_filename": original_filename,
-                    "input_ref": input_ref,
-                    "status": "Error",
-                    "error": str(write_err),
-                })
-                continue
-
-            if written == 0:
-                logger.warning(f"Uploaded file '{original_filename}' is empty. Skipping.")
-                file_handling_errors.append({
-                    "original_filename": original_filename,
-                    "input_ref": input_ref,
-                    "status": "Error",
-                    "error": "Uploaded file content is empty.",
-                })
-                try:
-                    local_file_path.unlink(missing_ok=True)
-                except OSError as unlink_err:
-                    logger.warning(
-                        f"Failed to remove empty upload file: {local_file_path}: {unlink_err}",
-                        exc_info=True,
-                    )
-                continue
-
-            try:
-                # Optionally skip deep archive scanning (e.g., for email containers where
-                # child-level guardrails are handled during processing).
-                archive_exts = {'.zip', '.tar', '.tgz', '.tar.gz', '.tbz2', '.tar.bz2', '.txz', '.tar.xz'}
-                is_pst_ost = file_extension in {'.pst', '.ost'}
-                # When PST/OST are explicitly allowed by the caller (e.g., emails endpoint with accept_pst),
-                # allow them through validation even if MIME is unknown, so the downstream handler can return
-                # the expected feature-flag message and keywords.
-                pst_accepted = normalized_allowed_extensions is not None and ('.pst' in normalized_allowed_extensions or '.ost' in normalized_allowed_extensions)
-
-                if skip_archive_scanning and file_extension in archive_exts:
-                    validation_result = validator.validate_file(
-                        local_file_path,
-                        original_filename=original_filename,
-                        media_type_key='archive'
-                    )
-                elif is_pst_ost and pst_accepted:
-                    # Relax MIME enforcement: pass an empty allowlist to skip MIME gating; rely on extension
-                    validation_result = validator.validate_file(
-                        local_file_path,
-                        original_filename=original_filename,
-                        media_type_key='email',
-                        allowed_mimetypes_override=set()
-                    )
-                else:
-                    # Prefer contextual media-type override inferred from the filename when available
-                    try:
-                        from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import _resolve_media_type_key as _resolve_media_type_key_for_upload
-                        inferred_media_key = _resolve_media_type_key_for_upload(original_filename or str(local_file_path))
-                    except Exception:
-                        inferred_media_key = None
-                    media_key_override = inferred_media_key or expected_media_type_key
-                    validation_result = process_and_validate_file(
-                        local_file_path,
-                        validator,
-                        original_filename=original_filename,
-                        media_type_key_override=media_key_override
-                    )
-            except FileValidationError as validation_err:
-                issues = getattr(validation_err, "issues", None) or [str(validation_err)]
-                logger.warning(
-                    f"Validation raised error for uploaded file '{original_filename}': {issues}"
-                )
-                file_handling_errors.append({
-                    "original_filename": original_filename,
-                    "input_ref": input_ref,
-                    "status": "Error",
-                    "error": f"Validation error: {'; '.join(issues)}"
-                })
-                if local_file_path.exists():
-                    local_file_path.unlink(missing_ok=True)
-                continue
-            except Exception as validation_exc:
-                logger.error(
-                    f"Unexpected error validating uploaded file '{original_filename}': {validation_exc}",
-                    exc_info=True
-                )
-                file_handling_errors.append({
-                    "original_filename": original_filename,
-                    "input_ref": input_ref,
-                    "status": "Error",
-                    "error": f"Validation error: {type(validation_exc).__name__} - {validation_exc}"
-                })
-                if local_file_path.exists():
-                    local_file_path.unlink(missing_ok=True)
-                continue
-
-            if not validation_result:
-                issue_msg = "; ".join(validation_result.issues or ["Unknown validation failure"])
-                logger.warning(
-                    f"Validation failed for uploaded file '{original_filename}': {issue_msg}"
-                )
-                file_handling_errors.append({
-                    "original_filename": original_filename,
-                    "input_ref": input_ref,
-                    "status": "Error",
-                    "error": f"Validation failed: {issue_msg}"
-                })
-                if local_file_path.exists():
-                    local_file_path.unlink(missing_ok=True)
-                continue
-
-            file_size = local_file_path.stat().st_size
-            logger.info(f"Successfully saved '{original_filename}' ({file_size} bytes) to {local_file_path}")
-
-            # Add the necessary info for the endpoint to process the file
-            processed_files.append({
-                "path": local_file_path, # Return Path object
-                "original_filename": original_filename, # Keep original name for reference
-                "input_ref": input_ref # Consistent reference
-            })
-
-        except Exception as e:
-            logger.error(f"Failed to save or validate uploaded file '{original_filename or input_ref}': {e}", exc_info=True)
-            file_handling_errors.append({
-                "original_filename": original_filename or "N/A",
-                "input_ref": input_ref,
-                "status": "Error",
-                "error": f"Failed during upload processing: {type(e).__name__} - {e}"
-            })
-            # Attempt cleanup if file was partially created before the error
-            if local_file_path and local_file_path.exists():
-                try:
-                    local_file_path.unlink(missing_ok=True) # missing_ok=True handles race conditions
-                    logger.debug(f"Cleaned up partially saved/failed file: {local_file_path}")
-                except OSError as unlink_err:
-                    logger.warning(f"Failed to clean up partially saved/failed file {local_file_path}: {unlink_err}")
-        finally:
-            # Ensure the UploadFile is closed, releasing resources
-            # FastAPI typically handles this, but explicit close is safer in manual processing loops
-            await file.close()
-
-
-    return processed_files, file_handling_errors
 
 # Backwards-compatibility alias for tests referencing old private helper name
 _process_uploaded_files = _save_uploaded_files
@@ -7096,11 +6730,20 @@ async def process_documents_endpoint(
         # --- Handle Uploads ---
         if files:
             # Enforce allowed document extensions for uploads
+            # Allow tests that patch `media.file_validator_instance` to influence the
+            # validator used here while preserving the default dependency wiring.
+            try:
+                from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+
+                validator = getattr(media_mod, "file_validator_instance", file_validator_instance)
+            except Exception:  # pragma: no cover - defensive fallback
+                validator = file_validator_instance
+
             saved_files, upload_errors = await _save_uploaded_files(
                 files,
                 temp_dir,
-                validator=file_validator_instance,
-                allowed_extensions=ALLOWED_DOC_EXTENSIONS
+                validator=validator,
+                allowed_extensions=ALLOWED_DOC_EXTENSIONS,
             )
             # Add file saving/validation errors to batch_result
             for err_info in upload_errors:
@@ -8780,6 +8423,59 @@ async def _download_url_async(
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 target_path.write_text(content, encoding="utf-8")
                 return target_path
+            if test_mode_active and _host in {"www.w3.org", "w3.org"}:
+                # Offline-friendly stub for the W3C dummy PDF used in tests.
+                # When networking is unavailable, synthesize a small local PDF
+                # so process-only endpoints can still exercise their pipelines.
+                try:
+                    tests_root = FilePath(__file__).resolve().parents[4] / "tests"
+                    sample_pdf = (
+                        tests_root
+                        / "Media_Ingestion_Modification"
+                        / "test_media"
+                        / "sample.pdf"
+                    )
+                    candidate_name = "dummy_test.pdf"
+                    target_path = target_dir / candidate_name
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    if sample_pdf.is_file():
+                        target_path.write_bytes(sample_pdf.read_bytes())
+                    else:
+                        # Minimal PDF stub; robust parsers tolerate this structure.
+                        target_path.write_bytes(
+                            b"%PDF-1.4\n% Test PDF\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
+                        )
+                    return target_path
+                except Exception:
+                    # Fall through to the normal network path on any failure.
+                    pass
+            if test_mode_active and _host in {"filesamples.com", "www.filesamples.com"}:
+                # Offline-friendly stub for the public EPUB used in tests.
+                # When networking is unavailable, copy the bundled sample
+                # EPUB into the target directory so ebook processing tests
+                # can still exercise the pipeline.
+                try:
+                    tests_root = FilePath(__file__).resolve().parents[4] / "tests"
+                    sample_epub = (
+                        tests_root
+                        / "Media_Ingestion_Modification"
+                        / "test_media"
+                        / "sample.epub"
+                    )
+                    candidate_name = sample_epub.name if sample_epub.is_file() else "sample.epub"
+                    target_path = target_dir / candidate_name
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    if sample_epub.is_file():
+                        target_path.write_bytes(sample_epub.read_bytes())
+                    else:
+                        target_path.write_text(
+                            "EPUB STUB for offline tests\n",
+                            encoding="utf-8",
+                        )
+                    return target_path
+                except Exception:
+                    # Fall through to the normal network path on any failure.
+                    pass
             final_url = url
             if not test_mode_active:
                 try:

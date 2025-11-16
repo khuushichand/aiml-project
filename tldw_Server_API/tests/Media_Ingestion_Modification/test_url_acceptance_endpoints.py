@@ -69,26 +69,13 @@ def patch_httpx_asyncclient(monkeypatch):
     AsyncClientFake.TABLE = {}
 
 
-@pytest.fixture(scope="module")
-def client():
-    def _override_get_request_user_proc_test():
-        _single_user_instance.id = 1
-        return _single_user_instance
-
-    async def _fake_get_media_db_for_user():
-        class _FakeDB:
-            def close_all_connections(self):
-                return None
-        yield _FakeDB()
-
-    original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[get_request_user] = _override_get_request_user_proc_test
-    app.dependency_overrides[get_media_db_for_user] = _fake_get_media_db_for_user
-
-    with TestClient(fastapi_app_instance) as c:
-        yield c
-
-    app.dependency_overrides = original_overrides
+@pytest.fixture()
+def client(client_user_only):
+    """
+    Use the shared single-user TestClient fixture so that auth and DB handling
+    match the rest of the media tests without custom dependency overrides.
+    """
+    return client_user_only
 
 
 @pytest.fixture

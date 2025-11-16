@@ -11,10 +11,9 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 - `POST /api/v1/chatbooks/export` (sync + async) produces a ZIP containing a valid `manifest.json` conforming to `Docs/Schemas/chatbooks_manifest_v1.json`.
 - Export pipeline covers the v1 scope: conversations (messages + image attachments), notes, characters, world books, dictionaries, generated docs, Prompt Studio prompts, media descriptors (including transcripts, media-linked prompts, optional media embeddings), and evaluation definitions with associated runs.
 - Jobs are persisted per user in ChaChaNotes with states `pending → in_progress → completed|failed|cancelled|expired|deleted`, and `GET /api/v1/chatbooks/*/jobs` returns consistent job metadata and scopes.
-- Signed download URLs (`CHATBOOKS_SIGNED_URLS`, `CHATBOOKS_SIGNING_SECRET`) work in multi-user/org modes; `GET /api/v1/chatbooks/download/{job_id}` returns either a ZIP file or a signed URL honoring `expires_at`.
 
 **Tests**:
-- Unit: manifest builder (per-type mappers and statistics), job model/state transitions, per-user storage path construction (`TLDW_USER_DATA_PATH`), signed URL HMAC generation and expiry handling.
+- Unit: manifest builder (per-type mappers and statistics), JSON Schema validation against `Docs/Schemas/chatbooks_manifest_v1.json`, job model/state transitions, per-user storage path construction (`TLDW_USER_DATA_PATH`).
 - Integration: end-to-end export for a user with mixed content types; verification of manifest counts and identities; retry/export of large-but-metadata-only archives; listing jobs by user and (for admins) by team/org.
 
 **Status**: Completed (per “What’s working now” in the PRD)
@@ -46,13 +45,30 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 - Identity and ownership semantics match the PRD: imported entities are materialized under the importing user; organizations own artifacts across their teams/users; teams own artifacts created by their members; cross-scope imports respect role-based access controls.
 - ChatbookValidator is wired into import/preview to enforce file integrity, path sanitization, zip-bomb protection, and reference consistency (no dangling media/embedding references without manifest entries).
 - QuotaManager enforces Chatbooks-specific limits (tier-based storage, daily exports/imports, concurrent jobs, per-file caps), surfaces actionable errors, and respects overrides for privileged roles/service accounts.
-- Dictionary/templating validation from `Docs/Product/Chatbook-Tools-PRD.md` is integrated into Chatbooks import: embedded dictionaries are validated, `ImportJob.warnings` populated, and `CHATBOOKS_IMPORT_DICT_STRICT` semantics honored without blocking entire imports on dictionary-only issues.
+- QuotaManager enforces Chatbooks-specific limits (tier-based storage, daily exports/imports, concurrent jobs, per-file caps), surfaces actionable errors, and respects overrides for privileged roles/service accounts.
+- Content-type policy controls are respected: operators can disable or restrict specific export/import content types (for example, evaluations or embeddings) via configuration/policy flags, and those policies are enforced consistently across API flows.
+- Dictionary/templating validation from `Docs/Product/Chatbook-Tools-PRD.md` is integrated into Chatbooks import: embedded dictionaries are validated, `ImportJob.warnings` populated, and `CHATBOOKS_IMPORT_DICT_STRICT` semantics honored without blocking entire imports on dictionary-only issues. This stage depends on the validator and API surface defined in the Chatbook-Tools implementation plan; Chatbooks-specific work focuses on wiring and verification.
 
 **Tests**:
-- Unit: conflict-resolution functions for each content type; ChatbookValidator scenarios (zip bombs, traversal attempts, missing references); quota checks with mocked tiers; dictionary validator wiring and strict/non-strict behavior.
-- Integration: import + preview of valid and invalid archives; conflict-strategy matrix across conversations/notes/prompts/characters/media/evaluations/embeddings; org/team-scope imports with correct ownership and audit logging; rate limits under load (SlowAPI configuration).
+- Unit: conflict-resolution functions for each content type; ChatbookValidator scenarios (zip bombs, traversal attempts, missing references); quota checks with mocked tiers; content-type policy flag handling; dictionary validator wiring and strict/non-strict behavior.
+- Integration: import + preview of valid and invalid archives; conflict-strategy matrix across conversations/notes/prompts/characters/media/evaluations/embeddings; org/team-scope imports with correct ownership and audit logging; enforcement of disabled content types in exports/imports; rate limits under load (SlowAPI configuration).
 
 **Status**: Not Started
+
+---
+
+## Stage 6: Optional Client-Side Encryption (TBD)
+**Goal**: Track potential client-side/password-protected Chatbooks encryption without changing the server-managed encryption stance.
+
+**Success Criteria**:
+- Any adopted approach for client-provided encryption (for example, password-protected archives) is consistent with the PRD non-goal that server-managed, per-chatbook encryption keys remain out of scope.
+- UX/API and key-handling responsibilities are clearly documented (client vs server), and import/export flows surface appropriate error messages when encrypted archives cannot be processed.
+- Backwards compatibility is maintained: unencrypted Chatbooks continue to work as before, and encrypted Chatbooks are either supported explicitly or rejected with clear, non-ambiguous errors.
+
+**Tests**:
+- To be defined once Open Question #3 in `Docs/Product/Chatbooks_PRD.md` is resolved and a concrete design is selected.
+
+**Status**: Deferred (pending resolution of PRD Open Question #3)
 
 ---
 
@@ -63,11 +79,12 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 - Health endpoint `GET /api/v1/chatbooks/health` reflects storage readiness, background worker availability, and configuration sanity (for example, presence of `TLDW_USER_DATA_PATH`, signing secret when required).
 - Metrics are emitted for exports/imports (e.g., `chatbooks_exports_total`, `chatbooks_imports_failed_total`, `chatbooks_export_bytes_total`, latency histograms) and integrated into the existing metrics registry.
 - Logs include structured job context (user/team/org scope, job_id, kind, status transitions) and audit events are emitted for any cross-user operations in line with the AuthNZ/audit modules.
-- Performance targets from the PRD are validated on a reference setup (for example, ~4 vCPU, SSD-backed storage, local network) and documented as SLOs, including: async export throughput and import handling of 10k+ items under the stated time budgets.
+- Signed download URLs (`CHATBOOKS_SIGNED_URLS`, `CHATBOOKS_SIGNING_SECRET`) work in multi-user/org modes; `GET /api/v1/chatbooks/download/{job_id}` returns either a ZIP file or a signed URL honoring `expires_at`, and this behavior is covered by metrics and logs.
+- Performance targets from the PRD are validated on a reference setup (for example, ~4 vCPU, SSD-backed storage, local network) and documented as target SLOs (not hard guarantees for all deployments), including: async export throughput and import handling of 10k+ items under the stated time budgets.
 
 **Tests**:
-- Unit: health check components (storage, worker connectivity) and metrics registration; log/audit helpers for job operations.
-- Integration: simulated job loads with exports/imports under various sizes; verification that health/metrics reflect backlogs and failures; spot checks that SLOs are met on the reference environment.
+- Unit: health check components (storage, worker connectivity) and metrics registration; log/audit helpers for job operations; signed URL HMAC generation and expiry handling.
+- Integration: simulated job loads with exports/imports under various sizes; verification that health/metrics reflect backlogs and failures; cross-scope job listings (large-org scenarios with many users/jobs) remain within acceptable latency; spot checks that target SLOs are met on the reference environment.
 
 **Status**: Not Started
 
@@ -87,4 +104,3 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 - Integration: exports/imports with mixed small attachments and large media binaries; verification of offline rehydration from a v2 chatbook; compatibility tests confirming that v1-only manifests still import correctly after v2 is introduced.
 
 **Status**: Not Started
-
