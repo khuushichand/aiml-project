@@ -45,7 +45,7 @@ Notes:
 - SQLite PRAGMAs: WAL, NORMAL sync, temp in memory, foreign keys ON
 - Auto-vacuum: `auto_vacuum=INCREMENTAL`; cleanup triggers `PRAGMA incremental_vacuum`
 - Optional `max_db_mb` parameter logs a warning if file size exceeds configured limit
-- Fallback durability: if repeated flush failures cause buffer overflow, dropped events are appended to `Databases/audit_fallback_queue.jsonl`
+- Fallback durability: if repeated flush failures cause the buffer to overflow, dropped events are appended to a fallback JSONL file adjacent to the audit DB (per-user under the audit directory when using DI; `./Databases/` when using the default constructor)
 
 ### Indexes
 
@@ -60,6 +60,7 @@ Notes:
   - Selected strings: `action`, `resource_id`, `error_message`, and `context_user_agent`
 - Redaction placeholders: `[EMAIL_REDACTED]`, `[API_KEY_REDACTED]`, `[CREDIT_CARD_REDACTED]`, etc.
 - When PII is detected, `pii_detected=true` and `compliance_flags` includes `pii_detected`.
+- If metadata isn’t JSON-serializable, the service stores a redacted representation as `{ "redacted_text": "..." }`.
 
 ## Programmatic Usage
 
@@ -161,6 +162,7 @@ agen = await svc.export_events(user_id="42", format="json", stream=True, chunk_s
 async for chunk in agen:
     ...  # write to socket / file
 ```
+Note: HTTP streaming applies to JSON/JSONL only (CSV+stream returns 400). Programmatic CSV export streams when `file_path` is provided.
 
 ## Configuration
 
@@ -171,18 +173,31 @@ async for chunk in agen:
   - `AUDIT_PII_SCAN_FIELDS`: comma-separated string or list of additional string fields to scan/redact beyond metadata (defaults include: `action`, `resource_id`, `error_message`, `context_user_agent`). Use `context_*` prefix for context fields, e.g. `context_endpoint`.
 - Retention: `retention_days` (constructor) controls cleanup.
 - Flush/cleanup: `buffer_size`, `flush_interval` tune background activity.
-- Database path is per-user via DI in multi-user mode; default DB is `./Databases/unified_audit.db`.
+- Database location:
+  - When using DI (single or multi-user), the audit DB path is per-user under `Databases/user_databases/<user_id>/audit/unified_audit.db`.
+  - If you construct the service directly without DI, the default `db_path` is `./Databases/unified_audit.db`.
+- `USER_DB_BASE_DIR` (settings): per-user DB root directory; defaults to `Databases/user_databases/` under the project root.
 
 ## Operational Notes
 
 - Deterministic ordering with `timestamp DESC, event_id DESC` supports paginated UIs.
 - Fixed CSV headers simplify downstream ingestion.
-- Fallback queue (`audit_fallback_queue.jsonl`) captures dropped events on persistent DB write failures.
+- Fallback queue (`audit_fallback_queue.jsonl`) is written adjacent to the audit DB and captures dropped events on persistent DB write failures.
 - PII scanning can be tuned centrally in future; currently Audit and RAG use separate detectors.
+- Shutdown: the service enforces owner-loop shutdown; DI helpers schedule safe cross-loop shutdown.
+
+### Utilities
+
+- `get_statistics()` returns in-memory counters and configuration snapshot.
+- `get_security_summary(hours=24)` returns aggregated security stats (high-risk counts, failures, unique users, top failing IPs).
 
 ---
 
 For questions or contributions, see `README.md` and the tests under `tldw_Server_API/tests/Audit/` for example usage.
-# JSONL (NDJSON)
+
+### JSONL (NDJSON)
+
+```bash
 curl -H "X-API-KEY: $KEY" \
   "http://127.0.0.1:8000/api/v1/audit/export?format=jsonl&stream=true&user_id=42" -OJ
+```

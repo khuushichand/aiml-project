@@ -2,6 +2,8 @@
 
 Note: This README is aligned to the project’s 3-section template. The original content is preserved below under section 3 to avoid any loss of information.
 
+Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
+
 ## 1. Descriptive of Current Feature Set
 
 - Purpose: Export, import, preview, and manage user content as portable chatbooks (ZIP + manifest), with multi-user isolation, quotas, and async job processing.
@@ -36,13 +38,43 @@ Note: This README is aligned to the project’s 3-section template. The original
 - Architecture & Flow:
   - API → Service (`chatbook_service.py`) → Validators/Quota → ZIP/manifest I/O → Jobs backend (core or Prompt Studio)
   - Per-user directories under `TLDW_USER_DATA_PATH` (or defaults) with strict path sanitization and safe file handling
+
+  Request/Job Flow (ASCII):
+  ```text
+  Export (sync)
+  -----------
+  Client
+    → POST /api/v1/chatbooks/export (async_mode=false)
+      → Validate (ChatbookValidator) + Quotas (QuotaManager)
+      → Service collects content → writes manifest + files → creates ZIP in exports/
+      → Persist completed ExportJob (download_url + expires_at)
+      ← 200 { job_id, download_url }
+
+  Export (async)
+  --------------
+  Client
+    → POST /api/v1/chatbooks/export (async_mode=true)
+      → Create ExportJob (pending)
+      → Enqueue core Jobs (domain=chatbooks) OR create Prompt Studio job
+      ← 200 { job_id }
+      Worker (core or PS)
+        → process → write ZIP → update job (output_path, download_url, expires_at, status=completed)
+
+  Import (sync/async)
+  -------------------
+  Client
+    → POST /api/v1/chatbooks/import (multipart file)
+      → Save to per-user temp → Validate ZIP → Secure extract → Import selections
+      → Sync: return counts/warnings; Async: create ImportJob + process in background
+  ```
 - Key Components:
   - `chatbook_service.py` (export/import/preview, job state, signed URLs)
   - `chatbook_validators.py` (file/ZIP/manifest validation), `quota_manager.py` (tier limits)
   - Optional `ps_job_adapter.py` for Prompt Studio JobManager integration
   - `chatbook_models.py` (content types, job models)
 - Configuration:
-  - `CHATBOOKS_JOBS_BACKEND` (`core` default) or legacy `TLDW_USE_PROMPT_STUDIO_QUEUE`
+  - `CHATBOOKS_JOBS_BACKEND` (`core` default). Precedence: `CHATBOOKS_JOBS_BACKEND` > `TLDW_JOBS_BACKEND` > deprecated `TLDW_USE_PROMPT_STUDIO_QUEUE`.
+  - `CHATBOOKS_CORE_WORKER_ENABLED`: `true|false` controls starting the core worker when backend=`core` (default true).
   - `TLDW_USER_DATA_PATH`, `CHATBOOKS_SIGNED_URLS`, `CHATBOOKS_SIGNING_SECRET`, `CHATBOOKS_URL_TTL_SECONDS`, `CHATBOOKS_ENFORCE_EXPIRY`
   - Core jobs tuning: `JOBS_POLL_INTERVAL_SECONDS`, `JOBS_LEASE_SECONDS`, `JOBS_LEASE_RENEW_SECONDS`, `JOBS_LEASE_RENEW_JITTER_SECONDS`
 - Concurrency & Performance:
@@ -142,10 +174,12 @@ Note: This README is aligned to the project’s 3-section template. The original
 - `CHATBOOKS_JOBS_BACKEND`: `core` (default) or `prompt_studio`.
 - `TLDW_JOBS_BACKEND`: legacy module default override; prefer `CHATBOOKS_JOBS_BACKEND`.
 - `TLDW_USE_PROMPT_STUDIO_QUEUE`: legacy boolean; deprecated.
+- Precedence: `CHATBOOKS_JOBS_BACKEND` overrides `TLDW_JOBS_BACKEND`, which supersedes deprecated `TLDW_USE_PROMPT_STUDIO_QUEUE`.
+- `CHATBOOKS_CORE_WORKER_ENABLED`: `true|false` controls starting the core worker when backend=`core` (default true).
 - `TLDW_USER_DATA_PATH`: base path for per-user data (useful for dev/testing).
 - `CHATBOOKS_URL_TTL_SECONDS`: download URL expiry TTL (default 86400).
 - `CHATBOOKS_ENFORCE_EXPIRY`: `true|false` enforce expiry at download.
-- `CHATBOOKS_SIGNED_URLS`: `true|false` enable HMAC signing of download URLs.
+- `CHATBOOKS_SIGNED_URLS`: `true|false` enable HMAC signing of download URLs (token = HMAC-SHA256 of `"{job_id}:{exp}"`).
 - `CHATBOOKS_SIGNING_SECRET`: secret key for HMAC token.
 - Core Jobs worker tuning: `JOBS_POLL_INTERVAL_SECONDS`, `JOBS_LEASE_SECONDS`, `JOBS_LEASE_RENEW_SECONDS`, `JOBS_LEASE_RENEW_JITTER_SECONDS`.
 

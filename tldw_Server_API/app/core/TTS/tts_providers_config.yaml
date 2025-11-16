@@ -36,6 +36,9 @@ providers:
     normalize_text: true
     sentence_splitting: true
     sample_rate: 24000
+    # Long-text pacing
+    pause_interval_words: 500
+    pause_tag: "[pause=1.1]"
     # Chunking configuration
     target_min_tokens: 175
     target_max_tokens: 250

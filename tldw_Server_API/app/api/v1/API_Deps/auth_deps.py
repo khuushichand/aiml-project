@@ -33,6 +33,7 @@ from tldw_Server_API.app.core.DB_Management.Users_DB import get_users_db
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
+from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
@@ -828,11 +829,27 @@ async def check_rate_limit(
     Raises:
         HTTPException: If rate limit exceeded
     """
-    # In TEST_MODE, bypass rate limiting entirely for deterministic tests
+    # In test mode, bypass rate limiting entirely for deterministic tests
+    if _is_test_mode():
+        return  # Skip enforcement in test environments
+
+    # Additional bypass: in single-user mode, honor the configured SINGLE_USER_API_KEY
+    # to avoid noisy 429s during local/dev and E2E runs against a live server.
     try:
-        if os.getenv("TEST_MODE", "").lower() == "true":
-            return  # Skip enforcement in test environments
+        from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings as _get_settings
+        if is_single_user_mode():
+            settings = _get_settings()
+            api_key_hdr = request.headers.get("X-API-KEY") if getattr(request, "headers", None) else None
+            auth_hdr = request.headers.get("Authorization") if getattr(request, "headers", None) else None
+            bearer_tok = auth_hdr.split(" ", 1)[1] if isinstance(auth_hdr, str) and auth_hdr.startswith("Bearer ") else None
+            # Accept env override if settings cache is stale in long-lived servers
+            import os as _os
+            env_key = _os.getenv("SINGLE_USER_API_KEY")
+            configured_key = settings.SINGLE_USER_API_KEY or env_key
+            if configured_key and (api_key_hdr == configured_key or bearer_tok == configured_key):
+                return  # Bypass rate limiting for the single-user API key
     except Exception:
+        # Non-fatal; fall through to standard enforcement
         pass
 
     # Get client IP
@@ -873,10 +890,23 @@ async def check_auth_rate_limit(
     Raises:
         HTTPException: If rate limit exceeded
     """
-    # In TEST_MODE, bypass rate limiting entirely for deterministic tests
+    # In test mode, bypass rate limiting entirely for deterministic tests
+    if _is_test_mode():
+        return
+
+    # Additional bypass: in single-user mode, bypass for the configured SINGLE_USER_API_KEY
     try:
-        if os.getenv("TEST_MODE", "").lower() == "true":
-            return
+        from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings as _get_settings
+        if is_single_user_mode():
+            settings = _get_settings()
+            api_key_hdr = request.headers.get("X-API-KEY") if getattr(request, "headers", None) else None
+            auth_hdr = request.headers.get("Authorization") if getattr(request, "headers", None) else None
+            bearer_tok = auth_hdr.split(" ", 1)[1] if isinstance(auth_hdr, str) and auth_hdr.startswith("Bearer ") else None
+            import os as _os
+            env_key = _os.getenv("SINGLE_USER_API_KEY")
+            configured_key = settings.SINGLE_USER_API_KEY or env_key
+            if configured_key and (api_key_hdr == configured_key or bearer_tok == configured_key):
+                return
     except Exception:
         pass
 

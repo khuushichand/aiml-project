@@ -5,6 +5,8 @@ import tempfile
 import pytest
 from fastapi.testclient import TestClient
 
+pytestmark = [pytest.mark.integration, pytest.mark.evaluations]
+
 
 def _detect_vllm_base_url():
     # Try common env vars or default to local vLLM
@@ -30,7 +32,6 @@ def _vllm_available():
         return False
 
 
-@pytest.mark.integration
 @pytest.mark.requires_llm
 def test_ocr_pdf_with_dots_and_vllm_text_accuracy():
     # Skip if dots_ocr is not installed

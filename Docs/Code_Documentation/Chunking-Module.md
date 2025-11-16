@@ -2,6 +2,8 @@
 
 This document explains the architecture, extension points, and best practices for the v2 Chunking subsystem. It is aimed at project developers and maintainers.
 
+See also: Guides/Chunking_Code_Guide.md for a surgical code-level map and usage tips.
+
 ## Purpose
 
 The Chunking module turns raw text (or structured content) into smaller, semantically meaningful units (“chunks”) suitable for RAG, embedding, and downstream analytics. It offers:
@@ -77,6 +79,73 @@ Example (excerpt):
 `GET /api/v1/chunking/capabilities`
 
 Returns the current chunking capabilities derived from the runtime registry and defaults.
+
+Note: The methods list is the union of `ChunkingMethod` enum values and runtime‑registered strategy keys returned by `Chunker().get_available_methods()`. This ensures clients see non‑enum methods (for example, `structure_aware` and `code_ast`) when those strategies are available at runtime.
+
+#### Method-Specific Options (example payload shape)
+
+The endpoint returns `method_specific_options` for discoverability. Below is an illustrative shape (keys may evolve):
+
+```
+{
+  "method_specific_options": {
+    "code": {
+      "code_mode": ["auto", "ast", "heuristic"],
+      "language_hints": {"py": "python", "js": "javascript", "jsx": "javascript", "ts": "typescript", "tsx": "typescript"}
+    },
+    "tokens": {
+      "tokenizer_name_or_path": "gpt2",
+      "add_special_tokens": [true, false]
+    },
+    "json": {
+      "preserve_metadata": [true, false],
+      "single_metadata_reference": [true, false],
+      "metadata_reference_key": "__meta_ref__",
+      "json_chunkable_data_key": "data"
+    },
+    "xml": {
+      "preserve_metadata": [true, false]
+    },
+    "structure_aware": {
+      "preserve_tables": [true, false],
+      "preserve_code_blocks": [true, false],
+      "preserve_headers": [true, false],
+      "preserve_lists": [true, false],
+      "table_serialization": ["markdown", "entity", "narrative"],
+      "contextual_header_mode": ["none", "simple", "contextual"],
+      "max_breadcrumb_levels": 6
+    },
+    "propositions": {
+      "engine": ["heuristic", "spacy", "llm", "auto"],
+      "aggressiveness": [0, 1, 2],
+      "min_proposition_length": 15,
+      "prompt_profile": ["generic", "claimify", "gemma_aps"]
+    }
+  }
+}
+```
+
+#### Hierarchical Support and Template Rules
+
+The endpoint includes `"hierarchical_support": true`. To use hierarchical splitting at call time (e.g., via `process_text`), pass either `{"hierarchical": true}` or a `hierarchical_template` with custom boundaries.
+
+Boundary rule schema and limits:
+
+```
+{
+  "hierarchical_template": {
+    "boundaries": [
+      { "kind": "chapter", "pattern": "^Chapter\\s+\\d+\\b", "flags": "im" },
+      { "kind": "appendix", "pattern": "^Appendix\\s+[A-Z]\\b", "flags": "im" }
+    ]
+  }
+}
+```
+
+- Allowed flags: only `i` and `m`.
+- Safety: patterns are checked via regex_safety (length cap, dangerous-constructs check, compile guard); RE2 fallback is used when available.
+- Limits: max 20 rules; max pattern length 256 characters.
+- Related config (config.txt [Chunking]): `regex_timeout_seconds`, `regex_disable_multiprocessing`, `regex_simple_only`.
 
 Example response:
 

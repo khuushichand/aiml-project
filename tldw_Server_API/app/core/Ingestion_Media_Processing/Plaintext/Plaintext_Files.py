@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 #
 # External Imports
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment
 from docx2txt import docx2txt
 import html2text
 from pypandoc import convert_file
@@ -193,7 +193,28 @@ def convert_document_to_text(file_path: Path) -> Tuple[str, str, Dict[str, Any]]
             h.ignore_links = False # Keep links as text
             h.body_width = 0 # Don't wrap lines
             html_content = _read_text(file_path)
-            content = h.handle(html_content) # Convert to Markdown
+            # Defense-in-depth: strip script/style/noscript tags and comments before conversion
+            try:
+                soup = BeautifulSoup(html_content, 'html.parser')
+                for tag_name in ('script', 'style', 'noscript'):
+                    for t in soup.find_all(tag_name):
+                        try:
+                            t.decompose()
+                        except Exception:
+                            try:
+                                t.extract()
+                            except Exception:
+                                pass
+                for c in soup.find_all(string=lambda s: isinstance(s, Comment)):
+                    try:
+                        c.extract()
+                    except Exception:
+                        pass
+                sanitized_html = str(soup)
+            except Exception:
+                # Fallback: use original content if BeautifulSoup fails
+                sanitized_html = html_content
+            content = h.handle(sanitized_html) # Convert to Markdown
             # Try extracting title/author
             soup = BeautifulSoup(html_content, 'html.parser')
             title_tag = soup.find('title')

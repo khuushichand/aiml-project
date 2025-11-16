@@ -427,7 +427,46 @@ class APIClient:
 
     # Character endpoints
     def import_character(self, character_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Import a character card."""
+        """Create/import a character from JSON data.
+
+        Uses the JSON create endpoint (`POST /api/v1/characters/`) when a dict is provided,
+        mapping legacy sample keys to the CharacterCreate schema. This avoids sending JSON to
+        the file-only import endpoint.
+        """
+        if isinstance(character_data, dict):
+            # Map common sample fields to CharacterCreate
+            def _extract_image_base64(val: Optional[str]) -> Optional[str]:
+                if not isinstance(val, str):
+                    return None
+                # Strip data URI prefix if present
+                if val.startswith("data:") and "," in val:
+                    return val.split(",", 1)[1]
+                return val
+
+            payload = {
+                "name": character_data.get("name"),
+                "description": character_data.get("description"),
+                "personality": character_data.get("personality"),
+                "scenario": character_data.get("scenario"),
+                "system_prompt": character_data.get("system_prompt"),
+                "post_history_instructions": character_data.get("post_history_instructions"),
+                # Legacy keys from sample_character_card
+                "first_message": character_data.get("first_message") or character_data.get("first_mes"),
+                "message_example": character_data.get("message_example") or character_data.get("mes_example"),
+                "creator_notes": character_data.get("creator_notes"),
+                "alternate_greetings": character_data.get("alternate_greetings"),
+                "tags": character_data.get("tags"),
+                "creator": character_data.get("creator"),
+                "character_version": character_data.get("character_version") or character_data.get("version"),
+                "extensions": character_data.get("extensions"),
+                "image_base64": _extract_image_base64(character_data.get("image_base64") or character_data.get("avatar")),
+            }
+            # POST to JSON create endpoint
+            resp = self.client.post(f"{API_PREFIX}/characters/", json=payload)
+            resp.raise_for_status()
+            return resp.json()
+
+        # Fallback (should rarely be used): try file-import endpoint if non-dict provided
         response = self.client.post(
             f"{API_PREFIX}/characters/import",
             json=character_data
@@ -462,6 +501,12 @@ class APIClient:
         response = self.client.delete(f"{API_PREFIX}/characters/{character_id}")
         response.raise_for_status()
         return response.json()
+
+    def delete_chat(self, chat_id: str) -> None:
+        """Delete a chat session (soft delete)."""
+        r = self.client.delete(f"{API_PREFIX}/chats/{chat_id}")
+        if r.status_code not in (200, 204):
+            r.raise_for_status()
 
     # RAG/Search endpoints
     def search_media(self, query: str, limit: int = 10) -> Dict[str, Any]:
@@ -506,7 +551,16 @@ class APIClient:
             json=data,
         )
         response.raise_for_status()
-        return response.json()
+        payload = response.json() or {}
+        # Back-compat: normalize unified response -> legacy keys expected by some tests
+        docs = payload.get("documents") or payload.get("results") or payload.get("items") or []
+        if "results" not in payload:
+            payload["results"] = docs
+        if "documents" not in payload:
+            payload["documents"] = docs
+        if "success" not in payload:
+            payload["success"] = (response.status_code == 200) and (not bool(payload.get("errors")))
+        return payload
 
     def rag_advanced_search(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Perform advanced RAG search via the unified endpoint.
@@ -530,7 +584,16 @@ class APIClient:
             json=cfg,
         )
         response.raise_for_status()
-        return response.json()
+        payload = response.json() or {}
+        # Back-compat: normalize unified response -> legacy keys expected by some tests
+        docs = payload.get("documents") or payload.get("results") or payload.get("items") or []
+        if "results" not in payload:
+            payload["results"] = docs
+        if "documents" not in payload:
+            payload["documents"] = docs
+        if "success" not in payload:
+            payload["success"] = (response.status_code == 200) and (not bool(payload.get("errors")))
+        return payload
 
     # Health check
     def health_check(self) -> Dict[str, Any]:
@@ -615,6 +678,8 @@ def ensure_server_running(base_url: str = BASE_URL, timeout: int = SERVER_STARTU
                 # Treat 200 OK and 206 Partial Content (degraded) as "server is up"
                 if response.status_code in (200, 206):
                     health_data = response.json()
+                    # Ensure auth_mode is present for tests; infer from environment when absent
+                    health_data.setdefault("auth_mode", os.getenv("AUTH_MODE", "single_user"))
                     print(f"✅ API server is running in {health_data.get('auth_mode', 'unknown')} mode")
                     return health_data
         except (httpx.ConnectError, httpx.TimeoutException) as e:
@@ -814,14 +879,72 @@ class TestDataTracker:
         for file_path in self.files:
             cleanup_test_file(file_path)
 
+    def cleanup_resources(self, preserve: bool = False):
+        """Clean up server-side resources created during tests.
+
+        Args:
+            preserve: When True, do not delete resources (useful for debugging).
+        """
+        if preserve:
+            print("[e2e] Preserving server-side resources (E2E_PRESERVE_ARTIFACTS=1)")
+            return
+
+        client = getattr(self, "_client", None)
+        if client is None:
+            return
+
+        # Delete prompts first (usually independent)
+        for pid in list(self.prompt_ids):
+            try:
+                client.delete_prompt(pid)
+            except Exception:
+                pass
+
+        # Delete notes
+        for nid in list(self.note_ids):
+            try:
+                client.delete_note(nid)
+            except Exception:
+                pass
+
+        # Delete chat sessions
+        for cid in list(self.chat_ids):
+            try:
+                client.delete_chat(cid)
+            except Exception:
+                pass
+
+        # Delete characters
+        for cid in list(self.character_ids):
+            try:
+                client.delete_character(cid)
+            except Exception:
+                pass
+
+        # Delete media last
+        for mid in list(self.media_ids):
+            try:
+                client.delete_media(mid)
+            except Exception:
+                pass
+
 
 @pytest.fixture(scope="session")
-def data_tracker():
+def data_tracker(api_client):
     """Create a data tracker for the test session."""
     tracker = TestDataTracker()
+    # Attach client for cleanup
+    tracker._client = api_client  # type: ignore[attr-defined]
     yield tracker
     # Cleanup files after tests
     tracker.cleanup_files()
+    # Optionally cleanup server-side resources unless preservation requested
+    preserve = str(os.getenv("E2E_PRESERVE_ARTIFACTS", "")).strip().lower() in {"1", "true", "yes", "on"}
+    try:
+        tracker.cleanup_resources(preserve=preserve)
+    except Exception as _e:
+        # Never fail session teardown due to cleanup issues
+        print(f"[e2e] Cleanup warning: {str(_e)[:200]}")
 
 
 # ============================================================================

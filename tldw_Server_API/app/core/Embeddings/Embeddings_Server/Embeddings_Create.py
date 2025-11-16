@@ -824,6 +824,12 @@ class ONNXEmbedder:
         os.makedirs(self.model_specific_onnx_dir, exist_ok=True)
         self.onnx_model_file_path = os.path.join(self.model_specific_onnx_dir, "model.onnx")  # Standard name by optimum
 
+        # Initialize critical attributes early so __del__/finalizers are safe even if setup fails
+        self.session: Optional[ort.InferenceSession] = None
+        self.unload_timer: Optional[threading.Timer] = None
+        self.last_used_time: float = 0.0
+        self.device_providers = config.onnx_providers
+
         # Tokenizer is usually stored with the ONNX model by optimum (lazy import)
         _, AutoTokenizer = _import_transformers()
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -832,11 +838,6 @@ class ONNXEmbedder:
             revision=self.revision,
             trust_remote_code=config.trust_remote_code,
         )
-
-        self.session: Optional[ort.InferenceSession] = None
-        self.unload_timer: Optional[threading.Timer] = None
-        self.last_used_time: float = 0.0
-        self.device_providers = config.onnx_providers
 
         log_counter("onnx_embedder_init", labels={"model_id": self.model_identifier})
         logging.info(f"ONNXEmbedder initialized for {model_identifier} (model: {config.model_name_or_path})")
@@ -1017,11 +1018,21 @@ class ONNXEmbedder:
         log_counter("onnx_create_embeddings_success", labels={"model_id": self.model_identifier})
         return embeddings_np.astype(np.float32)  # Ensure float32 output
 
-    def __del__(self):
-        logging.debug(f"ONNXEmbedder {self.model_identifier} is being deleted.")
-        if self.unload_timer:
-            self.unload_timer.cancel()
-            self.unload_timer = None
+    def __del__(self) -> None:
+        try:
+            if hasattr(self, "unload_timer"):
+                timer = getattr(self, "unload_timer", None)
+                if timer is not None:
+                    try:
+                        timer.cancel()
+                    except Exception:
+                        # Never raise from __del__
+                        pass
+        except Exception:
+            # Guard against any unexpected attribute/state issues during GC
+            pass
+
+    
 
 
 # Global limiter instance. Parameters (20 calls per 60s) are fixed.

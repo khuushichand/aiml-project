@@ -6,11 +6,11 @@ No mocking of internal functions; only dependency override to inject a temp DB.
 import os
 import tempfile
 from pathlib import Path
+import importlib
 
 import pytest
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
@@ -19,7 +19,7 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
-def client_with_notes_db(tmp_path):
+def client_with_notes_db(tmp_path, monkeypatch):
     db_path = tmp_path / "notes_integration.db"
     db = CharactersRAGDB(str(db_path), client_id="integration_user")
 
@@ -31,6 +31,15 @@ def client_with_notes_db(tmp_path):
 
     def override_db_dep():
         return db
+
+    # Use full app profile so Notes routes are included
+    monkeypatch.setenv("MINIMAL_TEST_APP", "0")
+    monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
+
+    from tldw_Server_API.app import main as app_main
+
+    importlib.reload(app_main)
+    fastapi_app = app_main.app
 
     fastapi_app.dependency_overrides[get_request_user] = override_user
     fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_db_dep

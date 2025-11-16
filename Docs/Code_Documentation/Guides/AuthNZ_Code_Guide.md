@@ -1,0 +1,386 @@
+# AuthNZ Code Guide (Developers)
+
+This guide orients project developers to the AuthNZ module: what’s in it, how it works, and how to work with it when building or extending the server.
+
+See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentation/AuthNZ-Developer-Guide.md` for complementary overviews.
+
+## Scope & Goals
+- Dual-mode authentication: single-user (API key) and multi-user (JWT) with a unified dependency pattern for endpoints.
+- Authorization via roles/permissions (RBAC) with org/team context.
+- Sessions, token rotation/blacklist, API keys and virtual keys, rate limits/quotas, CSRF, and security headers.
+- Works with SQLite (default) and PostgreSQL (production); optional Redis acceleration for sessions/rate limits.
+
+## Quick Map
+- Core settings: `tldw_Server_API/app/core/AuthNZ/settings.py`
+- DB pool + migrations glue: `tldw_Server_API/app/core/AuthNZ/database.py`
+- JWT service: `tldw_Server_API/app/core/AuthNZ/jwt_service.py`
+- Sessions + blacklist: `tldw_Server_API/app/core/AuthNZ/session_manager.py`, `tldw_Server_API/app/core/AuthNZ/token_blacklist.py`
+- API keys + Virtual keys: `tldw_Server_API/app/core/AuthNZ/api_key_manager.py`, `tldw_Server_API/app/core/AuthNZ/virtual_keys.py`
+- RBAC/orgs/teams/permissions: `tldw_Server_API/app/core/AuthNZ/permissions.py`, `tldw_Server_API/app/core/AuthNZ/rbac.py`, `tldw_Server_API/app/core/AuthNZ/orgs_teams.py`, `tldw_Server_API/app/core/AuthNZ/privilege_catalog.py`
+- Guardrails/middleware: `tldw_Server_API/app/core/AuthNZ/rate_limiter.py`, `tldw_Server_API/app/core/AuthNZ/llm_budget_middleware.py`, `tldw_Server_API/app/core/AuthNZ/llm_budget_guard.py`, `tldw_Server_API/app/core/AuthNZ/csrf_protection.py`, `tldw_Server_API/app/core/AuthNZ/security_headers.py`, `tldw_Server_API/app/core/AuthNZ/usage_logging_middleware.py`
+- Auth flows/support: `tldw_Server_API/app/core/AuthNZ/password_service.py`, `tldw_Server_API/app/core/AuthNZ/mfa_service.py`, `tldw_Server_API/app/core/AuthNZ/email_service.py`
+- Endpoint DI (use these): `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py`
+- Auth endpoints: `tldw_Server_API/app/api/v1/endpoints/auth.py`, `tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py`
+- Admin + RBAC mgmt: `tldw_Server_API/app/api/v1/endpoints/admin.py`, `.../users.py`, `.../privileges.py`, `.../register.py`
+- Debug helpers: `tldw_Server_API/app/api/v1/endpoints/authnz_debug.py`
+
+## Modes & Request Flow
+
+### Single-User Mode (X-API-KEY)
+- Configure `AUTH_MODE=single_user` and `SINGLE_USER_API_KEY`.
+- `get_current_user` accepts either `X-API-KEY: <key>` header or `Authorization: Bearer <key>`.
+- Optional IP allowlist via `SINGLE_USER_ALLOWED_IPS`.
+- JWT/session/blacklist are bypassed; user is treated as admin with full permissions.
+
+### Multi-User Mode (JWT)
+- Configure `AUTH_MODE=multi_user` and `JWT_SECRET_KEY` (or RS/ES keys).
+- Login issues `access` and `refresh` tokens; sessions persisted; refresh rotation enabled by default.
+- Bearer `Authorization` is required for protected endpoints unless an API key is used as an alternative path.
+- Token revocation checks the blacklist; sessions track activity, IP, UA.
+
+### API Keys & Virtual Keys
+- API keys provide non-JWT authentication; can be scoped, rotated, expire, and audited.
+- Virtual keys (JWT) are short-lived scoped tokens minted by authenticated users for automation/integrations. Validation works in both modes when JWT is configured. In single-user mode the JWT service derives a surrogate secret from `SINGLE_USER_API_KEY`, so bearer JWTs can be validated; API keys remain the simplest option when operating single-user.
+
+Note on single-user JWTs:
+- In single-user mode, `get_current_user` does not accept arbitrary JWTs; it only accepts `SINGLE_USER_API_KEY` via `X-API-KEY` or as Bearer (see tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:574). Virtual JWTs can still be verified and scoped via `require_token_scope`, but they do not authenticate a user in single-user mode.
+
+JWT virtual keys support additional constraints via claims (enforced with `auth_deps.require_token_scope`, not in `get_current_user`):
+- `allowed_endpoints`: list of endpoint codes (e.g., `chat.completions`)
+- `allowed_methods`: HTTP methods allowlist (e.g., `["POST"]`)
+- `allowed_paths`: path prefixes allowlist (e.g., `["/api/v1/chat/"]`)
+- `count_as` + `max_calls` or `max_runs`: simple per-token quotas
+- `schedule_id` + scheduler match options (when used with workflow scheduling)
+
+### Virtual Keys: API Keys vs JWTs
+
+- Virtual API Keys (DB-backed)
+  - Created/stored via `api_key_manager.py` in `api_keys` (may be flagged `is_virtual`).
+  - Authenticate with `X-API-KEY` (or Bearer); validated by `APIKeyManager.validate_api_key`.
+  - Budgets/allowlists enforced by `llm_budget_middleware.py`/`llm_budget_guard.py` (day/month token/usd, allowed endpoints/providers/models, IP allowlists, optional per-key rate_limit).
+  - Rotate/revoke; only HMAC-SHA256 key hashes stored (no plaintext).
+  - Best for longer-lived integrations/service accounts.
+
+- Virtual JWTs (short-lived tokens)
+  - Minted with `JWTService.create_virtual_access_token(...)`; not stored server-side.
+  - Authenticate with Bearer; claim-level enforcement is applied via `auth_deps.require_token_scope` (allowed_endpoints/methods/paths, quotas via `count_as` + `max_calls`/`max_runs`, optional `schedule_id`).
+  - Work in both modes (single-user derives a surrogate secret; multi-user uses configured JWT secrets/keys).
+  - Best for ephemeral, scoped automation (e.g., scheduled workflows) where rotation and narrow scope are required.
+
+## Using Dependencies in Endpoints
+
+Prefer the shared dependencies from `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py`.
+
+Typical patterns:
+
+```python
+from fastapi import APIRouter, Depends
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_current_user,           # Resolves single-user, API-key, or JWT
+    get_current_active_user,    # Adds active status check
+    check_rate_limit,           # General rate limit helper
+)
+from tldw_Server_API.app.core.AuthNZ.permissions import PermissionChecker
+
+router = APIRouter(prefix="/example", tags=["examples"])
+
+@router.get("/protected")
+async def protected_route(user=Depends(get_current_user)):
+    return {"hello": user.get("username")}
+
+@router.post("/write", dependencies=[Depends(PermissionChecker("media.update"))])
+async def write_route(user=Depends(get_current_active_user)):
+    return {"ok": True}
+
+@router.get("/limited", dependencies=[Depends(check_rate_limit)])
+async def limited_route(user=Depends(get_current_user)):
+    return {"ok": True}
+```
+
+Scoped token/key enforcement:
+- Use `require_token_scope(scope, endpoint_id=..., count_as=...)` to enforce virtual-key constraints on a route. It validates JWT claims when a bearer is present and applies equivalent metadata-based checks when only `X-API-KEY` is provided (allowed endpoints/methods/paths and optional per-key quotas).
+ - This dependency is additive and does not replace `get_current_user`; use both when a route must authenticate and enforce scoped constraints.
+
+Example (scoped automation endpoint):
+```python
+from fastapi import Depends
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_current_user, require_token_scope
+)
+
+@router.post("/workflows/run", dependencies=[Depends(require_token_scope(
+    scope="workflows",
+    endpoint_id="workflows.run",
+    count_as="run",
+))])
+async def run_workflow(user=Depends(get_current_user)):
+    return {"ok": True}
+```
+
+Notes:
+- `get_current_user` handles single-user mode first, then API key, then JWT.
+- `PermissionChecker` honors soft-enforce via `RBAC_SOFT_ENFORCE` and never logs secrets.
+- `check_rate_limit` uses a token bucket; see Rate Limiting below.
+
+Also handy DI:
+- `get_optional_current_user` for optional auth
+- `require_admin` and `require_role("role")` for simple role gating
+
+Examples:
+```python
+from fastapi import Depends
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_optional_current_user, require_admin, require_role
+)
+
+@router.get("/maybe-auth")
+async def maybe_auth(user=Depends(get_optional_current_user)):
+    if user:
+        return {"hello": user.get("username")}
+    return {"hello": "anonymous"}
+
+@router.get("/admin-only")
+async def admin_only(user=Depends(require_admin)):
+    return {"ok": True, "as": "admin"}
+
+@router.get("/viewer-only")
+async def viewer_only(user=Depends(require_role("viewer"))):
+    return {"ok": True, "as": "viewer"}
+```
+
+## Sessions, Tokens, Revocation
+
+- `session_manager.py` encrypts token material at rest using Fernet.
+- Encryption key precedence: explicit `SESSION_ENCRYPTION_KEY` → persisted file (secure 0600) → derived keys from configured secrets (fallback) → generated in TEST_MODE.
+  - Persisted key preferred path: project root `Config_Files/session_encryption.key`; back-compat fallback: `tldw_Server_API/Config_Files/session_encryption.key`. Set `SESSION_KEY_STORAGE=api` to prefer the API component path. Symlinks are handled safely and file ownership/permissions are validated.
+- Blacklist checks (by JTI) protect against replay after logout/rotation; see `token_blacklist.py`.
+- Redis (optional via `REDIS_URL`) accelerates lookups and counters.
+
+Key calls you’ll see in endpoints/services:
+- `JWTService.create_access_token(...)`, `create_refresh_token(...)`, `decode_access_token(...)`.
+- `SessionManager.create_session(...)`, `update_session_tokens(...)`, `revoke_session(...)`.
+
+## API Keys & Virtual Keys
+
+- `api_key_manager.py` creates, rotates, revokes, and validates keys; stores HMAC-SHA256 hash of the presented key.
+- Keys support: expiry, usage counts, IP allowlists, rate limits, audit log, and optional LLM usage budgets and allowlists.
+- `auth_deps.get_current_user` can authenticate via `X-API-KEY` when no Bearer token is present.
+- Virtual keys: use `POST /api/v1/auth/virtual-key` or programmatically via `JWTService.create_virtual_access_token(...)`.
+  - Virtual keys are enforced via scoped claims (e.g., `scope`, allowed endpoints/methods/paths) with helpers in `auth_deps.require_token_scope` and budget checks in `llm_budget_guard.py`.
+
+Example: create and validate an API key
+```python
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+
+mgr = await get_api_key_manager()
+rec = await mgr.create_api_key(user_id=1, name="integration", scope="write", expires_in_days=30)
+# Persist the cleartext key somewhere safe on the client side
+assert await mgr.validate_api_key(api_key=rec["key"])  # returns key info (includes user_id), not a full user dict
+```
+
+Notes:
+- `validate_api_key(...)` returns key metadata (including `user_id`, scope, budgets, etc.), not a full user record. Endpoints that authenticate via API key obtain user details separately (see `get_current_user`).
+
+## RBAC, Roles, Permissions, Orgs/Teams
+
+- Permissions helpers: `tldw_Server_API/app/core/AuthNZ/permissions.py`.
+- Org/team context: DI attaches `request.state.user_id`, plus memberships from `orgs_teams.list_memberships_for_user` and a content scope token via `scope_context.set_scope` for downstream DB access.
+- Use `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker` in route dependencies to enforce access.
+- Admin routes use stricter checks and separate admin endpoints (see `.../endpoints/admin.py`).
+
+References:
+- `tldw_Server_API/app/core/AuthNZ/permissions.py:159` (PermissionChecker)
+- `tldw_Server_API/app/core/AuthNZ/permissions.py:222` (RoleChecker)
+- `tldw_Server_API/app/core/AuthNZ/permissions.py:270` (AnyPermissionChecker)
+- `tldw_Server_API/app/core/AuthNZ/permissions.py:318` (AllPermissionsChecker)
+
+## Rate Limiting & Quotas
+
+- General limiter: `rate_limiter.py` implements a token bucket; DI provides `get_rate_limiter_dep`.
+- Endpoint helper: `check_rate_limit` extracts a stable client identity (IP or user) and enforces limits; authentication routes use `check_auth_rate_limit` with stricter defaults.
+- LLM budgets: `llm_budget_middleware.py` and `llm_budget_guard.py` enforce endpoint/provider/model quotas when configured. Settings are `LLM_BUDGET_ENFORCE` (on/off) and `LLM_BUDGET_ENDPOINTS` (paths). Virtual key features are gated by `VIRTUAL_KEYS_ENABLED` (defaults true).
+
+References:
+- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:284` (get_rate_limiter_dep)
+- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:817` (check_rate_limit)
+- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:862` (check_auth_rate_limit)
+- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:994` (rbac_rate_limit)
+- `tldw_Server_API/app/core/AuthNZ/rate_limiter.py:45` (RateLimiter)
+
+RBAC-aware selector (logging-only for now):
+- `auth_deps.rbac_rate_limit(resource)` logs the strictest configured limit selected for a user/role-resource pair; it does not enforce yet (use `check_rate_limit` for enforcement).
+
+Example: RBAC resource-aware logging (no enforcement)
+```python
+from fastapi import Depends
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_current_user, rbac_rate_limit
+)
+
+@router.get("/send", dependencies=[Depends(rbac_rate_limit("chat.send"))])
+async def send_message(user=Depends(get_current_user)):
+    return {"ok": True}
+```
+
+Example: custom rate limit per endpoint (IP-keyed; for per-user, pass your own identifier)
+```python
+from fastapi import Depends, Request, HTTPException, status
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
+
+async def limit_10rpm(req: Request, limiter=Depends(get_rate_limiter_dep)):
+    allowed, meta = await limiter.check_rate_limit(req.client.host, "example", limit=10, window_minutes=1)
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Slow down")
+
+@router.get("/tight", dependencies=[Depends(limit_10rpm)])
+async def tight_route(user=Depends(get_current_user)):
+    return {"ok": True}
+```
+
+Example: per-user rate limit
+```python
+from fastapi import Depends, HTTPException, status
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_rate_limiter_dep, get_current_user
+)
+
+async def limit_user_60rpm(user=Depends(get_current_user), limiter=Depends(get_rate_limiter_dep)):
+    # Use a user-scoped identifier; choose a stable endpoint label
+    identifier = f"user:{user['id']}"
+    allowed, meta = await limiter.check_rate_limit(identifier, endpoint="example:user", limit=60, window_minutes=1)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=meta.get("error", "Too many requests"),
+            headers={"Retry-After": str(meta.get("retry_after", 60))}
+        )
+
+@router.get("/tight-user", dependencies=[Depends(limit_user_60rpm)])
+async def tight_user(user=Depends(get_current_user)):
+    return {"ok": True}
+```
+
+## Settings & Initialization
+
+- Central source: `settings.py` (via `get_settings()`), with env + optional project config overrides.
+- Single-user requires `SINGLE_USER_API_KEY`; multi-user requires `JWT_SECRET_KEY` or asymmetric keys.
+- Asymmetric JWT is supported via `JWT_PRIVATE_KEY`/`JWT_PUBLIC_KEY` (e.g., RS256/ES256); otherwise use `JWT_SECRET_KEY` for HS*.
+- Initialize or migrate DB:
+  - `python -m tldw_Server_API.app.core.AuthNZ.run_migrations`
+  - `python -m tldw_Server_API.app.core.AuthNZ.initialize`
+- DB detection: `database.py` chooses Postgres in multi-user when `DATABASE_URL` is `postgres*`; else SQLite.
+
+Notes:
+- The self-service minting endpoint `POST /api/v1/auth/virtual-key` is available only in multi-user mode. In single-user mode you can still create scoped JWTs programmatically via `JWTService.create_virtual_access_token(...)`, but API keys are usually simpler.
+- Optional JWT issuer/audience enforcement is supported via `JWT_ISSUER` and `JWT_AUDIENCE`. Dual-validation during rotations is supported with `JWT_SECONDARY_SECRET` (HS) or `JWT_SECONDARY_PUBLIC_KEY` (RS/ES).
+- Virtual key features can be toggled via `VIRTUAL_KEYS_ENABLED` in settings (enabled by default).
+- Security alerts sinks (file/webhook/email) are configured via `SECURITY_ALERTS_*` settings; see the AuthNZ settings section for details.
+- Registration toggles: `ENABLE_REGISTRATION` and `REQUIRE_REGISTRATION_CODE` control whether registration is exposed and whether codes are required.
+ - MFA prerequisites: enforced via `_ensure_mfa_available` — tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:47
+ - Virtual key feature and budget settings: `VIRTUAL_KEYS_ENABLED`, `LLM_BUDGET_ENFORCE`, `LLM_BUDGET_ENDPOINTS` — tldw_Server_API/app/core/AuthNZ/settings.py:370, tldw_Server_API/app/core/AuthNZ/settings.py:374, tldw_Server_API/app/core/AuthNZ/settings.py:378
+
+Auth Endpoints (summary):
+- `POST /api/v1/auth/login` – Username/password login (multi-user) — tldw_Server_API/app/api/v1/endpoints/auth.py:234
+- `POST /api/v1/auth/refresh` – Refresh JWT (multi-user) — tldw_Server_API/app/api/v1/endpoints/auth.py:622
+- `POST /api/v1/auth/logout` – Logout; optional all devices (multi-user) — tldw_Server_API/app/api/v1/endpoints/auth.py:569
+- `POST /api/v1/auth/register` – Registration flow (if enabled by settings) — tldw_Server_API/app/api/v1/endpoints/auth.py:857
+- `POST /api/v1/auth/forgot-password` – Send password reset email (multi-user) — tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:125
+- `POST /api/v1/auth/reset-password` – Reset password with token (multi-user) — tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:228
+- `GET /api/v1/auth/verify-email` – Verify email (multi-user) — tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:384
+- `POST /api/v1/auth/resend-verification` – Resend verification email (multi-user) — tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:439
+- `POST /api/v1/auth/mfa/setup` | `POST /mfa/verify` | `POST /mfa/disable` – MFA endpoints; MFA is available only in multi-user deployments with PostgreSQL — tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:504
+- `POST /api/v1/auth/virtual-key` – Mint scoped virtual JWT; multi-user only — tldw_Server_API/app/api/v1/endpoints/auth.py:176
+
+References:
+- tldw_Server_API/app/api/v1/endpoints/auth.py:176
+- tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:1
+
+Operator references:
+- JWT rotation runbook: `Docs/Deployment/Operations/JWT_Rotation_Runbook.md`
+- AuthNZ settings/env vars (AuthNZ section): `Docs/Operations/Env_Vars.md`
+- Authentication setup guide: `Docs/Published/User_Guides/Authentication_Setup.md`
+
+## Database Backends
+
+- SQLite is the default; WAL mode enabled; migrations harmonized via `migrations.py` on startup.
+- PostgreSQL is recommended for multi-user deployments; pool managed by `asyncpg`.
+- `get_db_pool()` yields a singleton `DatabasePool`; use `transaction()` for writes, `acquire()` for reads.
+  - `DatabasePool.execute/fetch*` normalize SQL placeholders across backends (`?` → `$1,$2,...` on Postgres). Inside explicit transactions where you work with the raw connection, prefer Postgres-style placeholders (`$1,$2,...`) for portability; SQLite shims convert `$N` to `?` automatically.
+
+## Gotchas
+
+- Cross-backend SQL placeholders
+  - When using `get_db_transaction` (raw connections), Postgres requires `$1,$2,...` placeholders. SQLite adapter shims translate `$N` to `?`, so `$N` works on both.
+  - If you aren’t in a transaction, prefer `DatabasePool.execute/fetch*` which normalizes placeholders automatically in either direction.
+
+## Common Recipes
+
+1) Protect a new endpoint
+```python
+@router.get("/secure")
+async def secure(user=Depends(get_current_user)):
+    return {"user_id": user["id"]}
+```
+
+2) Require a permission
+```python
+from tldw_Server_API.app.core.AuthNZ.permissions import PermissionChecker
+
+@router.post("/media/update", dependencies=[Depends(PermissionChecker("media.update"))])
+async def update_media(user=Depends(get_current_user)):
+    ...
+```
+
+3) Use a DB transaction in a handler
+```python
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_db_transaction
+
+@router.post("/do-write")
+async def do_write(conn=Depends(get_db_transaction), user=Depends(get_current_user)):
+    # Prefer Postgres-style placeholders for cross-backend portability
+    await conn.execute("INSERT INTO example(col) VALUES($1)", "value")
+    return {"ok": True}
+```
+
+4) Mint a virtual key (from an authenticated route)
+```python
+from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+@router.post("/vk")
+async def mint_vk(user=Depends(get_current_user)):
+    svc = JWTService(get_settings())
+    token = svc.create_virtual_access_token(
+        user_id=user["id"], username=user.get("username", ""), role=user.get("role", "user"),
+        scope="workflows", ttl_minutes=30, additional_claims={"allowed_endpoints": ["chat.completions"]}
+    )
+    return {"token": token}
+```
+
+## Testing Notes
+
+- TEST_MODE (`TEST_MODE=1`) disables rate limiting by default and enables deterministic secrets/keys. Some DI dependencies return lightweight stubs to keep tests fast and deterministic.
+- In TEST_MODE, `get_session_manager_dep` returns a stub `SessionManager` and `get_rate_limiter_dep` returns a disabled limiter stub to avoid DB/Redis work and keep tests deterministic.
+- Postgres-dependent tests use a provisioned container unless `TLDW_TEST_NO_DOCKER=1`; see `tldw_Server_API/tests/AuthNZ_Postgres/` and project test README.
+- Many endpoint utilities add test-only diagnostics headers for clarity (e.g., `X-TLDW-DB`, `X-TLDW-CSRF-Enabled`).
+- 401 diagnostics in TEST_MODE: auth failures from `get_current_user` include `X-TLDW-Auth-Reason` and `X-TLDW-Auth-Headers` to explain why authentication failed and which headers were present (see tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:552).
+
+## Extending AuthNZ
+
+- Add new permissions in `permissions.py` and seed mapping in RBAC migrations/seeders.
+- New admin surfaces belong under `.../endpoints/admin.py` or feature-specific admin routes guarded by `RoleChecker("admin")` and permission checks.
+- For new guardrails, prefer middleware with settings gating, and expose DI helpers to keep endpoints simple.
+- Keep both SQLite and Postgres code paths working; use `DatabasePool` helpers to normalize placeholders across backends when needed.
+
+## Troubleshooting & Pitfalls
+
+- JWT misconfig in multi-user: ensure `JWT_SECRET_KEY` length >= 32 (HS*) or set RSA/EC keys for (RS*/ES*).
+- Single-user without key: set `SINGLE_USER_API_KEY` (a deterministic test key is used under TEST_MODE).
+- Session key persistence failures: ensure `Config_Files/session_encryption.key` is writable and not a symlink to an invalid location.
+- Virtual key JWTs do not require multi-user mode (they’re accepted in single-user when JWT is configured; a surrogate secret is derived from `SINGLE_USER_API_KEY`).
+- LLM budget enforcement depends on `LLM_BUDGET_*` settings and middleware placement.
+- When using `get_db_transaction` with Postgres connections, `?` placeholders are not supported. Use `$1,$2,...` or route SQL through `DatabasePool.execute`/`fetch*` for automatic normalization (outside explicit transactions).
+
+---
+
+If you need a deeper conceptual overview, read `tldw_Server_API/app/core/AuthNZ/README.md`. For a broader project context, see `Docs/Code_Documentation/AuthNZ-Developer-Guide.md`.

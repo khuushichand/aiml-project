@@ -503,7 +503,7 @@ else:
 #
 # Research/Paper Search and heavy routers/imports
 # In minimal test-app mode, import only what is needed for lightweight tests.
-if False and _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
+if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     # Research Endpoint (lightweight subset for tests)
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
     # Paper Search Endpoint (provider-specific)
@@ -3087,7 +3087,7 @@ async def api_metrics():
     return registry.get_all_metrics()
 
 # Router for health monitoring endpoints (NEW)
-if _MINIMAL_TEST_APP and False:
+if _MINIMAL_TEST_APP:
     # Minimal set for paper_search tests
     app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
     app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
@@ -3170,6 +3170,27 @@ if _MINIMAL_TEST_APP and False:
         app.include_router(rag_unified_router, tags=["rag-unified"])
     except Exception as _rag_min_err:
         logger.debug(f"Skipping rag_unified router in minimal test app: {_rag_min_err}")
+    # Collections endpoints (treated as lightweight; always included in minimal app)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.outputs_templates import router as outputs_templates_router
+        app.include_router(outputs_templates_router, prefix=f"{API_V1_PREFIX}", tags=["outputs-templates"])
+    except Exception as _ot_min_err:
+        logger.debug(f"Skipping outputs_templates router in minimal test app: {_ot_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.outputs import router as outputs_router
+        app.include_router(outputs_router, prefix=f"{API_V1_PREFIX}", tags=["outputs"])
+    except Exception as _outputs_min_err:
+        logger.debug(f"Skipping outputs router in minimal test app: {_outputs_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.reading_highlights import router as reading_highlights_router
+        app.include_router(reading_highlights_router, prefix=f"{API_V1_PREFIX}", tags=["reading-highlights"])
+    except Exception as _rh_min_err:
+        logger.debug(f"Skipping reading_highlights router in minimal test app: {_rh_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.items import router as items_router
+        app.include_router(items_router, prefix=f"{API_V1_PREFIX}", tags=["items"])
+    except Exception as _items_min_err:
+        logger.debug(f"Skipping items router in minimal test app: {_items_min_err}")
     # Chatbooks endpoints (export/import, jobs, download)
     try:
         from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
@@ -3332,18 +3353,25 @@ else:
         _include_if_enabled("audio-jobs", audio_jobs_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-jobs"])
     if _HAS_AUDIO:
         _include_if_enabled("audio-websocket", audio_ws_router, prefix=f"{API_V1_PREFIX}/audio", tags=["audio-websocket"])
-    _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    # Guard optional routers that may not be imported in ULTRA_MINIMAL_APP
+    if 'chat_router' in locals():
+        _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
     # Tools (MCP-backed server tool execution) - include if initial guarded import succeeded
     if 'tools_router' in locals() and tools_router is not None:
         _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"], default_stable=False)
-    _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
-    _include_if_enabled("character-chat-sessions", character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
-    _include_if_enabled("character-messages", character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
-    _include_if_enabled("metrics", metrics_router, prefix=f"{API_V1_PREFIX}", tags=["metrics"])
+    if 'character_router' in locals():
+        _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
+    if 'character_chat_sessions_router' in locals():
+        _include_if_enabled("character-chat-sessions", character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"])
+    if 'character_messages_router' in locals():
+        _include_if_enabled("character-messages", character_messages_router, prefix=f"{API_V1_PREFIX}", tags=["character-messages"])
+    if 'metrics_router' in locals():
+        _include_if_enabled("metrics", metrics_router, prefix=f"{API_V1_PREFIX}", tags=["metrics"])
     if _HAS_CHUNKING and 'chunking_router' in locals():
         _include_if_enabled("chunking", chunking_router, prefix=f"{API_V1_PREFIX}/chunking", tags=["chunking"])
-    _include_if_enabled("chunking-templates", chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["chunking-templates"])
-    if _HAS_OUTPUT_TEMPLATES:
+    if 'chunking_templates_router' in locals():
+        _include_if_enabled("chunking-templates", chunking_templates_router, prefix=f"{API_V1_PREFIX}", tags=["chunking-templates"])
+    if _HAS_OUTPUT_TEMPLATES and 'outputs_templates_router' in locals():
         _include_if_enabled("outputs-templates", outputs_templates_router, prefix=f"{API_V1_PREFIX}", tags=["outputs-templates"])
     try:
         # Optional outputs artifacts endpoint
@@ -3351,16 +3379,20 @@ else:
         _include_if_enabled("outputs", _outputs_router, prefix=f"{API_V1_PREFIX}", tags=["outputs"])
     except Exception as _e:
         logger.warning(f"Outputs endpoint not available: {_e}")
-    _include_if_enabled("embeddings", embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
-    _include_if_enabled("vector-stores", vector_stores_router, prefix=f"{API_V1_PREFIX}", tags=["vector-stores"])
+    if 'embeddings_router' in locals():
+        _include_if_enabled("embeddings", embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["embeddings"])
+    if 'vector_stores_router' in locals():
+        _include_if_enabled("vector-stores", vector_stores_router, prefix=f"{API_V1_PREFIX}", tags=["vector-stores"])
     # External connectors (Drive/Notion) scaffold
     try:
         from tldw_Server_API.app.api.v1.endpoints.connectors import router as connectors_router
         _include_if_enabled("connectors", connectors_router, prefix=f"{API_V1_PREFIX}", tags=["connectors"], default_stable=False)
     except Exception as _conn_e:
         logger.warning(f"Connectors endpoints unavailable; skipping import: {_conn_e}")
-    _include_if_enabled("claims", claims_router, prefix=f"{API_V1_PREFIX}")
-    _include_if_enabled("media-embeddings", media_embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["media-embeddings"])
+    if 'claims_router' in locals():
+        _include_if_enabled("claims", claims_router, prefix=f"{API_V1_PREFIX}")
+    if 'media_embeddings_router' in locals():
+        _include_if_enabled("media-embeddings", media_embeddings_router, prefix=f"{API_V1_PREFIX}", tags=["media-embeddings"])
     try:
         # Unified items endpoint
         from tldw_Server_API.app.api.v1.endpoints.items import router as _items_router
@@ -3384,9 +3416,10 @@ else:
         _include_if_enabled("subscriptions-deprecated", _subs_legacy_router, prefix=f"{API_V1_PREFIX}", tags=["subscriptions-deprecated"])
     except Exception as _e:
         logger.warning(f"Legacy subscriptions shim not available: {_e}")
-    _include_if_enabled("notes", notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
+    # Include Notes Graph routes before generic notes routes so /graph is not shadowed by /{note_id}
     if _HAS_NOTES_GRAPH:
         _include_if_enabled("notes", notes_graph_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])  # /api/v1/notes/graph
+    _include_if_enabled("notes", notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
     _include_if_enabled("prompts", prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
     if _HAS_READING_HIGHLIGHTS:
         _include_if_enabled("reading-highlights", reading_highlights_router, prefix=f"{API_V1_PREFIX}", tags=["reading-highlights"])

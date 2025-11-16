@@ -11,6 +11,7 @@ import torch
 #
 # Local Imports
 from tldw_Server_API.app.core.TTS.adapters.kokoro_adapter import KokoroAdapter
+from tldw_Server_API.app.core.TTS.tts_validation import ProviderLimits
 from tldw_Server_API.app.core.TTS.adapters.base import (
     TTSRequest,
     TTSResponse,
@@ -73,7 +74,8 @@ class TestKokoroAdapterMock:
         assert caps.supports_voice_cloning is False
         assert caps.supports_emotion_control is False
         assert caps.supports_phonemes is True
-        assert caps.max_text_length == 500
+        # Validate against canonical provider limit source
+        assert caps.max_text_length == ProviderLimits.get_max_text_length("kokoro")
         assert AudioFormat.WAV in caps.supported_formats
         assert AudioFormat.MP3 in caps.supported_formats
 
@@ -129,6 +131,72 @@ class TestKokoroAdapterMock:
         # Verify phoneme text is preserved
         assert request.text == phoneme_text
         assert request.extra_params.get("use_phonemes") is True
+
+    async def test_pause_insertion_interval_from_config(self):
+        """Pause tags should be inserted based on configurable interval"""
+        adapter = KokoroAdapter({
+            "pause_interval_words": 3
+        })
+        text = "one two three four five six seven"
+        processed = adapter.preprocess_text(text)
+        # Expect pause after words 3 and 6
+        assert processed.count('[pause=1.1]') >= 2
+
+    async def test_pause_insertion_interval_from_extra_params(self):
+        """Pause tags should respect nested extra_params configuration"""
+        adapter = KokoroAdapter({
+            "extra_params": {"pause_interval_words": 2}
+        })
+        text = "a b c d e"
+        processed = adapter.preprocess_text(text)
+        # Expect at least two pauses for 5 words with interval 2
+        assert processed.count('[pause=1.1]') >= 2
+
+    async def test_onnx_sync_iterator_wrapped_and_sr_used(self, monkeypatch):
+        """Verify ONNX sync iterator is wrapped to async and sample rate is honored"""
+        import numpy as np
+
+        class FakeWriter:
+            constructed = 0
+            last_sr = None
+            def __init__(self, format: str, sample_rate: int, channels: int):
+                FakeWriter.constructed += 1
+                FakeWriter.last_sr = sample_rate
+            def write_chunk(self, audio_data=None, finalize: bool=False):
+                return b'D' if not finalize else b'F'
+            def close(self):
+                pass
+
+        # Patch the writer used by the adapter
+        monkeypatch.setattr(
+            'tldw_Server_API.app.core.TTS.streaming_audio_writer.StreamingAudioWriter',
+            FakeWriter,
+            raising=True
+        )
+
+        # Build a KokoroAdapter and stub dependencies
+        adapter = KokoroAdapter({})
+        adapter.use_onnx = True
+        adapter.audio_normalizer = type('N', (), {
+            'normalize': staticmethod(lambda x, target_dtype: (np.clip(x, -1.0, 1.0) * 32767).astype(np.int16))
+        })()
+
+        # Sync generator that yields two chunks with a custom sample rate
+        def sync_stream(text, voice, speed, lang):
+            yield (np.array([0.0, 0.1], dtype=np.float32), 12345)
+            yield (np.array([0.2, -0.2], dtype=np.float32), 12345)
+
+        adapter.kokoro_instance = type('K', (), { 'create_stream': staticmethod(sync_stream) })
+
+        req = TTSRequest(text="hello world", voice="af_bella", format=AudioFormat.WAV, stream=True)
+        gen = adapter._stream_audio_kokoro("hello world", "af_bella", "en-us", req)
+
+        chunks = []
+        async for ch in gen:
+            chunks.append(ch)
+        assert len(chunks) >= 2
+        assert FakeWriter.constructed == 1
+        assert FakeWriter.last_sr == 12345
 
     async def test_device_selection(self):
         """Test device selection for inference"""
@@ -204,20 +272,19 @@ class TestKokoroAdapterMock:
             await adapter.generate(request)
 
     async def test_text_length_validation(self):
-        """Test text length validation"""
+        """Kokoro has no hard max length; pacing is enforced via pauses"""
         adapter = KokoroAdapter({})
 
-        # Text exceeding limit
-        long_text = "a" * 600  # Exceeds 500 character limit
-        request = TTSRequest(
-            text=long_text,
-            voice="af_bella",
-            format=AudioFormat.WAV
-        )
+        # Construct a long input exceeding the default pause interval (500 words)
+        long_text_words = " ".join(["word"] * 550)
+        processed = adapter.preprocess_text(long_text_words)
 
-        # Should be validated during generation
+        # Expect at least one pause tag inserted
+        assert processed.count('[pause=1.1]') >= 1
+
+        # Capabilities should advertise a large maximum
         caps = await adapter.get_capabilities()
-        assert len(long_text) > caps.max_text_length
+        assert caps.max_text_length >= len(processed)
 
     async def test_cleanup_on_close(self):
         """Test resource cleanup on close"""

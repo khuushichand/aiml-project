@@ -20,7 +20,8 @@ from datetime import datetime
 
 from fixtures import (
     api_client, authenticated_client, data_tracker,
-    create_test_file, StrongAssertionHelpers, SmartErrorHandler
+    create_test_file, StrongAssertionHelpers, SmartErrorHandler,
+    AsyncOperationHandler,
 )
 from test_data import TestDataGenerator
 
@@ -69,6 +70,7 @@ class TestLLMProviderResilience:
             else:
                 raise
 
+    @pytest.mark.rate_limits
     def test_llm_rate_limit_handling(self, api_client):
         """Test handling of LLM API rate limits."""
         messages = [
@@ -262,16 +264,18 @@ class TestEmbeddingServiceResilience:
 
             print(f"✓ Bulk embedding load handled: {len(media_ids)}/10 documents processed")
 
-            # Check if embeddings are being processed
-            time.sleep(2)  # Give some time for async processing
-
-            # Check status of first few items
+            # Poll a few items for accessibility instead of sleeping
             for media_id in media_ids[:3]:
                 try:
-                    media = api_client.get_media_item(media_id)
-                    # Just verify we can still access them
-                    assert media is not None
-                except:
+                    AsyncOperationHandler.wait_for_completion(
+                        check_func=lambda m=media_id: api_client.get_media_item(m),
+                        success_condition=lambda r: bool(r),
+                        timeout=10,
+                        poll_interval=0.5,
+                        context=f"Media {media_id} accessibility",
+                    )
+                except Exception:
+                    # Non-fatal in resilience test
                     pass
 
         finally:
@@ -452,6 +456,7 @@ class TestTranscriptionServiceResilience:
         return response.get("media_id") or response.get("id")
 
 
+@pytest.mark.rate_limits
 class TestRateLimitingEnforcement:
     """Test API rate limiting and throttling."""
 
@@ -625,10 +630,25 @@ class TestWebScrapingResilience:
                 title="Redirect Test",
                 persist=False
             )
-
-            # Should handle redirects appropriately
-            if response:
-                print("✓ Redirect handled successfully")
+            # Should handle redirects appropriately. Accept either:
+            # - 200 OK with processing result, or
+            # - 207 Multi-Status with a redirect-related error for the URL.
+            if isinstance(response, dict) and "results" in response:
+                # Look for redirect-related error entries
+                errs = []
+                try:
+                    errs = [r for r in response.get("results", []) if isinstance(r, dict) and str(r.get("status")) == "Error"]
+                except Exception:
+                    errs = []
+                if errs:
+                    # Any error mentioning redirect is acceptable (security policy: no auto-follow)
+                    err_texts = [str(e.get("error", "")) for e in errs]
+                    has_redirect_err = any("redirect" in t.lower() for t in err_texts)
+                    assert has_redirect_err, f"Expected redirect-related error, got: {err_texts}"
+                    print("✓ Redirect not followed (security) with clear error")
+                else:
+                    # No error entries -> consider handled as success path
+                    print("✓ Redirect handled successfully")
 
         except httpx.HTTPStatusError as e:
             # Might reject redirects for security

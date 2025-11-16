@@ -67,6 +67,7 @@ List all available chunking templates with optional filtering.
 }
 ```
 
+
 #### Example Request
 
 ```bash
@@ -150,6 +151,42 @@ Create a new chunking template.
   }
 }
 ```
+
+#### Response
+
+#### Example (hierarchical boundaries)
+
+Create a template that enables hierarchical splitting with custom chapter/appendix boundaries:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/chunking/templates" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "chapters_and_appendices",
+    "description": "Chapters and appendices with headings",
+    "tags": ["book", "chapters"],
+    "template": {
+      "chunking": {
+        "method": "sentences",
+        "config": {
+          "max_size": 8,
+          "overlap": 2,
+          "hierarchical": true,
+          "hierarchical_template": {
+            "boundaries": [
+              {"kind": "chapter",  "pattern": "^Chapter\\s+\\d+\\b",  "flags": "im"},
+              {"kind": "appendix", "pattern": "^Appendix\\s+[A-Z]\\b", "flags": "im"}
+            ]
+          }
+        }
+      }
+    }
+  }'
+```
+
+Notes:
+- Allowed flags: only `i` and `m`.
+- Limits: max 20 rules; max pattern length 256 chars.
 
 #### Response
 

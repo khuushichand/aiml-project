@@ -197,7 +197,10 @@ class ItemCreate(BaseModel):
 @app.post("/items")
 async def create_item(item: ItemCreate):
     """Queue a write to the database, then wait for its completion."""
-    sql = "INSERT INTO items (name) VALUES (?)"
+    # Cross-backend placeholder guidance:
+    # - Prefer Postgres-style placeholders ($1,$2,...) in examples; SQLite adapters will translate $N→?
+    # - If you are using raw sqlite3 without the project adapters, use: "VALUES (?)"
+    sql = "INSERT INTO items (name) VALUES ($1)"
     params = (item.name,)
 
     # Create a WriteTask

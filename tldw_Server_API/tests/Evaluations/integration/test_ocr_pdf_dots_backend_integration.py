@@ -7,8 +7,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+pytestmark = [pytest.mark.integration, pytest.mark.evaluations]
 
-@pytest.mark.integration
+
 def test_ocr_pdf_endpoint_with_dots_backend_integration(monkeypatch):
     # Skip unless dots_ocr is importable
     pytest.importorskip("dots_ocr")

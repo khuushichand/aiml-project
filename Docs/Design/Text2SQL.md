@@ -11,6 +11,7 @@ https://ai.gopubby.com/agentic-rags-extending-rags-to-sql-databases-1509b25ca3e7
 https://github.com/premAI-io/premsql
 https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/sql/#sql-query-semantic-equivalence
 https://github.com/hasura/pacha/tree/main
+https://arxiv.org/abs/2511.08245
 https://github.com/premAI-io/premsql
 https://medium.com/@visrow/tag-vs-text2sql-96542742e401
 https://huggingface.co/papers/2407.09025

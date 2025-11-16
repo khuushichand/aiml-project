@@ -79,8 +79,11 @@ https://www.daybreak.studio/writing/adaline-typography?ref=sidebar
 https://www.a11y-collective.com/blog/accessible-writing/?ref=sidebar
 https://uxdesign.cc/right-narratives-shape-lasting-products-9a50e28caae9
 https://posthog.com/newsletter/building-ai-features
+https://savolai.net/ux/product-and-framework-thinkers-when-developers-and-uxers-dont-get-each-other/
 
 
+
+https://savolai.net/ux/the-why-and-the-how-usability-testing/
 https://medium.com/design-bootcamp/10-ui-ux-cheat-codes-for-instantly-better-designs-2c6f6b4312c8
 https://medium.com/ai-ux-designers/37-ai-patterns-for-product-teams-e04c953270b3
 https://uxdesign.cc/designing-the-jarvis-moment-8f1a2f201d4a

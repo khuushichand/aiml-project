@@ -11,6 +11,7 @@ https://github.com/gudvardur/amazon_book_downloader
 https://github.com/presenton/presenton
 https://arxiv.org/abs/2412.02035
 https://github.com/andreamust/NEON-GPT
+https://fortelabs.com/blog/my-4-stage-system-for-learning-anything-new/
 https://arxiv.org/abs/2412.02035v1
 https://arxiv.org/abs/2411.07407
 https://arxiv.org/abs/2412.16429

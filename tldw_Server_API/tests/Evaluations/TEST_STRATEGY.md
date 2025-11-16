@@ -256,6 +256,22 @@ pytest -m property
 pytest -m requires_llm
 ```
 
+### Evaluations Suite Gating
+
+The Evaluations module has heavier, end-to-end tests that are opt-in:
+
+- Integration tests that hit `/api/v1/evaluations/*` are marked with both `integration` and `evaluations`.
+- By default, the main test `conftest` sets `MINIMAL_TEST_APP=1` and disables the `evaluations` router, and tests with `@pytest.mark.evaluations` are **skipped** unless explicitly enabled.
+- To run the Evaluations suite against the full app profile:
+
+```bash
+export RUN_EVALUATIONS=1
+export MINIMAL_TEST_APP=0
+pytest -m evaluations -v
+```
+
+This ensures the unified Evaluations router is loaded and that heavy tests (e.g. `tests/Evaluations/integration/test_api_endpoints.py`) only run when you explicitly opt in.
+
 ## Maintenance Guidelines
 
 ### Adding New Tests

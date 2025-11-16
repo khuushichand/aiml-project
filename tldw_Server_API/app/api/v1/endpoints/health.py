@@ -130,6 +130,24 @@ async def api_health():
         "checks": checks,
         "timestamp": _dt.utcnow().isoformat(),
     }
+    # Include auth mode for E2E tests and diagnostics
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings  # type: ignore
+        _s = _get_settings()
+        body["auth_mode"] = getattr(_s, "AUTH_MODE", "single_user")
+        # In test environments, optionally expose a test API key only with explicit opt-in
+        # This prevents accidental leakage of SINGLE_USER_API_KEY unless HEALTH_EXPOSE_TEST_API_KEY=true
+        if (
+            os.getenv("TEST_MODE")
+            and body["auth_mode"] == "single_user"
+            and str(os.getenv("HEALTH_EXPOSE_TEST_API_KEY", "")).strip().lower() == "true"
+        ):
+            _key = getattr(_s, "SINGLE_USER_API_KEY", None)
+            if _key:
+                body.setdefault("test_api_key", _key)
+    except Exception:
+        # Never fail health on settings import issues
+        pass
     # Include Resource Governor policy snapshot metadata when available (mirrors top-level /health)
     try:
         from tldw_Server_API.app.main import app as _app

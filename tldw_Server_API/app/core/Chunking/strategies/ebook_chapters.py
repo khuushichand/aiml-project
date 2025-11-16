@@ -151,7 +151,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
 
     @staticmethod
     def _is_simple_safe_pattern(pattern: str) -> bool:
-        """Allow only a restricted subset of regex constructs considered safe.
+        r"""Allow only a restricted subset of regex constructs considered safe.
 
         Allowed:
         - Literals (letters, digits, spaces)

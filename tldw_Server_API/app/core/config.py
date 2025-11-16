@@ -1406,6 +1406,33 @@ def load_comprehensive_config():
     except Exception as _stream_env_err:
         _log_debug(f"Streaming env propagation skipped: {_stream_env_err}")
 
+    # Propagate HTTP client redirect settings from config.txt into env (if unset)
+    try:
+        if hasattr(config_parser, 'has_section') and config_parser.has_section('HTTP'):
+            def _env_default_bool(name: str, opt: str):
+                try:
+                    v = config_parser.get('HTTP', opt, fallback=None)
+                except Exception:
+                    v = None
+                if v is not None and os.getenv(name) is None:
+                    os.environ[name] = str(v)
+
+            # Allow or disable following redirects globally for simple GET/HEAD fetches
+            _env_default_bool('HTTP_ALLOW_REDIRECTS', 'allow_redirects')
+            # Maximum redirect hops before erroring (default inherited in http_client)
+            try:
+                v = config_parser.get('HTTP', 'max_redirects', fallback=None)
+            except Exception:
+                v = None
+            if v is not None and os.getenv('HTTP_MAX_REDIRECTS') is None:
+                os.environ['HTTP_MAX_REDIRECTS'] = str(v)
+            # Cross-host redirects (default: disabled)
+            _env_default_bool('HTTP_ALLOW_CROSS_HOST_REDIRECTS', 'allow_cross_host_redirects')
+            # Scheme downgrade (https -> http) (default: disabled)
+            _env_default_bool('HTTP_ALLOW_SCHEME_DOWNGRADE', 'allow_scheme_downgrade')
+    except Exception as _http_env_err:
+        _log_debug(f"HTTP env propagation skipped: {_http_env_err}")
+
     return config_parser
 
 

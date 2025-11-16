@@ -52,7 +52,7 @@ class ProviderLimits:
             "max_similarity": 1.0
         },
         "kokoro": {
-            "max_text_length": 10000,
+            "max_text_length": 1000000,
             "languages": ["en"],
             "valid_formats": {"wav", "mp3"},
             "min_speed": 0.5,
@@ -175,7 +175,7 @@ class TTSInputValidator:
     MAX_TEXT_LENGTHS = {
         "openai": 4096,
         "elevenlabs": 5000,
-        "kokoro": 1000,
+        "kokoro": 1000000,
         "higgs": 50000,
         "dia": 30000,
         "chatterbox": 10000,
@@ -364,8 +364,8 @@ class TTSInputValidator:
             if request.voice:
                 self._validate_voice(request.voice, provider)
 
-            # Validate parameters
-            self._validate_parameters(request)
+            # Validate parameters (provider-aware)
+            self._validate_parameters(request, provider)
 
             # Validate voice reference if provided
             if request.voice_reference:
@@ -439,13 +439,20 @@ class TTSInputValidator:
                 provider=provider
             )
 
-    def _validate_parameters(self, request: TTSRequest):
+    def _validate_parameters(self, request: TTSRequest, provider: Optional[str] = None):
         """Validate TTS parameters"""
         raw_speed = getattr(request, "_original_speed", request.speed)
-        # Speed validation
-        if raw_speed < 0.1 or raw_speed > 3.0:
+        # Provider-aware speed validation
+        try:
+            limits = ProviderLimits.get_limits(provider or "default")
+            min_speed = float(limits.get("min_speed", 0.1))
+            max_speed = float(limits.get("max_speed", 3.0))
+        except Exception:
+            min_speed, max_speed = 0.1, 3.0
+        if raw_speed < min_speed or raw_speed > max_speed:
             raise TTSInvalidInputError(
-                f"Speed must be between 0.1 and 3.0, got {raw_speed}"
+                f"Speed must be between {min_speed} and {max_speed}, got {raw_speed}",
+                details={"min_speed": min_speed, "max_speed": max_speed}
             )
 
         # Pitch validation

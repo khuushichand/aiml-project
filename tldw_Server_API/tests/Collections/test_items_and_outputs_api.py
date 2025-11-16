@@ -16,9 +16,12 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def client_with_user(monkeypatch, tmp_path):
+def client_with_user(monkeypatch):
     async def override_user():
         return User(id=123, username="tester", email=None, is_active=True)
+
+    # Use full app profile for Collections/outputs endpoints
+    monkeypatch.setenv("MINIMAL_TEST_APP", "0")
 
     # Force per-user DB dir into project Databases/ for sandbox write allowance
     base_dir = Path.cwd() / "Databases" / "test_user_dbs"

@@ -1185,7 +1185,9 @@ async def unified_rag_pipeline(
                     pass
 
         # ========== NUMERIC/TABLE-AWARE BOOST (optional, pre-rerank) ==========
-        if enable_numeric_table_boost and result.documents:
+        # Record the metadata block even when no documents are retrieved so tests can
+        # confirm the feature path was considered for numeric queries.
+        if enable_numeric_table_boost:
             try:
                 import re as _re
                 q_has_num = bool(_re.search(r"\d", query)) or bool(_re.search(r"\b(percent|percentage|million|billion|thousand|\$|usd|eur|kg|g|lb|%|k|m|b)\b", query, _re.I))
@@ -1193,22 +1195,24 @@ async def unified_rag_pipeline(
                 q_has_num = False
             if q_has_num:
                 affected = 0
-                for d in result.documents:
-                    try:
-                        md = getattr(d, "metadata", None) or {}
-                        chunk_type = str(md.get("chunk_type", "")).lower()
-                        text = getattr(d, "content", "") or ""
-                        numbers = sum(1 for _ in _re.finditer(r"\d", text))
-                        looks_table = (chunk_type == "table") or (text.count("|") >= 3) or ("\t" in text)
-                        if looks_table or numbers >= 6:
-                            s = float(getattr(d, "score", 0.0) or 0.0)
-                            # modest boost within [0,1]
-                            d.score = min(1.0, s * 1.1 + 0.02)
-                            md["numeric_table_boost"] = True
-                            d.metadata = md
-                            affected += 1
-                    except Exception:
-                        continue
+                if result.documents:
+                    for d in result.documents:
+                        try:
+                            md = getattr(d, "metadata", None) or {}
+                            chunk_type = str(md.get("chunk_type", "")).lower()
+                            text = getattr(d, "content", "") or ""
+                            numbers = sum(1 for _ in _re.finditer(r"\d", text))
+                            looks_table = (chunk_type == "table") or (text.count("|") >= 3) or ("\t" in text)
+                            if looks_table or numbers >= 6:
+                                s = float(getattr(d, "score", 0.0) or 0.0)
+                                # modest boost within [0,1]
+                                d.score = min(1.0, s * 1.1 + 0.02)
+                                md["numeric_table_boost"] = True
+                                d.metadata = md
+                                affected += 1
+                        except Exception:
+                            continue
+                # Always emit the metadata block when numeric intent is detected
                 result.metadata["numeric_table_boost"] = {"enabled": True, "affected": int(affected)}
 
         # ========== GAP ANALYSIS / FOLLOW-UPS (optional) ==========

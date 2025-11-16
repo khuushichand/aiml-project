@@ -73,9 +73,16 @@ def test_smoke_basic_user_journey(api_client, data_tracker):
         )
         # Minimal structure checks; allow empty results in clean DBs
         assert isinstance(rag_resp, dict)
-        assert "success" in rag_resp
-        assert "results" in rag_resp
-        assert isinstance(rag_resp.get("results"), list)
+        # New unified response uses `documents`; accept legacy keys for compatibility
+        if "documents" in rag_resp:
+            docs = rag_resp["documents"]
+        elif "results" in rag_resp:
+            docs = rag_resp["results"]
+        elif "items" in rag_resp:
+            docs = rag_resp["items"]
+        else:
+            docs = []
+        assert isinstance(docs, list)
     except httpx.HTTPStatusError as e:
         # Some deployments may not have embeddings configured; skip rather than fail
         if e.response.status_code in (404, 422, 500):

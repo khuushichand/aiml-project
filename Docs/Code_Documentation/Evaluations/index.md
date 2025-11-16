@@ -6,6 +6,7 @@ The Evaluations module provides a unified, OpenAI-compatible API for assessing m
 - Unified API Reference: ../API-related/Evaluations_API_Unified_Reference.md
 - Readiness Summary: Unified_Evaluations_Readiness.md
 - Smoke Tests: Smoke_Test_Checklist.md
+- Code Guide (Developers): ../Guides/Evaluations_Code_Guide.md
 - Developer Guide: ../Code_Documentation/Evaluations_Developer_Guide.md
 - End-User Guide: ../User_Guides/Evaluations_End_User_Guide.md
 - Deployment Guides: ../User_Guides/Evaluations_Deployment_Guide.md, ../User_Guides/Evaluations_Production_Deployment_Guide.md

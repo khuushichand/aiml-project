@@ -6,9 +6,9 @@ Registers shared test plugins and provides common fixtures.
 
 """Local pytest configuration for tests subtree.
 
-Note: pytest>=8 forbids defining `pytest_plugins` in non-top-level conftest
-files. Global plugin registration now lives in the repository root
-`conftest.py`. Keep this file focused on environment setup and local fixtures.
+Note: pytest>=8 discourages defining `pytest_plugins` outside top-level conftest
+files. We register shared plugins here to ensure discovery across the suite,
+and keep per-suite conftests focused on markers and env overrides.
 """
 
 import os
@@ -38,19 +38,21 @@ try:
     existing_disable = os.getenv("ROUTES_DISABLE", "")
     if "research" not in existing_disable:
         os.environ["ROUTES_DISABLE"] = (existing_disable + ",research").strip(",")
-    # Prefer minimal app profile by default for faster, deterministic tests
-    os.environ.setdefault("MINIMAL_TEST_APP", "1")
     # Unless explicitly opted-in, disable Evaluations routes during tests to avoid heavy imports
     _run_evals = str(os.getenv("RUN_EVALUATIONS", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
     _rd = os.getenv("ROUTES_DISABLE", "")
     if _run_evals:
-        # Remove 'evaluations' from ROUTES_DISABLE if present
+        # Evaluations suite is enabled: ensure routes are not disabled
         parts = [p for p in _rd.replace(" ", ",").split(",") if p]
         parts = [p for p in parts if p.lower() != "evaluations"]
         os.environ["ROUTES_DISABLE"] = ",".join(dict.fromkeys(parts))
+        # Evaluations rely on the full app profile; disable minimal-test app mode
+        os.environ["MINIMAL_TEST_APP"] = "0"
     else:
+        # Default: prefer minimal app profile for faster, deterministic tests
+        os.environ.setdefault("MINIMAL_TEST_APP", "1")
         if "evaluations" not in ",".join([_rd]):
-            os.environ["ROUTES_DISABLE"] = ( (_rd + ",evaluations").strip(",") )
+            os.environ["ROUTES_DISABLE"] = ((_rd + ",evaluations").strip(","))
     # Enable deterministic test behaviors across subsystems
     os.environ.setdefault("TEST_MODE", "1")
     os.environ.setdefault("OTEL_SDK_DISABLED", "true")
@@ -87,6 +89,15 @@ except Exception as e:
 import pytest
 from fastapi.testclient import TestClient
 import contextlib
+
+# Register shared test plugins for the whole suite
+pytest_plugins = (
+    "tldw_Server_API.tests._plugins.e2e_fixtures",
+    "tldw_Server_API.tests._plugins.e2e_state_fixtures",
+    "tldw_Server_API.tests._plugins.chat_fixtures",
+    "tldw_Server_API.tests._plugins.media_fixtures",
+    "tldw_Server_API.tests._plugins.postgres",
+)
 
 
 # Skip Jobs-marked tests by default unless explicitly enabled via RUN_JOBS.

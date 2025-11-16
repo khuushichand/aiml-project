@@ -890,7 +890,40 @@ class FileValidator:
 
     def sanitize_html_content(self, html_content: str, config: Optional[Dict] = None) -> str:
         # Sanitizer using bleach with restricted protocols; otherwise strip tags.
+        # Explicitly remove script/style/noscript contents and comments before cleaning to prevent code leakage.
         try:
+            preprocessed = html_content
+            try:
+                from bs4 import BeautifulSoup, Comment  # type: ignore
+                soup = BeautifulSoup(html_content, 'html.parser')
+                # Remove script/style/noscript tags entirely (including their contents)
+                for tag_name in ('script', 'style', 'noscript'):
+                    for t in soup.find_all(tag_name):
+                        try:
+                            t.decompose()
+                        except Exception:
+                            try:
+                                t.extract()
+                            except Exception:
+                                pass
+                # Remove HTML comments which may contain scripts
+                for c in soup.find_all(string=lambda s: isinstance(s, Comment)):
+                    try:
+                        c.extract()
+                    except Exception:
+                        pass
+                preprocessed = str(soup)
+            except Exception:
+                # Fallback: regex-based removal for script/style blocks
+                try:
+                    import re as _re
+                    preprocessed = _re.sub(r"<script[^>]*>.*?</script\b[^>]*>", " ", preprocessed, flags=_re.DOTALL | _re.IGNORECASE)
+                    preprocessed = _re.sub(r"<style[^>]*>.*?</style\b[^>]*>", " ", preprocessed, flags=_re.DOTALL | _re.IGNORECASE)
+                    preprocessed = _re.sub(r"<noscript[^>]*>.*?</noscript\b[^>]*>", " ", preprocessed, flags=_re.DOTALL | _re.IGNORECASE)
+                    preprocessed = _re.sub(r"<!--.*?-->", " ", preprocessed, flags=_re.DOTALL)
+                except Exception:
+                    preprocessed = html_content
+
             import bleach  # type: ignore
             allowed_tags = (config or {}).get("allowed_tags") or [
                 'p', 'br', 'ul', 'ol', 'li', 'strong', 'em', 'b', 'i', 'u', 'a',
@@ -902,12 +935,12 @@ class FileValidator:
             strip = bool((config or {}).get("strip", True))
             allowed_protocols = (config or {}).get("allowed_protocols") or ['http', 'https', 'mailto']
             cleaner = bleach.Cleaner(tags=allowed_tags, attributes=allowed_attrs, protocols=allowed_protocols, strip=strip)
-            cleaned_html = cleaner.clean(html_content)
+            cleaned_html = cleaner.clean(preprocessed)
             # Enforce rel="noopener noreferrer" on anchors with target attribute to prevent tab-nabbing
             try:
                 from bs4 import BeautifulSoup  # type: ignore
-                soup = BeautifulSoup(cleaned_html, 'html.parser')
-                for a in soup.find_all('a'):
+                soup2 = BeautifulSoup(cleaned_html, 'html.parser')
+                for a in soup2.find_all('a'):
                     if a.has_attr('target'):
                         rel_vals = a.get('rel') or []
                         if isinstance(rel_vals, str):
@@ -915,17 +948,23 @@ class FileValidator:
                         rel_set = set(rel_vals)
                         rel_set.update({'noopener', 'noreferrer'})
                         a['rel'] = ' '.join(sorted(rel_set))
-                cleaned_html = str(soup)
+                cleaned_html = str(soup2)
             except Exception:
                 # If BeautifulSoup is unavailable, keep cleaned_html as-is.
                 pass
-            logging.info("HTML content sanitized with bleach.")
+            logging.info("HTML content sanitized with bleach (scripts/styles removed).")
             return cleaned_html
         except Exception as e:
             logging.warning(f"Bleach not available or failed ({e}); falling back to tag stripping.")
             try:
-                return re.sub(r"<[^>]+>", " ", html_content)
+                # Prefer the preprocessed (script/style/comments removed) content if available
+                try:
+                    _pre = preprocessed  # type: ignore[name-defined]
+                except Exception:
+                    _pre = html_content
+                return re.sub(r"<[^>]+>", " ", _pre)
             except Exception:
+                # As a last resort, return the original content
                 return html_content
 
     def sanitize_xml_content(self, xml_content: str, config: Optional[Dict] = None) -> str:

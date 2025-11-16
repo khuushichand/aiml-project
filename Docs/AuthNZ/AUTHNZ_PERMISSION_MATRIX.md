@@ -294,9 +294,12 @@ user_db = UserDatabase("../Databases/Users.db", "admin_client")
 
 # Create custom role (would need to add this method)
 conn = user_db.get_connection()
+# Cross-backend placeholder guidance:
+# - Prefer Postgres-style placeholders ($1,$2,...) in examples; SQLite adapters in this project translate $N→? automatically.
+# - If using raw sqlite3 instead of the project adapters, change $N placeholders below to '?'.
 cursor = conn.execute("""
     INSERT INTO roles (name, description, is_system)
-    VALUES (?, ?, ?)
+    VALUES ($1, $2, $3)
 """, ("content_moderator", "Can moderate user content", 0))
 role_id = cursor.lastrowid
 
@@ -305,7 +308,7 @@ permissions = ["media.read", "media.update", "media.delete", "users.read"]
 for perm in permissions:
     cursor = conn.execute("""
         INSERT INTO role_permissions (role_id, permission_id)
-        SELECT ?, id FROM permissions WHERE name = ?
+        SELECT $1, id FROM permissions WHERE name = $2
     """, (role_id, perm))
 
 conn.commit()

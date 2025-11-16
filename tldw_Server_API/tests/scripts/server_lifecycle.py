@@ -38,12 +38,14 @@ DEFAULT_PORT = "8000"
 # Candidate health endpoints to probe (most lightweight first).
 # The check succeeds when any returns HTTP 200, or 206 for aggregate health.
 HEALTH_PATHS = [
-    "/healthz",                 # ultra-light liveness (no deps)
-    "/api/v1/healthz",         # API-scoped liveness
-    "/health",                 # control-plane health (simple 200)
-    "/api/v1/health",          # aggregate health (200 ok, 206 degraded)
-    "/ready",                  # control-plane readiness
-    "/api/v1/health/ready",    # API readiness
+    "/healthz",                  # ultra-light liveness (no deps)
+    "/api/v1/healthz",          # API-scoped liveness
+    "/readyz",                  # control-plane readiness (lightweight)
+    "/api/v1/readyz",           # API-scoped readiness (lightweight)
+    "/health",                  # control-plane aggregate health (may be 206)
+    "/api/v1/health",           # API aggregate health (200 ok, 206 degraded)
+    "/ready",                   # legacy readiness alias (if present)
+    "/api/v1/health/ready",     # API readiness wrapper
 ]
 
 # Default timeout; may be overridden via env (see _get_timeout_seconds).

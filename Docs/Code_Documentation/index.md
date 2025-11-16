@@ -28,6 +28,7 @@ Use the links below to jump to common areas, or the sidebar to browse all topics
 ## Chunking
 - Chunking Module: Chunking-Module.md
 - Chunking Templates: Chunking_Templates_Developer_Guide.md
+- Chunking Module Code Guide: Guides/Chunking_Code_Guide.md
 - Pieces (semantic units): Pieces.md
 
 ## Chat & Knowledge

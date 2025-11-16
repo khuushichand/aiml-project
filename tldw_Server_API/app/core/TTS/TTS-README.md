@@ -98,6 +98,16 @@ python Helper_Scripts/download_kokoro_assets.py \
   --voices-dir models/kokoro/voices
 ```
 
+Configuration notes (providers.kokoro in tts_providers_config.yaml):
+- model_path: path to ONNX file
+- voices_json / voice_dir: directory with voice profiles
+- device: cpu|cuda|mps
+- sample_rate: default 24000
+- pause_interval_words: insert a pacing tag every N words (default 500)
+- pause_tag: the pacing marker to insert (default "[pause=1.1]")
+
+The adapter preprocesses long inputs and inserts a pause tag at least every `pause_interval_words` tokens to keep delivery natural and avoid very long continuous utterances.
+
 ### Voice Management & Cloning
 
 - `voice_manager.py` validates uploads (extensions, duration, sample rate, size) and enforces quotas (`VOICE_RATE_LIMITS`).

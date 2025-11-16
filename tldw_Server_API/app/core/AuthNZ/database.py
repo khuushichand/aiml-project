@@ -34,6 +34,47 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DuplicatePermissionError,
 )
 
+
+def _apply_single_user_fallback(url: str, auth_mode: Optional[str] = None) -> str:
+    """Apply single-user non-sqlite DATABASE_URL fallback to default SQLite path.
+
+    When running in single-user mode and the provided URL uses a non-sqlite/file
+    scheme, ignore it and return the default SQLite users DB path instead. This
+    guards against leaking a Postgres DSN from tests/CI into local single-user
+    runs.
+    """
+    try:
+        if auth_mode is None:
+            # Local import form retained for defensive use in non-pooled contexts.
+            from tldw_Server_API.app.core.AuthNZ.settings import (  # type: ignore
+                get_settings as _get_settings,
+            )
+
+            auth_mode_value = getattr(_get_settings(), "AUTH_MODE", "single_user")
+        else:
+            auth_mode_value = auth_mode
+        mode = str(auth_mode_value).strip().lower()
+    except Exception:
+        mode = "single_user"
+
+    try:
+        parsed = urlparse(url)
+        scheme = (parsed.scheme or "").lower()
+    except Exception:
+        scheme = ""
+
+    if mode == "single_user" and scheme and not scheme.startswith("sqlite") and not scheme.startswith("file"):
+        try:
+            logger.warning(
+                "Single-user mode: ignoring non-sqlite DATABASE_URL '%s'; using sqlite:///./Databases/users.db",
+                url,
+            )
+        except Exception:
+            pass
+        return "sqlite:///./Databases/users.db"
+
+    return url
+
 #######################################################################################################################
 #
 # Database Pool Manager
@@ -92,7 +133,15 @@ class DatabasePool:
 
                 else:
                     # SQLite for single-user mode or fallback
-                    self.db_path, self._sqlite_uri, self._sqlite_fs_path = self._resolve_sqlite_paths(self.settings.DATABASE_URL)
+                    # Defensive hardening: if AUTH_MODE is single_user but DATABASE_URL
+                    # is a non-sqlite scheme (e.g., a Postgres DSN leaked from CI),
+                    # ignore it and fall back to the default SQLite users DB.
+                    _raw_url = _apply_single_user_fallback(
+                        self.settings.DATABASE_URL,
+                        auth_mode=getattr(self.settings, "AUTH_MODE", "single_user"),
+                    )
+
+                    self.db_path, self._sqlite_uri, self._sqlite_fs_path = self._resolve_sqlite_paths(_raw_url)
 
                     # Ensure directory exists
                     if self._sqlite_fs_path and self._sqlite_fs_path != ":memory:":
@@ -123,7 +172,13 @@ class DatabasePool:
 
     @staticmethod
     def _resolve_sqlite_paths(url: str) -> tuple[str, bool, Optional[str]]:
-        """Resolve sqlite connection string, uri flag, and filesystem path."""
+        """Resolve sqlite connection string, uri flag, and filesystem path.
+
+        The provided URL is assumed to have already passed through any
+        single-user fallback handling; this helper focuses purely on parsing
+        SQLite and file-style URLs into a usable connection string and
+        filesystem path.
+        """
         parsed = urlparse(url)
         scheme = (parsed.scheme or "").lower()
         if scheme.startswith("file"):
