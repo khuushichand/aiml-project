@@ -1,0 +1,4 @@
+cfg keys: embedding_provider,embedding_model,embedding_fallback_model,auto_generate_on_upload,onnx_model_path,model_dir,embedding_api_url,embedding_api_key,chunk_size,chunk_overlap,enable_contextual_chunking,contextual_llm_model,contextual_llm_provider,contextual_llm_temperature,context_window_size,context_strategy,context_token_budget,USER_DB_BASE_DIR
+USER_DB_BASE_DIR: /Users/macbook-dev/Documents/GitHub/tldw_server2/Databases/user_databases
+manager created, client=<class 'chromadb.api.client.Client'>
+collection=Collection(name=user_1_media_embeddings)

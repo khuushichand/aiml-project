@@ -19,7 +19,12 @@ fi
 # Set test environment variables
 export TEST_MODE=true
 export TESTING=true
-export SINGLE_USER_API_KEY=test-api-key-for-e2e-testing-12345
+# Use a canonical deterministic test key that matches AuthNZ defaults and test expectations
+export SINGLE_USER_TEST_API_KEY="${SINGLE_USER_TEST_API_KEY:-test-api-key-12345}"
+# Ensure the single-user API key used by the server matches the test key
+export SINGLE_USER_API_KEY="${SINGLE_USER_API_KEY:-$SINGLE_USER_TEST_API_KEY}"
+# Expose the effective test API key via /api/v1/health for E2E fixtures
+export HEALTH_EXPOSE_TEST_API_KEY=true
 
 # Function to cleanup on exit
 cleanup() {

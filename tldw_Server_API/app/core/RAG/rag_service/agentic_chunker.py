@@ -828,6 +828,36 @@ async def agentic_rag_pipeline(
         logger.warning(f"Agentic coarse retrieval failed: {e}")
         docs = []
 
+    # Fallback: if no documents were retrieved via MultiDatabaseRetriever but we
+    # have a media DB path, run a direct Media DB FTS-only search to seed the
+    # agentic ephemeral chunk. This mirrors the standard pipeline fallback and
+    # ensures quality-gate tests have at least one document when media exists.
+    if (not docs) and media_db_path and search_mode in ("fts", "hybrid"):
+        try:
+            from .database_retrievers import MediaDBRetriever as _MDBR, RetrievalConfig as _RCfg
+            fb_cfg = _RCfg(
+                max_results=max(1, int(top_k or 10)),
+                min_score=float(min_score or 0.0),
+                use_fts=True,
+                use_vector=False,
+                include_metadata=True,
+                fts_level=(fts_level or "media"),
+            )
+            fb_retriever = _MDBR(
+                db_path=media_db_path,
+                config=fb_cfg,
+                user_id="rag_agentic",
+                media_db=media_db,
+            )
+            fallback_docs = await fb_retriever.retrieve(
+                query=query,
+                media_type=None,
+            )
+            if fallback_docs:
+                docs = fallback_docs
+        except Exception as _fb_err:
+            logger.warning(f"Agentic Media DB fallback retrieval failed: {_fb_err}")
+
     # Optional: VLM late chunking to add table/figure hints for PDFs
     if cfg.agentic_enable_vlm_late_chunking and docs:
         try:

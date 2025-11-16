@@ -124,6 +124,20 @@ except ImportError:
     apply_multi_vector_passages = None  # type: ignore
     MultiVectorConfig = None  # type: ignore
 
+# Pseudo-relevance feedback (PRF)
+try:
+    from .prf import PRFConfig, apply_prf
+except ImportError:
+    PRFConfig = None  # type: ignore
+    apply_prf = None  # type: ignore
+
+# Precomputed span index (multi-vector helper)
+try:
+    from .precomputed_spans import PrecomputedSpanConfig, apply_precomputed_spans
+except ImportError:
+    PrecomputedSpanConfig = None  # type: ignore
+    apply_precomputed_spans = None  # type: ignore
+
 try:
     from .rewrite_cache import RewriteCache
 except ImportError:
@@ -258,11 +272,17 @@ async def unified_rag_pipeline(
     auto_temporal_filters: bool = False,
     top_k: int = 10,
     min_score: float = 0.0,
-
     # ========== QUERY EXPANSION ==========
     expand_query: bool = False,
     expansion_strategies: List[str] = None,  # ["acronym", "synonym", "domain", "entity"]
     spell_check: bool = False,
+
+    # ========== PSEUDO-RELEVANCE FEEDBACK (PRF) ==========
+    enable_prf: bool = False,
+    prf_terms: int = 10,
+    prf_sources: List[str] = None,  # ["keywords", "entities", "numbers"]
+    prf_alpha: float = 0.3,
+    prf_top_n: int = 8,
 
     # ========== HYDE ==========
     enable_hyde: bool = False,
@@ -317,6 +337,7 @@ async def unified_rag_pipeline(
     mv_stride: int = 150,
     mv_max_spans: int = 8,
     mv_flatten_to_spans: bool = False,
+    enable_precomputed_spans: bool = False,
     enable_numeric_table_boost: bool = False,
 
     # ========== RERANKING ==========
@@ -327,6 +348,11 @@ async def unified_rag_pipeline(
     # Two-tier specific: request-level gating overrides (optional)
     rerank_min_relevance_prob: Optional[float] = None,
     rerank_sentinel_margin: Optional[float] = None,
+
+    # ========== LEARNED FUSION & CALIBRATION ==========
+    enable_learned_fusion: bool = False,
+    calibrator_version: Optional[str] = None,
+    abstention_policy: Literal["continue", "ask", "decline"] = "continue",
 
     # ========== CITATIONS ==========
     enable_citations: bool = False,
@@ -362,6 +388,16 @@ async def unified_rag_pipeline(
     adaptive_rerun_bypass_cache: bool = False,
     adaptive_rerun_time_budget_sec: Optional[float] = None,
     adaptive_rerun_doc_budget: Optional[int] = None,
+    # ========== QUERY DECOMPOSITION & MULTI-HOP ==========
+    enable_query_decomposition: bool = False,
+    max_subqueries: int = 4,
+    subquery_time_budget_sec: Optional[float] = None,
+    subquery_doc_budget: Optional[int] = None,
+    # ========== GRAPH-AUGMENTED RETRIEVAL ==========
+    enable_graph_retrieval: bool = False,
+    graph_version: Optional[str] = None,
+    graph_neighbors_k: int = 16,
+    graph_alpha: float = 0.4,
     # Internal guard to prevent nested rerun loops
     _adaptive_rerun: bool = False,
 
@@ -1061,6 +1097,39 @@ async def unified_rag_pipeline(
                             allowed_note_ids=include_note_ids,
                         )
 
+                    # Fallback: if no documents were retrieved via MultiDatabaseRetriever,
+                    # perform a direct Media DB FTS-only search. This guards against
+                    # configuration or adapter issues that can cause hybrid retrieval
+                    # to silently return an empty set even when media is present.
+                    if (not documents) and media_db_path and search_mode in ("fts", "hybrid"):
+                        try:
+                            from .database_retrievers import MediaDBRetriever as _MDBR, RetrievalConfig as _RCfg
+                            fb_cfg = _RCfg(
+                                max_results=top_k,
+                                min_score=min_score,
+                                use_fts=True,
+                                use_vector=False,
+                                include_metadata=True,
+                                fts_level=fts_level,
+                            )
+                            fb_retriever = _MDBR(
+                                db_path=media_db_path,
+                                config=fb_cfg,
+                                user_id=str(user_id or "0"),
+                            )
+                            fallback_docs = await fb_retriever.retrieve(
+                                query=query,
+                                media_type=None,
+                                allowed_media_ids=include_media_ids,
+                            )
+                            if fallback_docs:
+                                documents = fallback_docs
+                                if isinstance(result.metadata, dict):
+                                    result.metadata.setdefault("fallbacks", {})
+                                    result.metadata["fallbacks"]["media_db_fts"] = True
+                        except Exception as _fb_err:
+                            result.errors.append(f"Media DB fallback retrieval failed: {str(_fb_err)}")
+
                     # Optionally run HyDE-enhanced media retrieval and merge
                     if enable_hyde and hyde_vector and search_mode == "hybrid":
                         try:
@@ -1137,6 +1206,39 @@ async def unified_rag_pipeline(
                     )
                 except Exception:
                     pass
+
+                # On retrieval failure, attempt a best-effort Media DB FTS fallback.
+                # This is especially important in local/test environments where
+                # vector stores or adapters may be misconfigured but the Media DB
+                # itself contains the uploaded content.
+                if (not result.documents) and media_db_path and search_mode in ("fts", "hybrid"):
+                    try:
+                        from .database_retrievers import MediaDBRetriever as _MDBR, RetrievalConfig as _RCfg
+                        fb_cfg = _RCfg(
+                            max_results=top_k,
+                            min_score=min_score,
+                            use_fts=True,
+                            use_vector=False,
+                            include_metadata=True,
+                            fts_level=fts_level,
+                        )
+                        fb_retriever = _MDBR(
+                            db_path=media_db_path,
+                            config=fb_cfg,
+                            user_id=str(user_id or "0"),
+                        )
+                        fallback_docs = await fb_retriever.retrieve(
+                            query=query,
+                            media_type=None,
+                            allowed_media_ids=include_media_ids,
+                        )
+                        if fallback_docs:
+                            result.documents = fallback_docs
+                            if isinstance(result.metadata, dict):
+                                result.metadata.setdefault("fallbacks", {})
+                                result.metadata["fallbacks"]["media_db_fts_on_error"] = True
+                    except Exception as _fb_err:
+                        result.errors.append(f"Media DB fallback retrieval on error failed: {str(_fb_err)}")
             finally:
                 # Ensure OTEL span is closed
                 if _otel_cm is not None:
@@ -1145,10 +1247,57 @@ async def unified_rag_pipeline(
                     except Exception:
                         pass
 
+        # ========== PSEUDO-RELEVANCE FEEDBACK (optional, metadata-only stage) ==========
+        if enable_prf and result.documents:
+            try:
+                if apply_prf and PRFConfig:
+                    cfg = PRFConfig(
+                        max_terms=int(prf_terms or 0),
+                        sources=prf_sources or ["keywords", "entities", "numbers"],
+                        alpha=float(prf_alpha or 0.0),
+                        top_n=int(prf_top_n or 0),
+                    )
+                    prf_query, prf_meta = await apply_prf(query, result.documents, cfg)
+                    result.metadata.setdefault("prf", {})
+                    result.metadata["prf"].update(prf_meta)
+                    # For now, retrieval uses the original query; PRF is advisory metadata only.
+                    result.metadata["prf"]["expanded_query"] = prf_query
+                else:
+                    result.metadata.setdefault("prf", {})
+                    result.metadata["prf"].update({
+                        "enabled": False,
+                        "reason": "prf_module_unavailable",
+                    })
+            except Exception as e:
+                result.errors.append(f"PRF analysis failed: {e}")
+
         # ========== MULTI-VECTOR PASSAGES (optional, pre-rerank) ==========
         if enable_multi_vector_passages and result.documents:
             mv_start = time.time()
             try:
+                used_precomputed = False
+                if enable_precomputed_spans and apply_precomputed_spans and PrecomputedSpanConfig:
+                    try:
+                        pcfg = PrecomputedSpanConfig()
+                        pre_docs = await apply_precomputed_spans(
+                            query=query,
+                            documents=result.documents,
+                            config=pcfg,
+                            user_id=user_id,
+                        )
+                        result.metadata.setdefault("multi_vector", {})
+                        # When implementation is available, pre_docs can override documents
+                        if pre_docs:
+                            result.documents = pre_docs[: top_k]
+                            result.metadata["multi_vector"]["precomputed_spans"] = True
+                            used_precomputed = True
+                        else:
+                            result.metadata["multi_vector"]["precomputed_spans"] = False
+                    except Exception:
+                        # If precomputed path fails, fall back silently to on-the-fly spans
+                        result.metadata.setdefault("multi_vector", {})
+                        result.metadata["multi_vector"]["precomputed_spans"] = False
+
                 if apply_multi_vector_passages and MultiVectorConfig:
                     cfg = MultiVectorConfig(
                         span_chars=int(mv_span_chars or 300),

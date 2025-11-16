@@ -10,7 +10,8 @@
    This script will:
    - Set `TEST_MODE=true` to enable test features
    - Set `TESTING=true` to disable rate limiting
-   - Set a fixed `SINGLE_USER_API_KEY` for consistent authentication
+   - Set a fixed deterministic single-user test key for consistent authentication
+   - Expose that test key via `/api/v1/health` for the E2E fixtures
    - Start the server and wait for it to be ready
 
 2. **Run the E2E tests:**
@@ -26,8 +27,8 @@
 ## Important Notes
 
 - The server MUST be started with the `start_test_server.sh` script for tests to pass
-- The script sets a fixed API key: `test-api-key-for-e2e-testing-12345`
-- In TEST_MODE, the health endpoint exposes the API key for test fixtures to retrieve
+- The script configures a fixed deterministic API key: `test-api-key-12345`
+- In TEST_MODE (with `HEALTH_EXPOSE_TEST_API_KEY=true`), the health endpoint exposes this API key for test fixtures to retrieve
 - Tests will automatically skip if the server is not running
 
 ## Troubleshooting
@@ -35,7 +36,7 @@
 If tests are failing with 401 Unauthorized:
 1. Make sure the server was started with `./start_test_server.sh`
 2. Check that `TEST_MODE=true` is set in the server environment
-3. Verify the health endpoint returns `test_api_key` field when TEST_MODE is active
+3. Verify the health endpoint returns a `test_api_key` field when TEST_MODE is active
 
 ## Manual Server Start
 
@@ -43,6 +44,8 @@ If you prefer to start the server manually:
 ```bash
 export TEST_MODE=true
 export TESTING=true
-export SINGLE_USER_API_KEY=test-api-key-for-e2e-testing-12345
+export SINGLE_USER_TEST_API_KEY=test-api-key-12345
+export SINGLE_USER_API_KEY=${SINGLE_USER_API_KEY:-$SINGLE_USER_TEST_API_KEY}
+export HEALTH_EXPOSE_TEST_API_KEY=true
 python -m uvicorn tldw_Server_API.app.main:app --reload
 ```
