@@ -203,7 +203,7 @@ def smoke_audio_ws(base_url: str, api_key: Optional[str], timeout: float = 20.0)
     if not api_key:
         raise RuntimeError("[audio] API key is required for WS auth (token query parameter)")
 
-    ws_url = _build_ws_url(base_url, f"/api/v1/audio/stream/transcribe?token={api_key}")
+    ws_url = _build_ws_url(base_url, f"/api/v1/audio/stream/transcribe?token={quote(api_key, safe='')}")
     print(f"[audio] connecting to {ws_url}")
 
     async def _run() -> Tuple[int, bool]:
