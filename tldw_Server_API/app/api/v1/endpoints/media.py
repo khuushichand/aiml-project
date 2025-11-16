@@ -1586,8 +1586,11 @@ async def put_version_metadata(
                         "VALUES (?, ?, ?, ?, ?, ?)"
                     )
                 db.execute_query(ident_sql, (dv_id, _doi, _pmid, _pmcid, _arxiv, _s2id), connection=conn)
-            except Exception:
-                pass
+            except (sqlite3.OperationalError, DatabaseError) as e:
+                logger.debug("Identifier index update skipped (missing table/unsupported upsert): %s", e)
+            except Exception as e:
+                logger.error("Identifier index update failed for dv_id=%s: %s", dv_id, e, exc_info=True)
+                raise
         # Return updated rich details for consistency
         details = get_full_media_details_rich2(
             db_instance=db,
@@ -1792,8 +1795,13 @@ async def create_or_update_version_advanced(
                             "VALUES (?, ?, ?, ?, ?, ?)"
                         )
                     db.execute_query(ident_sql, (dv_id, _doi, _pmid, _pmcid, _arxiv, _s2id), connection=conn)
-                except Exception:
-                    pass
+
+                except (sqlite3.OperationalError, DatabaseError) as e:
+                        logger.debug("Identifier index update skipped (missing table/unsupported upsert): %s", e)
+                except Exception as e:
+                        logger.error("Identifier index update failed for dv_id=%s: %s", dv_id, e, exc_info=True)
+                        raise
+
             # Return updated rich details for consistency
             details = get_full_media_details_rich2(
                 db_instance=db,

@@ -12,7 +12,6 @@ import hashlib
 import re
 from functools import wraps
 from typing import Any, Dict, List, Optional
-import weakref
 #
 # Third-party Libraries
 import numpy as np
@@ -840,24 +839,6 @@ class ONNXEmbedder:
             trust_remote_code=config.trust_remote_code,
         )
 
-        # Capture timer and session references directly for cleanup
-        def _finalize_onnx(timer_ref, session_ref):
-            # Cancel timer if it exists
-            if timer_ref is not None:
-                try:
-                    timer_ref.cancel()
-                except Exception:
-                    pass
-            # Session cleanup is handled by ORT's own GC; explicit None assignment not needed
-
-        try:
-            self._finalizer = weakref.finalize(
-                self, _finalize_onnx, self.unload_timer, self.session
-            )
-        except Exception:
-            # Non-fatal if finalizer cannot be registered
-            self._finalizer = None  # type: ignore[assignment]
-
         log_counter("onnx_embedder_init", labels={"model_id": self.model_identifier})
         logging.info(f"ONNXEmbedder initialized for {model_identifier} (model: {config.model_name_or_path})")
 
@@ -1036,6 +1017,20 @@ class ONNXEmbedder:
         log_histogram("onnx_create_embeddings_duration", embedding_time, labels={"model_id": self.model_identifier})
         log_counter("onnx_create_embeddings_success", labels={"model_id": self.model_identifier})
         return embeddings_np.astype(np.float32)  # Ensure float32 output
+
+    def __del__(self) -> None:
+        try:
+            if hasattr(self, "unload_timer"):
+                timer = getattr(self, "unload_timer", None)
+                if timer is not None:
+                    try:
+                        timer.cancel()
+                    except Exception:
+                        # Never raise from __del__
+                        pass
+        except Exception:
+            # Guard against any unexpected attribute/state issues during GC
+            pass
 
     
 
