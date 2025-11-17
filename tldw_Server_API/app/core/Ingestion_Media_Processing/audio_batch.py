@@ -211,15 +211,21 @@ async def run_audio_batch(
         processed_items = processing_output.get("results", [])
         adapted_processed_items: List[Dict[str, Any]] = []
         for item in processed_items:
-            identifier_from_lib = item.get("input_ref") or item.get(
-                "processing_source"
-            )
+            # Prefer mapping based on the library's processing_source (temp path)
+            # but fall back to the original input_ref when no mapping exists.
+            orig_input_ref = item.get("input_ref")
+            processing_source = item.get("processing_source")
+            identifier_for_lookup = str(processing_source or orig_input_ref or "")
             original_ref = temp_path_to_original_name.get(
-                str(identifier_from_lib), str(identifier_from_lib)
+                identifier_for_lookup,
+                orig_input_ref or processing_source or "Unknown",
             )
+
             item["input_ref"] = original_ref
-            # Keep processing_source as what library used.
-            item["processing_source"] = identifier_from_lib or original_ref
+            # Preserve the library's processing_source if present; do not
+            # overwrite it with the (possibly mapped) input_ref.
+            if processing_source is None:
+                item["processing_source"] = identifier_for_lookup or original_ref
 
             # Ensure DB and media fields are correctly populated.
             item["db_id"] = None
@@ -238,7 +244,6 @@ async def run_audio_batch(
             item.setdefault("warnings", None)
             item.setdefault("message", None)
             adapted_processed_items.append(item)
-
         batch_result["results"].extend(adapted_processed_items)
     elif processing_output is None and not batch_result["results"]:
         # Legacy behavior: no additional action when there are neither
