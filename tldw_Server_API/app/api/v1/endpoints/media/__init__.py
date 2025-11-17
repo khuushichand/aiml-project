@@ -34,6 +34,7 @@ except Exception as _legacy_import_err:  # noqa: BLE001
 # the effective router object compatible with existing imports
 # while allowing gradual extraction into submodules.
 from . import (
+    add,
     item,
     listing,
     versions,
@@ -53,6 +54,7 @@ if legacy_router.routes:
         list(listing.router.routes)
         + list(item.router.routes)
         + list(versions.router.routes)
+        + list(add.router.routes)
         + list(process_code.router.routes)
         + list(process_documents.router.routes)
         + list(process_pdfs.router.routes)

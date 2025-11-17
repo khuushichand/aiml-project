@@ -324,7 +324,7 @@ Lightweight liveness check for the Chatbooks subsystem.
 
 ### Manifest Schema
 
-- Chatbook archives include a versioned manifest (`manifest_version`) that describes exported content, relationships, and provenance.
+- Chatbook archives include a versioned manifest (`version`) that describes exported content, relationships, and provenance.
 - The canonical JSON Schema for manifest version `1.0` lives in the repository at `Docs/Schemas/chatbooks_manifest_v1.json` and aligns with the Chatbooks PRD (`Docs/Product/Chatbooks_PRD.md`).
 - Client integrations that need strict validation can reference this schema in addition to the OpenAPI document (`API-related/chatbook_openapi.yaml`).
 

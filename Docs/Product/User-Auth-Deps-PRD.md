@@ -106,7 +106,7 @@ Symptoms:
 
 ### 1. Claim-First Permission Checks
 
-### Concept
+#### Concept
 
 - All runtime authorization checks should be pure functions of claims already attached to the principal.
 - DB access for authorization is reserved for:
@@ -114,7 +114,7 @@ Symptoms:
   - Guardrail/accounting operations (rate limits, budgets) as defined in the Principal-Governance and Resource_Governor PRDs.
   - Admin operations (managing roles/permissions).
 
-### Implementation Sketch
+#### Implementation Sketch
 
 - Strengthen the invariant that `User_DB_Handling` (or `get_auth_principal`) always:
   - Fetches roles and base permissions from RBAC tables.
@@ -135,13 +135,13 @@ Symptoms:
 
 ### 2. Unified Auth Dependencies
 
-### Concept
+#### Concept
 
 - Define a single “front door” dependency for auth:
   - `get_auth_principal(request: Request) -> AuthPrincipal`.
 - Build all other auth-related dependencies on top of it.
 
-### Implementation Sketch
+#### Implementation Sketch
 
 - Introduce `get_auth_principal` in AuthNZ (implementation aligned with Principal-Governance PRD).
   - It:

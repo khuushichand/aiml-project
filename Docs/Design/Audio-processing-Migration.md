@@ -5,8 +5,9 @@
 - Repo: `tldw_server2`.
 - Feature track: Media Endpoint Refactor → **post–Stage 3 follow-up** (Stage 3 in the PRD is already marked “Complete – all process-only endpoints routed through `media/`”; this doc covers a deeper refactor of `/process-audios` internals).
 - Current status:
-  - Routing for `POST /api/v1/media/process-audios` is modularized via `tldw_Server_API/app/api/v1/endpoints/media/process_audios.py` as a thin wrapper that delegates to `_legacy_media.process_audios_endpoint`.
-  - The full implementation (including calls to `Audio_Files.process_audio_files`) still lives in `_legacy_media.py` under the “Audio Processing Endpoint (REFACTORED)” section.
+  - Routing for `POST /api/v1/media/process-audios` is handled by `tldw_Server_API/app/api/v1/endpoints/media/process_audios.py`, which now owns the full HTTP-layer implementation (validation, TempDir handling, status codes).
+  - Core “call audio library + merge results” logic lives in `tldw_Server_API/app/core/Ingestion_Media_Processing/audio_batch.py::run_audio_batch`.
+  - `_legacy_media.process_audios_endpoint` has been reduced to a shim that simply delegates to the modular endpoint, preserving import compatibility.
 
 **Goal**
 
@@ -32,7 +33,7 @@ Move the implementation of `/process-audios` out of `_legacy_media.py` into the 
   - `db_message` is `"Processing only endpoint."` for processing-only routes.
 - Error messages:
   - `"No valid media sources supplied"` from `_validate_inputs` for empty input.
-  - Library/metadata/network errors must continue to match existing tests, including any standardized messages used to skip flaky external audio downloads (if introduced).
+  - Library/metadata/network errors must continue to match existing tests, including any standardized messages used to skip flaky external audio downloads (e.g., the CDN-hosted `VALID_AUDIO_URL` test now explicitly `pytest.skip`s when the host cannot be resolved in restricted environments).
 - Counts and codes:
   - `processed_count` and `errors_count` computed from `status` fields (`Success` / `Warning` vs `Error`).
   - Status codes: 200 when all items succeed/warn, 207 for mixed/all error, 400 when there are no results, 422/500 from validation/internal errors as today.
@@ -230,4 +231,3 @@ The migration should be considered complete once:
 - `media/process_audios.py` + a small core helper own the `/process-audios` logic.
 - `_legacy_media.process_audios_endpoint` is shim-only.
 - No external behavior changes are observable to API clients and tests.
-

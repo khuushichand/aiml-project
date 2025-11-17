@@ -72,12 +72,12 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
    **Response shapes (high level)**
    - `POST /api/v1/chatbooks/export` (async): `{"job_id", "status", "mode": "async", "download_url"?, "expires_at"?, "estimated_size_bytes"?, "created_at"}`. For async exports, `download_url` and `expires_at` are only populated once the job reaches `completed` status.
    - `POST /api/v1/chatbooks/import` (async): `{"job_id", "status", "mode": "async", "created_at"}`.
-   - `POST /api/v1/chatbooks/preview`: `{"manifest_version", "summary": {"counts": {per_type}, "estimated_size_bytes"?, "truncated_flags"?}}`.
+   - `POST /api/v1/chatbooks/preview`: `{"version", "summary": {"counts": {per_type}, "estimated_size_bytes"?, "truncated_flags"?}}`.
    - `GET /api/v1/chatbooks/*/jobs`: `{"jobs": [...], "next_page_token"?}` with each job including `{"job_id", "kind": "export"|"import", "status", "created_at", "updated_at", "scope": {"user_id", "team_id"?, "org_id"?}}`. `status` is one of `pending`, `in_progress`, `completed`, `failed`, `cancelled`, `expired`, `deleted`.
    - `GET /api/v1/chatbooks/download/{job_id}`: either a ZIP file response or `{"download_url", "expires_at"}` when using signed URLs.
 
 2. **Manifest Schema**
-   - Versioned JSON (`manifest_version`) describing metadata, content entries, relationships, file references, locale/timezone, export provenance (user, time, app version). The canonical JSON Schema lives in `Docs/Schemas/chatbooks_manifest_v1.json`.
+   - Versioned JSON (`version`) describing metadata, content entries, relationships, file references, locale/timezone, export provenance (user, time, app version). The canonical JSON Schema lives in `Docs/Schemas/chatbooks_manifest_v1.json`.
    - Content coverage: conversations (messages, attachments, citations), notes, characters, world books, dictionaries, prompts, media descriptors, generated documents, embeddings, evaluation runs.
    - Manifest entries include stable identity keys per content type and record conflict handling metadata (`conflict_strategy`, `source_instance_id`, `provenance`) so imports can apply `skip`/`overwrite`/`rename`/`merge` consistently.
    - Template-related metadata: the manifest reserves optional fields such as `metadata.template_mode`, `metadata.template_defaults`, `metadata.template_timezone`, and `metadata.template_locale` for content that participates in templating (for example, certain Chatbooks text fields and dictionaries). Their evaluation semantics and feature flags are defined in `Docs/Product/Chatbook-Tools-PRD.md` and must remain backward compatible across manifest versions.
