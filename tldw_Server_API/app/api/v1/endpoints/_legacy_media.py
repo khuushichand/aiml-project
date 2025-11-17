@@ -583,7 +583,10 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     TranscriptionModel
 )
 from tldw_Server_API.app.core.config import settings, config
-from tldw_Server_API.app.services.web_scraping_service import process_web_scraping_task
+from tldw_Server_API.app.services.web_scraping_service import (
+    process_web_scraping_task,
+    ingest_web_content_orchestrate,
+)
 #
 # MediaWiki
 from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki import (
@@ -6655,29 +6658,12 @@ async def ingest_web_content(
     if not request.urls:
         raise HTTPException(status_code=400, detail="At least one URL is required")
 
-    # Log usage for web scraping ingest
-    try:
-        usage_log.log_event(
-            "webscrape.ingest",
-            tags=[str(request.scrape_method or "")],
-            metadata={"url_count": len(request.urls or []), "perform_analysis": bool(getattr(request, 'perform_analysis', False))},
-        )
-    except Exception:
-        pass
-
-    # Topic monitoring (non-blocking): URLs and provided titles
-    try:
-        from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
-        mon = get_topic_monitoring_service()
-        uid = getattr(db, 'client_id', None) if hasattr(db, 'client_id') else None
-        for u in (request.urls or [])[:10]:  # bound to avoid large payloads
-            if u:
-                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=str(u), source="ingestion.web", scope_type="user", scope_id=str(uid) if uid else None)
-        for t in (request.titles or [])[:10]:
-            if t:
-                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=str(t), source="ingestion.web", scope_type="user", scope_id=str(uid) if uid else None)
-    except Exception:
-        pass
+    # Shared usage logging and topic monitoring
+    await ingest_web_content_orchestrate(
+        request=request,
+        db=db,
+        usage_log=usage_log,
+    )
 
     # If any array is shorter than # of URLs, pad it so we can zip them easily
     num_urls = len(request.urls)
@@ -6713,6 +6699,12 @@ async def ingest_web_content(
 
     # We'll accumulate all “raw” results (scraped data) in a list of dicts
     raw_results = []
+    try:
+        from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+
+        scrape_task = getattr(media_mod, "process_web_scraping_task", process_web_scraping_task)
+    except Exception:  # pragma: no cover - defensive fallback
+        scrape_task = process_web_scraping_task
 
     # Helper function to perform summarization (if needed)
     async def maybe_summarize_one(article: dict) -> dict:
@@ -6813,7 +6805,7 @@ async def ingest_web_content(
         level = request.url_level or 2
 
         try:
-            service_result = await process_web_scraping_task(
+            service_result = await scrape_task(
                 scrape_method="URL Level",
                 url_input=base_url,
                 url_level=level,
@@ -6860,7 +6852,7 @@ async def ingest_web_content(
         max_depth = request.max_depth or 3
 
         try:
-            service_result = await process_web_scraping_task(
+            service_result = await scrape_task(
                 scrape_method="Recursive Scraping",
                 url_input=base_url,
                 url_level=None,

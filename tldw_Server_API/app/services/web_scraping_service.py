@@ -6,7 +6,9 @@
 # Imports
 import asyncio
 import json
-from typing import Optional, List, Dict, Any
+import logging
+from datetime import datetime
+from typing import Optional, List, Dict, Any, Awaitable, Callable
 #
 # Third-party Libraries
 from fastapi import HTTPException
@@ -19,15 +21,18 @@ from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 # Import the enhanced service
 from tldw_Server_API.app.services.enhanced_web_scraping_service import (
-    get_web_scraping_service, shutdown_web_scraping_service
+    get_web_scraping_service,
+    shutdown_web_scraping_service,
 )
 # Keep legacy imports for fallback
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
     scrape_and_summarize_multiple,
+    scrape_article,
     scrape_from_sitemap,
     scrape_by_url_level,
-    recursive_scrape
+    recursive_scrape,
 )
+from tldw_Server_API.app.api.v1.schemas.media_request_models import ScrapeMethod
 #
 ########################################################################################################################
 #
@@ -366,3 +371,62 @@ async def process_web_scraping_task(
 
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
+
+
+async def ingest_web_content_orchestrate(
+    request: Any,
+    db: Any,
+    usage_log: Any,
+) -> None:
+    """
+    Shared helper for `/media/ingest-web-content` side effects.
+
+    This currently owns usage logging and topic monitoring for ingest,
+    mirroring `_legacy_media.ingest_web_content` while keeping the HTTP
+    layer thin. It may be extended to own more orchestration over time.
+    """
+
+    # Log usage for web scraping ingest
+    try:
+        usage_log.log_event(
+            "webscrape.ingest",
+            tags=[str(getattr(request, "scrape_method", "") or "")],
+            metadata={
+                "url_count": len(getattr(request, "urls", []) or []),
+                "perform_analysis": bool(
+                    getattr(request, "perform_analysis", False)
+                ),
+            },
+        )
+    except Exception:
+        pass
+
+    # Topic monitoring (non-blocking): URLs and provided titles
+    try:
+        from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import (
+            get_topic_monitoring_service,
+        )
+
+        mon = get_topic_monitoring_service()
+        uid = getattr(db, "client_id", None) if hasattr(db, "client_id") else None
+        for u in (getattr(request, "urls", []) or [])[:10]:
+            if u:
+                mon.evaluate_and_alert(
+                    user_id=str(uid) if uid else None,
+                    text=str(u),
+                    source="ingestion.web",
+                    scope_type="user",
+                    scope_id=str(uid) if uid else None,
+                )
+        for t in (getattr(request, "titles", []) or [])[:10]:
+            if t:
+                mon.evaluate_and_alert(
+                    user_id=str(uid) if uid else None,
+                    text=str(t),
+                    source="ingestion.web",
+                    scope_type="user",
+                    scope_id=str(uid) if uid else None,
+                )
+    except Exception:
+        # Do not let monitoring failures break ingestion.
+        pass

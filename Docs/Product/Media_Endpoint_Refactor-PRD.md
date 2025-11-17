@@ -334,10 +334,18 @@ This table serves as a migration checklist to ensure the compatibility shim cont
     - Keep all existing `/add` integration tests green as future refactors move more orchestration into `persistence.py`, and add targeted tests for quota enforcement, error mapping, and cache invalidation (list/detail/search) after create/update/rollback.
     - Maintain regression tests ensuring no `db_instance must be a Database object` errors surface for media write endpoints (e.g., `PATCH /api/v1/media/{media_id}/metadata`, `PUT /api/v1/media/{media_id}/versions/{version}/metadata`, `POST /api/v1/media/{media_id}/versions/advanced`, and `/api/v1/media/add`), including under minimal test app profiles.
     - Keep tests that explicitly assert expected success codes (200/201) for version creation/update and `/add` flows when using `client_with_single_user` and related fixtures, to guard against unintended 401s caused by auth/DB wiring changes.
-- Stage 5: Web Scraping
-  - Move `/process-web-scraping` handler to `web_scrape.py`; ensure it delegates to `services/web_scraping_service`.
-  - Move `/ingest-web-content` handler to `web_scrape.py`; share request normalization and orchestration with the process-only handler while preserving DB persistence behavior.
-  - Tests: web scraping tests (crawl flags, summarization toggles, ingest vs ephemeral modes).
+- Stage 5: Web Scraping **(Status: In Progress – web-scraping routes modularized; core services gradually adopting shared orchestration)**
+  - Current state:
+    - `/process-web-scraping` is handled by `tldw_Server_API/app/api/v1/endpoints/media/process_web_scraping.py` as a thin wrapper that preserves permission checks, rate limiting, and the existing `WebScrapingRequest` contract while delegating to `_legacy_media.process_web_scraping_endpoint`. The bridge in `services/web_scraping_service.process_web_scraping_task` accepts crawl overrides (`crawl_strategy`, `include_external`, `score_threshold`) and forwards them to the enhanced service.
+    - `/ingest-web-content` is now handled by `tldw_Server_API/app/api/v1/endpoints/media/ingest_web_content.py` as a thin wrapper that:
+      - Keeps `guard_backpressure_and_quota` and `require_token_scope("any", ..., endpoint_id="media.ingest")` dependency behavior identical to the legacy endpoint.
+      - Uses `get_media_db_for_user` and `get_usage_event_logger` via the same dependencies and types as `_legacy_media.ingest_web_content`.
+      - Delegates to `_legacy_media.ingest_web_content` for scrape-method branching and JSON shaping; usage logging and topic monitoring for ingest live in the shared service helper `tldw_Server_API.app.services.web_scraping_service.ingest_web_content_orchestrate`, keeping response envelopes and status codes unchanged.
+    - The router shim in `media/__init__.py` now merges the modular `process_web_scraping` and `ingest_web_content` routers ahead of `_legacy_media.router`, ensuring all web-scraping HTTP traffic flows through the `media/` package while still allowing tests to monkeypatch helpers via the `media` shim (both `/process-web-scraping` and `/ingest-web-content` resolve `process_web_scraping_task` via this shim).
+    - Web scraping tests (`tldw_Server_API/tests/WebScraping/test_webscraping_usage_events.py`, `tldw_Server_API/tests/WebScraping/test_custom_headers_support.py`, `tldw_Server_API/tests/Web_Scraping/test_friendly_ingest_crawl_flags.py`) pass with the modular routing and shim-based task resolution, confirming unchanged behavior for usage logging, crawl-flag forwarding, and custom-header propagation.
+  - Next steps:
+    - Gradually move more of the shared web-scraping orchestration into a dedicated core helper (e.g., `services/enhanced_web_scraping_service`), mirroring the Stage 4 `/add` persistence extraction, while keeping `process_web_scraping` and `ingest_web_content` as thin HTTP layers.
+    - Maintain tests around crawl flags, summarization toggles, ingest vs ephemeral modes, and any topic-monitoring side effects as logic is migrated into core services.
 - Stage 6: Debug Endpoint
   - Move schema introspection to `debug.py`.
   - Tests: basic health assertions.
