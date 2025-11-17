@@ -208,9 +208,8 @@ async def add_media_orchestrate(
                     total_uploaded_bytes = 0
                     for pf in saved_files_info:
                         try:
-                            # This mirrors the legacy behaviour, including its
-                            # reliance on Path from FastAPI (errors are ignored).
-                            total_uploaded_bytes += Path(  # type: ignore[arg-type]
+                            # Use filesystem Path (not FastAPI's Path) to compute size.
+                            total_uploaded_bytes += FilePath(
                                 str(pf["path"]).strip()
                             ).stat().st_size
                         except Exception:
@@ -1364,31 +1363,49 @@ async def persist_doc_item_and_children(
                                         f"{child_meta.get('filename') or child_title}"
                                     )
 
-                                    def _db_child_worker() -> Any:
+                                    def _db_child_worker(
+                                        child_url: str = child_url,
+                                        child_title: str = child_title,
+                                        child_content: str = child_content,
+                                        final_keywords: List[str] = final_keywords_list,
+                                        safe_child_meta_json_local: Optional[str] = safe_child_meta_json,
+                                        model_used_local: Optional[str] = model_used,
+                                        child_author_local: str = child_author,
+                                        child_chunks_for_sql_local: Optional[
+                                            List[Dict[str, Any]]
+                                        ] = child_chunks_for_sql,
+                                        chunk_options_local: Optional[
+                                            Dict[str, Any]
+                                        ] = chunk_options,
+                                        form_data_local: Any = form_data,
+                                        media_type_local: str = media_type,
+                                        client_id_local: str = client_id,
+                                        db_path_local: str = db_path,
+                                    ) -> Any:
                                         worker_db: Optional[MediaDatabase] = None
                                         try:
                                             worker_db = MediaDatabase(
-                                                db_path=db_path,
-                                                client_id=client_id,
+                                                db_path=db_path_local,
+                                                client_id=client_id_local,
                                             )
                                             return worker_db.add_media_with_keywords(
                                                 url=child_url,
                                                 title=child_title,
-                                                media_type=media_type,
+                                                media_type=media_type_local,
                                                 content=child_content,
-                                                keywords=final_keywords_list,
+                                                keywords=final_keywords,
                                                 prompt=getattr(
-                                                    form_data, "custom_prompt", None
+                                                    form_data_local, "custom_prompt", None
                                                 ),
                                                 analysis_content=None,
-                                                safe_metadata=safe_child_meta_json,
-                                                transcription_model=model_used,
-                                                author=child_author,
+                                                safe_metadata=safe_child_meta_json_local,
+                                                transcription_model=model_used_local,
+                                                author=child_author_local,
                                                 overwrite=getattr(
-                                                    form_data, "overwrite_existing", False
+                                                    form_data_local, "overwrite_existing", False
                                                 ),
-                                                chunk_options=chunk_options,
-                                                chunks=child_chunks_for_sql,
+                                                chunk_options=chunk_options_local,
+                                                chunks=child_chunks_for_sql_local,
                                             )
                                         finally:
                                             if worker_db is not None:
@@ -1594,44 +1611,48 @@ async def persist_doc_item_and_children(
                                 )
 
                                 def _db_child_arch_worker(
-                                    _child_url: str,
-                                    _child_title: str,
-                                    _child_content: str,
-                                    _final_keywords: List[str],
-                                    _safe_child_meta_json: Optional[str],
-                                    _model_used: Optional[str],
-                                    _child_author: str,
-                                    _child_chunks_for_sql: Optional[List[Dict[str, Any]]],
-                                    _media_type: str,
-                                    _form_data: Any,
-                                    _chunk_options: Optional[Dict[str, Any]],
-                                    _db_path: str,
-                                    _client_id: str,
+                                    child_url_local: str = child_url,
+                                    child_title_local: str = child_title,
+                                    child_content_local: str = child_content,
+                                    final_keywords_local: List[str] = final_keywords_list,
+                                    safe_child_meta_json_local: Optional[str] = safe_child_meta_json,
+                                    model_used_local: Optional[str] = model_used,
+                                    child_author_local: str = child_author,
+                                    child_chunks_for_sql_local: Optional[
+                                        List[Dict[str, Any]]
+                                    ] = child_chunks_for_sql,
+                                    media_type_local: str = media_type,
+                                    form_data_local: Any = form_data,
+                                    chunk_options_local: Optional[
+                                        Dict[str, Any]
+                                    ] = chunk_options,
+                                    db_path_local: str = db_path,
+                                    client_id_local: str = client_id,
                                 ) -> Any:
                                     worker_db: Optional[MediaDatabase] = None
                                     try:
                                         worker_db = MediaDatabase(
-                                            db_path=_db_path,
-                                            client_id=_client_id,
+                                            db_path=db_path_local,
+                                            client_id=client_id_local,
                                         )
                                         return worker_db.add_media_with_keywords(
-                                            url=_child_url,
-                                            title=_child_title,
-                                            media_type=_media_type,
-                                            content=_child_content,
-                                            keywords=_final_keywords,
+                                            url=child_url_local,
+                                            title=child_title_local,
+                                            media_type=media_type_local,
+                                            content=child_content_local,
+                                            keywords=final_keywords_local,
                                             prompt=getattr(
-                                                _form_data, "custom_prompt", None
+                                                form_data_local, "custom_prompt", None
                                             ),
                                             analysis_content=None,
-                                            safe_metadata=_safe_child_meta_json,
-                                            transcription_model=_model_used,
-                                            author=_child_author,
+                                            safe_metadata=safe_child_meta_json_local,
+                                            transcription_model=model_used_local,
+                                            author=child_author_local,
                                             overwrite=getattr(
-                                                _form_data, "overwrite_existing", False
+                                                form_data_local, "overwrite_existing", False
                                             ),
-                                            chunk_options=_chunk_options,
-                                            chunks=_child_chunks_for_sql,
+                                            chunk_options=chunk_options_local,
+                                            chunks=child_chunks_for_sql_local,
                                         )
                                     finally:
                                         if worker_db is not None:
@@ -1644,19 +1665,6 @@ async def persist_doc_item_and_children(
                                 ) = await loop.run_in_executor(  # type: ignore[arg-type]
                                     None,
                                     _db_child_arch_worker,
-                                    child_url,
-                                    child_title,
-                                    child_content,
-                                    final_keywords_list,
-                                    safe_child_meta_json,
-                                    model_used,
-                                    child_author,
-                                    child_chunks_for_sql,
-                                    media_type,
-                                    form_data,
-                                    chunk_options,
-                                    db_path,
-                                    client_id,
                                 )
                                 child_db_results.append(
                                     {

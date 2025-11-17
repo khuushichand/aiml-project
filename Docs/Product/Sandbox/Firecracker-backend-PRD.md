@@ -65,6 +65,7 @@ Deliver a real Firecracker backend with net=off, microVM lifecycle, host-shared 
 
 - Start Firecracker process; create API socket.
 - Configure machine: vCPU/mem from policy; boot‑source with kernel + boot args.
+- CPU and memory limits for the Firecracker microVM are sourced from the `[Sandbox]` section of `tldw_Server_API/Config_Files/config.txt` (keys such as `max_cpu` and `max_mem_mb`) via `SANDBOX_MAX_CPU`/`SANDBOX_MAX_MEM_MB` in `tldw_Server_API/app/core/config.py` and `SandboxPolicyConfig` in `tldw_Server_API/app/core/Sandbox/policy.py`, surfaced as `max_cpu`/`max_mem_mb` defaults in `SandboxService.feature_discovery()` (`tldw_Server_API/app/core/Sandbox/service.py`), with per-run overrides coming from `RunSpec.cpu`/`RunSpec.memory_mb` in `tldw_Server_API/app/core/Sandbox/models.py` that take precedence over the policy defaults but are bounded by these configured maxima (precedence: spec → env → config → built-in defaults).
 - Add drives: rootfs (read-only) and workspace (rw) and/or virtiofs share.
 - Ensure no `network-interfaces` configured (net=off).
 
@@ -75,6 +76,8 @@ Deliver a real Firecracker backend with net=off, microVM lifecycle, host-shared 
   - Fallback: if rootfs supports rc.local/systemd, use that to run `/workspace/entry.sh`.
 - `entry.sh` behavior:
   - Loads env, executes spec command, writes logs to `/workspace/run.log` (append + fsync per line), and writes exit JSON to `/workspace/.sandbox_status.json`.
+  - Redirects both stdout and stderr from the user command into a single `/workspace/run.log` file (no separate stderr log), with lines from both streams interleaved in write order, each line prefixed with an ISO8601 timestamp and flushed/fsynced after append to match the log tailing implementation planned in `tldw_Server_API/app/core/Sandbox/runners/firecracker_runner.py`.
+  - `.sandbox_status.json` MUST be a UTF‑8 JSON object with schema `{ "exit_code": integer, "reason": string, "duration_ms": integer, "timestamp": ISO8601 string, "signal": optional string }` (additional fields ignored), and this schema will be validated when `_read_exit_status()` in `tldw_Server_API/app/core/Sandbox/runners/firecracker_runner.py` deserializes the file and corresponding tests in `tldw_Server_API/tests/sandbox/` assert the mapping into `RunStatus`.
 
 ### Stage 5: Log Streaming & Metrics
 
@@ -148,4 +151,3 @@ Deliver a real Firecracker backend with net=off, microVM lifecycle, host-shared 
 - Virtiofs unavailability → Fallback writable drive, no live streaming; document behavior.
 - Privilege/safety → Gate behind flags + preflight; plan early migration to `jailer`.
 - Flaky log streaming → Make `entry.sh` fsync and flush lines; add WS timeouts in tests.
-

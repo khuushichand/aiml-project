@@ -54,8 +54,9 @@ if legacy_router.routes:
     original_legacy_router = legacy_router
     legacy_router = APIRouter()
 
-    # Manually merge route objects instead of using include_router with an
-    # empty prefix, to avoid FastAPI's restriction on (prefix="", path="").
+    # Use include_router so FastAPI performs internal bookkeeping
+    # (path resolution, dependencies, middleware), preserving the
+    # same route order as the previous manual merge.
     for _router in (
         listing.router,
         item.router,
@@ -73,8 +74,7 @@ if legacy_router.routes:
         process_mediawiki.router,
         original_legacy_router,
     ):
-        for route in _router.routes:
-            legacy_router.routes.append(route)
+        legacy_router.include_router(_router)
 
     # Public router used by main application when legacy module is available.
     router: APIRouter = legacy_router
@@ -98,8 +98,7 @@ else:
         process_web_scraping.router,
         process_mediawiki.router,
     ):
-        for route in _router.routes:
-            router.routes.append(route)
+        router.include_router(_router)
 
 # Commonly imported helpers (kept explicit for type checkers).
 if _legacy_media is not None:

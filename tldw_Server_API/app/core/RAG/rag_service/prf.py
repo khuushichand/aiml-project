@@ -101,7 +101,7 @@ async def apply_prf(
         }
 
     try:
-        seeds = documents[: cfg.top_n] if cfg.top_n > 0 else []
+        seeds = documents[: cfg.top_n]
         term_counts: Dict[str, int] = {}
         term_score_sums: Dict[str, float] = {}
 

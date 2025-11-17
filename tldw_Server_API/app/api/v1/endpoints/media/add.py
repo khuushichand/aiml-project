@@ -21,7 +21,6 @@ router = APIRouter()
     "/add",
     # Status code is determined dynamically based on per-item results.
     dependencies=[
-        Depends(get_media_db_for_user),
         Depends(PermissionChecker(MEDIA_CREATE)),
         Depends(rbac_rate_limit("media.create")),
     ],
