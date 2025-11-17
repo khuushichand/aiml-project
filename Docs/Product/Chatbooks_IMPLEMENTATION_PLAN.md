@@ -56,21 +56,6 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 
 ---
 
-## Stage 6: Optional Client-Side Encryption (TBD)
-**Goal**: Track potential client-side/password-protected Chatbooks encryption without changing the server-managed encryption stance.
-
-**Success Criteria**:
-- Any adopted approach for client-provided encryption (for example, password-protected archives) is consistent with the PRD non-goal that server-managed, per-chatbook encryption keys remain out of scope.
-- UX/API and key-handling responsibilities are clearly documented (client vs server), and import/export flows surface appropriate error messages when encrypted archives cannot be processed.
-- Backwards compatibility is maintained: unencrypted Chatbooks continue to work as before, and encrypted Chatbooks are either supported explicitly or rejected with clear, non-ambiguous errors.
-
-**Tests**:
-- To be defined once Open Question #3 in `Docs/Product/Chatbooks_PRD.md` is resolved and a concrete design is selected.
-
-**Status**: Deferred (pending resolution of PRD Open Question #3)
-
----
-
 ## Stage 4: Observability, Health & SLOs
 **Goal**: Provide clear observability, health signals, and performance SLOs for Chatbooks jobs.
 
@@ -103,3 +88,18 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 - Integration: exports/imports with mixed small attachments and large media binaries; verification of offline rehydration from a v2 Chatbook; compatibility tests confirming that v1-only manifests still import correctly after v2 is introduced.
 
 **Status**: Not Started
+
+---
+
+## Stage 6: Optional Client-Side Encryption (TBD)
+**Goal**: Track potential client-side/password-protected Chatbooks encryption without changing the server-managed encryption stance.
+
+**Success Criteria**:
+- Any adopted approach for client-provided encryption (for example, password-protected archives) is consistent with the PRD non-goal that server-managed, per-chatbook encryption keys remain out of scope.
+- UX/API and key-handling responsibilities are clearly documented (client vs server), and import/export flows surface appropriate error messages when encrypted archives cannot be processed.
+- Backwards compatibility is maintained: unencrypted Chatbooks continue to work as before, and encrypted Chatbooks are either supported explicitly or rejected with clear, non-ambiguous errors.
+
+**Tests**:
+- To be defined once Open Question #3 in `Docs/Product/Chatbooks_PRD.md` is resolved and a concrete design is selected.
+
+**Status**: Deferred (pending resolution of PRD Open Question #3)

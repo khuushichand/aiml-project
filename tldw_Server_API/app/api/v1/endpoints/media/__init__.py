@@ -50,30 +50,53 @@ from . import (
 )
 
 if legacy_router.routes:
-    legacy_router.routes = (
-        list(listing.router.routes)
-        + list(item.router.routes)
-        + list(versions.router.routes)
-        + list(add.router.routes)
-        + list(process_code.router.routes)
-        + list(process_documents.router.routes)
-        + list(process_pdfs.router.routes)
-        + list(process_ebooks.router.routes)
-        + list(process_emails.router.routes)
-        + list(process_videos.router.routes)
-        + list(process_audios.router.routes)
-        + list(process_web_scraping.router.routes)
-        + list(process_mediawiki.router.routes)
-        + list(legacy_router.routes)
-    )
+    original_legacy_router = legacy_router
+    legacy_router = APIRouter()
+
+    # Manually merge route objects instead of using include_router with an
+    # empty prefix, to avoid FastAPI's restriction on (prefix="", path="").
+    for _router in (
+        listing.router,
+        item.router,
+        versions.router,
+        add.router,
+        process_code.router,
+        process_documents.router,
+        process_pdfs.router,
+        process_ebooks.router,
+        process_emails.router,
+        process_videos.router,
+        process_audios.router,
+        process_web_scraping.router,
+        process_mediawiki.router,
+        original_legacy_router,
+    ):
+        for route in _router.routes:
+            legacy_router.routes.append(route)
+
     # Public router used by main application when legacy module is available.
     router: APIRouter = legacy_router
 else:
-    # Fallback: expose only the modular, read-only endpoints.
+    # Fallback: expose only the modular endpoints when legacy media cannot
+    # be imported (ultra-minimal test profiles).
     router = APIRouter()
-    router.include_router(listing.router)
-    router.include_router(item.router)
-    router.include_router(versions.router)
+    for _router in (
+        listing.router,
+        item.router,
+        versions.router,
+        add.router,
+        process_code.router,
+        process_documents.router,
+        process_pdfs.router,
+        process_ebooks.router,
+        process_emails.router,
+        process_videos.router,
+        process_audios.router,
+        process_web_scraping.router,
+        process_mediawiki.router,
+    ):
+        for route in _router.routes:
+            router.routes.append(route)
 
 # Commonly imported helpers (kept explicit for type checkers).
 if _legacy_media is not None:
@@ -95,10 +118,17 @@ def cache_response(key: str, response: Dict) -> None:
     """
     if _legacy_media is None:
         return
-    setattr(_legacy_media, "cache", cache)
     legacy_cache_response = getattr(_legacy_media, "cache_response", None)
-    if legacy_cache_response is not None:
+    if legacy_cache_response is None:
+        return
+    # Avoid leaving shared state mutated across calls: temporarily
+    # override the legacy module's cache and restore it afterwards.
+    old_cache = getattr(_legacy_media, "cache", None)
+    try:
+        setattr(_legacy_media, "cache", cache)
         legacy_cache_response(key, response)
+    finally:
+        setattr(_legacy_media, "cache", old_cache)
 
 
 def invalidate_cache(media_id: int) -> None:
@@ -108,10 +138,15 @@ def invalidate_cache(media_id: int) -> None:
     """
     if _legacy_media is None:
         return
-    setattr(_legacy_media, "cache", cache)
     legacy_invalidate = getattr(_legacy_media, "invalidate_cache", None)
-    if legacy_invalidate is not None:
+    if legacy_invalidate is None:
+        return
+    old_cache = getattr(_legacy_media, "cache", None)
+    try:
+        setattr(_legacy_media, "cache", cache)
         legacy_invalidate(media_id)
+    finally:
+        setattr(_legacy_media, "cache", old_cache)
 
 
 def __getattr__(name: str) -> Any:

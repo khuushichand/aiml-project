@@ -1,6 +1,6 @@
 ## Audio Processing Endpoint Migration Plan (`/process-audios`)
 
-**Context**
+## Context
 
 - Repo: `tldw_server2`.
 - Feature track: Media Endpoint Refactor → **post–Stage 3 follow-up** (Stage 3 in the PRD is already marked “Complete – all process-only endpoints routed through `media/`”; this doc covers a deeper refactor of `/process-audios` internals).
@@ -9,7 +9,7 @@
   - Core “call audio library + merge results” logic lives in `tldw_Server_API/app/core/Ingestion_Media_Processing/audio_batch.py::run_audio_batch`.
   - `_legacy_media.process_audios_endpoint` has been reduced to a shim that simply delegates to the modular endpoint, preserving import compatibility.
 
-**Goal**
+## Goal
 
 Move the implementation of `/process-audios` out of `_legacy_media.py` into the modular `media/` layer (and a small core helper), while:
 
@@ -23,7 +23,7 @@ Move the implementation of `/process-audios` out of `_legacy_media.py` into the 
   - Import `tldw_Server_API.app.api.v1.endpoints.media` / `_legacy_media`.
   - Assert on specific error messages, `input_ref` values, and audio‑specific fields (`segments`, analysis placeholder when disabled, etc.).
 
-**Invariants to Preserve**
+## Invariants to Preserve
 
 - `input_ref`:
   - For URLs: original URL (e.g., `VALID_AUDIO_URL`), not a temp path.
