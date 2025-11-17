@@ -100,6 +100,6 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 
 **Tests**:
 - Unit: streaming large-file writers, bundle-size accounting, and retention/quota calculations for large archives.
-- Integration: exports/imports with mixed small attachments and large media binaries; verification of offline rehydration from a v2 chatbook; compatibility tests confirming that v1-only manifests still import correctly after v2 is introduced.
+- Integration: exports/imports with mixed small attachments and large media binaries; verification of offline rehydration from a v2 Chatbook; compatibility tests confirming that v1-only manifests still import correctly after v2 is introduced.
 
 **Status**: Not Started

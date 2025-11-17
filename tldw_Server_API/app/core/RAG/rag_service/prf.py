@@ -30,6 +30,21 @@ class PRFConfig:
     alpha: float = 0.3
     top_n: int = 8
 
+    def __post_init__(self) -> None:
+        """
+        Validate configuration values.
+
+        In particular, ensure alpha is a numeric weight in the closed interval
+        [0.0, 1.0] so downstream scoring logic can rely on it.
+        """
+        try:
+            alpha_val = float(self.alpha)
+        except (TypeError, ValueError):
+            raise ValueError(f"PRFConfig.alpha must be a float between 0.0 and 1.0, got {self.alpha!r}")
+        if not 0.0 <= alpha_val <= 1.0:
+            raise ValueError(f"PRFConfig.alpha must be between 0.0 and 1.0, got {alpha_val}")
+        self.alpha = alpha_val
+
 
 def _tokenize(text: str) -> List[str]:
     """Simple tokenizer for PRF term extraction."""
@@ -88,6 +103,7 @@ async def apply_prf(
     try:
         seeds = documents[: max(1, cfg.top_n)]
         term_counts: Dict[str, int] = {}
+        term_score_sums: Dict[str, float] = {}
 
         use_keywords = "keywords" in cfg.sources
         use_entities = "entities" in cfg.sources
@@ -95,21 +111,54 @@ async def apply_prf(
 
         for doc in seeds:
             text = getattr(doc, "content", "") or ""
+            doc_score = float(getattr(doc, "score", 0.0) or 0.0)
+            doc_terms = set()
+
             if use_keywords:
-                for tok in _tokenize(text):
-                    term_counts[tok] = term_counts.get(tok, 0) + 1
+                doc_terms.update(_tokenize(text))
             if use_numbers:
-                for num in _extract_numbers(text):
-                    term_counts[num] = term_counts.get(num, 0) + 1
+                doc_terms.update(_extract_numbers(text))
             if use_entities:
-                for ent in _extract_entities(doc):
-                    term_counts[ent] = term_counts.get(ent, 0) + 1
+                doc_terms.update(_extract_entities(doc))
+
+            if not doc_terms:
+                continue
+
+            for term in doc_terms:
+                term_counts[term] = term_counts.get(term, 0) + 1
+                if doc_score:
+                    term_score_sums[term] = term_score_sums.get(term, 0.0) + doc_score
 
         base_terms = set(_tokenize(query))
-        # Sort by frequency (desc) then lexicographically for stability
+        if not term_counts:
+            return query, {
+                "enabled": False,
+                "base_query": query,
+                "reason": "no_additional_terms",
+                "doc_seed_count": len(seeds),
+            }
+
+        # Blend original retrieval weights (from document scores) with PRF term
+        # frequencies using alpha as a weighting factor.
+        alpha = cfg.alpha
+        max_count = max(term_counts.values())
+        max_score_sum = max(term_score_sums.values()) if term_score_sums else 0.0
+
+        term_scores: Dict[str, float] = {}
+        for term, count in term_counts.items():
+            prf_score = float(count) / float(max_count) if max_count > 0 else 0.0
+            if max_score_sum > 0.0:
+                original_score = float(term_score_sums.get(term, 0.0)) / float(max_score_sum)
+            else:
+                original_score = 0.0
+            combined_score = (1.0 - alpha) * original_score + alpha * prf_score
+            term_scores[term] = combined_score
+
+        # Rank candidate expansion terms by blended score, excluding tokens that
+        # already appear in the original query.
         ranked_terms = sorted(
             (t for t in term_counts.keys() if t not in base_terms),
-            key=lambda t: (-term_counts[t], t),
+            key=lambda t: (-term_scores.get(t, 0.0), t),
         )
         selected = ranked_terms[: cfg.max_terms]
 
@@ -141,4 +190,3 @@ async def apply_prf(
             "reason": "error",
             "error": str(e),
         }
-

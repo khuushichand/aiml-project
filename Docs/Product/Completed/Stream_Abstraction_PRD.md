@@ -1,6 +1,6 @@
 # Stream Abstraction — PRD
 
-- Status: Complete (GA; STREAMS_UNIFIED default on in non‑prod, opt-out via feature flag)
+- Status: Complete (GA; currently `STREAMS_UNIFIED` is default ON in dev/test/non‑prod; production can opt out via feature flag; see §9 Rollout Plan and Docs/Issues/STREAMS_UNIFIED_Rollout_Tracking.md)
 - Last Updated: 2025-11-16
 - Authors: Codex (coding agent)
 - Stakeholders: API (Chat/Embeddings), Audio, MCP, WebUI, Docs
@@ -400,7 +400,7 @@ Note: Keep metrics labels low-cardinality (e.g., `component`, `endpoint`); avoid
 6. Phase 5 — Cleanup
    - Delete endpoint‑local helpers; update docs/tests; enable by default.
 
-Feature flag: `STREAMS_UNIFIED` (default off for one release; then on by default).
+Feature flag: `STREAMS_UNIFIED` (rollout complete; currently default ON in dev/test/non‑prod with opt‑out/rollback via flag; see Docs/Issues/STREAMS_UNIFIED_Rollout_Tracking.md).
 
 ---
 
@@ -472,7 +472,7 @@ None at this time. Remaining compatibility work (e.g., Audio WS `error_type` ali
 
 ## 14. Configuration
 
-- `STREAMS_UNIFIED`: feature flag (off for one release; then default on)
+- `STREAMS_UNIFIED`: feature flag (currently default ON in dev/test/non‑prod; production can opt out or roll back via flag)
 - `STREAM_HEARTBEAT_INTERVAL_S`: default 10
 - `STREAM_IDLE_TIMEOUT_S`: default disabled
 - `STREAM_MAX_DURATION_S`: default disabled

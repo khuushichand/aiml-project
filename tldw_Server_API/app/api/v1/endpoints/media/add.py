@@ -8,6 +8,9 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE, PermissionChecker
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
+    add_media_persist,
+)
 
 from tldw_Server_API.app.api.v1.endpoints import _legacy_media as legacy_media  # type: ignore
 
@@ -51,7 +54,7 @@ async def add_media(
     logic still lives in `_legacy_media.add_media`.
     """
 
-    return await legacy_media.add_media(  # type: ignore[func-returns-value]
+    return await add_media_persist(
         background_tasks=background_tasks,
         form_data=form_data,
         files=files,
@@ -63,4 +66,3 @@ async def add_media(
 
 
 __all__ = ["router"]
-

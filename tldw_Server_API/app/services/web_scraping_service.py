@@ -68,7 +68,54 @@ async def process_web_scraping_task(
 
     This function delegates to the enhanced service while maintaining
     backward compatibility with the existing API.
+
+    Parameters:
+    - crawl_strategy: Optional crawl strategy override for enhanced crawling.
+      Normalized to lowercase and validated against: "best_first", "best-first", "bestfirst".
+    - include_external: Optional flag to allow following external links during crawl.
+      Forwarded as-is to the enhanced service when provided.
+    - score_threshold: Optional relevance threshold in [0.0, 1.0] for URL scoring.
+      Coerced to float and validated to be within the closed interval [0.0, 1.0].
+    - custom_headers: Optional HTTP headers to use for outbound scraping requests.
+      Forwarded as-is to the enhanced service and used for session keying.
+
+    Fallback behaviour:
+    - When the enhanced service is unavailable, a legacy implementation is used.
+    - For the "Recursive Scraping" method, advanced crawl options
+      (`custom_headers`, `crawl_strategy`, `include_external`, `score_threshold`)
+      are not supported by the legacy path; if any of these are provided when
+      the fallback is active, the request is rejected with an explicit error
+      instead of silently ignoring them.
     """
+    # Normalize and validate crawl overrides before dispatch
+    normalized_crawl_strategy: Optional[str] = None
+    if crawl_strategy is not None:
+        normalized_crawl_strategy = crawl_strategy.strip().lower()
+        allowed_strategies = {"best_first", "best-first", "bestfirst"}
+        if normalized_crawl_strategy not in allowed_strategies:
+            raise ValueError(
+                f"Invalid crawl_strategy '{crawl_strategy}'. "
+                "Valid options are: 'best_first', 'best-first', 'bestfirst'."
+            )
+
+    normalized_score_threshold: Optional[float] = None
+    if score_threshold is not None:
+        try:
+            normalized_score_threshold = float(score_threshold)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"score_threshold must be a float between 0.0 and 1.0; got {score_threshold!r}."
+            )
+        if not 0.0 <= normalized_score_threshold <= 1.0:
+            raise ValueError(
+                f"score_threshold must be between 0.0 and 1.0 inclusive; got {normalized_score_threshold}."
+            )
+
+    if normalized_crawl_strategy is not None:
+        crawl_strategy = normalized_crawl_strategy
+    if normalized_score_threshold is not None:
+        score_threshold = normalized_score_threshold
+
     # Try to use enhanced service
     try:
         service = get_web_scraping_service()
@@ -143,17 +190,45 @@ async def process_web_scraping_task(
                     raise ValueError("`url_level` must be provided when scraping method is 'URL Level'")
                 result_list = await asyncio.to_thread(scrape_by_url_level, url_input, url_level)
             elif scrape_method == "Recursive Scraping":
-                # Call your existing "recursive_scrape(...)"
-                # That returns a list of dict { url, title, content, extraction_successful, ... }
-                # Then optionally summarize if requested
-                result_list = await recursive_scrape(
-                    base_url=url_input,
-                    max_pages=max_pages,
-                    max_depth=max_depth,
-                    progress_callback=lambda x: None,  # no-op
-                    delay=1.0,
-                    custom_cookies=custom_cookies
-                )
+                # Legacy recursive scraping cannot honor advanced crawl flags that
+                # are supported only by the enhanced service. Make this explicit.
+                advanced_flags = {
+                    "custom_headers": custom_headers if custom_headers else None,
+                    "crawl_strategy": (crawl_strategy or "").strip() or None,
+                    "include_external": include_external
+                    if include_external is not None
+                    else None,
+                    "score_threshold": score_threshold
+                    if score_threshold is not None
+                    else None,
+                }
+                unsupported = [name for name, value in advanced_flags.items() if value is not None]
+                if unsupported:
+                    detail = (
+                        "Enhanced web scraping options are only available when the enhanced "
+                        "scraping service is running. The legacy fallback for 'Recursive "
+                        "Scraping' does not support the following parameters: "
+                        f"{', '.join(sorted(unsupported))}."
+                    )
+                    raise HTTPException(status_code=400, detail=detail)
+
+                # Call the existing async recursive_scrape implementation.
+                # It returns a list of dicts:
+                # { url, title, content, extraction_successful, ... }
+                recursive_kwargs: Dict[str, Any] = {
+                    "base_url": url_input,
+                    "max_pages": max_pages,
+                    "max_depth": max_depth,
+                    "progress_callback": (lambda x: None),  # no-op
+                    "delay": 1.0,
+                    "custom_cookies": custom_cookies,
+                }
+                # Only override user-agent if explicitly provided, otherwise keep
+                # the legacy default inside recursive_scrape.
+                if user_agent:
+                    recursive_kwargs["user_agent"] = user_agent
+
+                result_list = await recursive_scrape(**recursive_kwargs)
             else:
                 raise ValueError(f"Unknown scrape method: {scrape_method}")
 
