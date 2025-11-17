@@ -216,9 +216,14 @@ async def run_video_batch(
         batch_result["errors_count"] = sum(
             1 for r in final_results_list if r.get("status") == "Error"
         )
-        unique_errors = set(str(e) for e in final_errors_list if e is not None)
-        batch_result["errors"] = list(unique_errors)
-
+        deduped_errors: List[str] = []
+        for err in final_errors_list:
+            if err is None:
+                continue
+            err_str = str(err)
+            if err_str not in deduped_errors:
+                deduped_errors.append(err_str)
+        batch_result["errors"] = deduped_errors
     except Exception as exec_err:
         # Catch errors during the library execution call itself.
         logger.error(f"Error executing process_videos: {exec_err}", exc_info=True)

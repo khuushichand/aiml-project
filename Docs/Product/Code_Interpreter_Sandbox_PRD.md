@@ -74,7 +74,7 @@ Update: Egress Allowlist & DNS Pinning (v0.3)
 Not yet (planned or in progress)
 - Egress allowlist enforcement and DNS pinning (capability flag present; enforcement WIP).
 - Firecracker runner: real execution parity (scaffold implemented).
-- Firecracker backend plan: see [Firecracker Backend (MVP) — Implementation Plan](../../Firevracker-backend-PRD.md).
+- Firecracker backend plan: see [Firecracker Backend (MVP) — Implementation Plan](../../Firecracker-backend-PRD.md).
 - Additional admin aggregates for cluster mode.
 
 Clarifications

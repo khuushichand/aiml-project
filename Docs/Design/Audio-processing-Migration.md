@@ -58,7 +58,7 @@ Steps:
 
 Success criteria:
 
-- All identified tests are green prior to refactor.
+- All identified tests are green before refactor.
 - Clear understanding of:
   - How `TempDirManager`, `_save_uploaded_files`, and `file_validator_instance` are used for audio.
   - How `process_audio_files` is called (arguments, thread executor, return format).
