@@ -108,6 +108,10 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
 from tldw_Server_API.app.core.Ingestion_Media_Processing.result_normalization import (
     normalize_process_batch,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
+    persist_primary_av_item,
+    persist_doc_item_and_children,
+)
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_and_quota
@@ -1654,9 +1658,11 @@ async def get_by_identifier(
                 raise HTTPException(status_code=400, detail=str(ve))
         if not flt_list:
             raise HTTPException(status_code=400, detail="Provide at least one identifier")
-        # If DB is unavailable (e.g., in test mode without auth), delay raising until after validation
         if db is None:
-            raise HTTPException(status_code=401, detail="Not authenticated")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Media DB initialization failed",
+            )
         rows, total = db.search_by_safe_metadata(filters=flt_list, match_all=True, page=1, per_page=50, group_by_media=group_by_media)
         import json as _json
         for r in rows:
@@ -3151,239 +3157,17 @@ async def _process_batch_media(
                 logger.debug(f"Claim extraction skipped for {original_input_ref}: {claims_err}")
 
         # --- DB Interaction Logic ---
-        db_id = None
-        db_message = "DB interaction skipped (Processing failed or DB not provided)."
-
-        # Perform DB add/update ONLY if processing succeeded
-        # No need to check for db object here, we check db_path/client_id
-        if db_path and client_id and process_result.get("status") in ["Success", "Warning"]:
-            # Extract data needed for the database from the process_result dict
-            # Use transcript as content for audio/video
-            content_for_db = process_result.get('transcript', process_result.get('content'))
-            analysis_for_db = process_result.get('summary', process_result.get('analysis'))
-            metadata_for_db = process_result.get('metadata', {})
-            analysis_details_for_db = process_result.get('analysis_details', {})
-            # Use the model reported by the processor if available, else fallback to form data
-            transcription_model_used = metadata_for_db.get('model', form_data.transcription_model) # Use metadata['model'] if present
-            extracted_keywords = metadata_for_db.get('keywords', [])
-            # Ensure keywords from form_data (which is a list) are combined correctly
-            combined_keywords = set(form_data.keywords or []) # Use the list directly
-            if isinstance(extracted_keywords, list):
-                 combined_keywords.update(k.strip().lower() for k in extracted_keywords if k and k.strip())
-            final_keywords_list = sorted(list(combined_keywords))
-            title_for_db = metadata_for_db.get('title', form_data.title or (FilePath(str(original_input_ref)).stem if original_input_ref else 'Untitled')) # Use original_input_ref here
-            author_for_db = metadata_for_db.get('author', form_data.author)
-
-            if content_for_db:
-                try:
-                    logger.info(f"Attempting DB persistence for item: {input_ref}")
-                    # --- FIX 2: Use lambda for run_in_executor ---
-                    # Build a safe metadata subset for persistence
-                    safe_meta = {}
-                    try:
-                        allowed_keys = {
-                            'title','author','doi','pmid','pmcid','arxiv_id','s2_paper_id',
-                            'url','pdf_url','pmc_url','date','year','venue','journal','license','license_url',
-                            'publisher','source','creators','rights'
-                        }
-                        for k, v in (metadata_for_db or {}).items():
-                            if k in allowed_keys and isinstance(v, (str, int, float, bool)):
-                                safe_meta[k] = v
-                            elif k in allowed_keys and isinstance(v, list):
-                                safe_meta[k] = [x for x in v if isinstance(x, (str, int, float, bool))]
-                        # Extract from externalIds if present
-                        ext = (metadata_for_db or {}).get('externalIds')
-                        if isinstance(ext, dict):
-                            for kk in ('DOI','ArXiv','PMID','PMCID'):
-                                if ext.get(kk):
-                                    safe_meta[kk.lower()] = ext.get(kk)
-                    except Exception:
-                        safe_meta = {}
-                    safe_metadata_json = None
-                    try:
-                        if safe_meta:
-                            from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata as _norm_sm
-                            try:
-                                safe_meta = _norm_sm(safe_meta)
-                            except Exception:
-                                # Best-effort normalization; ignore failures here
-                                pass
-                            safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
-                    except Exception:
-                        safe_metadata_json = None
-                    # Build plaintext chunks for chunk-level FTS if chunking is requested
-                    chunks_for_sql = None
-                    try:
-                        _opts = chunk_options or {}
-                        if _opts:
-                            from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
-                            _ck = _Chunker()
-                            _flat = _ck.chunk_text_hierarchical_flat(
-                                content_for_db,
-                                method=_opts.get('method') or 'sentences',
-                                max_size=_opts.get('max_size') or 500,
-                                overlap=_opts.get('overlap') or 50,
-                            )
-                            _kind_map = {
-                                'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
-                                'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
-                            }
-                            chunks_for_sql = []
-                            for _it in _flat:
-                                _md = _it.get('metadata') or {}
-                                _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
-                                _small = {}
-                                if _md.get('ancestry_titles'):
-                                    _small['ancestry_titles'] = _md.get('ancestry_titles')
-                                if _md.get('section_path'):
-                                    _small['section_path'] = _md.get('section_path')
-                                chunks_for_sql.append({
-                                    'text': _it.get('text',''),
-                                    'start_char': _md.get('start_offset'),
-                                    'end_char': _md.get('end_offset'),
-                                    'chunk_type': _ctype,
-                                    'metadata': _small,
-                                })
-                            # If processing produced extra chunks (e.g., VLM), merge them
-                            try:
-                                extra_chunks = (process_result or {}).get('extra_chunks')
-                                if isinstance(extra_chunks, list) and extra_chunks:
-                                    for ec in extra_chunks:
-                                        if not isinstance(ec, dict) or 'text' not in ec:
-                                            continue
-                                        chunks_for_sql.append({
-                                            'text': ec.get('text', ''),
-                                            'start_char': ec.get('start_char'),
-                                            'end_char': ec.get('end_char'),
-                                            'chunk_type': ec.get('chunk_type') or 'vlm',
-                                            'metadata': ec.get('metadata') if isinstance(ec.get('metadata'), dict) else {},
-                                        })
-                            except Exception:
-                                pass
-                    except Exception:
-                        chunks_for_sql = None
-
-                    # Merge VLM extra chunks even if chunking was disabled or failed
-                    try:
-                        extra_chunks_any = (process_result or {}).get('extra_chunks')
-                        if isinstance(extra_chunks_any, list) and extra_chunks_any:
-                            if chunks_for_sql is None:
-                                chunks_for_sql = []
-                            for ec in extra_chunks_any:
-                                if not isinstance(ec, dict) or 'text' not in ec:
-                                    continue
-                                chunks_for_sql.append({
-                                    'text': ec.get('text', ''),
-                                    'start_char': ec.get('start_char'),
-                                    'end_char': ec.get('end_char'),
-                                    'chunk_type': ec.get('chunk_type') or 'vlm',
-                                    'metadata': ec.get('metadata') if isinstance(ec.get('metadata'), dict) else {},
-                                })
-                    except Exception:
-                        pass
-
-                    db_add_kwargs = dict(
-                        url=str(original_input_ref),
-                        title=title_for_db,
-                        media_type=media_type,
-                        content=content_for_db,
-                        keywords=final_keywords_list,
-                        prompt=form_data.custom_prompt,
-                        analysis_content=analysis_for_db,
-                        safe_metadata=safe_metadata_json,
-                        transcription_model=transcription_model_used,
-                        author=author_for_db,
-                        overwrite=form_data.overwrite_existing,
-                        chunk_options=chunk_options,
-                        chunks=chunks_for_sql,
-                    )
-
-                    # --- Function to run in executor ---
-                    def _db_worker():
-                        worker_db = None  # Initialize
-                        try:
-                            # --- Instantiate DB inside the worker ---
-                            worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
-                            # --- Call the INSTANCE method ---
-                            return worker_db.add_media_with_keywords(**db_add_kwargs)
-                        finally:
-                            # --- Ensure connection is closed ---
-                            if worker_db:
-                                worker_db.close_connection()
-
-                    # --------------------------------------
-
-                    media_id_result, media_uuid_result, db_message_result = await loop.run_in_executor(
-                        None, _db_worker  # Pass the worker function
-                    )
-
-                    db_id = media_id_result
-                    media_uuid = media_uuid_result
-                    db_message = db_message_result # Use message from DB method
-
-                    process_result["db_id"] = db_id
-                    process_result["db_message"] = db_message
-                    process_result["media_uuid"] = media_uuid # Add UUID to result if useful
-
-                    logger.info(f"DB persistence result for {original_input_ref}: ID={db_id}, UUID={media_uuid}, Msg='{db_message}'") # Log original ref
-
-                    await _persist_claims_if_applicable(
-                        claims_context,
-                        process_result.get("db_id"),
-                        db_path,
-                        client_id,
-                        loop,
-                        process_result,
-                    )
-
-                except (DatabaseError, InputError, ConflictError) as db_err:  # Catch specific DB errors
-                    logging.error(f"Database operation failed for {original_input_ref}: {db_err}", exc_info=True) # Log original ref
-                    process_result['status'] = 'Warning'  # Downgrade to Warning if DB fails after successful processing
-                    process_result['error'] = (process_result.get('error') or "") + f" | DB Error: {db_err}"
-                    process_result.setdefault("warnings", []).append(f"Database operation failed: {db_err}")
-                    process_result["db_message"] = f"DB Error: {db_err}"
-                    process_result["db_id"] = None  # Ensure db_id is None on error
-                    process_result["media_uuid"] = None
-                    await _persist_claims_if_applicable(
-                        claims_context,
-                        None,
-                        db_path,
-                        client_id,
-                        loop,
-                        process_result,
-                    )
-
-                except Exception as e:
-                    logging.error(f"Unexpected error during DB persistence for {original_input_ref}: {e}", exc_info=True) # Log original ref
-                    process_result['status'] = 'Warning'  # Downgrade to Warning
-                    process_result['error'] = (process_result.get(
-                        'error') or "") + f" | Persistence Error: {type(e).__name__}"
-                    process_result.setdefault("warnings", []).append(f"Unexpected persistence error: {e}")
-                    process_result["db_message"] = f"Persistence Error: {type(e).__name__}"
-                    process_result["db_id"] = None  # Ensure db_id is None on error
-                    process_result["media_uuid"] = None
-                    await _persist_claims_if_applicable(
-                        claims_context,
-                        None,
-                        db_path,
-                        client_id,
-                        loop,
-                        process_result,
-                    )
-
-            else:
-                logging.warning(f"Skipping DB persistence for {original_input_ref} due to missing content.") # Log original ref
-                process_result["db_message"] = "DB persistence skipped (no content)."
-                process_result["db_id"] = None  # Ensure db_id is None
-                process_result["media_uuid"] = None
-                await _persist_claims_if_applicable(
-                    claims_context,
-                    None,
-                    db_path,
-                    client_id,
-                    loop,
-                    process_result,
-                )
+        await persist_primary_av_item(
+            process_result=process_result,
+            form_data=form_data,
+            media_type=media_type,
+            original_input_ref=str(original_input_ref) if original_input_ref else "",
+            chunk_options=chunk_options,
+            db_path=db_path,
+            client_id=client_id,
+            loop=loop,
+            claims_context=claims_context,
+        )
 
         # Add the (potentially updated) result to the final list
         final_batch_results.append(process_result)
@@ -3785,408 +3569,17 @@ async def _process_document_like_item(
     # Only attempt if processing status is Success or Warning
     if final_result.get("status") in ["Success", "Warning"]:
         claims_context = await _extract_claims_if_requested(final_result, form_data, loop)
-        content_for_db = final_result.get('content', '')
-        analysis_for_db = final_result.get('summary') or final_result.get('analysis')
-        metadata_for_db = final_result.get('metadata', {})
-        # Use parsed keywords list from form_data, combined with any extracted
-        extracted_keywords = final_result.get('keywords', [])
-        combined_keywords = set(form_data.keywords or []) # Use list from form
-        if isinstance(extracted_keywords, list):
-            combined_keywords.update(k.strip().lower() for k in extracted_keywords if k and k.strip())
-        # If we processed an email archive, propagate child keywords (e.g., archive tag) to the parent
-        try:
-            if media_type == 'email':
-                children = final_result.get('children')
-                if isinstance(children, list):
-                    for _child in children:
-                        if isinstance(_child, dict):
-                            _kws = _child.get('keywords') or []
-                            for _kw in _kws:
-                                if isinstance(_kw, str) and _kw.strip():
-                                    combined_keywords.add(_kw.strip())
-        except Exception:
-            pass
-        # For email with attachment ingestion enabled, add a shared group tag for UI grouping
-        try:
-            if media_type == 'email' and getattr(form_data, 'ingest_attachments', False):
-                parent_msg_id = None
-                try:
-                    parent_msg_id = ((metadata_for_db or {}).get('email') or {}).get('message_id')
-                except Exception:
-                    parent_msg_id = None
-                if parent_msg_id:
-                    combined_keywords.add(f"email_group:{str(parent_msg_id)}")
-            # For email containers, add a grouping tag to keywords
-            if media_type == 'email' and (getattr(form_data, 'accept_archives', False) or getattr(form_data, 'accept_mbox', False) or getattr(form_data, 'accept_pst', False)):
-                try:
-                    arch_name = (processing_filename or item_input_ref)
-                    if arch_name:
-                        lower = str(arch_name).lower()
-                        if lower.endswith('.zip'):
-                            arch_tag = f"email_archive:{FilePath(arch_name).stem}"
-                            combined_keywords.add(arch_tag)
-                        elif lower.endswith('.mbox'):
-                            mbox_tag = f"email_mbox:{FilePath(arch_name).stem}"
-                            combined_keywords.add(mbox_tag)
-                        elif lower.endswith('.pst') or lower.endswith('.ost'):
-                            pst_tag = f"email_pst:{FilePath(arch_name).stem}"
-                            combined_keywords.add(pst_tag)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        final_keywords_list = sorted(list(combined_keywords))
-        # Reflect final keywords in the response object for client visibility
-        try:
-            final_result["keywords"] = final_keywords_list
-            logging.info(f"Archive parent keywords set for {item_input_ref}: {final_keywords_list}")
-        except Exception as _kw_err:
-            logging.warning(f"Failed to set parent keywords for {item_input_ref}: {_kw_err}")
-
-        model_used = metadata_for_db.get('parser_used', 'Imported') # Check metadata first
-        if not model_used and media_type == 'pdf': model_used = final_result.get('analysis_details', {}).get('parser', 'Imported')
-        # Prefer explicit user-provided title; fall back to extracted metadata; then filename stem
-        title_for_db = form_data.title or metadata_for_db.get('title', (FilePath(item_input_ref).stem if item_input_ref else 'Untitled'))
-        author_for_db = metadata_for_db.get('author', form_data.author or 'Unknown')
-
-
-        if content_for_db:
-            try:
-                logger.info(f"Attempting DB persistence for item: {item_input_ref} using user DB")
-                # Build a safe metadata subset for persistence
-                safe_meta = {}
-                try:
-                    allowed_keys = {
-                        'title','author','doi','pmid','pmcid','arxiv_id','s2_paper_id',
-                        'url','pdf_url','pmc_url','date','year','venue','journal','license','license_url',
-                        'publisher','source','creators','rights'
-                    }
-                    for k, v in (metadata_for_db or {}).items():
-                        if k in allowed_keys and isinstance(v, (str, int, float, bool)):
-                            safe_meta[k] = v
-                        elif k in allowed_keys and isinstance(v, list):
-                            safe_meta[k] = [x for x in v if isinstance(x, (str, int, float, bool))]
-                    ext = (metadata_for_db or {}).get('externalIds')
-                    if isinstance(ext, dict):
-                        for kk in ('DOI','ArXiv','PMID','PMCID'):
-                            if ext.get(kk):
-                                safe_meta[kk.lower()] = ext.get(kk)
-                except Exception:
-                    safe_meta = {}
-                safe_metadata_json = None
-                try:
-                    if safe_meta:
-                        from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
-                        try:
-                            safe_meta = normalize_safe_metadata(safe_meta)
-                        except Exception:
-                            pass
-                        safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
-                except Exception:
-                    safe_metadata_json = None
-                # Build plaintext chunks for chunk-level FTS if chunking is requested
-                chunks_for_sql = None
-                try:
-                    _opts = chunk_options or {}
-                    if _opts:
-                        from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
-                        _ck = _Chunker()
-                        _flat = _ck.chunk_text_hierarchical_flat(
-                            content_for_db,
-                            method=_opts.get('method') or 'sentences',
-                            max_size=_opts.get('max_size') or 500,
-                            overlap=_opts.get('overlap') or 50,
-                        )
-                        _kind_map = {
-                            'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
-                            'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
-                        }
-                        chunks_for_sql = []
-                        for _it in _flat:
-                            _md = _it.get('metadata') or {}
-                            _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
-                            _small = {}
-                            if _md.get('ancestry_titles'):
-                                _small['ancestry_titles'] = _md.get('ancestry_titles')
-                            if _md.get('section_path'):
-                                _small['section_path'] = _md.get('section_path')
-                            chunks_for_sql.append({
-                                'text': _it.get('text',''),
-                                'start_char': _md.get('start_offset'),
-                                'end_char': _md.get('end_offset'),
-                                'chunk_type': _ctype,
-                                'metadata': _small,
-                            })
-                except Exception:
-                    chunks_for_sql = None
-
-                db_add_kwargs = dict(
-                    url=item_input_ref, title=title_for_db, media_type=media_type,
-                    content=content_for_db, keywords=final_keywords_list,
-                    prompt=form_data.custom_prompt, analysis_content=analysis_for_db, safe_metadata=safe_metadata_json,
-                    transcription_model=model_used, author=author_for_db,
-                    overwrite=form_data.overwrite_existing, chunk_options=chunk_options,
-                    chunks=chunks_for_sql,
-                )
-
-                # --- Function to run in executor ---
-                def _db_worker():
-                    worker_db = None
-                    try:
-                        # --- Instantiate DB inside the worker ---
-                        worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
-                        # --- Call the INSTANCE method ---
-                        return worker_db.add_media_with_keywords(**db_add_kwargs)
-                    finally:
-                        if worker_db:
-                            worker_db.close_connection()
-                # --------------------------------------
-
-                media_id_result, media_uuid_result, db_message_result = await loop.run_in_executor(
-                    None, _db_worker # Pass the worker function
-                )
-
-                final_result["db_id"] = media_id_result
-                final_result["db_message"] = db_message_result
-                final_result["media_uuid"] = media_uuid_result # Add UUID
-                logger.info(f"DB persistence result for {item_input_ref}: ID={media_id_result}, UUID={media_uuid_result}, Msg='{db_message_result}'")
-
-                # --- Persist child emails (if any and requested) ---
-                try:
-                    if media_type == 'email' and getattr(form_data, 'ingest_attachments', False):
-                        children = final_result.get('children') or []
-                        if isinstance(children, list) and children:
-                            # If any child is not a Success (e.g., guardrail), do not persist any children
-                            if any((isinstance(c, dict) and c.get('status') != 'Success') for c in children):
-                                final_result['child_db_results'] = None
-                            else:
-                                child_db_results = []
-                                for child in children:
-                                    try:
-                                        c_content = child.get('content')
-                                        c_meta = child.get('metadata') or {}
-                                        if not c_content:
-                                            continue
-                                        # Safe metadata subset for child
-                                        allowed_keys = {
-                                            'title','author','doi','pmid','pmcid','arxiv_id','s2_paper_id',
-                                            'url','pdf_url','pmc_url','date','year','venue','journal','license','license_url',
-                                            'publisher','source','creators','rights','parent_media_uuid'
-                                        }
-                                        safe_c_meta = {k: v for k, v in c_meta.items() if k in allowed_keys and isinstance(v, (str, int, float, bool, list))}
-                                        safe_c_meta['parent_media_uuid'] = media_uuid_result
-                                        try:
-                                            from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
-                                            safe_c_meta = normalize_safe_metadata(safe_c_meta)
-                                            safe_c_meta_json = json.dumps(safe_c_meta, ensure_ascii=False)
-                                        except Exception:
-                                            safe_c_meta_json = None
-
-                                        # Child chunking (optional)
-                                        c_chunks_for_sql = None
-                                        try:
-                                            _opts = chunk_options or {}
-                                            if _opts:
-                                                from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
-                                                _ck = _Chunker()
-                                                _flat = _ck.chunk_text_hierarchical_flat(
-                                                    c_content,
-                                                    method=_opts.get('method') or 'sentences',
-                                                    max_size=_opts.get('max_size') or 500,
-                                                    overlap=_opts.get('overlap') or 50,
-                                                )
-                                                _kind_map = {
-                                                    'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
-                                                    'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
-                                                }
-                                                c_chunks_for_sql = []
-                                                for _it in _flat:
-                                                    _md = _it.get('metadata') or {}
-                                                    _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
-                                                    _small = {}
-                                                    if _md.get('ancestry_titles'):
-                                                        _small['ancestry_titles'] = _md.get('ancestry_titles')
-                                                    if _md.get('section_path'):
-                                                        _small['section_path'] = _md.get('section_path')
-                                                    c_chunks_for_sql.append({
-                                                        'text': _it.get('text',''),
-                                                        'start_char': _md.get('start_offset'),
-                                                        'end_char': _md.get('end_offset'),
-                                                        'chunk_type': _ctype,
-                                                        'metadata': _small,
-                                                    })
-                                        except Exception:
-                                            c_chunks_for_sql = None
-
-                                        c_title = form_data.title or c_meta.get('title') or (FilePath(item_input_ref).stem + ' (child)')
-                                        c_author = c_meta.get('author') or form_data.author or 'Unknown'
-                                        c_url = f"{item_input_ref}::child::{c_meta.get('filename') or c_title}"
-
-                                        def _db_child_worker():
-                                            worker_db = None
-                                            try:
-                                                worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
-                                                return worker_db.add_media_with_keywords(
-                                                    url=c_url, title=c_title, media_type=media_type,
-                                                    content=c_content, keywords=final_keywords_list,
-                                                    prompt=form_data.custom_prompt, analysis_content=None,
-                                                    safe_metadata=safe_c_meta_json, transcription_model=model_used,
-                                                    author=c_author, overwrite=form_data.overwrite_existing,
-                                                    chunk_options=chunk_options, chunks=c_chunks_for_sql,
-                                                )
-                                            finally:
-                                                if worker_db:
-                                                    worker_db.close_connection()
-
-                                        c_id, c_uuid, c_msg = await loop.run_in_executor(None, _db_child_worker)
-                                        child_db_results.append({"db_id": c_id, "media_uuid": c_uuid, "message": c_msg, "title": c_title})
-                                    except Exception as child_db_err:
-                                        logging.warning(f"Child email persistence failed: {child_db_err}")
-                                if child_db_results:
-                                    final_result['child_db_results'] = child_db_results
-                except Exception:
-                    pass
-
-
-            except (DatabaseError, InputError, ConflictError) as db_err:
-                 logger.error(f"Database operation failed for {item_input_ref}: {db_err}", exc_info=True)
-                 final_result['status'] = 'Warning' # Keep Warning status
-                 final_result['error'] = (final_result.get('error') or "") + f" | DB Error: {db_err}"
-                 # Ensure warnings list exists before appending
-                 if not isinstance(final_result.get("warnings"), list):
-                     final_result["warnings"] = []
-                 final_result["warnings"].append(f"Database operation failed: {db_err}")
-                 final_result["db_message"] = f"DB Error: {db_err}"
-                 final_result["db_id"] = None # Ensure None on error
-                 final_result["media_uuid"] = None
-            except Exception as e:
-                 logger.error(f"Unexpected error during DB persistence for {item_input_ref}: {e}", exc_info=True)
-                 final_result['status'] = 'Warning' # Keep Warning status
-                 final_result['error'] = (final_result.get('error') or "") + f" | Persistence Error: {type(e).__name__}"
-                 # Ensure warnings list exists before appending
-                 if not isinstance(final_result.get("warnings"), list):
-                     final_result["warnings"] = []
-                 final_result["warnings"].append(f"Unexpected persistence error: {e}")
-                 final_result["db_message"] = f"Persistence Error: {type(e).__name__}"
-                 final_result["db_id"] = None # Ensure None on error
-                 final_result["media_uuid"] = None
-        else:
-             # No parent content: if this is an email container (zip/mbox/pst) with children, persist children directly
-             persisted_any_children = False
-             if media_type == 'email' and (getattr(form_data, 'accept_archives', False) or getattr(form_data, 'accept_mbox', False) or getattr(form_data, 'accept_pst', False)):
-                 try:
-                     children = final_result.get('children') or []
-                     if isinstance(children, list) and children:
-                         # If any child failed (e.g., guardrail error), skip child persistence entirely
-                         if any((isinstance(c, dict) and c.get('status') != 'Success') for c in children):
-                             final_result['child_db_results'] = None
-                             persisted_any_children = False
-                         else:
-                             child_db_results = []
-                         for child in children:
-                             try:
-                                 c_content = child.get('content')
-                                 c_meta = child.get('metadata') or {}
-                                 if not c_content:
-                                     continue
-                                 # Safe metadata for child
-                                 allowed_keys = {
-                                     'title','author','doi','pmid','pmcid','arxiv_id','s2_paper_id',
-                                     'url','pdf_url','pmc_url','date','year','venue','journal','license','license_url',
-                                     'publisher','source','creators','rights'
-                                 }
-                                 safe_c_meta = {k: v for k, v in c_meta.items() if k in allowed_keys and isinstance(v, (str, int, float, bool, list))}
-                                 safe_c_meta_json = None
-                                 try:
-                                     from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
-                                     safe_c_meta = normalize_safe_metadata(safe_c_meta)
-                                     safe_c_meta_json = json.dumps(safe_c_meta, ensure_ascii=False)
-                                 except Exception:
-                                     pass
-                                 # Chunking for child
-                                 c_chunks_for_sql = None
-                                 try:
-                                     _opts = chunk_options or {}
-                                     if _opts:
-                                         from tldw_Server_API.app.core.Chunking.chunker import Chunker as _Chunker
-                                         _ck = _Chunker()
-                                         _flat = _ck.chunk_text_hierarchical_flat(
-                                             c_content,
-                                             method=_opts.get('method') or 'sentences',
-                                             max_size=_opts.get('max_size') or 500,
-                                             overlap=_opts.get('overlap') or 50,
-                                         )
-                                         _kind_map = {
-                                             'paragraph': 'text', 'list_unordered': 'list', 'list_ordered': 'list',
-                                             'code_fence': 'code', 'table_md': 'table', 'header_line': 'heading', 'header_atx': 'heading'
-                                         }
-                                         c_chunks_for_sql = []
-                                         for _it in _flat:
-                                             _md = _it.get('metadata') or {}
-                                             _ctype = _kind_map.get(str(_md.get('paragraph_kind') or '').lower(), 'text')
-                                             _small = {}
-                                             if _md.get('ancestry_titles'):
-                                                 _small['ancestry_titles'] = _md.get('ancestry_titles')
-                                             if _md.get('section_path'):
-                                                 _small['section_path'] = _md.get('section_path')
-                                             c_chunks_for_sql.append({
-                                                 'text': _it.get('text',''),
-                                                 'start_char': _md.get('start_offset'),
-                                                 'end_char': _md.get('end_offset'),
-                                                 'chunk_type': _ctype,
-                                                 'metadata': _small,
-                                             })
-                                 except Exception:
-                                     c_chunks_for_sql = None
-
-                                 c_title = form_data.title or c_meta.get('title') or (FilePath(item_input_ref).stem + ' (archive child)')
-                                 c_author = c_meta.get('author') or form_data.author or 'Unknown'
-                                 c_url = f"{item_input_ref}::archive::{c_meta.get('filename') or c_title}"
-
-                                 def _db_child_arch_worker():
-                                     worker_db = None
-                                     try:
-                                         worker_db = MediaDatabase(db_path=db_path, client_id=client_id)
-                                         return worker_db.add_media_with_keywords(
-                                             url=c_url, title=c_title, media_type=media_type,
-                                             content=c_content, keywords=final_keywords_list,
-                                             prompt=form_data.custom_prompt, analysis_content=None,
-                                             safe_metadata=safe_c_meta_json, transcription_model=model_used,
-                                             author=c_author, overwrite=form_data.overwrite_existing,
-                                             chunk_options=chunk_options, chunks=c_chunks_for_sql,
-                                         )
-                                     finally:
-                                         if worker_db:
-                                             worker_db.close_connection()
-
-                                 c_id, c_uuid, c_msg = await loop.run_in_executor(None, _db_child_arch_worker)
-                                 child_db_results.append({"db_id": c_id, "media_uuid": c_uuid, "message": c_msg, "title": c_title})
-                                 persisted_any_children = True
-                             except Exception as child_db_err:
-                                 logging.warning(f"Archive child email persistence failed: {child_db_err}")
-                         try:
-                             if child_db_results:
-                                 final_result['child_db_results'] = child_db_results
-                         except Exception:
-                             pass
-                 except Exception:
-                     pass
-
-             if not persisted_any_children:
-                 logger.warning(f"Skipping DB persistence for {item_input_ref} due to missing content.")
-                 final_result["db_message"] = "DB persistence skipped (no content)."
-                 final_result["db_id"] = None # Ensure None
-                 final_result["media_uuid"] = None
-             else:
-                 final_result["db_message"] = "Persisted archive children."
-
-        await _persist_claims_if_applicable(
-            claims_context,
-            final_result.get("db_id"),
-            db_path,
-            client_id,
-            loop,
-            final_result,
+        await persist_doc_item_and_children(
+            final_result=final_result,
+            form_data=form_data,
+            media_type=media_type,
+            item_input_ref=item_input_ref,
+            processing_filename=processing_filename,
+            chunk_options=chunk_options,
+            db_path=db_path,
+            client_id=client_id,
+            loop=loop,
+            claims_context=claims_context,
         )
     else:
         # If processing failed, set DB message accordingly
@@ -4231,7 +3624,7 @@ def _determine_final_status(results: List[Dict[str, Any]]) -> int:
         return status.HTTP_207_MULTI_STATUS
 
 
-async def add_media(
+async def _add_media_impl(
     background_tasks: BackgroundTasks,
     # # --- Required Fields ---
     # #media_type: MediaType = Form(..., description="Type of media (e.g., 'audio', 'video', 'pdf')"),
@@ -4668,6 +4061,21 @@ async def add_media(
 #
 # End of General media ingestion and analysis
 ####################################################################################
+
+
+async def add_media(*args: Any, **kwargs: Any) -> Any:
+    """
+    Compatibility shim that routes to the modular `/media/add` path.
+
+    This preserves the historical `add_media` entry point while ensuring
+    that any lingering direct imports go through the `media/add.py`
+    endpoint and core persistence helpers.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (  # type: ignore
+        add_media_persist,
+    )
+
+    return await add_media_persist(*args, **kwargs)
 
 
 ######################## Video Processing Endpoint ###################################

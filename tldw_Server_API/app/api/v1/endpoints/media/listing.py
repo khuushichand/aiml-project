@@ -405,8 +405,8 @@ async def get_by_identifier(
             )
         if db is None:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Not authenticated",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Media DB initialization failed",
             )
 
         rows, total = db.search_by_safe_metadata(

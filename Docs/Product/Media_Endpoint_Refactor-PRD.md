@@ -320,22 +320,20 @@ This table serves as a migration checklist to ensure the compatibility shim cont
       - Preserving existing batch response structure and HTTP status code semantics for partial success.
   - Tests (reference for implementers):
     - Reuse and adapt existing process‑endpoint tests under `tldw_Server_API/tests/Media` and MediaWiki/web-scraping suites, and add focused unit tests for input sourcing, normalization, and error mapping in the new core modules as they are extended.
-- Stage 4: Persistence Path (`/add`) **(Status: In Progress – `/add` routed through `media/` as thin wrapper)**
+- Stage 4: Persistence Path (`/add`) **(Status: Complete – `/add` served via `media/add.py` + core persistence helpers)**
   - Current state:
-    - `/api/v1/media/add` is now routed via `tldw_Server_API/app/api/v1/endpoints/media/add.py`, which defines a thin `add_media` endpoint delegating to the legacy `_legacy_media.add_media` implementation. This keeps the HTTP contract, RBAC, rate limiting, and side effects identical while allowing router wiring to live under the modular `media/` package.
-    - The legacy `_legacy_media.add_media` function no longer has a `@router.post("/add", ...)` decorator and is used as the core implementation behind the modular endpoint; direct imports of `_legacy_media.add_media` continue to work.
-    - The router shim in `media/__init__.py` prepends `add.router.routes` ahead of `_legacy_media.router.routes` so that `/media/add` traffic consistently flows through the modular package.
-    - Multiple integration suites exercise this behavior (e.g., `tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_add_endpoint*.py`, `tests/AuthNZ/integration/test_media_permission_enforcement.py`, and contextual ingestion tests under `tests/Media_Ingestion_Modification/`), and the `/media/add` tests remain green after routing through `media/add.py`.
-  - Target design:
-    - Add `persistence.py` under `tldw_Server_API/app/core/Ingestion_Media_Processing/` to encapsulate transactional DB writes, keyword tagging, identifier index maintenance, and claims storage, using `MediaDatabase` and existing DB helpers.
-    - Extract `/add` into `tldw_Server_API/app/api/v1/endpoints/media/add.py`; handlers should:
-      - Delegate processing to the Stage 3 orchestrator.
-      - Delegate all DB mutations to `persistence.py`.
-      - Preserve quotas, metrics, usage events, and claims feature flags as wired today in `_legacy_media.add_media`.
+    - `/api/v1/media/add` is routed via `tldw_Server_API/app/api/v1/endpoints/media/add.py`, which defines the `add_media` endpoint and delegates into `tldw_Server_API.app.core.Ingestion_Media_Processing.persistence.add_media_persist`.
+    - `tldw_Server_API/app/core/Ingestion_Media_Processing/persistence.py` now owns the `/add` orchestration and persistence entry points:
+      - `add_media_orchestrate(...)` is the central orchestration helper (currently still reusing `_legacy_media._add_media_impl` for request parsing + processing while larger extraction continues).
+      - `persist_primary_av_item(...)` handles audio/video DB writes and claims persistence for `/add` A/V items.
+      - `persist_doc_item_and_children(...)` handles document/email DB writes, including attachment children and archive-only email containers, and calls `_persist_claims_if_applicable(...)` with the correct `media_id` and error-handling semantics.
+    - The legacy `_legacy_media.add_media` function no longer has a `@router.post("/add", ...)` decorator and has been reduced to a thin compatibility shim that simply forwards to `add_media_persist(...)`; its original body now lives in `_add_media_impl(...)` and the shared helpers above. Direct imports of `_legacy_media.add_media` continue to work but now route through the modular path.
+    - The router shim in `media/__init__.py` prepends `add.router.routes` ahead of `_legacy_media.router.routes` so that all `/media/add` HTTP traffic flows through the modular `media/` package and persistence helpers.
+    - `/media/add` integration tests (e.g., `tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_add_endpoint*.py`, `tests/AuthNZ/integration/test_media_permission_enforcement.py`, and contextual ingestion tests under `tests/Media_Ingestion_Modification/`) are green after the persistence refactor, confirming status codes, envelopes, and DB/claims behavior remain unchanged.
   - Tests:
-    - Keep all existing `/add` integration tests green while gradually switching to the new modules, and add targeted tests for quota enforcement, error mapping, and cache invalidation (list/detail/search) after create/update/rollback.
-    - Add regression tests ensuring no `db_instance must be a Database object` errors surface for media write endpoints (e.g., `PATCH /api/v1/media/{media_id}/metadata`, `PUT /api/v1/media/{media_id}/versions/{version}/metadata`, `POST /api/v1/media/{media_id}/versions/advanced`, and `/api/v1/media/add`), including under minimal test app profiles.
-    - Add tests that explicitly assert expected success codes (200/201) for version creation/update and `/add` flows when using `client_with_single_user` and related fixtures, to guard against unintended 401s caused by auth/DB wiring changes.
+    - Keep all existing `/add` integration tests green as future refactors move more orchestration into `persistence.py`, and add targeted tests for quota enforcement, error mapping, and cache invalidation (list/detail/search) after create/update/rollback.
+    - Maintain regression tests ensuring no `db_instance must be a Database object` errors surface for media write endpoints (e.g., `PATCH /api/v1/media/{media_id}/metadata`, `PUT /api/v1/media/{media_id}/versions/{version}/metadata`, `POST /api/v1/media/{media_id}/versions/advanced`, and `/api/v1/media/add`), including under minimal test app profiles.
+    - Keep tests that explicitly assert expected success codes (200/201) for version creation/update and `/add` flows when using `client_with_single_user` and related fixtures, to guard against unintended 401s caused by auth/DB wiring changes.
 - Stage 5: Web Scraping
   - Move `/process-web-scraping` handler to `web_scrape.py`; ensure it delegates to `services/web_scraping_service`.
   - Move `/ingest-web-content` handler to `web_scrape.py`; share request normalization and orchestration with the process-only handler while preserving DB persistence behavior.
