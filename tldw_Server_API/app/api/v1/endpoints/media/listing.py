@@ -328,6 +328,8 @@ async def _validate_identifier_query(
         raw["pmcid"] = pmcid
     if arxiv_id is not None:
         raw["arxiv_id"] = arxiv_id
+    if s2_paper_id is not None:
+        raw["s2_paper_id"] = s2_paper_id
 
     try:
         if raw:
