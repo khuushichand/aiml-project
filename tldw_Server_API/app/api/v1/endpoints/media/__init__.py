@@ -35,6 +35,7 @@ except Exception as _legacy_import_err:  # noqa: BLE001
 # while allowing gradual extraction into submodules.
 from . import (
     add,
+    debug,
     ingest_web_content,
     item,
     listing,
@@ -62,6 +63,7 @@ if legacy_router.routes:
         item.router,
         versions.router,
         add.router,
+        debug.router,
         ingest_web_content.router,
         process_code.router,
         process_documents.router,
@@ -87,6 +89,7 @@ else:
         item.router,
         versions.router,
         add.router,
+        debug.router,
         ingest_web_content.router,
         process_code.router,
         process_documents.router,

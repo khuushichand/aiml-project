@@ -136,6 +136,12 @@ class TTSServiceV2:
             max_concurrent = 4
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._stream_errors_as_audio = stream_errors_as_audio
+        if self._stream_errors_as_audio:
+            logger.warning(
+                "TTSServiceV2 initialized with stream_errors_as_audio=True. "
+                "Errors will be embedded as audio bytes; this mode is not "
+                "recommended for production deployments."
+            )
         self._active_request_counts: Dict[str, int] = {}
         self._active_requests_lock = asyncio.Lock()
 

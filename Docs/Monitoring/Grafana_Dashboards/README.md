@@ -4,6 +4,10 @@ Overview
 - This folder contains an example Grafana dashboard JSON for visualizing the LLM Gateway metrics exposed at `/metrics`.
 - The dashboard targets the internal Prometheus-style metrics emitted by `tldw_Server_API.app.core.Metrics.metrics_manager` and the HTTP middleware.
 
+Dashboards
+- `llm_gateway_dashboard.json`: LLM gateway and HTTP endpoint metrics (e.g., `/api/v1/chat/completions`).
+- `tts_audio_dashboard.json`: TTS service and `/api/v1/audio/speech` metrics (provider success/failure, latency, audio size, active requests, HTTP error rate).
+
 Prometheus Scrape (example)
 Add a scrape job pointing to your server (adjust host/port):
 
@@ -15,7 +19,7 @@ Add a scrape job pointing to your server (adjust host/port):
 
 Importing the Dashboard
 1) In Grafana: Dashboards -> New -> Import.
-2) Upload `llm_gateway_dashboard.json`.
+2) Upload `llm_gateway_dashboard.json` or `tts_audio_dashboard.json`.
 3) Set the Prometheus datasource when prompted.
 
 Variables
@@ -24,6 +28,11 @@ Variables
 - method: HTTP method label (defaults to `POST`).
 - provider: LLM provider label (e.g., `openai`).
 - model: LLM model label (e.g., `gpt-4o-mini`).
+
+For the TTS dashboard, additional variables include:
+- endpoint: HTTP endpoint label (defaults to `/api/v1/audio/speech`).
+- provider: TTS provider label (e.g., `openai`, `kokoro`).
+- format: TTS response format label (e.g., `mp3`, `wav`, `opus`).
 
 Notes
 - If you run the server in mock mode for benchmarking (`CHAT_FORCE_MOCK=1`), the upstream LLM panels still work since metrics are recorded by the gateway (decorators and usage tracker).

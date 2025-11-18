@@ -5678,41 +5678,31 @@ async def process_web_scraping_endpoint(
 
 
 ######################## Debugging and Diagnostics ###################################
-# Endpoints:
-#     GET /api/v1/media/debug/schema
-# Debugging and Diagnostics
-@router.get("/debug/schema",)
+# Backwards-compatible helper; the HTTP route lives in `media/debug.py`.
 async def debug_schema(
-        # 1. Auth + UserID Determined through `get_db_by_user`
-        # token: str = Header(None), # Use Header(None) for optional
-        # 2. DB Dependency
-        db: MediaDatabase = Depends(get_media_db_for_user),
-    ):
-    """Diagnostic endpoint to check database schema."""
+    db: MediaDatabase = Depends(get_media_db_for_user),
+):
+    """Diagnostic helper retained for compatibility with legacy imports."""
     try:
         schema_info = {}
 
         with db.get_connection() as conn:
             cursor = conn.cursor()
 
-            # Get list of tables
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
             schema_info["tables"] = [table[0] for table in cursor.fetchall()]
 
-            # Get Media table columns
             cursor.execute("PRAGMA table_info(Media)")
             schema_info["media_columns"] = [col[1] for col in cursor.fetchall()]
 
-            # Get MediaModifications table columns
             cursor.execute("PRAGMA table_info(MediaModifications)")
             schema_info["media_mods_columns"] = [col[1] for col in cursor.fetchall()]
 
-            # Count media rows
             cursor.execute("SELECT COUNT(*) FROM Media")
             schema_info["media_count"] = cursor.fetchone()[0]
 
         return schema_info
-    except Exception as e:
+    except Exception as e:  # pragma: no cover - legacy-only path
         logging.error({"error": str(e)})
         return {"error": "An internal error has occurred."}
 
@@ -6283,6 +6273,47 @@ async def _download_url_async(
             except OSError as e:
                 logger.debug(f"Failed to remove temporary file {target_path}: {e}")
         raise RuntimeError(f"Failed to download or save {url}: {e}") from e  # Use RuntimeError for unexpected
+
+
+async def _process_batch_media_shim(
+    media_type: MediaType,
+    urls: List[str],
+    uploaded_file_paths: List[str],
+    source_to_ref_map: Dict[str, Union[str, Tuple[str, str]]],
+    form_data: AddMediaForm,
+    chunk_options: Optional[Dict],
+    loop: asyncio.AbstractEventLoop,
+    db_path: str,
+    client_id: str,
+    temp_dir: FilePath,
+) -> List[Dict[str, Any]]:
+    """
+    Backwards-compatible shim for audio/video batch processing.
+
+    Delegates to the core ``process_batch_media`` helper so that the
+    implementation lives under ``core.Ingestion_Media_Processing`` while
+    preserving the original name and signature for any existing callers.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
+        process_batch_media,
+    )
+
+    return await process_batch_media(
+        media_type=media_type,
+        urls=urls,
+        uploaded_file_paths=uploaded_file_paths,
+        source_to_ref_map=source_to_ref_map,
+        form_data=form_data,
+        chunk_options=chunk_options,
+        loop=loop,
+        db_path=db_path,
+        client_id=client_id,
+        temp_dir=temp_dir,
+    )
+
+
+# Rebind legacy helper names to shims so core implementations are used.
+_process_batch_media = _process_batch_media_shim  # type: ignore[assignment]
 
 
 #

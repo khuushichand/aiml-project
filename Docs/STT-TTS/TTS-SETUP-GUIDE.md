@@ -443,6 +443,23 @@ ffmpeg -i input.mp3 -ar 22050 -ac 1 output.wav
 ffmpeg -i input.wav -ss 0 -t 10 -ar 24000 output_10s.wav
 ```
 
+### Error Semantics and Client Responsibilities
+
+The `/api/v1/audio/speech` endpoint returns **structured HTTP errors by default**:
+
+- Validation errors → HTTP 400 with a JSON `{"detail": "..."}`
+- Model/provider configuration issues → HTTP 4xx/5xx with JSON `{"detail": "..."}`
+- Provider/auth failures (e.g., invalid API key) → HTTP 5xx with JSON error detail
+
+Clients **must not** assume a 200 response or treat all responses as audio bytes:
+
+- Always check the HTTP status code (e.g., `response.raise_for_status()` in Python).
+- Only treat the body as audio when the status is 200.
+- On non-200 responses, parse the JSON body and surface the `detail` field to users/logging.
+
+An opt-in legacy mode exists (`performance.stream_errors_as_audio: true` or `TTS_STREAM_ERRORS_AS_AUDIO=1`)
+that embeds `ERROR: ...` bytes in the stream, but this mode is not recommended for production APIs.
+
 3. **Validate Audio Quality**:
 ```python
 import librosa
@@ -488,7 +505,10 @@ response = requests.post(
     }
 )
 
-# Save the generated audio
+# Check for HTTP errors before treating the body as audio
+response.raise_for_status()
+
+# Save the generated audio on success
 with open("cloned_output.mp3", "wb") as f:
     f.write(response.content)
 ```
@@ -511,6 +531,7 @@ response = requests.post(
         }
     }
 )
+response.raise_for_status()
 
 # VibeVoice with vibe control
 response = requests.post(
@@ -527,6 +548,7 @@ response = requests.post(
         }
     }
 )
+response.raise_for_status()
 ```
 
 ### Voice Cloning via cURL
@@ -552,6 +574,10 @@ curl -X POST http://localhost:8000/api/v1/audio/speech \
   -H "Authorization: Bearer your-token" \
   -d @request.json \
   --output cloned.mp3
+  
+# Important: check the HTTP status code. On non-2xx, the response body will be
+# a JSON error (not audio), so handle that in scripts by inspecting the status
+# and printing/parsing the body instead of assuming audio.
 ```
 
 ### Voice Cloning Best Practices

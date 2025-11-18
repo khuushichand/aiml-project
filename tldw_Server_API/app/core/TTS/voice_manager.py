@@ -401,29 +401,46 @@ class VoiceManager:
             raise VoiceProcessingError(f"Failed to process voice upload: {str(e)}")
 
     async def _get_audio_duration(self, file_path: Path) -> float:
-        """Get audio file duration using ffprobe"""
+        """Get audio file duration using ffprobe (non-blocking)."""
+        cmd = [
+            'ffprobe', '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            str(file_path)
+        ]
         try:
-            import subprocess
-            result = subprocess.run(
-                [
-                    'ffprobe', '-v', 'error',
-                    '-show_entries', 'format=duration',
-                    '-of', 'default=noprint_wrappers=1:nokey=1',
-                    str(file_path)
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-
-            if result.returncode == 0 and result.stdout:
-                return float(result.stdout.strip())
-            else:
-                logger.warning(f"Could not determine audio duration for {file_path}")
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+            except asyncio.TimeoutError:
+                proc.kill()
+                try:
+                    await proc.communicate()
+                except Exception:
+                    pass
+                logger.error(f"ffprobe timed out for {file_path}")
                 return 0.0
 
-        except (subprocess.TimeoutExpired, FileNotFoundError, ValueError) as e:
-            logger.error(f"Error getting audio duration: {e}")
+            if proc.returncode == 0 and stdout:
+                try:
+                    return float(stdout.decode().strip())
+                except (UnicodeDecodeError, ValueError) as e:
+                    logger.error(f"Error parsing ffprobe output for {file_path}: {e}")
+                    return 0.0
+
+            err_msg = (stderr or b"").decode(errors="ignore") if stderr is not None else ""
+            logger.warning(f"Could not determine audio duration for {file_path}: {err_msg}")
+            return 0.0
+
+        except FileNotFoundError as e:
+            logger.error(f"ffprobe not found while getting audio duration: {e}")
+            return 0.0
+        except Exception as e:
+            logger.error(f"Error getting audio duration for {file_path}: {e}")
             return 0.0
 
     async def _process_for_provider(self, input_path: Path, output_path: Path, provider: str) -> Path:
@@ -439,8 +456,6 @@ class VoiceManager:
 
         # Convert using ffmpeg
         try:
-            import subprocess
-
             # Ensure output has correct extension
             output_path = output_path.with_suffix(f".{target_format}")
 
@@ -452,17 +467,32 @@ class VoiceManager:
                 str(output_path)
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            except asyncio.TimeoutError:
+                proc.kill()
+                try:
+                    await proc.communicate()
+                except Exception:
+                    pass
+                logger.error(f"FFmpeg conversion timed out for {input_path}")
+                shutil.copy2(input_path, output_path)
+                return output_path
 
-            if result.returncode != 0:
-                logger.error(f"FFmpeg conversion failed: {result.stderr}")
+            if proc.returncode != 0:
+                err_msg = (stderr or b"").decode(errors="ignore") if stderr is not None else ""
+                logger.error(f"FFmpeg conversion failed for {input_path}: {err_msg}")
                 # Fall back to copying original
                 shutil.copy2(input_path, output_path)
             else:
                 logger.info(f"Converted audio to {target_format} at {target_sr}Hz")
 
             return output_path
-
         except Exception as e:
             logger.error(f"Audio conversion failed: {e}")
             # Fall back to copying original

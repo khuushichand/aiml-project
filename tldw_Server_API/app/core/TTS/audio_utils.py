@@ -2,6 +2,7 @@
 # Description: Audio processing utilities for TTS voice cloning/reference
 #
 # Imports
+import asyncio
 import base64
 import io
 import tempfile
@@ -295,6 +296,31 @@ class AudioProcessor:
             logger.error(f"Audio conversion failed: {e}")
             return audio_bytes  # Return original if conversion fails
 
+    async def convert_audio_async(
+        self,
+        audio_bytes: bytes,
+        target_format: str = 'wav',
+        target_sample_rate: Optional[int] = None,
+        provider: Optional[str] = None
+    ) -> bytes:
+        """
+        Async-friendly wrapper around convert_audio.
+
+        Offloads the potentially blocking conversion (ffmpeg/librosa) to a
+        background thread so it does not block the event loop when called
+        from async adapters.
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self.convert_audio(
+                audio_bytes,
+                target_format=target_format,
+                target_sample_rate=target_sample_rate,
+                provider=provider,
+            ),
+        )
+
     def extract_clean_segment(
         self,
         audio_bytes: bytes,
@@ -406,6 +432,54 @@ def process_voice_reference(
 
     except Exception as e:
         logger.error(f"Failed to process voice reference: {e}")
+        return None, str(e)
+
+
+async def process_voice_reference_async(
+    base64_audio: str,
+    provider: str,
+    validate: bool = True,
+    convert: bool = True
+) -> Tuple[Optional[bytes], Optional[str]]:
+    """
+    Async-friendly variant of process_voice_reference for use in adapters.
+
+    Uses the same validation logic but offloads heavy conversion work to a
+    background thread so it does not block the event loop.
+    """
+    processor = AudioProcessor()
+
+    try:
+        # Decode base64
+        audio_bytes = processor.decode_base64_audio(base64_audio)
+
+        # Validate if requested
+        if validate:
+            is_valid, error_msg, info = processor.validate_audio(
+                audio_bytes,
+                provider,
+                check_duration=True,
+                check_quality=True
+            )
+
+            if not is_valid:
+                return None, error_msg
+
+            logger.info(f"Voice reference validated: {info}")
+
+        # Convert if requested
+        if convert and provider.lower() in processor.PROVIDER_REQUIREMENTS:
+            audio_bytes = await processor.convert_audio_async(
+                audio_bytes,
+                target_format='wav',
+                provider=provider,
+            )
+            logger.info(f"Voice reference converted for {provider}")
+
+        return audio_bytes, None
+
+    except Exception as e:
+        logger.error(f"Failed to process voice reference (async): {e}")
         return None, str(e)
 
 #

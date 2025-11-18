@@ -61,7 +61,8 @@ print(doc_res["status"], doc_res["source_format"])
 
 ## Endpoint Integration
 
-- `POST /api/v1/media/process-documents` (media.py) invokes this pipeline per uploaded/URL-provided document.
+- `POST /api/v1/media/process-documents` (modular endpoint in `endpoints/media/process_documents.py`) invokes this pipeline per uploaded/URL-provided document.
+- Persistent `/api/v1/media/add` document/email flows use the shared `process_document_like_item(...)` helper in `core.Ingestion_Media_Processing.persistence`, which wraps `process_document_content` and calls `persist_doc_item_and_children(...)` to write results to the Media DB.
 
 Notes:
 - URL downloads are restricted to document extensions: `.txt`, `.md`, `.docx`, `.rtf`, `.html`, `.htm`, `.xml`.

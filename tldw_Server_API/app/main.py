@@ -1999,6 +1999,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down TTS service: {e}")
 
+    # Shutdown TTS Resource Manager (memory monitor, sessions, HTTP clients)
+    try:
+        from tldw_Server_API.app.core.TTS.tts_resource_manager import close_resource_manager as _close_tts_resource_manager
+        await _close_tts_resource_manager()
+        logger.info("App Shutdown: TTS resource manager shutdown complete")
+    except Exception as e:
+        logger.error(f"App Shutdown: Error shutting down TTS resource manager: {e}")
+
     # Shutdown Chat Module Components
     logger.info("App Shutdown: Cleaning up Chat module components...")
 
