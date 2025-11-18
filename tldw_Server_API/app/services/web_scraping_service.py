@@ -377,13 +377,12 @@ async def ingest_web_content_orchestrate(
     request: Any,
     db: Any,
     usage_log: Any,
-) -> None:
+) -> Optional[List[Dict[str, Any]]]:
     """
-    Shared helper for `/media/ingest-web-content` side effects.
-
-    This currently owns usage logging and topic monitoring for ingest,
-    mirroring `_legacy_media.ingest_web_content` while keeping the HTTP
-    layer thin. It may be extended to own more orchestration over time.
+    Shared helper for `/media/ingest-web-content` side effects and, for
+    selected scrape methods, the scraping + summarization:
+      - ScrapeMethod.INDIVIDUAL: per-URL scrape + summary
+      - ScrapeMethod.SITEMAP: sitemap scrape + summary
     """
 
     # Log usage for web scraping ingest
@@ -430,3 +429,267 @@ async def ingest_web_content_orchestrate(
     except Exception:
         # Do not let monitoring failures break ingestion.
         pass
+
+    scrape_method = getattr(request, "scrape_method", None)
+
+    async def maybe_summarize_one(article: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Shared summarization helper for sitemap/individual scraping.
+        Mirrors the legacy `_legacy_media.ingest_web_content` behaviour.
+        """
+        if not getattr(request, "perform_analysis", False):
+            article["analysis"] = None
+            return article
+
+        content = article.get("content", "")
+        if not content:
+            article["analysis"] = "No content to analyze."
+            return article
+
+        analysis_results = analyze(
+            input_data=content,
+            custom_prompt_arg=getattr(request, "custom_prompt", None)
+            or "Summarize this article.",
+            api_name=getattr(request, "api_name", None),
+            temp=0.7,
+            system_message=getattr(request, "system_prompt", None)
+            or "Act as a professional summarizer.",
+        )
+        article["analysis"] = analysis_results
+
+        if getattr(request, "perform_rolling_summarization", False):
+            logging.info("Performing rolling summarization (placeholder).")
+        if getattr(request, "perform_confabulation_check_of_analysis", False):
+            logging.info("Performing confabulation check of analysis (placeholder).")
+
+        return article
+
+    def parse_cookies() -> Optional[List[Dict[str, Any]]]:
+        """
+        Parse cookies from the request when `use_cookies` is enabled.
+        Mirrors the legacy JSON parsing + 400 semantics.
+        """
+        custom_cookies_list: Optional[List[Dict[str, Any]]] = None
+        if getattr(request, "use_cookies", False) and getattr(
+            request, "cookies", None
+        ):
+            try:
+                parsed = json.loads(getattr(request, "cookies"))
+                if isinstance(parsed, dict):
+                    custom_cookies_list = [parsed]
+                elif isinstance(parsed, list):
+                    custom_cookies_list = parsed
+                else:
+                    raise ValueError("Cookies must be a dict or list of dicts.")
+            except json.JSONDecodeError:
+                raise HTTPException(
+                    status_code=400, detail="Invalid JSON format for cookies"
+                )
+        return custom_cookies_list
+
+    # INDIVIDUAL URLs: per-URL scrape + summarization
+    if scrape_method == ScrapeMethod.INDIVIDUAL:
+        urls = getattr(request, "urls", []) or []
+        if not urls:
+            return []
+
+        titles = getattr(request, "titles", None) or []
+        authors = getattr(request, "authors", None) or []
+        keywords = getattr(request, "keywords", None) or []
+        num_urls = len(urls)
+
+        if len(titles) < num_urls:
+            titles += ["Untitled"] * (num_urls - len(titles))
+        if len(authors) < num_urls:
+            authors += ["Unknown"] * (num_urls - len(authors))
+        if len(keywords) < num_urls:
+            keywords += ["no_keyword_set"] * (num_urls - len(keywords))
+
+        custom_cookies_list = parse_cookies()
+
+        results: List[Dict[str, Any]] = []
+        for i, url in enumerate(urls):
+            title_ = titles[i]
+            author_ = authors[i]
+            kw_ = keywords[i]
+
+            article_data = await scrape_article(url, custom_cookies=custom_cookies_list)
+            if not article_data or not article_data.get("extraction_successful"):
+                logging.warning(f"Failed to scrape: {url}")
+                continue
+
+            article_data["title"] = title_ or article_data.get("title")
+            article_data["author"] = author_ or article_data.get("author")
+            article_data["keywords"] = kw_
+
+            article_data = await maybe_summarize_one(article_data)
+            results.append(article_data)
+
+        return results
+
+    # SITEMAP: scrape sitemap URL, then summarize each article
+    if scrape_method == ScrapeMethod.SITEMAP:
+        urls = getattr(request, "urls", []) or []
+        if not urls:
+            return []
+
+        sitemap_url = urls[0]
+
+        def scrape_in_thread() -> List[Dict[str, Any]]:
+            return scrape_from_sitemap(sitemap_url)
+
+        loop = asyncio.get_running_loop()
+        results = await loop.run_in_executor(None, scrape_in_thread)
+
+        if not results:
+            logging.warning("No articles returned from sitemap scraping.")
+            return []
+
+        summarized: List[Dict[str, Any]] = []
+        for r in results:
+            # Legacy path expects dict-like articles; skip anything else defensively.
+            if not isinstance(r, dict):
+                continue
+            summarized_article = await maybe_summarize_one(r)
+            summarized.append(summarized_article)
+
+        return summarized
+
+    # URL LEVEL: route to enhanced service (friendly ingest)
+    if scrape_method == ScrapeMethod.URL_LEVEL:
+        urls = getattr(request, "urls", []) or []
+        if not urls:
+            return []
+
+        base_url = urls[0]
+        level = getattr(request, "url_level", None) or 2
+
+        custom_cookies_list = parse_cookies()
+
+        try:
+            from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+
+            scrape_task = getattr(
+                media_mod, "process_web_scraping_task", process_web_scraping_task
+            )
+        except Exception:  # pragma: no cover - defensive fallback
+            scrape_task = process_web_scraping_task
+
+        try:
+            service_result = await scrape_task(
+                scrape_method="URL Level",
+                url_input=base_url,
+                url_level=level,
+                max_pages=getattr(request, "max_pages", None) or 10,
+                max_depth=level,
+                summarize_checkbox=bool(
+                    getattr(request, "perform_analysis", False)
+                ),
+                custom_prompt=getattr(request, "custom_prompt", None),
+                api_name=getattr(request, "api_name", None),
+                api_key=None,
+                keywords=",".join(request.keywords or [])
+                if isinstance(getattr(request, "keywords", None), list)
+                else (getattr(request, "keywords", None) or ""),
+                custom_titles=None,
+                system_prompt=getattr(request, "system_prompt", None),
+                temperature=0.7,
+                custom_cookies=custom_cookies_list,
+                mode="ephemeral",
+                user_agent=getattr(request, "user_agent", None)
+                if hasattr(request, "user_agent")
+                else None,
+                custom_headers=None,
+                crawl_strategy=getattr(request, "crawl_strategy", None),
+                include_external=getattr(request, "include_external", None),
+                score_threshold=getattr(request, "score_threshold", None),
+            )
+            articles: List[Dict[str, Any]] = []
+            if isinstance(service_result, dict):
+                if service_result.get("articles"):
+                    articles = service_result["articles"]
+                elif service_result.get("results"):
+                    articles = service_result["results"]
+
+            for r in articles:
+                if (
+                    isinstance(r, dict)
+                    and "summary" in r
+                    and "analysis" not in r
+                ):
+                    r["analysis"] = r.get("summary")
+
+            return articles
+        except Exception as exc:  # pragma: no cover - propagate for legacy handler
+            logging.error(f"Enhanced URL Level crawl failed: {exc}")
+            raise
+
+    # RECURSIVE SCRAPING: route to enhanced service (friendly ingest)
+    if scrape_method == ScrapeMethod.RECURSIVE:
+        urls = getattr(request, "urls", []) or []
+        if not urls:
+            return []
+
+        base_url = urls[0]
+        max_pages = getattr(request, "max_pages", None) or 10
+        max_depth = getattr(request, "max_depth", None) or 3
+
+        custom_cookies_list = parse_cookies()
+
+        try:
+            from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+
+            scrape_task = getattr(
+                media_mod, "process_web_scraping_task", process_web_scraping_task
+            )
+        except Exception:  # pragma: no cover - defensive fallback
+            scrape_task = process_web_scraping_task
+
+        try:
+            service_result = await scrape_task(
+                scrape_method="Recursive Scraping",
+                url_input=base_url,
+                url_level=None,
+                max_pages=max_pages,
+                max_depth=max_depth,
+                summarize_checkbox=bool(
+                    getattr(request, "perform_analysis", False)
+                ),
+                custom_prompt=getattr(request, "custom_prompt", None),
+                api_name=getattr(request, "api_name", None),
+                api_key=None,
+                keywords=",".join(request.keywords or [])
+                if isinstance(getattr(request, "keywords", None), list)
+                else (getattr(request, "keywords", None) or ""),
+                custom_titles=None,
+                system_prompt=getattr(request, "system_prompt", None),
+                temperature=0.7,
+                custom_cookies=custom_cookies_list,
+                mode="ephemeral",
+                user_agent=getattr(request, "user_agent", None)
+                if hasattr(request, "user_agent")
+                else None,
+                custom_headers=None,
+                crawl_strategy=getattr(request, "crawl_strategy", None),
+                include_external=getattr(request, "include_external", None),
+                score_threshold=getattr(request, "score_threshold", None),
+            )
+            articles: List[Dict[str, Any]] = []
+            if isinstance(service_result, dict):
+                articles = service_result.get("articles", [])
+
+            for r in articles:
+                if (
+                    isinstance(r, dict)
+                    and "summary" in r
+                    and "analysis" not in r
+                ):
+                    r["analysis"] = r.get("summary")
+
+            return articles
+        except Exception as exc:  # pragma: no cover - propagate for legacy handler
+            logging.error(f"Enhanced recursive crawl failed: {exc}")
+            raise
+
+    # Other methods (or unrecognized) still handled in `_legacy_media`.
+    return None

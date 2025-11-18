@@ -20,6 +20,10 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 )
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+    prepare_chunking_options_dict,
+    prepare_common_options,
+)
 
 
 try:  # Align HTTP 413 compatibility with legacy endpoint module
@@ -50,8 +54,8 @@ async def add_media_orchestrate(
     )
 
     _validate_inputs = legacy_media._validate_inputs  # type: ignore[attr-defined]
-    _prepare_chunking_options_dict = legacy_media._prepare_chunking_options_dict  # type: ignore[attr-defined]
-    _prepare_common_options = legacy_media._prepare_common_options  # type: ignore[attr-defined]
+    _prepare_chunking_options_dict = prepare_chunking_options_dict
+    _prepare_common_options = prepare_common_options
     _process_batch_media = legacy_media._process_batch_media  # type: ignore[attr-defined]
     _process_document_like_item = legacy_media._process_document_like_item  # type: ignore[attr-defined]
     _determine_final_status = legacy_media._determine_final_status  # type: ignore[attr-defined]

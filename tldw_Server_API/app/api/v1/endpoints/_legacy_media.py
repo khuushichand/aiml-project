@@ -84,7 +84,8 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     get_full_media_details_rich2,
 )
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
-    MediaDatabase, DatabaseError,
+    MediaDatabase,
+    DatabaseError,
     InputError,
     ConflictError,
     SchemaError,
@@ -124,8 +125,10 @@ from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 # -----------------------------
 # Code processing helpers
 # -----------------------------
- # Rate limit tuning for search endpoint; must be defined after imports
+# Rate limit tuning for search endpoint; must be defined after imports
 _SEARCH_RATE_LIMIT = "600/minute" if _is_test_mode() else "30/minute"
+
+
 class ProcessCodeForm(BaseModel):
     urls: Optional[List[str]] = None
     perform_chunking: bool = True
@@ -137,52 +140,36 @@ class ProcessCodeForm(BaseModel):
     chunk_overlap: int = Field(default=200, description="Overlap: chars for 'code', lines for 'lines'")
 
 CODE_ALLOWED_EXTENSIONS: Set[str] = {
-    '.py', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx',
-    '.cs', '.java', '.kt', '.kts', '.swift', '.rs', '.go',
-    '.rb', '.php', '.pl', '.lua', '.sql', '.yaml',
-    '.yml', '.toml', '.ini', '.cfg', '.conf', '.ts', '.tsx', '.jsx', '.js'
+    ".py",
+    ".c",
+    ".h",
+    ".cpp",
+    ".hpp",
+    ".cc",
+    ".cxx",
+    ".cs",
+    ".java",
+    ".kt",
+    ".kts",
+    ".swift",
+    ".rs",
+    ".go",
+    ".rb",
+    ".php",
+    ".pl",
+    ".lua",
+    ".sql",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".conf",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".js",
 }
-
-def _detect_code_language(filename: str) -> str:
-    ext = FilePath(filename).suffix.lower()
-    return {
-        '.py': 'python', '.c': 'c', '.h': 'c-header', '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp', '.hpp': 'cpp',
-        '.cs': 'csharp', '.java': 'java', '.kt': 'kotlin', '.kts': 'kotlin', '.swift': 'swift', '.rs': 'rust', '.go': 'go',
-        '.rb': 'ruby', '.php': 'php', '.pl': 'perl', '.lua': 'lua', '.sql': 'sql', '.json': 'json', '.yaml': 'yaml',
-        '.yml': 'yaml', '.toml': 'toml', '.ini': 'ini', '.cfg': 'ini', '.conf': 'conf', '.ts': 'typescript', '.tsx': 'tsx', '.jsx': 'jsx',
-    }.get(ext, ext.lstrip('.') or 'text')
-
-def _read_text_safe(path: FilePath) -> str:
-    try:
-        return path.read_text(encoding='utf-8')
-    except UnicodeDecodeError:
-        return path.read_text(encoding='latin-1')
-
-def _chunk_code_lines(text: str, lines_per_chunk: int, overlap: int, language: str) -> List[Dict[str, Any]]:
-    lines = text.splitlines()
-    chunks: List[Dict[str, Any]] = []
-    if lines_per_chunk <= 0:
-        return chunks
-    step = max(1, lines_per_chunk - max(0, overlap))
-    start = 0
-    total = len(lines)
-    while start < total:
-        end = min(total, start + lines_per_chunk)
-        chunk_text = "\n".join(lines[start:end])
-        chunks.append({
-            'text': chunk_text,
-            'metadata': {
-                'language': language,
-                'start_line': start + 1,
-                'end_line': end,
-                'total_lines': total,
-                'chunk_method': 'lines'
-            }
-        })
-        if end == total:
-            break
-        start += step
-    return chunks
 
 # --------------------- Media List (GET /api/v1/media) ---------------------
 
@@ -289,231 +276,35 @@ async def get_process_code_form(
             serializable_errors.append(err)
         raise HTTPException(status_code=HTTP_422_UNPROCESSABLE, detail=serializable_errors) from e
 
-@router.post(
-    "/process-code",
-    summary="Process code files (NO DB Persistence)",
-    tags=["Media Processing (No DB)"]
-)
 async def process_code_endpoint(
     db: MediaDatabase = Depends(get_media_db_for_user),
     form_data: ProcessCodeForm = Depends(get_process_code_form),
     files: Optional[List[UploadFile]] = File(None, description="Code uploads (.py, .c, .cpp, .java, .ts, etc.)"),
 ):
     """
-    Reads uploaded or downloaded code files as text, optionally chunks by lines,
-    and returns artifacts without DB writes.
-    """
-    urls = form_data.urls or []
-    _validate_inputs("code", urls, files)
-    # Do not preemptively hard-fail entire batch on URL policy here.
-    # URL safety is handled during per-item download to allow partial 207 batches in tests.
-    batch: Dict[str, Any] = {"processed_count": 0, "errors_count": 0, "errors": [], "results": []}
-    with TempDirManager(cleanup=True, prefix="process_code_") as temp_dir_path:
-        temp_dir = FilePath(temp_dir_path)
-        # Handle uploads
-        if files:
-            saved, upload_errors = await _save_uploaded_files(
-                files,
-                temp_dir,
-                validator=file_validator_instance,
-                allowed_extensions=sorted(CODE_ALLOWED_EXTENSIONS),
-                skip_archive_scanning=False,
-                expected_media_type_key='code',
-            )
-            # TEST_MODE diagnostics for upload validation behavior
-            try:
-                if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"} and upload_errors:
-                    logger.warning(f"TEST_MODE: process-code upload_errors={upload_errors}")
-            except Exception:
-                pass
-            for err in upload_errors:
-                batch["results"].append({
-                    "status": "Error", "input_ref": err.get("original_filename", "Unknown Upload"),
-                    # Normalize message for tests: map any disallowed-type to a standard phrase
-                    "error": (
-                        "Invalid file type" if isinstance(err.get('error'), str) and (
-                            'not allowed for security' in err.get('error').lower() or 'invalid file type' in err.get('error').lower()
-                        ) else f"Upload error: {err.get('error')}"
-                    ),
-                    "media_type": "code", "processing_source": None, "metadata": {}, "content": None,
-                    "chunks": None, "analysis": None, "keywords": None, "warnings": None,
-                    "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
-                })
-                batch["errors_count"] += 1
-            for info in saved:
-                filename = info["original_filename"]
-                local_path = FilePath(info["path"])
-                language = _detect_code_language(filename)
-                try:
-                    text = _read_text_safe(local_path)
-                    if form_data.perform_chunking:
-                        if str(form_data.chunk_method or 'code').lower() == 'lines':
-                            chunks = _chunk_code_lines(
-                                text, form_data.chunk_size, form_data.chunk_overlap, language
-                            )
-                            op_status = "Success"
-                            op_warnings = None
-                        else:
-                            # Structure-aware code chunking via core Chunker with metadata
-                            # On failure, fall back to simple line-based chunking and downgrade status to Warning.
-                            from tldw_Server_API.app.core.Chunking.chunker import Chunker, ChunkerConfig
-                            from dataclasses import asdict
-                            try:
-                                chunker = Chunker(config=ChunkerConfig(default_method='code', default_max_size=form_data.chunk_size, default_overlap=form_data.chunk_overlap))
-                                crs = chunker.chunk_text_with_metadata(text, method='code', max_size=form_data.chunk_size, overlap=form_data.chunk_overlap, language=language)
-                                total = len(crs)
-                                chunks = []
-                                for idx, cr in enumerate(crs):
-                                    md = asdict(cr.metadata)
-                                    # Flatten options into metadata top-level for ease of use
-                                    opts = md.pop('options', {}) or {}
-                                    md.update(opts)
-                                    md.setdefault('chunk_method', 'code')
-                                    md.setdefault('language', language)
-                                    # Ensure top-level start/end lines exist for convenience
-                                    if md.get('start_line') is None or md.get('end_line') is None:
-                                        try:
-                                            blocks = md.get('blocks') or []
-                                            starts = [b.get('start_line') for b in blocks if isinstance(b, dict) and b.get('start_line') is not None]
-                                            ends = [b.get('end_line') for b in blocks if isinstance(b, dict) and b.get('end_line') is not None]
-                                            if starts:
-                                                md['start_line'] = int(min(starts))
-                                            if ends:
-                                                md['end_line'] = int(max(ends))
-                                        except Exception:
-                                            pass
-                                    md['chunk_index'] = idx + 1
-                                    md['total_chunks'] = total
-                                    chunks.append({"text": cr.text, "metadata": md})
-                                op_status = "Success"
-                                op_warnings = None
-                            except Exception as _code_chunk_err:
-                                # Fallback: simple line-based chunking
-                                chunks = _chunk_code_lines(
-                                    text, form_data.chunk_size, form_data.chunk_overlap, language
-                                )
-                                op_status = "Warning"
-                                op_warnings = [f"Structure-aware code chunker failed; fell back to line chunking: {_code_chunk_err}"]
-                    else:
-                        chunks = []
-                        op_status = "Success"
-                        op_warnings = None
-                    batch["results"].append({
-                        "status": op_status, "input_ref": filename, "processing_source": str(local_path),
-                        "media_type": "code", "content": text, "metadata": {
-                            "language": language, "filename": filename, "lines": text.count('\n') + 1
-                        }, "chunks": chunks, "analysis": None, "keywords": None, "warnings": op_warnings,
-                        "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
-                    })
-                    batch["processed_count"] += 1
-                except Exception as e:
-                    # TEST_MODE diagnostics for read errors after successful save
-                    try:
-                        if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
-                            logger.warning(
-                                f"TEST_MODE: process-code read-error file='{filename}' path='{local_path}': {type(e).__name__}: {e}"
-                            )
-                    except Exception:
-                        pass
-                    batch["results"].append({
-                        "status": "Error", "input_ref": filename, "processing_source": str(local_path),
-                        "media_type": "code", "error": f"Failed to read code file: {e}",
-                        "metadata": {}, "content": None, "chunks": None, "analysis": None, "keywords": None,
-                        "warnings": None, "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
-                    })
-                    batch["errors_count"] += 1
-        # Handle URLs
-        if urls:
-            # Use module-local httpx.AsyncClient so tests can monkeypatch it
-            async with httpx.AsyncClient() as client:
-                tasks = [
-                    _download_url_async(
-                        client=client, url=u, target_dir=temp_dir,
-                        allowed_extensions=CODE_ALLOWED_EXTENSIONS, check_extension=True
-                    ) for u in urls
-                ]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                for url, res in zip(urls, results):
-                    if isinstance(res, Exception):
-                        batch["results"].append({
-                            "status": "Error", "input_ref": url, "processing_source": None,
-                            "media_type": "code", "error": f"Download/preparation failed: {res}",
-                            "metadata": {}, "content": None, "chunks": None, "analysis": None, "keywords": None,
-                            "warnings": None, "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
-                        })
-                        batch["errors_count"] += 1
-                        continue
-                    local_path = FilePath(res)
-                    language = _detect_code_language(local_path.name)
-                    try:
-                        text = _read_text_safe(local_path)
-                        if form_data.perform_chunking:
-                            if str(form_data.chunk_method or 'code').lower() == 'lines':
-                                chunks = _chunk_code_lines(
-                                    text, form_data.chunk_size, form_data.chunk_overlap, language
-                                )
-                            else:
-                                from tldw_Server_API.app.core.Chunking.chunker import Chunker, ChunkerConfig
-                                from dataclasses import asdict
-                                chunker = Chunker(config=ChunkerConfig(default_method='code', default_max_size=form_data.chunk_size, default_overlap=form_data.chunk_overlap))
-                                crs = chunker.chunk_text_with_metadata(
-                                    text,
-                                    method='code',
-                                    max_size=form_data.chunk_size,
-                                    overlap=form_data.chunk_overlap,
-                                    language=language,
-                                )
-                                total = len(crs)
-                                chunks = []
-                                for idx, cr in enumerate(crs):
-                                    md = asdict(cr.metadata)
-                                    opts = md.pop('options', {}) or {}
-                                    md.update(opts)
-                                    md.setdefault('chunk_method', 'code')
-                                    md.setdefault('language', language)
-                                    if md.get('start_line') is None or md.get('end_line') is None:
-                                        try:
-                                            blocks = md.get('blocks') or []
-                                            starts = [b.get('start_line') for b in blocks if isinstance(b, dict) and b.get('start_line') is not None]
-                                            ends = [b.get('end_line') for b in blocks if isinstance(b, dict) and b.get('end_line') is not None]
-                                            if starts:
-                                                md['start_line'] = int(min(starts))
-                                            if ends:
-                                                md['end_line'] = int(max(ends))
-                                        except Exception:
-                                            pass
-                                    md['chunk_index'] = idx + 1
-                                    md['total_chunks'] = total
-                                    chunks.append({"text": cr.text, "metadata": md})
-                        else:
-                            chunks = []
-                        batch["results"].append({
-                            "status": "Success", "input_ref": url, "processing_source": str(local_path),
-                            "media_type": "code", "content": text, "metadata": {
-                                "language": language, "filename": local_path.name, "lines": text.count('\n') + 1
-                            }, "chunks": chunks, "analysis": None, "keywords": None, "warnings": None,
-                            "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
-                        })
-                        batch["processed_count"] += 1
-                    except Exception as e:
-                        batch["results"].append({
-                            "status": "Error", "input_ref": url, "processing_source": str(local_path),
-                            "media_type": "code", "error": f"Failed to read code file: {e}",
-                            "metadata": {}, "content": None, "chunks": None, "analysis": None, "keywords": None,
-                            "warnings": None, "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
-                        })
-                        batch["errors_count"] += 1
+    Shim for backwards compatibility.
 
-    # Normalize batch ordering and ensure standard counters exist.
-    batch = normalize_process_batch(batch)
-    final_status = status.HTTP_200_OK if (batch["processed_count"] > 0 and batch["errors_count"] == 0) else (
-        status.HTTP_207_MULTI_STATUS if batch["results"] else status.HTTP_400_BAD_REQUEST
+    The actual `/process-code` implementation now lives in
+    `tldw_Server_API.app.api.v1.endpoints.media.process_code`.
+    This wrapper simply forwards calls so tests and imports that
+    reference `_legacy_media.process_code_endpoint` continue to work.
+    """
+    from tldw_Server_API.app.api.v1.endpoints.media.process_code import (  # noqa: WPS433
+        process_code_endpoint as _process_code_impl,
     )
-    return JSONResponse(status_code=final_status, content=batch)
+
+    return await _process_code_impl(
+        db=db,
+        form_data=form_data,
+        files=files,
+    )
 from tldw_Server_API.app.api.v1.schemas.media_response_models import PaginationInfo, MediaListResponse, MediaListItem, \
     MediaDetailResponse, VersionDetailResponse
 from tldw_Server_API.app.api.v1.schemas.media_request_models import MetadataSearchRequest, MetadataFilter, MetadataPatchRequest, AdvancedVersionUpsertRequest
-from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
+from tldw_Server_API.app.core.Utils.metadata_utils import (
+    normalize_safe_metadata,
+    update_version_safe_metadata_in_transaction,
+)
 # Media Processing
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import process_audio_files
 import tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib as books
@@ -1388,6 +1179,14 @@ async def patch_metadata(
     """
     import json as _json
     try:
+        # Normalize incoming safe_metadata payload to enforce identifier rules
+        # BEFORE any DB access so invalid identifiers yield 400 even when the
+        # DB dependency is a lightweight stub in tests.
+        try:
+            normalized = normalize_safe_metadata(body.safe_metadata or {})
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
+
         latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
         if not latest:
             raise HTTPException(status_code=404, detail="No active version found for this media.")
@@ -1400,12 +1199,6 @@ async def patch_metadata(
                 existing = None
         if not isinstance(existing, dict):
             existing = {}
-
-        # Normalize incoming safe_metadata payload to enforce identifier rules
-        try:
-            normalized = normalize_safe_metadata(body.safe_metadata or {})
-        except ValueError as ve:
-            raise HTTPException(status_code=400, detail=str(ve))
 
         new_meta = dict(existing)
         if body.merge:
@@ -1421,7 +1214,7 @@ async def patch_metadata(
 
         if body.new_version:
             with db.transaction():
-                res = db.create_document_version(
+                db.create_document_version(
                     media_id=media_id,
                     content=latest.get('content') or '',
                     prompt=latest.get('prompt'),
@@ -1446,51 +1239,13 @@ async def patch_metadata(
                 raise HTTPException(status_code=500, detail="Latest version record missing identifier")
             # Use the same connection from the transaction context and keep identifier index in sync
             with db.transaction() as conn:
-                # Backend-aware execution (placeholder conversion handled by execute_query)
-                # Bump version to satisfy sync trigger and refresh last_modified
-                try:
-                    now_ts = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-                except Exception:
-                    now_ts = None
-                if now_ts is not None:
-                    db.execute_query(
-                        "UPDATE DocumentVersions SET safe_metadata=?, version=version+1, last_modified=? WHERE id=? AND deleted=0",
-                        (new_meta_json, now_ts, dv_id),
-                        connection=conn,
-                    )
-                else:
-                    db.execute_query(
-                        "UPDATE DocumentVersions SET safe_metadata=?, version=version+1 WHERE id=? AND deleted=0",
-                        (new_meta_json, dv_id),
-                        connection=conn,
-                    )
-                # Maintain identifier index using backend-specific upsert
-                try:
-                    _doi = new_meta.get('doi') or new_meta.get('DOI')
-                    _pmid = new_meta.get('pmid') or new_meta.get('PMID')
-                    _pmcid = new_meta.get('pmcid') or new_meta.get('PMCID')
-                    _arxiv = new_meta.get('arxiv_id') or new_meta.get('arxiv') or new_meta.get('ArXiv')
-                    _s2id = new_meta.get('s2_paper_id') or new_meta.get('paperId')
-                    backend = db.backend_type() if callable(db.backend_type) else db.backend_type
-                    if backend == BackendType.POSTGRESQL:
-                        ident_sql = (
-                            "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
-                            "VALUES (?, ?, ?, ?, ?, ?) "
-                            "ON CONFLICT (dv_id) DO UPDATE SET "
-                            "doi = EXCLUDED.doi, pmid = EXCLUDED.pmid, pmcid = EXCLUDED.pmcid, "
-                            "arxiv_id = EXCLUDED.arxiv_id, s2_paper_id = EXCLUDED.s2_paper_id"
-                        )
-                    else:
-                        ident_sql = (
-                            "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
-                            "VALUES (?, ?, ?, ?, ?, ?)"
-                        )
-                    db.execute_query(ident_sql, (dv_id, _doi, _pmid, _pmcid, _arxiv, _s2id), connection=conn)
-                except (sqlite3.OperationalError, DatabaseError) as e:
-                        logger.debug("Identifier index update skipped (missing table/unsupported upsert): %s", e)
-                except Exception as e:
-                    logger.error("Identifier index update failed for dv_id=%s: %s", dv_id, e, exc_info=True)
-                    raise
+                update_version_safe_metadata_in_transaction(
+                    db=db,
+                    dv_id=dv_id,
+                    safe_metadata_json=new_meta_json,
+                    merged_metadata=new_meta,
+                    connection=conn,
+                )
             # Return updated rich details for consistency
             details = get_full_media_details_rich2(
                 db_instance=db,
@@ -1529,6 +1284,14 @@ async def put_version_metadata(
     """
     import json as _json
     try:
+        # Normalize incoming safe_metadata payload to enforce identifier rules
+        # BEFORE any DB access so invalid identifiers yield 400 even when the
+        # DB dependency is a lightweight stub in tests.
+        try:
+            normalized = normalize_safe_metadata(body.safe_metadata or {})
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
+
         version_dict = get_document_version(db, media_id=media_id, version_number=version_number, include_content=False)
         if not version_dict:
             raise HTTPException(status_code=404, detail="Version not found")
@@ -1541,11 +1304,6 @@ async def put_version_metadata(
                 existing = None
         if not isinstance(existing, dict):
             existing = {}
-        # Normalize incoming safe_metadata payload to enforce identifier rules
-        try:
-            normalized = normalize_safe_metadata(body.safe_metadata or {})
-        except ValueError as ve:
-            raise HTTPException(status_code=400, detail=str(ve))
 
         new_meta = dict(existing)
         if body.merge:
@@ -1557,50 +1315,13 @@ async def put_version_metadata(
         except Exception:
             raise HTTPException(status_code=400, detail="safe_metadata is not JSON-serializable")
         with db.transaction() as conn:
-            # Bump version to satisfy sync trigger and refresh last_modified
-            try:
-                now_ts = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-            except Exception:
-                now_ts = None
-            if now_ts is not None:
-                db.execute_query(
-                    "UPDATE DocumentVersions SET safe_metadata=?, version=version+1, last_modified=? WHERE id=? AND deleted=0",
-                    (smj, now_ts, dv_id),
-                    connection=conn,
-                )
-            else:
-                db.execute_query(
-                    "UPDATE DocumentVersions SET safe_metadata=?, version=version+1 WHERE id=? AND deleted=0",
-                    (smj, dv_id),
-                    connection=conn,
-                )
-            # Sync identifier index for this version using backend-specific upsert
-            try:
-                _doi = new_meta.get('doi') or new_meta.get('DOI')
-                _pmid = new_meta.get('pmid') or new_meta.get('PMID')
-                _pmcid = new_meta.get('pmcid') or new_meta.get('PMCID')
-                _arxiv = new_meta.get('arxiv_id') or new_meta.get('arxiv') or new_meta.get('ArXiv')
-                _s2id = new_meta.get('s2_paper_id') or new_meta.get('paperId')
-                backend = db.backend_type() if callable(db.backend_type) else db.backend_type
-                if backend == BackendType.POSTGRESQL:
-                    ident_sql = (
-                        "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
-                        "VALUES (?, ?, ?, ?, ?, ?) "
-                        "ON CONFLICT (dv_id) DO UPDATE SET "
-                        "doi = EXCLUDED.doi, pmid = EXCLUDED.pmid, pmcid = EXCLUDED.pmcid, "
-                        "arxiv_id = EXCLUDED.arxiv_id, s2_paper_id = EXCLUDED.s2_paper_id"
-                    )
-                else:
-                    ident_sql = (
-                        "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
-                        "VALUES (?, ?, ?, ?, ?, ?)"
-                    )
-                db.execute_query(ident_sql, (dv_id, _doi, _pmid, _pmcid, _arxiv, _s2id), connection=conn)
-            except (sqlite3.OperationalError, DatabaseError) as e:
-                logger.debug("Identifier index update skipped (missing table/unsupported upsert): %s", e)
-            except Exception as e:
-                logger.error("Identifier index update failed for dv_id=%s: %s", dv_id, e, exc_info=True)
-                raise
+            update_version_safe_metadata_in_transaction(
+                db=db,
+                dv_id=dv_id,
+                safe_metadata_json=smj,
+                merged_metadata=new_meta,
+                connection=conn,
+            )
         # Return updated rich details for consistency
         details = get_full_media_details_rich2(
             db_instance=db,
@@ -1705,6 +1426,15 @@ async def create_or_update_version_advanced(
     """
     import json as _json
     try:
+        # Normalize incoming safe_metadata first so malformed identifiers
+        # yield 400 before any DB access.
+        normalized: Optional[Dict[str, Any]] = None
+        if body.safe_metadata is not None:
+            try:
+                normalized = normalize_safe_metadata(body.safe_metadata)
+            except ValueError as ve:
+                raise HTTPException(status_code=400, detail=str(ve))
+
         latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
         if not latest:
             raise HTTPException(status_code=404, detail="No active version found for this media.")
@@ -1721,13 +1451,8 @@ async def create_or_update_version_advanced(
                 latest_sm = None
         if not isinstance(latest_sm, dict):
             latest_sm = {}
-        merged_sm = None
         if body.safe_metadata is not None:
-            # Normalize incoming safe_metadata first
-            try:
-                normalized = normalize_safe_metadata(body.safe_metadata)
-            except ValueError as ve:
-                raise HTTPException(status_code=400, detail=str(ve))
+            assert normalized is not None
             if body.merge:
                 merged_sm = dict(latest_sm)
                 merged_sm.update(normalized)
@@ -1746,7 +1471,7 @@ async def create_or_update_version_advanced(
             prompt = body.prompt if body.prompt is not None else latest.get('prompt')
             analysis = body.analysis_content if body.analysis_content is not None else latest.get('analysis_content')
             with db.transaction():
-                res = db.create_document_version(
+                db.create_document_version(
                     media_id=media_id,
                     content=content,
                     prompt=prompt,
@@ -1768,51 +1493,13 @@ async def create_or_update_version_advanced(
             # Update latest safe_metadata only
             dv_id = latest.get('id')
             with db.transaction() as conn:
-                # Bump version to satisfy sync trigger and refresh last_modified
-                try:
-                    now_ts = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-                except Exception:
-                    now_ts = None
-                if now_ts is not None:
-                    db.execute_query(
-                        "UPDATE DocumentVersions SET safe_metadata=?, version=version+1, last_modified=? WHERE id=? AND deleted=0",
-                        (smj, now_ts, dv_id),
-                        connection=conn,
-                    )
-                else:
-                    db.execute_query(
-                        "UPDATE DocumentVersions SET safe_metadata=?, version=version+1 WHERE id=? AND deleted=0",
-                        (smj, dv_id),
-                        connection=conn,
-                    )
-                # Keep identifier index updated for metadata-search using backend-specific upsert
-                try:
-                    _doi = merged_sm.get('doi') if isinstance(merged_sm, dict) else None
-                    _pmid = merged_sm.get('pmid') if isinstance(merged_sm, dict) else None
-                    _pmcid = merged_sm.get('pmcid') if isinstance(merged_sm, dict) else None
-                    _arxiv = (merged_sm.get('arxiv_id') if isinstance(merged_sm, dict) else None)
-                    _s2id = (merged_sm.get('s2_paper_id') if isinstance(merged_sm, dict) else None)
-                    backend = db.backend_type() if callable(db.backend_type) else db.backend_type
-                    if backend == BackendType.POSTGRESQL:
-                        ident_sql = (
-                            "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
-                            "VALUES (?, ?, ?, ?, ?, ?) "
-                            "ON CONFLICT (dv_id) DO UPDATE SET "
-                            "doi = EXCLUDED.doi, pmid = EXCLUDED.pmid, pmcid = EXCLUDED.pmcid, "
-                            "arxiv_id = EXCLUDED.arxiv_id, s2_paper_id = EXCLUDED.s2_paper_id"
-                        )
-                    else:
-                        ident_sql = (
-                            "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
-                            "VALUES (?, ?, ?, ?, ?, ?)"
-                        )
-                    db.execute_query(ident_sql, (dv_id, _doi, _pmid, _pmcid, _arxiv, _s2id), connection=conn)
-
-                except (sqlite3.OperationalError, DatabaseError) as e:
-                        logger.debug("Identifier index update skipped (missing table/unsupported upsert): %s", e)
-                except Exception as e:
-                        logger.error("Identifier index update failed for dv_id=%s: %s", dv_id, e, exc_info=True)
-                        raise
+                update_version_safe_metadata_in_transaction(
+                    db=db,
+                    dv_id=dv_id,
+                    safe_metadata_json=smj,
+                    merged_metadata=merged_sm,
+                    connection=conn,
+                )
 
             # Return updated rich details for consistency
             details = get_full_media_details_rich2(
@@ -2560,208 +2247,66 @@ def _validate_inputs(media_type: MediaType, urls: Optional[List[str]], files: Op
 _process_uploaded_files = _save_uploaded_files
 
 
-def _prepare_chunking_options_dict(form_data: AddMediaForm) -> Optional[Dict[str, Any]]:
-    """Prepares the dictionary of chunking options based on form data."""
-    if not form_data.perform_chunking:
-        logging.info("Chunking disabled.")
-        return None
+def _prepare_chunking_options_dict(
+    form_data: AddMediaForm,
+) -> Optional[Dict[str, Any]]:
+    """
+    Backwards-compatible wrapper that delegates to the core helper.
 
-    # Determine default chunk method based on media type if not specified
-    default_chunk_method = 'sentences'
-    if form_data.media_type == 'ebook':
-        default_chunk_method = 'ebook_chapters'
-        logging.info("Setting chunk method to 'ebook_chapters' for ebook type.")
-    elif form_data.media_type in ['video', 'audio']:
-        default_chunk_method = 'sentences' # Example default
+    The actual implementation lives in
+    `core.Ingestion_Media_Processing.chunking_options.prepare_chunking_options_dict`.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+        prepare_chunking_options_dict,
+    )
 
-    final_chunk_method = form_data.chunk_method or default_chunk_method
+    return prepare_chunking_options_dict(form_data)
 
-    # Determine size/overlap defaults by media type while respecting user-provided values
-    # Base defaults come from AddMediaForm (size=500, overlap=200). For 'document' and 'email',
-    # align to ProcessDocuments/Emails endpoints: size=1000 when user didn't override.
-    chunk_size_used = form_data.chunk_size
-    chunk_overlap_used = form_data.chunk_overlap
-    if str(form_data.media_type) in ["document", "email"]:
-        try:
-            # If user didn't explicitly pick a different size (i.e., it's the model default 500), bump to 1000
-            if chunk_size_used is None or int(chunk_size_used) == 500:
-                chunk_size_used = 1000
-        except Exception:
-            chunk_size_used = 1000
-    # Email-specific overlap decoupling: use 150 when not explicitly overridden (model default 200)
-    if str(form_data.media_type) == "email":
-        try:
-            if chunk_overlap_used is None or int(chunk_overlap_used) == 200:
-                chunk_overlap_used = 150
-        except Exception:
-            chunk_overlap_used = 150
 
-    # Override to 'ebook_chapters' if media_type is 'ebook', regardless of user input
-    if form_data.media_type == 'ebook':
-        final_chunk_method = 'ebook_chapters'
+def _prepare_common_options(
+    form_data: AddMediaForm,
+    chunk_options: Optional[Dict],
+) -> Dict[str, Any]:
+    """
+    Backwards-compatible wrapper that delegates to the core helper.
 
-    # Infer contextual enablement if related fields provided
-    inferred_enable_contextual = bool(getattr(form_data, 'contextual_llm_model', None) or getattr(form_data, 'context_window_size', None))
-    chunk_options = {
-        'method': final_chunk_method,
-        'max_size': chunk_size_used,
-        'overlap': chunk_overlap_used,
-        'adaptive': form_data.use_adaptive_chunking,
-        'multi_level': form_data.use_multi_level_chunking,
-        # Use specific chunk language, fallback to transcription lang, else None
-        'language': form_data.chunk_language or (form_data.transcription_language if form_data.media_type in ['audio', 'video'] else None),
-        'custom_chapter_pattern': form_data.custom_chapter_pattern,
-        # Add contextual chunking options
-        'enable_contextual_chunking': form_data.enable_contextual_chunking or inferred_enable_contextual,
-        'contextual_llm_model': form_data.contextual_llm_model,
-        'context_window_size': form_data.context_window_size,
-        'context_strategy': form_data.context_strategy,
-        'context_token_budget': form_data.context_token_budget,
-    }
-    # Optional hierarchical support (simple flag at API level)
-    try:
-        hier_flag = getattr(form_data, 'hierarchical_chunking', None)
-        hier_template = getattr(form_data, 'hierarchical_template', None)
-        if hier_flag is True or (hier_template and isinstance(hier_template, dict)):
-            chunk_options['hierarchical'] = True
-            if isinstance(hier_template, dict):
-                chunk_options['hierarchical_template'] = hier_template
-            # Prefer sentences when hierarchical is on for better structure, if not specified by client
-            chunk_options.setdefault('method', 'sentences')
-    except Exception:
-        pass
-    # Inject proposition defaults from config when applicable
-    if final_chunk_method == 'propositions':
-        try:
-            cfg = load_and_log_configs()
-            c = cfg.get('chunking_config', {}) if isinstance(cfg, dict) else {}
-            if 'proposition_engine' in c:
-                chunk_options['proposition_engine'] = c.get('proposition_engine')
-            if 'proposition_prompt_profile' in c:
-                chunk_options['proposition_prompt_profile'] = c.get('proposition_prompt_profile')
-            if 'proposition_aggressiveness' in c:
-                try:
-                    chunk_options['proposition_aggressiveness'] = int(c.get('proposition_aggressiveness'))
-                except Exception:
-                    pass
-            if 'proposition_min_proposition_length' in c:
-                try:
-                    chunk_options['proposition_min_proposition_length'] = int(c.get('proposition_min_proposition_length'))
-                except Exception:
-                    pass
-        except Exception as _cfg_err:
-            logger.debug(f"Proposition config defaults not loaded: {_cfg_err}")
-    logging.info(f"Chunking enabled with options: {chunk_options}")
-    return chunk_options
+    The actual implementation lives in
+    `core.Ingestion_Media_Processing.chunking_options.prepare_common_options`.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+        prepare_common_options,
+    )
 
-def _prepare_common_options(form_data: AddMediaForm, chunk_options: Optional[Dict]) -> Dict[str, Any]:
-    """Prepares the dictionary of common processing options."""
-    # SECURITY: Never pass API keys from client - they will be retrieved from server config
-    return {
-        "keywords": form_data.keywords, # Use the parsed list from the model
-        "custom_prompt": form_data.custom_prompt,
-        "system_prompt": form_data.system_prompt,
-        "overwrite_existing": form_data.overwrite_existing,
-        "perform_analysis": form_data.perform_analysis,
-        "chunk_options": chunk_options, # Pass the prepared dict
-        "api_name": form_data.api_name,  # For backward compatibility
-        "api_provider": form_data.api_provider,  # New field for provider name
-        "model_name": form_data.model_name,  # New field for model name
-        # api_key removed - will be retrieved from server config in processing functions
-        "store_in_db": True, # Assume we always want to store for this endpoint
-        "summarize_recursively": form_data.summarize_recursively,
-        "author": form_data.author # Pass common author
-    }
+    return prepare_common_options(form_data, chunk_options)
 
 
 def _claims_extraction_enabled(form_data: AddMediaForm) -> bool:
-    """Determine whether claim extraction should run for this request."""
-    value = getattr(form_data, "perform_claims_extraction", None)
-    if value is not None:
-        return bool(value)
-    try:
-        return bool(settings.get("ENABLE_INGESTION_CLAIMS", False))
-    except Exception:
-        return False
+    """Backwards-compatible wrapper delegating to core claims utils."""
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.claims_utils import (
+        claims_extraction_enabled,
+    )
+
+    return claims_extraction_enabled(form_data)
 
 
 def _resolve_claims_parameters(form_data: AddMediaForm) -> Tuple[str, int]:
-    """Resolve extractor mode and max claims per chunk from request or settings."""
-    mode = getattr(form_data, "claims_extractor_mode", None)
-    if isinstance(mode, str) and mode.strip():
-        extractor_mode = mode.strip()
-    else:
-        try:
-            extractor_mode = str(settings.get("CLAIM_EXTRACTOR_MODE", "heuristic"))
-        except Exception:
-            extractor_mode = "heuristic"
+    """Backwards-compatible wrapper delegating to core claims utils."""
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.claims_utils import (
+        resolve_claims_parameters,
+    )
 
-    max_per = getattr(form_data, "claims_max_per_chunk", None)
-    if max_per is None:
-        try:
-            max_per = int(settings.get("CLAIMS_MAX_PER_CHUNK", 3))
-        except Exception:
-            max_per = 3
-    else:
-        try:
-            max_per = int(max_per)
-        except Exception:
-            max_per = 3
-    if max_per <= 0:
-        max_per = 1
-    return extractor_mode, max_per
+    return resolve_claims_parameters(form_data)
 
 
-def _prepare_claims_chunks(process_result: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[int, str]]:
-    """
-    Build a chunk list and index->text map suitable for claim extraction.
-    Prefers existing chunks, falls back to segments, and finally full content.
-    """
-    prepared_chunks: List[Dict[str, Any]] = []
-    chunk_text_map: Dict[int, str] = {}
+def _prepare_claims_chunks(
+    process_result: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], Dict[int, str]]:
+    """Backwards-compatible wrapper delegating to core claims utils."""
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.claims_utils import (
+        prepare_claims_chunks,
+    )
 
-    raw_chunks = process_result.get("chunks")
-    if isinstance(raw_chunks, list):
-        for idx, chunk in enumerate(raw_chunks):
-            chunk_dict = chunk or {}
-            text = (chunk_dict.get("text") or chunk_dict.get("content") or "").strip()
-            if not text:
-                continue
-            meta = dict((chunk_dict.get("metadata") or {}).copy())
-            chunk_idx = meta.get("chunk_index", meta.get("index"))
-            try:
-                chunk_idx_int = int(chunk_idx) if chunk_idx is not None else idx
-            except Exception:
-                chunk_idx_int = idx
-            meta["chunk_index"] = chunk_idx_int
-            prepared_chunks.append({"text": text, "metadata": meta})
-            chunk_text_map[chunk_idx_int] = text
-
-    if not prepared_chunks:
-        segments = process_result.get("segments")
-        if isinstance(segments, list):
-            for idx, segment in enumerate(segments):
-                seg_dict = segment or {}
-                text = str(seg_dict.get("text") or "").strip()
-                if not text:
-                    continue
-                meta = {
-                    "chunk_index": idx,
-                    "segment_start": seg_dict.get("start"),
-                    "segment_end": seg_dict.get("end"),
-                    "source": "segment",
-                }
-                prepared_chunks.append({"text": text, "metadata": meta})
-                chunk_text_map[idx] = text
-
-    if not prepared_chunks:
-        content = process_result.get("content")
-        if isinstance(content, str) and content.strip():
-            meta = {"chunk_index": 0, "source": "content"}
-            prepared_chunks.append({"text": content, "metadata": meta})
-            chunk_text_map[0] = content
-
-    return prepared_chunks, chunk_text_map
+    return prepare_claims_chunks(process_result)
 
 
 async def _extract_claims_if_requested(
@@ -2770,74 +2315,13 @@ async def _extract_claims_if_requested(
     loop: asyncio.AbstractEventLoop,
 ) -> Optional[Dict[str, Any]]:
     """
-    Optionally extract claims for a processing result.
-    Returns context with claims and chunk map when extraction ran.
+    Backwards-compatible wrapper delegating to core claims utils.
     """
-    process_result.setdefault("claims", None)
-    process_result.setdefault("claims_details", None)
-
-    if not _claims_extraction_enabled(form_data):
-        return None
-
-    prepared_chunks, chunk_text_map = _prepare_claims_chunks(process_result)
-    extractor_mode, max_per_chunk = _resolve_claims_parameters(form_data)
-
-    if not prepared_chunks:
-        process_result["claims"] = None
-        process_result["claims_details"] = {
-            "enabled": True,
-            "extractor": extractor_mode,
-            "claim_count": 0,
-            "chunks_evaluated": 0,
-            "reason": "no_chunks_available",
-        }
-        return {"claims": [], "chunk_text_map": chunk_text_map, "extractor": extractor_mode, "max_per_chunk": max_per_chunk}
-
-    extraction_callable: Callable[[], List[Dict[str, Any]]] = functools.partial(
-        extract_claims_for_chunks,
-        prepared_chunks,
-        extractor_mode=extractor_mode,
-        max_per_chunk=max_per_chunk,
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.claims_utils import (
+        extract_claims_if_requested,
     )
 
-    try:
-        claims = await loop.run_in_executor(None, extraction_callable)
-    except Exception as exc:
-        process_result["claims"] = None
-        process_result["claims_details"] = {
-            "enabled": True,
-            "extractor": extractor_mode,
-            "error": str(exc),
-            "chunks_evaluated": len(prepared_chunks),
-        }
-        return None
-
-    claim_count = len(claims or [])
-    if claim_count == 0:
-        process_result["claims"] = None
-        process_result["claims_details"] = {
-            "enabled": True,
-            "extractor": extractor_mode,
-            "claim_count": 0,
-            "max_per_chunk": max_per_chunk,
-            "chunks_evaluated": len(prepared_chunks),
-        }
-    else:
-        process_result["claims"] = claims
-        process_result["claims_details"] = {
-            "enabled": True,
-            "extractor": extractor_mode,
-            "claim_count": claim_count,
-            "max_per_chunk": max_per_chunk,
-            "chunks_evaluated": len(prepared_chunks),
-        }
-
-    return {
-        "claims": claims or [],
-        "chunk_text_map": chunk_text_map,
-        "extractor": extractor_mode,
-        "max_per_chunk": max_per_chunk,
-    }
+    return await extract_claims_if_requested(process_result, form_data, loop)
 
 
 async def _persist_claims_if_applicable(
@@ -2848,56 +2332,21 @@ async def _persist_claims_if_applicable(
     loop: asyncio.AbstractEventLoop,
     process_result: Dict[str, Any],
 ) -> None:
-    """Persist extracted claims to the database when a media id is available."""
-    details = process_result.get("claims_details")
-    if not isinstance(details, dict):
-        details = None
+    """
+    Backwards-compatible wrapper delegating to core claims utils.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.claims_utils import (
+        persist_claims_if_applicable,
+    )
 
-    if (
-        not claims_context
-        or not claims_context.get("claims")
-        or not media_id
-        or not db_path
-    ):
-        if details is not None:
-            details.setdefault("stored_in_db", 0)
-            process_result["claims_details"] = details
-        return
-
-    def _worker() -> int:
-        db = MediaDatabase(db_path=db_path, client_id=client_id)
-        try:
-            try:
-                db.soft_delete_claims_for_media(int(media_id))
-            except Exception:
-                pass
-            inserted = store_claims(
-                db,
-                media_id=int(media_id),
-                chunk_texts_by_index=claims_context.get("chunk_text_map", {}),
-                claims=claims_context.get("claims", []),
-                extractor=claims_context.get("extractor") or "heuristic",
-                extractor_version="v1",
-            )
-            return inserted
-        finally:
-            try:
-                db.close_connection()
-            except Exception:
-                pass
-
-    try:
-        inserted_count = await loop.run_in_executor(None, _worker)
-        if details is None:
-            details = {}
-        details["stored_in_db"] = int(inserted_count or 0)
-        process_result["claims_details"] = details
-    except Exception as exc:
-        if details is None:
-            details = {}
-        details["stored_in_db"] = 0
-        details["storage_error"] = str(exc)
-        process_result["claims_details"] = details
+    await persist_claims_if_applicable(
+        claims_context=claims_context,
+        media_id=media_id,
+        db_path=db_path,
+        client_id=client_id,
+        loop=loop,
+        process_result=process_result,
+    )
 
 async def _process_batch_media(
     media_type: MediaType,
@@ -3696,6 +3145,24 @@ async def _add_media_impl(
     - Optionally pass `hierarchical_template` with custom boundary rules:
       `{"boundaries": [{"kind":"my_section","pattern":"^##\\s+Custom","flags":"im"}]}`
     """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
+        add_media_orchestrate,
+    )
+
+    # Delegate to the core orchestration helper so this legacy
+    # implementation is no longer on the hot path. The remaining
+    # code in this function is kept only as historical reference
+    # and is unreachable after this return.
+    return await add_media_orchestrate(
+        background_tasks=background_tasks,
+        form_data=form_data,
+        files=files,
+        db=db,
+        current_user=current_user,
+        usage_log=usage_log,
+        response=response,
+    )
+
     # --- 1. Validation (Now handled by get_add_media_form dependency) ---
     # Basic check for presence of inputs still useful here
     _validate_inputs(form_data.media_type, form_data.urls, files)
@@ -5457,13 +4924,6 @@ def get_process_documents_form(
 
 
 # ─────────────────────── Endpoint Implementation ────────────────
-@router.post(
-    "/process-documents",
-    # status_code=status.HTTP_200_OK, # Determined dynamically
-    summary="Extract, chunk, analyse Documents (NO DB Persistence)",
-    tags=["Media Processing (No DB)"],
-    response_model=Dict[str, Any], # Define a response model if desired
-)
 async def process_documents_endpoint(
     # background_tasks: BackgroundTasks, # Remove if unused
     # 1. Auth + UserID Determined through `get_db_by_user`
@@ -5479,306 +4939,22 @@ async def process_documents_endpoint(
     """
     **Process Documents (No Persistence)**
 
-    Extracts content from `.txt`, `.md`, `.docx`, `.rtf`, `.html`, `.htm`, `.xml` (Pandoc required for `.rtf`),
-    with optional chunking and analysis. Returns artifacts without DB writes.
+    Compatibility shim that forwards to the modular
+    `media.process_documents.process_documents_endpoint` implementation.
 
-    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Documents.md`
-
-    Example:
-    ```python
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files import process_document_content
-    process_document_content(Path("/abs/article.docx"), perform_chunking=True, perform_analysis=True, api_name="openai")
-    ```
-
-    URL inputs must resolve to a supported document format. The server accepts URLs that either:
-    - end with one of: .txt, .md, .docx, .rtf, .html, .htm, .xml, .json, or
-    - provide `Content-Disposition` with a filename that ends with an allowed extension, or
-    - set a supported `Content-Type` (e.g., text/plain, text/markdown, text/html, application/xhtml+xml, application/xml, text/xml, application/json, application/rtf, text/rtf, application/vnd.openxmlformats-officedocument.wordprocessingml.document).
-    Other URLs are rejected with a clear error entry in the batch response.
+    The HTTP route for `/process-documents` is now owned by the modular
+    endpoint; this function remains for direct imports/tests.
     """
-    logger.info("Request received for /process-documents (no persistence).")
-    try:
-        usage_log.log_event(
-            "media.process.document",
-            tags=["no_db"],
-            metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
-        )
-    except Exception:
-        pass
-    logger.debug(f"Form data received: {form_data.model_dump()}") # api_key no longer exists in form
+    from tldw_Server_API.app.api.v1.endpoints.media.process_documents import (
+        process_documents_endpoint as _process_documents_impl,
+    )
 
-    # Guardrails: restrict to a known set of document extensions for this endpoint.
-    # Dedicated code-file processing will be added separately.
-    ALLOWED_DOC_EXTENSIONS = [".txt", ".md", ".docx", ".rtf", ".html", ".htm", ".xml", ".json"]
-
-    _validate_inputs("document", form_data.urls, files)
-
-    # --- Prepare result structure ---
-    batch_result: Dict[str, Any] = {
-        "processed_count": 0,
-        "errors_count": 0,
-        "errors": [],
-        "results": []
-    }
-    # Map to track original ref -> temp path
-    source_map: Dict[str, FilePath] = {} # Store Path objects
-
-    loop = asyncio.get_running_loop()
-    # Use TempDirManager for reliable cleanup
-    with TempDirManager(cleanup=(not form_data.keep_original_file), prefix="process_doc_") as temp_dir_path:
-        temp_dir = FilePath(temp_dir_path)
-        logger.info(f"Using temporary directory: {temp_dir}")
-
-        local_paths_to_process: List[Tuple[str, FilePath]] = [] # (original_ref, local_path)
-
-        # --- Handle Uploads ---
-        if files:
-            # Enforce allowed document extensions for uploads
-            # Allow tests that patch `media.file_validator_instance` to influence the
-            # validator used here while preserving the default dependency wiring.
-            try:
-                from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-
-                validator = getattr(media_mod, "file_validator_instance", file_validator_instance)
-            except Exception:  # pragma: no cover - defensive fallback
-                validator = file_validator_instance
-
-            saved_files, upload_errors = await _save_uploaded_files(
-                files,
-                temp_dir,
-                validator=validator,
-                allowed_extensions=ALLOWED_DOC_EXTENSIONS,
-            )
-            # Add file saving/validation errors to batch_result
-            for err_info in upload_errors:
-                original_filename = err_info.get("input") or err_info.get("original_filename", "Unknown Upload")
-                err_detail = f"Upload error: {err_info['error']}"
-                batch_result["results"].append({
-                    "status": "Error", "input_ref": original_filename,
-                    "error": err_detail, "media_type": "document",
-                    "processing_source": None, "metadata": {}, "content": None, "chunks": None,
-                    "analysis": None, "keywords": form_data.keywords, "warnings": None,
-                    "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint.",
-                    "segments": None # Ensure all expected fields are present
-                })
-                batch_result["errors_count"] += 1
-                batch_result["errors"].append(f"{original_filename}: {err_detail}")
-
-            for info in saved_files:
-                original_ref = info["original_filename"]
-                local_path = FilePath(info["path"])
-                local_paths_to_process.append((original_ref, local_path))
-                source_map[original_ref] = local_path
-                logger.debug(f"Prepared uploaded file for processing: {original_ref} -> {local_path}")
-
-        # --- Handle URLs (Asynchronously) ---
-        if form_data.urls:
-            logger.info(f"Attempting to download {len(form_data.urls)} URLs asynchronously...")
-            download_tasks = []  # Initialize outside the client block
-            url_task_map = {}  # Initialize outside the client block
-
-            # --- MODIFICATION: Create client first ---
-            # Use module-local httpx.AsyncClient so tests can monkeypatch it
-            async with httpx.AsyncClient() as client:
-                # Enforce allowed extensions for documents from URLs; still block generic HTML/XHTML/etc
-                allowed_ext_set = set(ALLOWED_DOC_EXTENSIONS)
-                download_tasks = [
-                    _download_url_async(
-                        client=client,
-                        url=url,
-                        target_dir=temp_dir,
-                        allowed_extensions=allowed_ext_set,
-                        check_extension=True,
-                        # Disallow only clearly unsupported/generic types. Allow HTML/XHTML/XML types here
-                        # because this endpoint handles .html/.htm/.xml content.
-                        disallow_content_types={
-                            "application/msword",
-                            "application/octet-stream",
-                        }
-                    )
-                    for url in form_data.urls
-                ]
-                # --------------------------------------------------------
-
-                # Create the map *after* tasks are created
-                url_task_map = {task: url for task, url in zip(download_tasks, form_data.urls)}
-
-                # Gather results (can stay inside or move just outside client block)
-                # Keeping it inside is fine.
-                if download_tasks:  # Only gather if there are tasks
-                    download_results = await asyncio.gather(*download_tasks, return_exceptions=True)
-                else:
-                    download_results = []  # No tasks to gather
-            # --- End MODIFICATION ---
-
-            # Process results (this loop remains largely the same)
-            # Ensure download_tasks and download_results align if gather was conditional
-            if download_tasks:  # Check if tasks were created/gathered
-                for task, result in zip(download_tasks, download_results):
-                    # Get original_url using the pre-built map
-                    original_url = url_task_map.get(task, "Unknown URL")  # Use .get for safety
-
-                    if isinstance(result, FilePath):
-                        downloaded_path = result
-                        local_paths_to_process.append((original_url, downloaded_path))
-                        source_map[original_url] = downloaded_path  # Use original_url as key
-                        logger.debug(f"Prepared downloaded URL for processing: {original_url} -> {downloaded_path}")
-                    elif isinstance(result, Exception):
-                        error = result
-                        logger.error(f"Download or preparation failed for URL {original_url}: {error}", exc_info=False)
-                        # Use the specific error message from the exception
-                        err_detail = f"Download/preparation failed: {str(error)}"
-                        batch_result["results"].append({
-                            "status": "Error", "input_ref": original_url, "error": err_detail,
-                            "media_type": "document",
-                            "processing_source": None, "metadata": {}, "content": None, "chunks": None,
-                            "analysis": None, "keywords": form_data.keywords, "warnings": None,
-                            "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint.",
-                            "segments": None
-                        })
-                        batch_result["errors_count"] += 1
-                        batch_result["errors"].append(f"{original_url}: {err_detail}")
-                    else:
-                        logger.error(f"Unexpected result type '{type(result)}' for URL download task: {original_url}")
-                        err_detail = f"Unexpected download result type: {type(result).__name__}"
-                        batch_result["results"].append({
-                            "status": "Error", "input_ref": original_url, "error": err_detail,
-                            "media_type": "document",
-                            "processing_source": None, "metadata": {}, "content": None, "chunks": None,
-                            "analysis": None, "keywords": form_data.keywords, "warnings": None,
-                            "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint.",
-                            "segments": None
-                        })
-                        batch_result["errors_count"] += 1
-                        batch_result["errors"].append(f"{original_url}: {err_detail}")
-
-
-        # --- Check if any files are ready for processing ---
-        if not local_paths_to_process:
-            logger.warning("No valid document sources found or prepared after handling uploads/URLs.")
-            status_code = status.HTTP_207_MULTI_STATUS if batch_result["errors_count"] > 0 else status.HTTP_400_BAD_REQUEST
-            # Ensure results already added are returned
-            return JSONResponse(status_code=status_code, content=batch_result)
-
-        logger.info(f"Starting processing for {len(local_paths_to_process)} document(s).")
-
-        # --- Prepare options for the worker ---
-        # Use helper or form_data directly
-        chunk_options_dict = _prepare_chunking_options_dict(form_data) if form_data.perform_chunking else None
-
-        # --- Create and run processing tasks ---
-        processing_tasks = []
-        for original_ref, doc_path in local_paths_to_process:
-            partial_func = functools.partial(
-                docs.process_document_content,
-                doc_path=doc_path,
-                # Pass relevant options from form_data
-                perform_chunking=form_data.perform_chunking,
-                chunk_options=chunk_options_dict,
-                perform_analysis=form_data.perform_analysis,
-                summarize_recursively=form_data.summarize_recursively,
-                api_name=form_data.api_name,
-                api_key=None,  # Use server-configured credentials if needed; explicit None satisfies signature
-                custom_prompt=form_data.custom_prompt,
-                system_prompt=form_data.system_prompt,
-                title_override=form_data.title,
-                author_override=form_data.author,
-                keywords=form_data.keywords, # Pass the LIST validated by Pydantic
-            )
-            processing_tasks.append(loop.run_in_executor(None, partial_func))
-
-        # Gather results from processing tasks
-        task_results = await asyncio.gather(*processing_tasks, return_exceptions=True)
-
-    # --- Combine and Finalize Results (Outside temp dir context) ---
-    # Logic similar to ebook endpoint
-    for i, res in enumerate(task_results):
-        original_ref = local_paths_to_process[i][0] # Get corresponding original ref
-
-        if isinstance(res, dict):
-            # Ensure mandatory fields and DB fields are null/default
-            res["input_ref"] = original_ref # Set input_ref to original URL/filename
-            res["db_id"] = None
-            res["db_message"] = "Processing only endpoint."
-            res.setdefault("status", "Error")
-            res.setdefault("media_type", "document")
-            res.setdefault("error", None)
-            res.setdefault("warnings", None)
-            res.setdefault("metadata", {})
-            res.setdefault("content", None)
-            res.setdefault("chunks", None)
-            res.setdefault("analysis", None)
-            res.setdefault("keywords", [])
-            res.setdefault("analysis_details", {})
-            res.setdefault("segments", None) # Ensure segments field exists
-
-            batch_result["results"].append(res) # Add the processed/error dict
-
-            # Update counts based on status
-            if res["status"] in ["Success", "Warning"]:
-                 batch_result["processed_count"] += 1
-                 if res["status"] == "Warning" and res.get("warnings"):
-                     for warn in res["warnings"]:
-                          batch_result["errors"].append(f"{original_ref}: [Warning] {warn}")
-                     # Don't increment errors_count for warnings
-            else: # Status is Error
-                 batch_result["errors_count"] += 1
-                 error_msg = f"{original_ref}: {res.get('error', 'Unknown processing error')}"
-                 if error_msg not in batch_result["errors"]:
-                    batch_result["errors"].append(error_msg)
-
-        elif isinstance(res, Exception): # Handle exceptions returned by asyncio.gather
-             logger.error(f"Task execution failed for {original_ref} with exception: {res}", exc_info=res)
-             error_detail = f"Task execution failed: {type(res).__name__}: {str(res)}"
-             batch_result["results"].append({
-                 "status": "Error", "input_ref": original_ref, "error": error_detail,
-                 "media_type": "document", "db_id": None, "db_message": "Processing only endpoint.",
-                 "processing_source": str(local_paths_to_process[i][1]), # Include path if possible
-                 "metadata": {}, "content": None, "chunks": None, "analysis": None,
-                 "keywords": form_data.keywords, "warnings": None, "analysis_details": {}, "segments": None,
-             })
-             batch_result["errors_count"] += 1
-             if error_detail not in batch_result["errors"]:
-                batch_result["errors"].append(f"{original_ref}: {error_detail}")
-        else: # Should not happen
-             logger.error(f"Received unexpected result type from document worker task for {original_ref}: {type(res)}")
-             error_detail = "Invalid result type from document worker."
-             batch_result["results"].append({
-                 "status": "Error", "input_ref": original_ref, "error": error_detail,
-                 "media_type": "document", "db_id": None, "db_message": "Processing only endpoint.",
-                 "processing_source": str(local_paths_to_process[i][1]),
-                 "metadata": {}, "content": None, "chunks": None, "analysis": None,
-                 "keywords": form_data.keywords, "warnings": None, "analysis_details": {}, "segments": None,
-             })
-             batch_result["errors_count"] += 1
-             if error_detail not in batch_result["errors"]:
-                 batch_result["errors"].append(f"{original_ref}: {error_detail}")
-
-    # --- Determine Final Status Code ---
-    # (Same logic as ebook endpoint)
-    if batch_result["errors_count"] == 0 and batch_result["processed_count"] > 0:
-        final_status_code = status.HTTP_200_OK
-    elif batch_result["errors_count"] > 0: # Includes partial success/warnings and all errors
-        final_status_code = status.HTTP_207_MULTI_STATUS
-    elif batch_result["processed_count"] == 0 and batch_result["errors_count"] == 0:
-         # This case means no valid inputs were processed or resulted in error state
-         # Could happen if only upload errors occurred before processing started
-         # Check if results list is non-empty (contains only upload errors)
-         if batch_result["results"]:
-              final_status_code = status.HTTP_207_MULTI_STATUS # Had only input errors
-         else:
-              final_status_code = status.HTTP_400_BAD_REQUEST # No valid input provided or prepared
-    else:
-        logger.warning("Reached unexpected state for final status code determination.")
-        final_status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-
-    log_level = "INFO" if final_status_code == status.HTTP_200_OK else "WARNING"
-    logger.log(log_level,
-               f"/process-documents request finished with status {final_status_code}. "
-               f"Processed: {batch_result['processed_count']}, Errors: {batch_result['errors_count']}")
-
-    # --- Return Final Response ---
-    return JSONResponse(status_code=final_status_code, content=batch_result)
+    return await _process_documents_impl(
+        db=db,
+        form_data=form_data,
+        files=files,
+        usage_log=usage_log,
+    )
 
 #
 # End of Document Processing Endpoint
@@ -6658,232 +5834,28 @@ async def ingest_web_content(
     if not request.urls:
         raise HTTPException(status_code=400, detail="At least one URL is required")
 
-    # Shared usage logging and topic monitoring
-    await ingest_web_content_orchestrate(
+    # Shared usage logging, topic monitoring, and per-method scraping are
+    # handled by the service helper in `web_scraping_service`.
+    raw_results: List[Dict[str, Any]] = []
+    helper_results = await ingest_web_content_orchestrate(
         request=request,
         db=db,
         usage_log=usage_log,
     )
+    if helper_results:
+        raw_results.extend(helper_results)
 
-    # If any array is shorter than # of URLs, pad it so we can zip them easily
-    num_urls = len(request.urls)
-    titles = request.titles or []
-    authors = request.authors or []
-    keywords = request.keywords or []
-
-    if len(titles) < num_urls:
-        titles += ["Untitled"] * (num_urls - len(titles))
-    if len(authors) < num_urls:
-        authors += ["Unknown"] * (num_urls - len(authors))
-    if len(keywords) < num_urls:
-        keywords += ["no_keyword_set"] * (num_urls - len(keywords))
-
-    # 2) Parse cookies if needed
-    custom_cookies_list = None
-    if request.use_cookies and request.cookies:
-        try:
-            parsed = json.loads(request.cookies)
-            # if it's a dict, wrap in a list
-            if isinstance(parsed, dict):
-                custom_cookies_list = [parsed]
-            elif isinstance(parsed, list):
-                custom_cookies_list = parsed
-            else:
-                raise ValueError("Cookies must be a dict or list of dicts.")
-        except json.JSONDecodeError as e:
-            raise HTTPException(status_code=400, detail="Invalid JSON format for cookies")
-
-    # 3) Choose the appropriate scraping method
+    # 2) Choose the appropriate scraping method (for logging / validation)
     scrape_method = request.scrape_method
     logging.info(f"Selected scrape method: {scrape_method}")
 
-    # We'll accumulate all “raw” results (scraped data) in a list of dicts
-    raw_results = []
-    try:
-        from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-
-        scrape_task = getattr(media_mod, "process_web_scraping_task", process_web_scraping_task)
-    except Exception:  # pragma: no cover - defensive fallback
-        scrape_task = process_web_scraping_task
-
-    # Helper function to perform summarization (if needed)
-    async def maybe_summarize_one(article: dict) -> dict:
-        if not request.perform_analysis:
-            article["analysis"] = None
-            return article
-
-        content = article.get("content", "")
-        if not content:
-            article["analysis"] = "No content to analyze."
-            return article
-
-        # Analyze
-        analysis_results = analyze(
-            input_data=content,
-            custom_prompt_arg=request.custom_prompt or "Summarize this article.",
-            api_name=request.api_name,
-            # api_key removed - retrieved from server config
-            temp=0.7,
-            system_message=request.system_prompt or "Act as a professional summarizer."
-        )
-        article["analysis"] = analysis_results
-
-        # Rolling summarization or confab check
-        if request.perform_rolling_summarization:
-            logging.info("Performing rolling summarization (placeholder).")
-            # Insert logic for multi-step summarization if needed
-        if request.perform_confabulation_check_of_analysis:
-            logging.info("Performing confabulation check of analysis (placeholder).")
-
-        return article
-
-    #####################################################################
-    # INDIVIDUAL
-    #####################################################################
-    if scrape_method == ScrapeMethod.INDIVIDUAL:
-        # Possibly multiple URLs
-        # You already have a helper: scrape_and_summarize_multiple(...),
-        # but we can do it manually to show the synergy with your “titles/authors” approach:
-        # If you’d rather skip multiple loops, you can rely on your library.
-        # For example, your library already can handle “custom_article_titles” as strings.
-        # But here's a direct approach:
-
-        for i, url in enumerate(request.urls):
-            title_ = titles[i]
-            author_ = authors[i]
-            kw_ = keywords[i]
-
-            # Scrape one URL
-            article_data = await scrape_article(url, custom_cookies=custom_cookies_list)
-            if not article_data or not article_data.get("extraction_successful"):
-                logging.warning(f"Failed to scrape: {url}")
-                continue
-
-            # Overwrite metadata with user-supplied fields
-            article_data["title"] = title_ or article_data["title"]
-            article_data["author"] = author_ or article_data["author"]
-            article_data["keywords"] = kw_
-
-            # Summarize if requested
-            article_data = await maybe_summarize_one(article_data)
-            raw_results.append(article_data)
-
-    #####################################################################
-    # SITEMAP
-    #####################################################################
-    elif scrape_method == ScrapeMethod.SITEMAP:
-        # Typically the user will supply only 1 URL in request.urls[0]
-        sitemap_url = request.urls[0]
-        # Sync approach vs. async approach: your library’s `scrape_from_sitemap`
-        # is a synchronous function that returns a list of articles or partial results.
-
-        # You might want to run it in a thread if it’s truly blocking:
-        def scrape_in_thread():
-            return scrape_from_sitemap(sitemap_url)
-
-        loop = asyncio.get_running_loop()
-        results = await loop.run_in_executor(None, scrape_in_thread)
-
-        # The “scrape_from_sitemap” function might return partial dictionaries
-        # that do not have the final summarization. Let’s handle summarization next:
-        # We unify everything to raw_results.
-        if not results:
-            logging.warning("No articles returned from sitemap scraping.")
-        else:
-            # Each item is presumably a dict with at least {url, title, content}
-            for r in results:
-                # Summarize if needed
-                r = await maybe_summarize_one(r)
-                raw_results.append(r)
-
-    #####################################################################
-    # URL LEVEL
-    #####################################################################
-    elif scrape_method == ScrapeMethod.URL_LEVEL:
-        # Route to enhanced service to honor crawl flags and modern traversal
-        base_url = request.urls[0]
-        level = request.url_level or 2
-
-        try:
-            service_result = await scrape_task(
-                scrape_method="URL Level",
-                url_input=base_url,
-                url_level=level,
-                max_pages=request.max_pages or 10,
-                max_depth=level,
-                summarize_checkbox=bool(getattr(request, 'perform_analysis', False)),
-                custom_prompt=getattr(request, 'custom_prompt', None),
-                api_name=getattr(request, 'api_name', None),
-                api_key=None,
-                keywords=",".join(request.keywords or []) if isinstance(request.keywords, list) else (request.keywords or ""),
-                custom_titles=None,
-                system_prompt=getattr(request, 'system_prompt', None),
-                temperature=0.7,
-                custom_cookies=custom_cookies_list,
-                mode="ephemeral",
-                user_agent=getattr(request, 'user_agent', None) if hasattr(request, 'user_agent') else None,
-                custom_headers=None,
-                crawl_strategy=getattr(request, 'crawl_strategy', None),
-                include_external=getattr(request, 'include_external', None),
-                score_threshold=getattr(request, 'score_threshold', None),
-            )
-            articles: List[Dict[str, Any]] = []
-            if isinstance(service_result, dict):
-                if service_result.get("articles"):
-                    articles = service_result["articles"]
-                elif service_result.get("results"):
-                    articles = service_result["results"]
-            # Map summary->analysis for compatibility with Friendly endpoint
-            for r in articles:
-                if isinstance(r, dict) and 'summary' in r and 'analysis' not in r:
-                    r['analysis'] = r.get('summary')
-            raw_results.extend(articles)
-        except Exception as e:
-            logging.error(f"Enhanced URL Level crawl failed: {e}")
-            raise
-
-    #####################################################################
-    # RECURSIVE SCRAPING
-    #####################################################################
-    elif scrape_method == ScrapeMethod.RECURSIVE:
-        # Route to enhanced service to honor crawl flags and modern traversal
-        base_url = request.urls[0]
-        max_pages = request.max_pages or 10
-        max_depth = request.max_depth or 3
-
-        try:
-            service_result = await scrape_task(
-                scrape_method="Recursive Scraping",
-                url_input=base_url,
-                url_level=None,
-                max_pages=max_pages,
-                max_depth=max_depth,
-                summarize_checkbox=bool(getattr(request, 'perform_analysis', False)),
-                custom_prompt=getattr(request, 'custom_prompt', None),
-                api_name=getattr(request, 'api_name', None),
-                api_key=None,
-                keywords=",".join(request.keywords or []) if isinstance(request.keywords, list) else (request.keywords or ""),
-                custom_titles=None,
-                system_prompt=getattr(request, 'system_prompt', None),
-                temperature=0.7,
-                custom_cookies=custom_cookies_list,
-                mode="ephemeral",
-                user_agent=getattr(request, 'user_agent', None) if hasattr(request, 'user_agent') else None,
-                custom_headers=None,
-                crawl_strategy=getattr(request, 'crawl_strategy', None),
-                include_external=getattr(request, 'include_external', None),
-                score_threshold=getattr(request, 'score_threshold', None),
-            )
-            articles = service_result.get("articles", []) if isinstance(service_result, dict) else []
-            for r in articles:
-                if isinstance(r, dict) and 'summary' in r and 'analysis' not in r:
-                    r['analysis'] = r.get('summary')
-            raw_results.extend(articles)
-        except Exception as e:
-            logging.error(f"Enhanced recursive crawl failed: {e}")
-            raise
-
-    else:
+    # For now, treat any scrape_method outside the known enum as invalid.
+    if scrape_method not in (
+        ScrapeMethod.INDIVIDUAL,
+        ScrapeMethod.SITEMAP,
+        ScrapeMethod.URL_LEVEL,
+        ScrapeMethod.RECURSIVE,
+    ):
         raise HTTPException(
             status_code=400,
             detail=f"Unknown scrape method: {scrape_method}"
@@ -7025,8 +5997,6 @@ class WebScrapingRequest(BaseModel):
     include_external: Optional[bool] = None
     score_threshold: Optional[float] = None
 
-@router.post("/process-web-scraping",
-             dependencies=[Depends(PermissionChecker(MEDIA_CREATE)), Depends(rbac_rate_limit("media.create"))])
 async def process_web_scraping_endpoint(
         payload: WebScrapingRequest,
         # 1. Auth + UserID Determined through `get_db_by_user`
@@ -7036,60 +6006,21 @@ async def process_web_scraping_endpoint(
         usage_log: UsageEventLogger = Depends(get_usage_event_logger),
     ):
     """
-    Ingest / scrape data from websites or sitemaps, optionally summarize,
-    then either store ephemeral or persist in DB.
+    Compatibility shim that forwards to the modular
+    `media.process_web_scraping.process_web_scraping_endpoint`.
+
+    The HTTP route for `/process-web-scraping` is now owned by the
+    modular endpoint; this function remains for direct imports/tests.
     """
-    try:
-        # Log usage for web scraping process endpoint
-        try:
-            usage_log.log_event(
-                "webscrape.process",
-                tags=[str(payload.scrape_method or "")],
-                metadata={"mode": payload.mode, "max_pages": payload.max_pages, "max_depth": payload.max_depth},
-            )
-        except Exception:
-            pass
+    from tldw_Server_API.app.api.v1.endpoints.media.process_web_scraping import (  # type: ignore[import-not-found]
+        process_web_scraping_endpoint as _process_web_scraping_impl,
+    )
 
-        # Delegates to the service; allow tests to patch the task via the
-        # `media` shim while defaulting to the imported helper.
-        try:
-            from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-
-            task = getattr(media_mod, "process_web_scraping_task", process_web_scraping_task)
-        except Exception:  # pragma: no cover - defensive fallback
-            task = process_web_scraping_task
-
-        result = await task(
-            scrape_method=payload.scrape_method,
-            url_input=payload.url_input,
-            url_level=payload.url_level,
-            max_pages=payload.max_pages,
-            max_depth=payload.max_depth,
-            summarize_checkbox=payload.summarize_checkbox,
-            custom_prompt=payload.custom_prompt,
-            api_name=payload.api_name,
-            api_key=None,  # API key retrieved from server config
-            keywords=payload.keywords or "",
-            custom_titles=payload.custom_titles,
-            system_prompt=payload.system_prompt,
-            temperature=payload.temperature,
-            custom_cookies=payload.custom_cookies,
-            mode=payload.mode,
-            user_id=getattr(getattr(db, "user", None), "id", None) if db is not None else None,
-            user_agent=payload.user_agent,
-            custom_headers=payload.custom_headers,
-            crawl_strategy=payload.crawl_strategy,
-            include_external=payload.include_external,
-            score_threshold=payload.score_threshold,
-        )
-        return result
-    except Exception as e:
-        import traceback
-        error_detail = f"Web scraping failed: {str(e)}"
-        logger.error(f"Web scraping endpoint error: {error_detail}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        logger.error(f"Request details - scrape_method: {payload.scrape_method}, url_input: {payload.url_input[:100] if payload.url_input else 'None'}")
-        raise HTTPException(status_code=500, detail=error_detail)
+    return await _process_web_scraping_impl(
+        payload=payload,
+        db=db,
+        usage_log=usage_log,
+    )
 
 #
 # End of Web Scraping Ingestion

@@ -454,6 +454,9 @@ else:
     # Media Endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
+        from tldw_Server_API.app.api.v1.endpoints.web_scraping import (
+            router as web_scraping_router,
+        )
         _HAS_MEDIA = True
     except Exception as _media_import_err:  # noqa: BLE001
         logger.warning(f"Media endpoints unavailable; skipping import: {_media_import_err}")

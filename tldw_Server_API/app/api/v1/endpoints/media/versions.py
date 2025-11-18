@@ -33,6 +33,8 @@ def _is_test_mode() -> bool:
 @router.get(
     "/{media_id:int}/versions",
     summary="List Media Versions",
+    response_model=List[VersionDetailResponse],
+    response_model_exclude_none=True,
 )
 async def list_versions(
     media_id: int = Path(..., description="The ID of the media item"),
@@ -166,6 +168,8 @@ async def list_versions(
 @router.get(
     "/{media_id:int}/versions/{version_number:int}",
     summary="Get Specific Media Version",
+    response_model=VersionDetailResponse,
+    response_model_exclude_none=True,
 )
 async def get_version(
     media_id: int = Path(..., description="The ID of the media item"),

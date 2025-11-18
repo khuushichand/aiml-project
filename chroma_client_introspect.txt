@@ -1,2 +1,0 @@
-client type: <class 'chromadb.api.client.Client'>
-settings_obj: None
