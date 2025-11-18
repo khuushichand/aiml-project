@@ -6275,6 +6275,40 @@ async def _download_url_async(
         raise RuntimeError(f"Failed to download or save {url}: {e}") from e  # Use RuntimeError for unexpected
 
 
+async def _add_media_impl_shim(
+    background_tasks: BackgroundTasks,
+    form_data: AddMediaForm = Depends(get_add_media_form),
+    files: Optional[List[UploadFile]] = File(
+        None,
+        description="List of files to upload",
+    ),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    current_user: User = Depends(get_request_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
+    response: FastAPIResponse = None,
+) -> Any:
+    """
+    Backwards-compatible shim for the legacy add-media implementation.
+
+    Delegates to the core ``add_media_orchestrate`` helper so that all
+    `/media/add` behaviour lives under the core ingestion module while
+    preserving the original name and signature for any existing callers.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
+        add_media_orchestrate,
+    )
+
+    return await add_media_orchestrate(
+        background_tasks=background_tasks,
+        form_data=form_data,
+        files=files,
+        db=db,
+        current_user=current_user,
+        usage_log=usage_log,
+        response=response,
+    )
+
+
 async def _process_batch_media_shim(
     media_type: MediaType,
     urls: List[str],
@@ -6313,6 +6347,7 @@ async def _process_batch_media_shim(
 
 
 # Rebind legacy helper names to shims so core implementations are used.
+_add_media_impl = _add_media_impl_shim  # type: ignore[assignment]
 _process_batch_media = _process_batch_media_shim  # type: ignore[assignment]
 
 
