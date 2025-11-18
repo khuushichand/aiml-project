@@ -460,6 +460,36 @@ Clients **must not** assume a 200 response or treat all responses as audio bytes
 An opt-in legacy mode exists (`performance.stream_errors_as_audio: true` or `TTS_STREAM_ERRORS_AS_AUDIO=1`)
 that embeds `ERROR: ...` bytes in the stream, but this mode is not recommended for production APIs.
 
+### Text Sanitization and Strict Validation
+
+Incoming TTS text is passed through a sanitizer (`TTSInputValidator`) that:
+
+- Normalizes Unicode and removes HTML tags/entities.
+- Strips or rejects potentially dangerous patterns (e.g., obvious SQL/command injections such as `whoami`, `curl evil`, `rm -rf /`, `../../etc/passwd`).
+- Enforces provider-aware text length limits and basic repetition checks.
+
+By default, **strict validation is enabled**:
+
+- `strict_validation: true` in `tts_providers_config.yaml` (or omitted, since the default is true), or
+- `TTS_STRICT_VALIDATION=1`
+
+In strict mode, dangerous patterns cause a 400 error rather than being silently stripped. This is recommended for multi-tenant or untrusted deployments.
+
+For trusted/local deployments, you can relax this behavior by setting:
+
+```yaml
+# tldw_Server_API/Config_Files/tts_providers_config.yaml
+strict_validation: false
+```
+
+or via environment:
+
+```bash
+export TTS_STRICT_VALIDATION=0
+```
+
+In non-strict mode, dangerous substrings are removed, but the request is still processed. Clients should be aware that meta-text like “the `whoami` command” may be altered or rejected depending on the chosen validation mode.
+
 3. **Validate Audio Quality**:
 ```python
 import librosa

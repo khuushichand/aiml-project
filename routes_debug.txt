@@ -1,0 +1,8 @@
+ROUTE /api/v1/media/search {'POST'}
+NAME search_media_items
+SIGNATURE (request: 'Request', search_params: 'SearchRequest' = Body(PydanticUndefined), page: 'int' = Query(1), results_per_page: 'int' = Query(10), db: 'MediaDatabase' = Depends(dependency=<function get_media_db_for_user at 0x15413ad40>, use_cache=True), if_none_match: 'Optional[str]' = Header(None)) -> 'Response'
+---
+ROUTE /api/v1/media/search {'POST'}
+NAME search_media_items
+SIGNATURE (request: starlette.requests.Request, search_params: tldw_Server_API.app.api.v1.schemas.media_request_models.SearchRequest, page: int = Query(1), results_per_page: int = Query(10), db: tldw_Server_API.app.core.DB_Management.Media_DB_v2.MediaDatabase = Depends(dependency=<function get_media_db_for_user at 0x15413ad40>, use_cache=True), if_none_match: Optional[str] = Header(None))
+---

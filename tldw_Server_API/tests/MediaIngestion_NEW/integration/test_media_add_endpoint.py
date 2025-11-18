@@ -15,7 +15,9 @@ from fastapi import status
 
 from tldw_Server_API.tests.MediaIngestion_NEW.golden_media_add import (
     DOCUMENT_ADD_GOLDEN_RESPONSE,
+    DOCUMENT_MIXED_URL_FILE_GOLDEN_RESPONSE,
     EMAIL_ADD_GOLDEN_RESPONSE,
+    EMAIL_MIXED_URL_FILE_GOLDEN_RESPONSE,
     VIDEO_ADD_GOLDEN_RESPONSE,
     clone_results,
 )
@@ -625,6 +627,50 @@ class TestMediaAddGoldenEnvelopes:
         assert response.json() == DOCUMENT_ADD_GOLDEN_RESPONSE
 
     @pytest.mark.unit
+    def test_add_document_mixed_url_and_file_golden_envelope(
+        self,
+        test_client,
+        auth_headers,
+        test_text_file,
+    ):
+        """Verify mixed URL+file document /media/add envelope matches golden sample."""
+        from tldw_Server_API.app.core.Ingestion_Media_Processing import (  # type: ignore
+            persistence as persistence_mod,
+        )
+
+        url_payload, file_payload = clone_results(
+            DOCUMENT_MIXED_URL_FILE_GOLDEN_RESPONSE
+        )
+
+        async def fake_process_document_like_item(*args, **kwargs):
+            is_url = kwargs.get("is_url", False)
+            return dict(url_payload if is_url else file_payload)
+
+        with patch.object(
+            persistence_mod,
+            "process_document_like_item",
+            new=fake_process_document_like_item,
+        ):
+            with open(test_text_file, "rb") as f:
+                response = test_client.post(
+                    "/api/v1/media/add",
+                    data=[
+                        ("media_type", "document"),
+                        ("urls", "https://golden.example/document-url-1"),
+                    ],
+                    files=[
+                        (
+                            "files",
+                            ("golden_document_upload.txt", f, "text/plain"),
+                        )
+                    ],
+                    headers=auth_headers,
+                )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json() == DOCUMENT_MIXED_URL_FILE_GOLDEN_RESPONSE
+
+    @pytest.mark.unit
     def test_add_email_golden_envelope(
         self,
         test_client,
@@ -669,3 +715,56 @@ class TestMediaAddGoldenEnvelopes:
 
         assert response.status_code == status.HTTP_200_OK
         assert response.json() == EMAIL_ADD_GOLDEN_RESPONSE
+
+    @pytest.mark.unit
+    def test_add_email_mixed_url_and_file_golden_envelope(
+        self,
+        test_client,
+        auth_headers,
+    ):
+        """Verify mixed URL+file email /media/add envelope matches golden sample."""
+        from io import BytesIO
+
+        from tldw_Server_API.app.core.Ingestion_Media_Processing import (  # type: ignore
+            persistence as persistence_mod,
+        )
+
+        url_payload, file_payload = clone_results(
+            EMAIL_MIXED_URL_FILE_GOLDEN_RESPONSE
+        )
+
+        async def fake_process_document_like_item(*args, **kwargs):
+            is_url = kwargs.get("is_url", False)
+            return dict(url_payload if is_url else file_payload)
+
+        # Minimal EML payload; content is ignored because helper is stubbed.
+        eml_bytes = (
+            b"From: Alice <alice@example.com>\r\n"
+            b"To: Bob <bob@example.com>\r\n"
+            b"Subject: Golden Email Mixed\r\n"
+            b"MIME-Version: 1.0\r\n"
+            b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+            b"Hello from golden mixed email.\r\n"
+        )
+
+        files = {
+            "files": ("golden_email_upload.eml", BytesIO(eml_bytes), "message/rfc822"),
+        }
+
+        with patch.object(
+            persistence_mod,
+            "process_document_like_item",
+            new=fake_process_document_like_item,
+        ):
+            response = test_client.post(
+                "/api/v1/media/add",
+                data=[
+                    ("media_type", "email"),
+                    ("urls", "https://golden.example/email-archive-1.zip"),
+                ],
+                files=files,
+                headers=auth_headers,
+            )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json() == EMAIL_MIXED_URL_FILE_GOLDEN_RESPONSE

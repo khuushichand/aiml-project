@@ -81,7 +81,8 @@ Provider support snapshot (indicative): OpenAI (cloud), ElevenLabs (cloud, cloni
   - Missing or misconfigured adapters are skipped after failure; optional retry window controlled by `adapter_failure_retry_seconds`.
   - Quotas/rate limits may short-circuit requests; check Usage/Audio quota logs when debugging.
 - Roadmap/TODOs:
-  - AllTalk adapter; adaptive chunk shaping; provider health probes and proactive warmups; richer voice metadata unification.
+  - AllTalk adapter (enum/config placeholder only; requests currently return "provider not configured").
+  - Adaptive chunk shaping; provider health probes and proactive warmups; richer voice metadata unification.
 
 Example: programmatic usage
 

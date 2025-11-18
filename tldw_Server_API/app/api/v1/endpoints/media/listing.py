@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import (
     APIRouter,
+    Body,
     Depends,
     Header,
     HTTPException,
@@ -21,6 +22,7 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 from tldw_Server_API.app.api.v1.schemas.media_request_models import SearchRequest
+from pydantic import ValidationError
 from tldw_Server_API.app.api.v1.schemas.media_response_models import (
     MediaListItem,
     MediaListResponse,
@@ -454,7 +456,7 @@ async def get_by_identifier(
 @limiter.limit(_SEARCH_RATE_LIMIT)
 async def search_media_items(
     request: Request,
-    search_params: SearchRequest,
+    payload: Dict[str, Any] = Body(...),
     page: int = Query(1, ge=1, description="Page number"),
     results_per_page: int = Query(
         10,
@@ -472,6 +474,13 @@ async def search_media_items(
     ETag helpers for conditional responses.
     """
     try:
+        try:
+            search_params = SearchRequest(**payload)
+        except ValidationError as ve:
+            raise HTTPException(
+                status_code=HTTP_422_UNPROCESSABLE,
+                detail=ve.errors(),
+            ) from ve
         query_text_for_match: Optional[str] = None
         if search_params.exact_phrase:
             query_text_for_match = f'"{search_params.exact_phrase.strip()}"'

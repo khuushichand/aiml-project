@@ -29,7 +29,14 @@ from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 # TTS Adapter Registry and Factory
 
 class TTSProvider(Enum):
-    """Enumeration of available TTS providers"""
+    """
+    Enumeration of TTS providers known to the service.
+
+    Note: some members (for example, ALLTALK and MOCK) are placeholders
+    without concrete adapters registered in DEFAULT_ADAPTERS. Requests
+    targeting those providers will surface as "provider not configured"
+    at runtime until an adapter is implemented and enabled.
+    """
     OPENAI = "openai"
     KOKORO = "kokoro"
     HIGGS = "higgs"

@@ -335,6 +335,64 @@ class TestMetricsCollection:
         assert metrics_registry.increment.called
         assert metrics_registry.observe.called
 
+    @pytest.mark.unit
+    async def test_soft_failure_no_audio_records_primary_failure_metrics(self):
+        """
+        When a provider returns no audio but no exception, generate_speech
+        should record a failure for the primary provider before falling back.
+        """
+        from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
+
+        # Set up a service with a mocked factory/adapter
+        adapter = MagicMock()
+        adapter.provider_name = "openai"
+        adapter.generate = AsyncMock(return_value=TTSResponse())
+
+        factory = MagicMock()
+        factory.get_adapter_by_model = AsyncMock(return_value=adapter)
+        factory.registry = MagicMock()
+        factory.registry.get_adapter = AsyncMock(return_value=adapter)
+        factory.registry.config = {"performance": {"max_concurrent_generations": 1, "stream_errors_as_audio": False}}
+
+        service = TTSServiceV2(factory=factory)
+        service.factory = factory
+        service._factory = factory
+
+        # Stub metrics and internal helpers
+        service.metrics = MagicMock()
+        service._record_tts_metrics = MagicMock()
+
+        async def fake_try_fallback(request, exclude, from_provider):
+            yield b"fallback-audio"
+
+        service._handle_provider_fallback = AsyncMock(return_value=None)
+        service._try_fallback_providers = fake_try_fallback
+
+        req = OpenAISpeechRequest(
+            model="tts-1",
+            input="hello",
+            voice="alloy",
+            response_format="mp3",
+            stream=False,
+        )
+
+        # Trigger the no-audio soft failure with fallback enabled
+        chunks = []
+        async for c in service.generate_speech(req, fallback=True):
+            chunks.append(c)
+
+        assert b"fallback-audio" in b"".join(chunks)
+
+        # Verify that a failure metrics record was emitted for the primary provider
+        failure_calls = [
+            call for call in service._record_tts_metrics.call_args_list
+            if call.kwargs.get("success") is False
+        ]
+        assert failure_calls, "Expected failure metrics call for primary provider soft-fail"
+        kwargs = failure_calls[0].kwargs
+        assert kwargs["provider"] == "openai"
+        assert "No audio data returned" in (kwargs.get("error") or "")
+
 # ========================================================================
 # Caching Tests
 # ========================================================================

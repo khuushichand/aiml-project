@@ -251,6 +251,7 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSQuotaExceededError,
 )
 from tldw_Server_API.app.core.TTS.tts_validation import TTSInputValidator
+from tldw_Server_API.app.core.TTS.tts_config import get_tts_config
 from uuid import uuid4
 
 async def get_tts_service() -> TTSServiceV2:
@@ -279,7 +280,15 @@ async def create_speech(
     Requires authentication via Bearer token in Authorization header.
     Rate limited to 10 requests per minute per IP address.
 
-    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md` (context on audio pipeline)
+    Input is sanitized by `TTSInputValidator`, which normalizes Unicode,
+    strips HTML, and removes or rejects potentially dangerous patterns
+    (e.g., obvious SQL/command/FS injection attempts). In strict mode
+    (the default), such patterns result in HTTP 400 errors; in relaxed
+    mode (`strict_validation` set to false via TTS config), dangerous
+    substrings are stripped and the request is processed if non-empty.
+
+    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`,
+    `Docs/STT-TTS/TTS-SETUP-GUIDE.md` (sanitization and error semantics).
 
     Example (curl):
     ```bash
@@ -295,8 +304,9 @@ async def create_speech(
 
     # Input validation using the new validation system
     try:
-        # Create validator instance
-        validator = TTSInputValidator()
+        # Create validator instance; strictness can be configured via TTS config
+        tts_config = get_tts_config()
+        validator = TTSInputValidator({"strict_validation": tts_config.strict_validation})
 
         # Validate and sanitize input text
         sanitized_text = validator.sanitize_text(request_data.input)

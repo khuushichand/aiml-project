@@ -171,7 +171,9 @@ class TTSInputValidator:
     # Compiled regex patterns for performance
     DANGEROUS_REGEX = [re.compile(pattern, re.IGNORECASE | re.DOTALL) for pattern in DANGEROUS_PATTERNS]
 
-    # Maximum text length per provider (characters)
+    # Maximum text length per provider (characters).
+    # For unknown providers, default to a more permissive 5000 characters to
+    # avoid surprising rejections when the underlying engine can handle more.
     MAX_TEXT_LENGTHS = {
         "openai": 4096,
         "elevenlabs": 5000,
@@ -181,7 +183,7 @@ class TTSInputValidator:
         "chatterbox": 10000,
         "vibevoice": 15000,
         "index_tts": 4000,
-        "default": 1000
+        "default": 5000,
     }
 
     # Supported languages by provider
@@ -442,11 +444,15 @@ class TTSInputValidator:
     def _validate_parameters(self, request: TTSRequest, provider: Optional[str] = None):
         """Validate TTS parameters"""
         raw_speed = getattr(request, "_original_speed", request.speed)
-        # Provider-aware speed validation
+        # Provider-aware speed validation; fall back to generic defaults when
+        # no provider hint is available.
         try:
-            limits = ProviderLimits.get_limits(provider or "default")
-            min_speed = float(limits.get("min_speed", 0.1))
-            max_speed = float(limits.get("max_speed", 3.0))
+            if provider:
+                limits = ProviderLimits.get_limits(provider)
+                min_speed = float(limits.get("min_speed", 0.1))
+                max_speed = float(limits.get("max_speed", 3.0))
+            else:
+                min_speed, max_speed = 0.1, 3.0
         except Exception:
             min_speed, max_speed = 0.1, 3.0
         if raw_speed < min_speed or raw_speed > max_speed:

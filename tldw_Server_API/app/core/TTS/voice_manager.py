@@ -25,6 +25,7 @@ from .tts_exceptions import (
     TTSInvalidInputError,
     TTSResourceError
 )
+from .utils import parse_bool
 #
 #######################################################################################################################
 #
@@ -248,6 +249,7 @@ class VoiceManager:
         self.cleanup_interval = 3600  # 1 hour
         self.user_upload_counts: Dict[int, List[datetime]] = {}
         self._processing_tasks: Dict[str, asyncio.Task] = {}
+        self._warned_user_db_base_dir_fallback: bool = False
 
     def get_user_voices_path(self, user_id: int) -> Path:
         """Get the voices directory path for a user"""
@@ -257,6 +259,13 @@ class VoiceManager:
         except Exception:
             # Anchor to package root as last resort to avoid CWD effects
             base_path = Path(__file__).resolve().parents[4] / "Databases" / "user_databases" / str(user_id) / "voices"
+            if not self._warned_user_db_base_dir_fallback:
+                logger.warning(
+                    "VoiceManager: USER_DB_BASE_DIR is not configured; using fallback path "
+                    f"{base_path.parent}. For production deployments, configure USER_DB_BASE_DIR "
+                    "to point at a volume with sufficient capacity, backup, and appropriate ACLs."
+                )
+                self._warned_user_db_base_dir_fallback = True
         base_path.mkdir(parents=True, exist_ok=True)
 
         # Create subdirectories
@@ -353,6 +362,15 @@ class VoiceManager:
                 warnings.append(f"Audio duration {duration:.1f}s is less than recommended {min_duration}s for {request.provider}")
             elif duration > max_duration:
                 warnings.append(f"Audio duration {duration:.1f}s exceeds maximum {max_duration}s for {request.provider}")
+
+            # Optional strict enforcement for production deployments: when
+            # TTS_VOICE_STRICT_DURATION is truthy, reject uploads that fall
+            # outside the recommended duration range instead of only warning.
+            if warnings and parse_bool(os.getenv("TTS_VOICE_STRICT_DURATION"), default=False):
+                raise VoiceDurationError(
+                    f"Voice sample duration {duration:.1f}s is outside the recommended "
+                    f"range [{min_duration}, {max_duration}] seconds for provider '{request.provider}'"
+                )
 
             # Process for provider (convert format if needed)
             processed_path = await self._process_for_provider(

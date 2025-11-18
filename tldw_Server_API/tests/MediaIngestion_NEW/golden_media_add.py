@@ -72,6 +72,63 @@ DOCUMENT_ADD_GOLDEN_RESPONSE: Dict[str, Any] = {
     ]
 }
 
+DOCUMENT_MIXED_URL_FILE_GOLDEN_RESPONSE: Dict[str, Any] = {
+    "results": [
+        {
+            "status": "Success",
+            "input_ref": "https://golden.example/document-url-1",
+            "processing_source": "golden://document/url/1",
+            "media_type": "document",
+            "metadata": {
+                "title": "Golden Document URL Sample",
+                "author": "Doc URL Author",
+                "source_format": "txt",
+            },
+            "content": "This is a golden document body from URL.",
+            "transcript": None,
+            "segments": None,
+            "chunks": [],
+            "analysis": "Golden URL document analysis.",
+            "summary": "Golden URL document analysis.",
+            "analysis_details": {},
+            "claims": [],
+            "claims_details": {},
+            "error": None,
+            "warnings": [],
+            "db_id": 10,
+            "db_message": "Golden document from URL persisted.",
+            "media_uuid": "00000000-0000-0000-0000-00000000000A",
+            "children": [],
+        },
+        {
+            "status": "Success",
+            "input_ref": "golden_document_upload.txt",
+            "processing_source": "golden://document/upload/1",
+            "media_type": "document",
+            "metadata": {
+                "title": "Golden Document Upload Sample",
+                "author": "Doc Upload Author",
+                "source_format": "txt",
+            },
+            "content": "This is a golden document body from upload.",
+            "transcript": None,
+            "segments": None,
+            "chunks": [],
+            "analysis": "Golden upload document analysis.",
+            "summary": "Golden upload document analysis.",
+            "analysis_details": {},
+            "claims": [],
+            "claims_details": {},
+            "error": None,
+            "warnings": [],
+            "db_id": 11,
+            "db_message": "Golden document upload persisted.",
+            "media_uuid": "00000000-0000-0000-0000-00000000000B",
+            "children": [],
+        },
+    ]
+}
+
 
 EMAIL_ADD_GOLDEN_RESPONSE: Dict[str, Any] = {
     "results": [
@@ -133,6 +190,108 @@ EMAIL_ADD_GOLDEN_RESPONSE: Dict[str, Any] = {
 }
 
 
+EMAIL_MIXED_URL_FILE_GOLDEN_RESPONSE: Dict[str, Any] = {
+    "results": [
+        {
+            "status": "Success",
+            "input_ref": "https://golden.example/email-archive-1.zip",
+            "processing_source": "golden://email/url/1",
+            "media_type": "email",
+            "metadata": {
+                "title": "Golden Email Archive (URL)",
+                "source_format": "zip",
+                "tags": ["email_archive:url"],
+            },
+            "content": None,
+            "transcript": None,
+            "segments": None,
+            "chunks": [],
+            "analysis": "Golden email archive (URL) analysis.",
+            "summary": "Golden email archive (URL) analysis.",
+            "analysis_details": {},
+            "claims": [],
+            "claims_details": {},
+            "error": None,
+            "warnings": [],
+            "db_id": 4,
+            "db_message": "Golden email archive (URL) persisted.",
+            "media_uuid": "00000000-0000-0000-0000-000000000004",
+            "children": [
+                {
+                    "status": "Success",
+                    "input_ref": "url-child-1.eml",
+                    "processing_source": "golden://email/url/1/child/1",
+                    "media_type": "email",
+                    "metadata": {
+                        "email": {"subject": "URL Child One"},
+                    },
+                    "content": "First URL child email body.",
+                    "chunks": [],
+                    "analysis": None,
+                    "error": None,
+                    "warnings": [],
+                },
+                {
+                    "status": "Success",
+                    "input_ref": "url-child-2.eml",
+                    "processing_source": "golden://email/url/1/child/2",
+                    "media_type": "email",
+                    "metadata": {
+                        "email": {"subject": "URL Child Two"},
+                    },
+                    "content": "Second URL child email body.",
+                    "chunks": [],
+                    "analysis": None,
+                    "error": None,
+                    "warnings": [],
+                },
+            ],
+        },
+        {
+            "status": "Success",
+            "input_ref": "golden_email_upload.eml",
+            "processing_source": "golden://email/upload/1",
+            "media_type": "email",
+            "metadata": {
+                "title": "Golden Email Upload",
+                "source_format": "eml",
+                "tags": ["email_upload:file"],
+            },
+            "content": None,
+            "transcript": None,
+            "segments": None,
+            "chunks": [],
+            "analysis": "Golden email upload analysis.",
+            "summary": "Golden email upload analysis.",
+            "analysis_details": {},
+            "claims": [],
+            "claims_details": {},
+            "error": None,
+            "warnings": [],
+            "db_id": 5,
+            "db_message": "Golden email upload persisted.",
+            "media_uuid": "00000000-0000-0000-0000-000000000005",
+            "children": [
+                {
+                    "status": "Success",
+                    "input_ref": "upload-child-1.eml",
+                    "processing_source": "golden://email/upload/1/child/1",
+                    "media_type": "email",
+                    "metadata": {
+                        "email": {"subject": "Upload Child One"},
+                    },
+                    "content": "First upload child email body.",
+                    "chunks": [],
+                    "analysis": None,
+                    "error": None,
+                    "warnings": [],
+                }
+            ],
+        },
+    ]
+}
+
+
 def clone_results(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Return a shallow copy of the golden results list.
@@ -140,4 +299,3 @@ def clone_results(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     This avoids accidental mutation of the module-level fixtures in tests.
     """
     return [dict(item) for item in payload.get("results", [])]
-

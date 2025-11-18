@@ -514,6 +514,21 @@ class TTSServiceV2:
                         error_msg = f"No audio data returned by {adapter.provider_name}"
                         logger.error(error_msg)
                         if fallback:
+                            # Record a soft failure for observability before falling back.
+                            try:
+                                self._record_tts_metrics(
+                                    provider=adapter.provider_name,
+                                    model=tts_request.model or "default",
+                                    voice=tts_request.voice or "default",
+                                    format=tts_request.format.value,
+                                    text_length=len(tts_request.text),
+                                    audio_size=audio_size,
+                                    duration=max(0.0, time.time() - start_time),
+                                    success=False,
+                                    error=error_msg,
+                                )
+                            except Exception:
+                                pass
                             await self._handle_provider_fallback(tts_request, adapter.provider_name, error_msg)
                             await self._decrement_active_requests(adapter.provider_name)
                             released_active_slot = True

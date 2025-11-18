@@ -633,6 +633,13 @@ custom_vocab_case_sensitive = False
 [external_providers]
 
 [TTS-Settings]
+# Base directory for per-user databases and voice assets.
+# Recommended for production: point this at a dedicated volume
+# with sufficient capacity, backups, and appropriate filesystem ACLs.
+# If unset, the server falls back to Databases/user_databases under
+# the project root.
+USER_DB_BASE_DIR = Databases/user_databases
+
 local_tts_device = cpu
 default_tts_provider = kokoro
 default_tts_voice = af_bella
@@ -664,6 +671,12 @@ default_alltalk_tts_output_format = mp3
 alltalk_api_ip = http://127.0.0.1:7851/v1/audio/speech
 kokoro_model_path = ./App_Function_Libraries/models/kokoro_models/
 default_kokoro_tts_speed = 1.0
+
+# When true, enforce strict duration requirements for uploaded voice
+# samples based on provider-specific ranges in VoiceManager. Out-of-range
+# samples will be rejected with a VoiceDurationError instead of only
+# emitting warnings. Default is false (advisory-only).
+TTS_VOICE_STRICT_DURATION = false
 
 # ---------------------------------------------
 # Optional: Audio streaming quota configuration

@@ -112,6 +112,9 @@ class OpenAIAdapter(TTSAdapter):
             or "tts-1"
         )  # e.g., "tts-1" or "tts-1-hd"
         self.client: Optional[httpx.AsyncClient] = None
+        # Optional: perform a lightweight API-key verification call during
+        # initialize() when enabled via configuration.
+        self._verify_api_key_on_init: bool = bool(self.config.get("verify_api_key_on_init"))
 
         if not self.api_key:
             logger.warning(f"{self.provider_name}: API key not configured")
@@ -126,20 +129,60 @@ class OpenAIAdapter(TTSAdapter):
                 self._status = ProviderStatus.NOT_CONFIGURED
                 raise TTSProviderNotConfiguredError(error_msg, provider=self.provider_name)
 
-            # Get HTTP client from resource manager
+            # Get HTTP client from resource manager. By default we avoid
+            # making a network call here so that initialization does not
+            # depend on external API availability. When explicitly enabled
+            # via configuration, a lightweight API-key verification call
+            # can be performed below.
             resource_manager = await get_resource_manager()
             self.client = await resource_manager.get_http_client(
                 provider=self.provider_name.lower(),
                 base_url=self.base_url
             )
 
-            # Test the API key with a minimal request
+            # Prepare auth headers for subsequent requests (and optional verify).
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             }
 
-            # Quick validation - we'll do a proper test in production
+            # Optional: best-effort API key verification on init.
+            # This is disabled by default to keep startup fast and resilient
+            # to transient network issues. When enabled, only clear auth
+            # failures are treated as fatal; other errors are logged and
+            # deferred to the first real request.
+            if self._verify_api_key_on_init and self.client is not None:
+                try:
+                    payload = {
+                        "model": self.model,
+                        "input": "test",
+                        "voice": "alloy",
+                        "response_format": "mp3",
+                        "speed": 1.0,
+                    }
+                    # Reuse the same error-mapping logic as normal requests.
+                    await self._generate_complete(headers, payload)
+                    logger.info(f"{self.provider_name}: API key verified during initialization")
+                except TTSAuthenticationError as auth_exc:
+                    logger.error(f"{self.provider_name}: API key verification failed during initialization: {auth_exc}")
+                    self._status = ProviderStatus.ERROR
+                    raise TTSProviderInitializationError(
+                        f"Failed to initialize {self.provider_name}: authentication failed",
+                        provider=self.provider_name,
+                        details={"error": str(auth_exc), "error_type": type(auth_exc).__name__},
+                    ) from auth_exc
+                except (TTSRateLimitError, TTSNetworkError, TTSTimeoutError, TTSProviderError) as non_fatal:
+                    logger.warning(
+                        f"{self.provider_name}: API key verification during initialization did not succeed "
+                        f"({type(non_fatal).__name__}: {non_fatal}). Continuing initialization; "
+                        "the first real request will surface any persistent issues."
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"{self.provider_name}: Unexpected error during API key verification on init: {exc}. "
+                        "Continuing initialization."
+                    )
+
             # Mark initialized and cache capabilities for direct initialize() calls
             self._capabilities = await self.get_capabilities()
             self._initialized = True
