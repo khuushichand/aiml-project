@@ -967,7 +967,7 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     normalized_path = out_path
     try:
         if isinstance(pp, dict) and pp.get("normalize"):
-            import shutil, subprocess
+            import shutil
             ffmpeg_path = shutil.which("ffmpeg")
             if ffmpeg_path:
                 # Use EBU R128 loudness normalization as a sane default
@@ -981,18 +981,26 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
                     str(norm_out)
                 ]
                 try:
-                    # Explicit shell=False to avoid any shell interpretation
-                    subprocess.run(
-                        cmd,
-                        check=True,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        shell=False,
-                        timeout=120,
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
                         cwd=str(out_dir),
                     )
-                    normalized = True
-                    normalized_path = norm_out
+                    try:
+                        await asyncio.wait_for(proc.communicate(), timeout=120)
+                    except asyncio.TimeoutError:
+                        proc.kill()
+                        try:
+                            await proc.communicate()
+                        except Exception:
+                            pass
+                    else:
+                        if proc.returncode == 0:
+                            normalized = True
+                            normalized_path = norm_out
+                        else:
+                            normalized = False
                 except Exception:
                     normalized = False
             else:
