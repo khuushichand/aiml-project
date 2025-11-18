@@ -4,6 +4,20 @@ Golden-sample envelopes for the /media/add endpoint.
 These fixtures are used in tests to assert that the modular
 `/api/v1/media/add` path preserves the expected response shape when
 core ingestion helpers return known results.
+
+Scenarios covered:
+  - VIDEO_ADD_GOLDEN_RESPONSE
+      Single video upload (file only).
+  - VIDEO_MIXED_URL_FILE_GOLDEN_RESPONSE
+      Mixed video URL + file upload in one /add request.
+  - DOCUMENT_ADD_GOLDEN_RESPONSE
+      Single document upload (file only).
+  - DOCUMENT_MIXED_URL_FILE_GOLDEN_RESPONSE
+      Mixed document URL + file upload in one /add request.
+  - EMAIL_ADD_GOLDEN_RESPONSE
+      Single email archive upload with child messages.
+  - EMAIL_MIXED_URL_FILE_GOLDEN_RESPONSE
+      Mixed email archive URL + email upload, each with children.
 """
 
 from __future__ import annotations
@@ -37,6 +51,59 @@ VIDEO_ADD_GOLDEN_RESPONSE: Dict[str, Any] = {
             "db_message": "Golden DB write succeeded.",
             "media_uuid": "00000000-0000-0000-0000-000000000001",
         }
+    ]
+}
+
+VIDEO_MIXED_URL_FILE_GOLDEN_RESPONSE: Dict[str, Any] = {
+    "results": [
+        {
+            "status": "Success",
+            "input_ref": "https://golden.example/video-url-1",
+            "processing_source": "golden://video/url/1",
+            "media_type": "video",
+            "metadata": {
+                "title": "Golden Video URL Sample",
+                "source_format": "video",
+            },
+            "content": None,
+            "transcript": "Golden URL video transcript.",
+            "segments": [],
+            "chunks": [],
+            "analysis": "Golden URL video analysis.",
+            "summary": "Golden URL video analysis.",
+            "analysis_details": {},
+            "claims": [],
+            "claims_details": {},
+            "error": None,
+            "warnings": [],
+            "db_id": 20,
+            "db_message": "Golden URL video persisted.",
+            "media_uuid": "00000000-0000-0000-0000-000000000014",
+        },
+        {
+            "status": "Success",
+            "input_ref": "golden_video_upload.mp4",
+            "processing_source": "golden://video/upload/1",
+            "media_type": "video",
+            "metadata": {
+                "title": "Golden Video Upload Sample",
+                "source_format": "video",
+            },
+            "content": None,
+            "transcript": "Golden upload video transcript.",
+            "segments": [],
+            "chunks": [],
+            "analysis": "Golden upload video analysis.",
+            "summary": "Golden upload video analysis.",
+            "analysis_details": {},
+            "claims": [],
+            "claims_details": {},
+            "error": None,
+            "warnings": [],
+            "db_id": 21,
+            "db_message": "Golden upload video persisted.",
+            "media_uuid": "00000000-0000-0000-0000-000000000015",
+        },
     ]
 }
 

@@ -36,7 +36,7 @@ Move the implementation of `/process-audios` out of `_legacy_media.py` into the 
   - Library/metadata/network errors must continue to match existing tests, including any standardized messages used to skip flaky external audio downloads (e.g., the CDN-hosted `VALID_AUDIO_URL` test now explicitly `pytest.skip`s when the host cannot be resolved in restricted environments).
 - Counts and codes:
   - `processed_count` and `errors_count` computed from `status` fields (`Success` / `Warning` vs `Error`).
-  - Status codes: 200 when all items succeed/warn, 207 for mixed/all error, 400 when there are no results, 422/500 from validation/internal errors as today.
+  - Status codes: 200 only if all items are `Success`; 207 when any item has `Warning` or when results are mixed/errors; 400 when there are no results; 422/500 from validation/internal errors as today.
 
 ---
 

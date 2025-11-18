@@ -12,10 +12,10 @@ Dashboards (JSON):
 - `rag-reranker-dashboard.json` - RAG reranker guardrails (timeouts, exceptions, budget, docs scored)
 - `rag-quality-dashboard.json` - Nightly eval faithfulness/coverage trends (dataset-labeled)
 - `streaming-dashboard.json` - Streaming observability (SSE/WS): latencies, idle timeouts, ping failures, SSE queue depth
- - `Grafana_Streaming_Basics.json` now also includes an HTTP Client row with:
-   - Egress denials (5m) by reason: `http_client_egress_denials_total`
-   - Retries (5m) by reason: `http_client_retries_total`
-   - Panels are pre-wired for a Prometheus datasource UID `prometheus`.
+- `Grafana_Streaming_Basics.json` - Streaming basics + HTTP client metrics:
+  - Egress denials (5m) by reason: `http_client_egress_denials_total`
+  - Retries (5m) by reason: `http_client_retries_total`
+  - Panels are pre-wired for a Prometheus datasource UID `prometheus`.
   - Persona WS series appear with labels `{component: persona, endpoint: persona_ws, transport: ws}` and show up in the WS panels (send latency, pings, idle timeouts).
 
 Exemplars

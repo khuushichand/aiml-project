@@ -19,6 +19,7 @@ from tldw_Server_API.tests.MediaIngestion_NEW.golden_media_add import (
     EMAIL_ADD_GOLDEN_RESPONSE,
     EMAIL_MIXED_URL_FILE_GOLDEN_RESPONSE,
     VIDEO_ADD_GOLDEN_RESPONSE,
+    VIDEO_MIXED_URL_FILE_GOLDEN_RESPONSE,
     clone_results,
 )
 
@@ -595,6 +596,45 @@ class TestMediaAddGoldenEnvelopes:
         assert response.json() == VIDEO_ADD_GOLDEN_RESPONSE
 
     @pytest.mark.unit
+    def test_add_video_mixed_url_and_file_golden_envelope(
+        self,
+        test_client,
+        auth_headers,
+        test_video_file,
+    ):
+        """Verify mixed URL+file video /media/add envelope matches golden sample."""
+        from tldw_Server_API.app.core.Ingestion_Media_Processing import (  # type: ignore
+            persistence as persistence_mod,
+        )
+
+        async def fake_process_batch_media(*args, **kwargs):
+            return clone_results(VIDEO_MIXED_URL_FILE_GOLDEN_RESPONSE)
+
+        with patch.object(
+            persistence_mod,
+            "process_batch_media",
+            new=fake_process_batch_media,
+        ):
+            with open(test_video_file, "rb") as f:
+                response = test_client.post(
+                    "/api/v1/media/add",
+                    data={
+                        "media_type": "video",
+                        "urls": "https://golden.example/video-url-1",
+                    },
+                    files=[
+                        (
+                            "files",
+                            ("golden_video_upload.mp4", f, "video/mp4"),
+                        )
+                    ],
+                    headers=auth_headers,
+                )
+
+        assert response.status_code == status.HTTP_200_OK, response.text
+        assert response.json() == VIDEO_MIXED_URL_FILE_GOLDEN_RESPONSE
+
+    @pytest.mark.unit
     def test_add_document_golden_envelope(
         self,
         test_client,
@@ -654,10 +694,10 @@ class TestMediaAddGoldenEnvelopes:
             with open(test_text_file, "rb") as f:
                 response = test_client.post(
                     "/api/v1/media/add",
-                    data=[
-                        ("media_type", "document"),
-                        ("urls", "https://golden.example/document-url-1"),
-                    ],
+                    data={
+                        "media_type": "document",
+                        "urls": "https://golden.example/document-url-1",
+                    },
                     files=[
                         (
                             "files",
@@ -667,7 +707,7 @@ class TestMediaAddGoldenEnvelopes:
                     headers=auth_headers,
                 )
 
-        assert response.status_code == status.HTTP_200_OK
+        assert response.status_code == status.HTTP_200_OK, response.text
         assert response.json() == DOCUMENT_MIXED_URL_FILE_GOLDEN_RESPONSE
 
     @pytest.mark.unit
@@ -758,13 +798,13 @@ class TestMediaAddGoldenEnvelopes:
         ):
             response = test_client.post(
                 "/api/v1/media/add",
-                data=[
-                    ("media_type", "email"),
-                    ("urls", "https://golden.example/email-archive-1.zip"),
-                ],
+                data={
+                    "media_type": "email",
+                    "urls": "https://golden.example/email-archive-1.zip",
+                },
                 files=files,
                 headers=auth_headers,
             )
 
-        assert response.status_code == status.HTTP_200_OK
+        assert response.status_code == status.HTTP_200_OK, response.text
         assert response.json() == EMAIL_MIXED_URL_FILE_GOLDEN_RESPONSE

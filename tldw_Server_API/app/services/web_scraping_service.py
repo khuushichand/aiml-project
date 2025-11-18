@@ -467,24 +467,35 @@ async def ingest_web_content_orchestrate(
     def parse_cookies() -> Optional[List[Dict[str, Any]]]:
         """
         Parse cookies from the request when `use_cookies` is enabled.
-        Mirrors the legacy JSON parsing + 400 semantics.
+        Mirrors the legacy JSON parsing + 400 semantics, but ensures that
+        malformed or incorrectly-typed cookie payloads yield a 400 instead
+        of bubbling up as a 500 error.
         """
         custom_cookies_list: Optional[List[Dict[str, Any]]] = None
         if getattr(request, "use_cookies", False) and getattr(
             request, "cookies", None
         ):
+            raw_cookies = getattr(request, "cookies")
             try:
-                parsed = json.loads(getattr(request, "cookies"))
-                if isinstance(parsed, dict):
-                    custom_cookies_list = [parsed]
-                elif isinstance(parsed, list):
-                    custom_cookies_list = parsed
-                else:
-                    raise ValueError("Cookies must be a dict or list of dicts.")
+                parsed = json.loads(raw_cookies)
             except json.JSONDecodeError:
                 raise HTTPException(
                     status_code=400, detail="Invalid JSON format for cookies"
                 )
+
+            if isinstance(parsed, dict):
+                custom_cookies_list = [parsed]
+            elif isinstance(parsed, list):
+                if not all(isinstance(item, dict) for item in parsed):
+                    raise HTTPException(
+                        status_code=400, detail="Invalid cookies format"
+                    )
+                custom_cookies_list = parsed
+            else:
+                raise HTTPException(
+                    status_code=400, detail="Invalid cookies format"
+                )
+
         return custom_cookies_list
 
     # INDIVIDUAL URLs: per-URL scrape + summarization
@@ -675,8 +686,13 @@ async def ingest_web_content_orchestrate(
                 score_threshold=getattr(request, "score_threshold", None),
             )
             articles: List[Dict[str, Any]] = []
-            if isinstance(service_result, dict):
-                articles = service_result.get("articles", [])
+            if isinstance(service_result, list):
+                articles = service_result
+            elif isinstance(service_result, dict):
+                if service_result.get("articles"):
+                    articles = service_result.get("articles") or []
+                elif service_result.get("results"):
+                    articles = service_result.get("results") or []
 
             for r in articles:
                 if (

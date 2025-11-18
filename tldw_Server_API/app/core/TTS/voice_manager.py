@@ -411,6 +411,13 @@ class VoiceManager:
                 info=f"Voice '{request.name}' uploaded successfully for {request.provider}"
             )
 
+        except VoiceProcessingError:
+            # Clean up on error but preserve the specific voice processing
+            # exception type (e.g., VoiceDurationError) so API layers can
+            # distinguish between validation and generic failures.
+            if upload_path.exists():
+                upload_path.unlink()
+            raise
         except Exception as e:
             # Clean up on error
             if upload_path.exists():

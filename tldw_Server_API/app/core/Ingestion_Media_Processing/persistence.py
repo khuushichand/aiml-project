@@ -516,37 +516,6 @@ async def add_media_orchestrate(
                 individual_results = await asyncio.gather(*tasks)
                 results.extend(individual_results)
 
-        # --- 7. Generate Embeddings if Requested ---
-        logger.info("generate_embeddings flag: %s", form_data.generate_embeddings)
-        if form_data.generate_embeddings:
-            logger.info(
-                "Generating embeddings for successfully processed media items..."
-            )
-
-            for result in results:
-                if result.get("status") == "Success" and result.get("db_id"):
-                    try:
-                        media_id = int(result["db_id"])
-                    except Exception:
-                        continue
-                    try:
-                        from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
-                            media_embeddings as media_embeddings_module,
-                        )
-
-                        background_tasks.add_task(
-                            media_embeddings_module.enqueue_embeddings_job,  # type: ignore[attr-defined]
-                            media_id=media_id,
-                            db_path=db.db_path_str,
-                            client_id=db.client_id,
-                        )
-                    except Exception as emb_err:
-                        logger.error(
-                            "Failed to enqueue embeddings job for media_id=%s: %s",
-                            media_id,
-                            emb_err,
-                        )
-
 
         # --- 7. Generate Embeddings if Requested ---
         logger.info("generate_embeddings flag: %s", form_data.generate_embeddings)
