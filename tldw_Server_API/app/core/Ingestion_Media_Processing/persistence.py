@@ -6,8 +6,10 @@ import asyncio
 import logging
 import json
 import os
+import sqlite3
 from pathlib import Path as FilePath
 
+import httpx
 from fastapi import BackgroundTasks, HTTPException, Path, UploadFile, status
 from loguru import logger
 from starlette.responses import JSONResponse
@@ -23,6 +25,9 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     prepare_chunking_options_dict,
     prepare_common_options,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.claims_utils import (
+    extract_claims_if_requested,
 )
 
 
@@ -56,7 +61,6 @@ async def add_media_orchestrate(
     _validate_inputs = legacy_media._validate_inputs  # type: ignore[attr-defined]
     _prepare_chunking_options_dict = prepare_chunking_options_dict
     _prepare_common_options = prepare_common_options
-    _process_batch_media = legacy_media._process_batch_media  # type: ignore[attr-defined]
     _process_document_like_item = legacy_media._process_document_like_item  # type: ignore[attr-defined]
     _determine_final_status = legacy_media._determine_final_status  # type: ignore[attr-defined]
     _save_uploaded_files = legacy_media._save_uploaded_files  # type: ignore[attr-defined]
@@ -427,8 +431,8 @@ async def add_media_orchestrate(
             )
 
             if form_data.media_type in ["video", "audio"]:
-                batch_results = await _process_batch_media(
-                    media_type=form_data.media_type,
+                batch_results = await process_batch_media(
+                    media_type=str(form_data.media_type),
                     urls=url_list,
                     uploaded_file_paths=uploaded_file_paths,
                     source_to_ref_map=source_to_ref_map,
@@ -464,6 +468,38 @@ async def add_media_orchestrate(
                 ]
                 individual_results = await asyncio.gather(*tasks)
                 results.extend(individual_results)
+
+        # --- 7. Generate Embeddings if Requested ---
+        logger.info("generate_embeddings flag: %s", form_data.generate_embeddings)
+        if form_data.generate_embeddings:
+            logger.info(
+                "Generating embeddings for successfully processed media items..."
+            )
+
+            for result in results:
+                if result.get("status") == "Success" and result.get("db_id"):
+                    try:
+                        media_id = int(result["db_id"])
+                    except Exception:
+                        continue
+                    try:
+                        from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
+                            media_embeddings as media_embeddings_module,
+                        )
+
+                        background_tasks.add_task(
+                            media_embeddings_module.enqueue_embeddings_job,  # type: ignore[attr-defined]
+                            media_id=media_id,
+                            db_path=db.db_path_str,
+                            client_id=db.client_id,
+                        )
+                    except Exception as emb_err:
+                        logger.error(
+                            "Failed to enqueue embeddings job for media_id=%s: %s",
+                            media_id,
+                            emb_err,
+                        )
+
 
         # --- 7. Generate Embeddings if Requested ---
         logger.info("generate_embeddings flag: %s", form_data.generate_embeddings)
@@ -955,6 +991,465 @@ async def persist_primary_av_item(
             loop,
             process_result,
         )
+
+
+async def process_batch_media(
+    media_type: Any,
+    urls: List[str],
+    uploaded_file_paths: List[str],
+    source_to_ref_map: Dict[str, Any],
+    form_data: Any,
+    chunk_options: Optional[Dict[str, Any]],
+    loop: asyncio.AbstractEventLoop,
+    db_path: str,
+    client_id: str,
+    temp_dir: FilePath,
+) -> List[Dict[str, Any]]:
+    """
+    Core implementation of the audio/video batch processing helper used by `/media/add`.
+
+    This function mirrors the legacy `_process_batch_media` behaviour while living
+    in the core ingestion module so it can be reused independently of the legacy
+    endpoint file.
+    """
+    combined_results: List[Dict[str, Any]] = []
+    all_processing_sources = urls + uploaded_file_paths
+    items_to_process: List[str] = []
+
+    logger.debug(
+        "Starting pre-check for %d %s items...",
+        len(all_processing_sources),
+        media_type,
+    )
+
+    # --- 1. Pre-check ---
+    for source_path_or_url in all_processing_sources:
+        input_ref_info = source_to_ref_map.get(source_path_or_url)
+        input_ref = input_ref_info[0] if isinstance(input_ref_info, tuple) else input_ref_info
+        if not input_ref:
+            logger.error(
+                "CRITICAL: Could not find original input reference for %s.",
+                source_path_or_url,
+            )
+            input_ref = source_path_or_url
+
+        identifier_for_check = input_ref
+        should_process = True
+        existing_id: Optional[int] = None
+        reason = "Ready for processing."
+        pre_check_warning: Optional[str] = None
+
+        if not getattr(form_data, "overwrite_existing", False) and str(media_type) in ["video", "audio"]:
+            try:
+                temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
+                model_for_check = getattr(form_data, "transcription_model", None)
+                pre_check_query = """
+                                  SELECT id \
+                                  FROM Media
+                                  WHERE url = ?
+                                    AND transcription_model = ?
+                                    AND is_trash = 0 \
+                                  """
+                cursor = temp_db_for_check.execute_query(
+                    pre_check_query,
+                    (identifier_for_check, model_for_check),
+                )
+                existing_record = cursor.fetchone()
+                temp_db_for_check.close_connection()
+
+                if existing_record:
+                    existing_id = existing_record["id"]
+                    should_process = False
+                    reason = (
+                        "Media exists (ID: {id}) with the same URL/identifier "
+                        "and transcription model ('{model}'). Overwrite is False."
+                    ).format(id=existing_id, model=model_for_check)
+                else:
+                    should_process = True
+                    reason = (
+                        "Media not found with this URL/identifier and "
+                        "transcription model."
+                    )
+            except (DatabaseError, sqlite3.Error) as check_err:
+                logger.error(
+                    "DB pre-check (custom query) failed for %s: %s",
+                    identifier_for_check,
+                    check_err,
+                    exc_info=True,
+                )
+                should_process, existing_id, reason = (
+                    True,
+                    None,
+                    f"DB pre-check failed: {check_err}",
+                )
+                pre_check_warning = f"Database pre-check failed: {check_err}"
+            except Exception as check_err:
+                logger.error(
+                    "Unexpected error during DB pre-check (custom query) for %s: %s",
+                    identifier_for_check,
+                    check_err,
+                    exc_info=True,
+                )
+                should_process, existing_id, reason = (
+                    True,
+                    None,
+                    f"Unexpected pre-check error: {check_err}",
+                )
+                pre_check_warning = (
+                    f"Unexpected database pre-check error: {check_err}"
+                )
+        else:
+            should_process = True
+            reason = (
+                "Overwrite requested or not applicable, proceeding regardless "
+                "of existence."
+            )
+
+        if not should_process:
+            logger.info("Skipping processing for %s: %s", input_ref, reason)
+            skipped_result = {
+                "status": "Skipped",
+                "input_ref": input_ref,
+                "processing_source": source_path_or_url,
+                "media_type": media_type,
+                "message": reason,
+                "db_id": existing_id,
+                "metadata": {},
+                "content": None,
+                "transcript": None,
+                "segments": None,
+                "chunks": None,
+                "analysis": None,
+                "summary": None,
+                "analysis_details": None,
+                "error": None,
+                "warnings": None,
+                "db_message": "Skipped processing, no DB action.",
+            }
+            combined_results.append(skipped_result)
+        else:
+            items_to_process.append(source_path_or_url)
+            log_msg = f"Proceeding with processing for {input_ref}: {reason}"
+            if pre_check_warning:
+                log_msg += f" (Pre-check Warning: {pre_check_warning})"
+                source_to_ref_map[source_path_or_url] = (input_ref, pre_check_warning)
+            logger.info(log_msg)
+
+    if not items_to_process:
+        logging.info("No items require processing after pre-checks.")
+        return combined_results
+
+    processing_output: Optional[Dict[str, Any]] = None
+    try:
+        if str(media_type) == "video":
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import (  # type: ignore  # noqa: E501
+                process_videos,
+            )
+
+            video_args = {
+                "inputs": items_to_process,
+                "temp_dir": str(temp_dir),
+                "start_time": getattr(form_data, "start_time", None),
+                "end_time": getattr(form_data, "end_time", None),
+                "diarize": getattr(form_data, "diarize", False),
+                "vad_use": getattr(form_data, "vad_use", False),
+                "transcription_model": getattr(form_data, "transcription_model", None),
+                "transcription_language": getattr(
+                    form_data,
+                    "transcription_language",
+                    None,
+                ),
+                "custom_prompt": getattr(form_data, "custom_prompt", None),
+                "system_prompt": getattr(form_data, "system_prompt", None),
+                "perform_analysis": getattr(form_data, "perform_analysis", False),
+                "perform_chunking": getattr(form_data, "perform_chunking", True),
+                "chunk_method": chunk_options.get("method") if chunk_options else None,
+                "max_chunk_size": (
+                    chunk_options.get("max_size") if chunk_options else 500
+                ),
+                "chunk_overlap": (
+                    chunk_options.get("overlap") if chunk_options else 200
+                ),
+                "use_adaptive_chunking": (
+                    chunk_options.get("adaptive", False) if chunk_options else False
+                ),
+                "use_multi_level_chunking": (
+                    chunk_options.get("multi_level", False)
+                    if chunk_options
+                    else False
+                ),
+                "chunk_language": (
+                    chunk_options.get("language") if chunk_options else None
+                ),
+                "summarize_recursively": getattr(
+                    form_data,
+                    "summarize_recursively",
+                    False,
+                ),
+                "api_name": getattr(form_data, "api_name", None)
+                if getattr(form_data, "perform_analysis", False)
+                else None,
+                "use_cookies": getattr(form_data, "use_cookies", False),
+                "cookies": getattr(form_data, "cookies", None),
+                "timestamp_option": getattr(form_data, "timestamp_option", None),
+                "perform_confabulation_check": getattr(
+                    form_data,
+                    "perform_confabulation_check_of_analysis",
+                    False,
+                ),
+                "keep_original": getattr(form_data, "keep_original_file", False),
+            }
+            logging.debug(
+                "Calling external process_videos with args including temp_dir: %s",
+                list(video_args.keys()),
+            )
+            target_func = functools.partial(process_videos, **video_args)
+            processing_output = await loop.run_in_executor(None, target_func)
+
+        elif str(media_type) == "audio":
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import process_audio_files  # type: ignore  # noqa: E501
+
+            audio_args = {
+                "inputs": items_to_process,
+                "temp_dir": str(temp_dir),
+                "transcription_model": getattr(
+                    form_data,
+                    "transcription_model",
+                    None,
+                ),
+                "transcription_language": getattr(
+                    form_data,
+                    "transcription_language",
+                    None,
+                ),
+                "perform_chunking": getattr(form_data, "perform_chunking", True),
+                "chunk_method": chunk_options.get("method") if chunk_options else None,
+                "max_chunk_size": (
+                    chunk_options.get("max_size") if chunk_options else 500
+                ),
+                "chunk_overlap": (
+                    chunk_options.get("overlap") if chunk_options else 200
+                ),
+                "use_adaptive_chunking": (
+                    chunk_options.get("adaptive", False) if chunk_options else False
+                ),
+                "use_multi_level_chunking": (
+                    chunk_options.get("multi_level", False)
+                    if chunk_options
+                    else False
+                ),
+                "chunk_language": (
+                    chunk_options.get("language") if chunk_options else None
+                ),
+                "diarize": getattr(form_data, "diarize", False),
+                "vad_use": getattr(form_data, "vad_use", False),
+                "timestamp_option": getattr(form_data, "timestamp_option", None),
+                "perform_analysis": getattr(form_data, "perform_analysis", False),
+                "api_name": getattr(form_data, "api_name", None)
+                if getattr(form_data, "perform_analysis", False)
+                else None,
+                "custom_prompt_input": getattr(form_data, "custom_prompt", None),
+                "system_prompt_input": getattr(form_data, "system_prompt", None),
+                "summarize_recursively": getattr(
+                    form_data,
+                    "summarize_recursively",
+                    False,
+                ),
+                "use_cookies": getattr(form_data, "use_cookies", False),
+                "cookies": getattr(form_data, "cookies", None),
+                "keep_original": getattr(form_data, "keep_original_file", False),
+                "custom_title": getattr(form_data, "title", None),
+                "author": getattr(form_data, "author", None),
+            }
+            logging.debug(
+                "Calling external process_audio_files with args including temp_dir: %s",
+                list(audio_args.keys()),
+            )
+            target_func = functools.partial(process_audio_files, **audio_args)
+            processing_output = await loop.run_in_executor(None, target_func)
+        else:
+            raise ValueError(f"Invalid media type '{media_type}' for batch processing.")
+
+    except Exception as call_e:
+        logging.error(
+            "Error calling external batch processor for %s: %s",
+            media_type,
+            call_e,
+            exc_info=True,
+        )
+        failed_items_results = [
+            {
+                "status": "Error",
+                "input_ref": source_to_ref_map.get(item, (item, None))[0],
+                "processing_source": item,
+                "media_type": media_type,
+                "error": f"Failed to call processor: {type(call_e).__name__}",
+                "metadata": None,
+                "content": None,
+                "transcript": None,
+                "segments": None,
+                "chunks": None,
+                "analysis": None,
+                "summary": None,
+                "analysis_details": None,
+                "warnings": None,
+                "db_id": None,
+                "db_message": None,
+            }
+            for item in items_to_process
+        ]
+        combined_results.extend(failed_items_results)
+        return combined_results
+
+    final_batch_results: List[Dict[str, Any]] = []
+    processing_results_list: List[Dict[str, Any]] = []
+
+    if processing_output and isinstance(processing_output.get("results"), list):
+        processing_results_list = processing_output["results"]
+        if processing_output.get("errors_count", 0) > 0:
+            logging.warning(
+                "Batch %s processor reported errors: %s",
+                media_type,
+                processing_output.get("errors"),
+            )
+    else:
+        logging.error(
+            "Batch %s processor returned unexpected output: %s",
+            media_type,
+            processing_output,
+        )
+        return combined_results
+
+    for process_result in processing_results_list:
+        if not isinstance(process_result, Dict):
+            logging.error("Processor returned non-dict item: %s", process_result)
+            malformed_result = {
+                "status": "Error",
+                "input_ref": "Unknown Input",
+                "processing_source": "Unknown",
+                "media_type": media_type,
+                "error": "Processor returned invalid result format.",
+                "metadata": None,
+                "content": None,
+                "transcript": None,
+                "segments": None,
+                "chunks": None,
+                "analysis": None,
+                "summary": None,
+                "analysis_details": None,
+                "warnings": None,
+                "db_id": None,
+                "db_message": None,
+            }
+            final_batch_results.append(malformed_result)
+            continue
+
+        input_ref = process_result.get("input_ref")
+        processing_source = process_result.get("processing_source")
+        if processing_source:
+            ref_info = source_to_ref_map.get(str(processing_source))
+            if isinstance(ref_info, tuple):
+                original_input_ref = ref_info[0]
+            elif isinstance(ref_info, str):
+                original_input_ref = ref_info
+            else:
+                logger.warning(
+                    "Could not find original input reference in source_to_ref_map "
+                    "for processing_source: %s. Falling back.",
+                    processing_source,
+                )
+                original_input_ref = (
+                    process_result.get("input_ref") or processing_source or "Unknown Input"
+                )
+        else:
+            original_input_ref = process_result.get("input_ref") or "Unknown Input (Missing Source)"
+            logger.warning(
+                "Processing result missing 'processing_source'. Using fallback input_ref: %s",
+                original_input_ref,
+            )
+            process_result["processing_source"] = (
+                str(original_input_ref) if original_input_ref else "Unknown"
+            )
+
+        process_result["input_ref"] = (
+            str(original_input_ref) if original_input_ref else "Unknown"
+        )
+
+        pre_check_info = source_to_ref_map.get(processing_source) if processing_source else None
+        pre_check_warning_msg = None
+        if isinstance(pre_check_info, tuple):
+            pre_check_warning_msg = pre_check_info[1]
+        if pre_check_warning_msg:
+            process_result.setdefault("warnings", []).append(pre_check_warning_msg)
+
+        claims_context: Optional[Dict[str, Any]] = None
+        if process_result.get("status") in ("Success", "Warning"):
+            try:
+                claims_context = await extract_claims_if_requested(
+                    process_result,
+                    form_data,
+                    loop,
+                )
+            except Exception as claims_err:
+                logger.debug(
+                    "Claim extraction skipped for %s: %s",
+                    original_input_ref,
+                    claims_err,
+                )
+
+        await persist_primary_av_item(
+            process_result=process_result,
+            form_data=form_data,
+            media_type=media_type,
+            original_input_ref=str(original_input_ref) if original_input_ref else "",
+            chunk_options=chunk_options,
+            db_path=db_path,
+            client_id=client_id,
+            loop=loop,
+            claims_context=claims_context,
+        )
+
+        final_batch_results.append(process_result)
+
+    combined_results.extend(final_batch_results)
+
+    final_standardized_results: List[Dict[str, Any]] = []
+    processed_input_refs: set[str] = set()
+
+    for res in combined_results:
+        input_ref = res.get("input_ref", "Unknown")
+        if input_ref in processed_input_refs and input_ref != "Unknown":
+            continue
+        processed_input_refs.add(input_ref)
+
+        standardized = {
+            "status": res.get("status", "Error"),
+            "input_ref": input_ref,
+            "processing_source": res.get("processing_source", "Unknown"),
+            "media_type": res.get("media_type", media_type),
+            "metadata": res.get("metadata", {}),
+            "content": res.get("content", res.get("transcript")),
+            "transcript": res.get("transcript"),
+            "segments": res.get("segments"),
+            "chunks": res.get("chunks"),
+            "analysis": res.get("analysis", res.get("summary")),
+            "summary": res.get("summary"),
+            "analysis_details": res.get("analysis_details"),
+            "claims": res.get("claims"),
+            "claims_details": res.get("claims_details"),
+            "error": res.get("error"),
+            "warnings": res.get("warnings"),
+            "db_id": res.get("db_id"),
+            "db_message": res.get("db_message"),
+            "message": res.get("message"),
+            "media_uuid": res.get("media_uuid"),
+        }
+        if isinstance(standardized.get("warnings"), list) and not standardized["warnings"]:
+            standardized["warnings"] = None
+
+        final_standardized_results.append(standardized)
+
+    return final_standardized_results
 
 
 async def persist_doc_item_and_children(

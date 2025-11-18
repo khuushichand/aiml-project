@@ -324,16 +324,133 @@ This table serves as a migration checklist to ensure the compatibility shim cont
   - Current state:
     - `/api/v1/media/add` is routed via `tldw_Server_API/app/api/v1/endpoints/media/add.py`, which defines the `add_media` endpoint and delegates into `tldw_Server_API.app.core.Ingestion_Media_Processing.persistence.add_media_persist`.
     - `tldw_Server_API/app/core/Ingestion_Media_Processing/persistence.py` now owns the `/add` orchestration and persistence entry points:
-      - `add_media_orchestrate(...)` implements the full ingestion pipeline that previously lived in `_legacy_media._add_media_impl`, including TempDir management, upload saving, quota checks, per-type dispatch (audio/video via `_process_batch_media`, docs/emails via `_process_document_like_item`), optional embeddings, and final status selection.
+      - `add_media_orchestrate(...)` implements the full ingestion pipeline that previously lived in `_legacy_media._add_media_impl`, including TempDir management, upload saving, quota checks, per-type dispatch (audio/video via the new core `process_batch_media` helper, docs/emails via `_process_document_like_item` for now), optional embeddings, and final status selection.
       - `persist_primary_av_item(...)` handles audio/video DB writes and claims persistence for `/add` A/V items.
       - `persist_doc_item_and_children(...)` handles document/email DB writes, including attachment children and archive-only email containers, and calls `_persist_claims_if_applicable(...)` with the correct `media_id` and error-handling semantics.
     - The legacy `_legacy_media.add_media` function no longer has a `@router.post("/add", ...)` decorator and has been reduced to a thin compatibility shim that simply forwards to `add_media_persist(...)`; `_add_media_impl` is no longer on the `/media/add` hot path and remains only as a temporary, unused reference until final cleanup.
     - The router shim in `media/__init__.py` prepends `add.router.routes` (along with all `process_*` and read-only media routes) ahead of `_legacy_media.router.routes` by directly merging route objects, avoiding FastAPI prefix/path conflicts while ensuring all `/media/add` HTTP traffic flows through the modular `media/` package and persistence helpers.
     - `/media/add` integration tests (e.g., `tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_add_endpoint*.py`, `tests/AuthNZ/integration/test_media_permission_enforcement.py`, and contextual ingestion tests under `tests/Media_Ingestion_Modification/`) are green after the persistence refactor, confirming status codes, envelopes, and DB/claims behavior remain unchanged. Some legacy URL-based tests (e.g., PDF/audio URLs against external CDNs) may still skip or fail in environments without outbound network/egress; these are treated as environment quirks rather than behavioral regressions.
+  - Recent implementation details (A/V batch helper + metadata fix):
+    - What changed
+      - New core helper for AV batch processing
+        - Added `process_batch_media` to `tldw_Server_API/app/core/Ingestion_Media_Processing/persistence.py` with a signature matching the legacy `_process_batch_media` logic:
+
+          ```python
+          async def process_batch_media(
+              media_type: Any,
+              urls: List[str],
+              uploaded_file_paths: List[str],
+              source_to_ref_map: Dict[str, Any],
+              form_data: Any,
+              chunk_options: Optional[Dict[str, Any]],
+              loop: asyncio.AbstractEventLoop,
+              db_path: str,
+              client_id: str,
+              temp_dir: FilePath,
+          ) -> List[Dict[str, Any]]:
+          ```
+        - Behavior is the same as the legacy version:
+          - Pre-checks:
+            - Optional DB pre-check when `overwrite_existing` is false and `media_type` in `["video", "audio"]` using a temporary `MediaDatabase` on `db_path`.
+            - Skips existing items (status `Skipped`, `db_id` set, `db_message = "Skipped processing, no DB action."`).
+            - Records pre-check warnings in `source_to_ref_map` as `(input_ref, warning)` tuples.
+          - Processing:
+            - For video:
+              - Calls `Video_DL_Ingestion_Lib.process_videos` in an executor with the same arguments (temp dir, chunking options, diarization, analysis, cookies, etc.).
+            - For audio:
+              - Calls `Audio_Files.process_audio_files` in an executor with the same argument set (including titles/authors, chunking, diarization, etc.).
+            - On processor errors, returns per-item `Error` results with unchanged error messages.
+          - Post-processing:
+            - Normalizes `input_ref`/`processing_source` via `source_to_ref_map`.
+            - Preserves pre-check warnings as `warnings` entries.
+            - Uses core `extract_claims_if_requested` for claims extraction.
+            - Calls `persist_primary_av_item` for DB writes and claim persistence.
+            - Final standardization produces the same envelope as before (status, `input_ref`, `processing_source`, `media_type`, metadata, `content`/`transcript`, segments, chunks, analysis/summary, claims, `db_id`, `db_message`, `media_uuid`, etc.).
+      - Core orchestration now uses the core helper
+        - In `add_media_orchestrate` (`persistence.py`), the A/V branch now calls:
+
+          ```python
+          if form_data.media_type in ["video", "audio"]:
+              batch_results = await process_batch_media(
+                  media_type=str(form_data.media_type),
+                  urls=url_list,
+                  uploaded_file_paths=uploaded_file_paths,
+                  source_to_ref_map=source_to_ref_map,
+                  form_data=form_data,
+                  chunk_options=chunking_options_dict,
+                  loop=loop,
+                  db_path=db_path_for_workers,
+                  client_id=client_id_for_workers,
+                  temp_dir=temp_dir_path,
+              )
+              results.extend(batch_results)
+          ```
+        - This replaces the previous indirection through `legacy_media._process_batch_media` while preserving all semantics.
+      - Legacy `_process_batch_media` is now a shim
+        - In `tldw_Server_API/app/api/v1/endpoints/_legacy_media.py`, the heavy implementation has been replaced by a thin wrapper:
+
+          ```python
+          async def _process_batch_media(
+              media_type: MediaType,
+              urls: List[str],
+              uploaded_file_paths: List[str],
+              source_to_ref_map: Dict[str, Union[str, Tuple[str, str]]],
+              form_data: AddMediaForm,
+              chunk_options: Optional[Dict],
+              loop: asyncio.AbstractEventLoop,
+              db_path: str,
+              client_id: str,
+              temp_dir: Path,
+          ) -> List[Dict[str, Any]]:
+              from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
+                  process_batch_media,
+              )
+
+              return await process_batch_media(
+                  media_type=media_type,
+                  urls=urls,
+                  uploaded_file_paths=uploaded_file_paths,
+                  source_to_ref_map=source_to_ref_map,
+                  form_data=form_data,
+                  chunk_options=chunk_options,
+                  loop=loop,
+                  db_path=db_path,
+                  client_id=client_id,
+                  temp_dir=temp_dir,
+              )
+          ```
+        - This keeps the original name and signature so any existing imports or internal callers still work, but all real work happens in core.
+      - Metadata helper fixed and safe
+        - While working on the AV helper, a syntax issue introduced earlier in `update_version_safe_metadata_in_transaction` (`metadata_utils.py`) was fixed:
+          - Removed a stray outer `try:` that lacked a matching `except` and restructured the function into:
+            - A simple try/except for computing `now_ts`.
+            - A separate try/except around the identifier upsert.
+          - The module now compiles cleanly (`python -m compileall tldw_Server_API/app/core/Utils/metadata_utils.py`).
+      - Regression checks
+        - Re-ran `/media/add` integration tests:
+          - `pytest tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_add_endpoint.py -q` → 15 passed.
+          - This exercises video/audio `/media/add` paths, ensuring:
+            - Pre-check/overwrite semantics.
+            - AV processing.
+            - DB persistence via `persist_primary_av_item`.
+            - Claims extraction and persistence.
+            - Response envelope and status-code semantics.
+    - Net result
+      - The full audio/video batch pipeline used by `/media/add` is now implemented in core (`process_batch_media` in `persistence.py`) with `_legacy_media._process_batch_media` as a thin shim.
+      - Behaviour, error messages, and DB/claims side effects remain unchanged, as confirmed by the `/media/add` integration suite.
+      - This continues the trend of shrinking `_legacy_media` into a compatibility wrapper while centralizing business logic under `core/Ingestion_Media_Processing/`.
   - Tests:
     - Keep all existing `/add` integration tests green as future refactors move more orchestration into `persistence.py`, and add targeted tests for quota enforcement, error mapping, and cache invalidation (list/detail/search) after create/update/rollback.
     - Maintain regression tests ensuring no `db_instance must be a Database object` errors surface for media write endpoints (e.g., `PATCH /api/v1/media/{media_id}/metadata`, `PUT /api/v1/media/{media_id}/versions/{version}/metadata`, `POST /api/v1/media/{media_id}/versions/advanced`, and `/api/v1/media/add`), including under minimal test app profiles.
     - Keep tests that explicitly assert expected success codes (200/201) for version creation/update and `/add` flows when using `client_with_single_user` and related fixtures, to guard against unintended 401s caused by auth/DB wiring changes.
+  - Next focus: document/email helper extraction (planned)
+    - Introduce a core `process_document_like_item` helper under `tldw_Server_API/app/core/Ingestion_Media_Processing/persistence.py` that mirrors the current `_legacy_media._process_document_like_item` signature and behavior:
+      - Handles per-item PRE-CHECK (if re-enabled), URL/download preparation with SSRF guards and per-user quota checks, processor dispatch for `pdf`/`document`/`json`/`ebook`/`email`, and email container handling (zip/mbox/pst/ost) including `children` aggregation and archive keywords.
+      - Uses core claims utilities (`extract_claims_if_requested`, `persist_claims_if_applicable`) and `persist_doc_item_and_children` for DB writes, keeping the same `db_id`, `db_message`, `media_uuid`, and `child_db_results` semantics as the legacy implementation.
+      - Normalizes the result envelope to match the A/V path (`status`, `input_ref`, `processing_source`, `media_type`, `metadata`, `content`/`transcript`, segments, chunks, analysis/summary, claims, warnings, DB fields).
+    - Update `add_media_orchestrate(...)` to call the new `process_document_like_item` helper for non-A/V types (PDF/doc/ebook/email/JSON) instead of `legacy_media._process_document_like_item`, preserving concurrency (`asyncio.gather` over `all_valid_input_sources`) and `source_to_ref_map` behavior.
+    - Replace the heavy implementation of `_legacy_media._process_document_like_item` with a thin wrapper that imports and awaits the core helper, keeping the original name and signature for any remaining internal callers.
+    - Extend `/media/add` regression tests for document/email flows (PDFs, plain docs, ebooks, single emails, and email archives with attachments) to assert envelopes, DB writes, claims extraction/persistence, and `MediaDatabase` side effects remain unchanged after the extraction.
 - Stage 5: Web Scraping **(Status: Complete – web-scraping routes modularized; ingest orchestration centralized, management endpoints gated in some envs)**
   - Current state:
     - `/process-web-scraping` is handled by `tldw_Server_API/app/api/v1/endpoints/media/process_web_scraping.py` as the full endpoint:

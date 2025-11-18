@@ -109,68 +109,67 @@ def update_version_safe_metadata_in_transaction(
     from tldw_Server_API.app.core.DB_Management.backends.base import (  # noqa: WPS433
         BackendType,
     )
-    try:
-        try:
-            now_ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-        except Exception:  # pragma: no cover - extremely unlikely
-            now_ts = None
 
-        if now_ts is not None:
-            db.execute_query(
-                "UPDATE DocumentVersions SET safe_metadata=?, version=version+1, last_modified=? WHERE id=? AND deleted=0",
-                (safe_metadata_json, now_ts, dv_id),
-                connection=connection,
+    try:
+        now_ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    except Exception:  # pragma: no cover - extremely unlikely
+        now_ts = None
+
+    if now_ts is not None:
+        db.execute_query(
+            "UPDATE DocumentVersions SET safe_metadata=?, version=version+1, last_modified=? WHERE id=? AND deleted=0",
+            (safe_metadata_json, now_ts, dv_id),
+            connection=connection,
+        )
+    else:
+        db.execute_query(
+            "UPDATE DocumentVersions SET safe_metadata=?, version=version+1 WHERE id=? AND deleted=0",
+            (safe_metadata_json, dv_id),
+            connection=connection,
+        )
+
+    # Maintain identifier index using backend-specific upsert.
+    # Accept both canonical and legacy key variants for robustness.
+    try:
+        doi = merged_metadata.get("doi") or merged_metadata.get("DOI")
+        pmid = merged_metadata.get("pmid") or merged_metadata.get("PMID")
+        pmcid = merged_metadata.get("pmcid") or merged_metadata.get("PMCID")
+        arxiv = (
+            merged_metadata.get("arxiv_id")
+            or merged_metadata.get("arxiv")
+            or merged_metadata.get("ArXiv")
+        )
+        s2id = merged_metadata.get("s2_paper_id") or merged_metadata.get("paperId")
+        backend = db.backend_type() if callable(db.backend_type) else db.backend_type
+        if backend == BackendType.POSTGRESQL:
+            ident_sql = (
+                "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (dv_id) DO UPDATE SET "
+                "doi = EXCLUDED.doi, pmid = EXCLUDED.pmid, pmcid = EXCLUDED.pmcid, "
+                "arxiv_id = EXCLUDED.arxiv_id, s2_paper_id = EXCLUDED.s2_paper_id"
             )
         else:
-            db.execute_query(
-                "UPDATE DocumentVersions SET safe_metadata=?, version=version+1 WHERE id=? AND deleted=0",
-                (safe_metadata_json, dv_id),
-                connection=connection,
+            ident_sql = (
+                "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)"
             )
-
-        # Maintain identifier index using backend-specific upsert.
-        # Accept both canonical and legacy key variants for robustness.
-        try:
-            doi = merged_metadata.get("doi") or merged_metadata.get("DOI")
-            pmid = merged_metadata.get("pmid") or merged_metadata.get("PMID")
-            pmcid = merged_metadata.get("pmcid") or merged_metadata.get("PMCID")
-            arxiv = (
-                merged_metadata.get("arxiv_id")
-                or merged_metadata.get("arxiv")
-                or merged_metadata.get("ArXiv")
-            )
-            s2id = merged_metadata.get("s2_paper_id") or merged_metadata.get("paperId")
-            backend = db.backend_type() if callable(db.backend_type) else db.backend_type
-            if backend == BackendType.POSTGRESQL:
-                ident_sql = (
-                    "INSERT INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT (dv_id) DO UPDATE SET "
-                    "doi = EXCLUDED.doi, pmid = EXCLUDED.pmid, pmcid = EXCLUDED.pmcid, "
-                    "arxiv_id = EXCLUDED.arxiv_id, s2_paper_id = EXCLUDED.s2_paper_id"
-                )
-            else:
-                ident_sql = (
-                    "INSERT OR REPLACE INTO DocumentVersionIdentifiers (dv_id, doi, pmid, pmcid, arxiv_id, s2_paper_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?)"
-                )
-            db.execute_query(
-                ident_sql,
-                (dv_id, doi, pmid, pmcid, arxiv, s2id),
-                connection=connection,
-            )
-        except (sqlite3.OperationalError, DatabaseError) as exc:
-            # Missing identifier table or unsupported upsert is not fatal.
-            logger.debug(
-                "Identifier index update skipped (missing table/unsupported upsert) for dv_id=%s: %s",
-                dv_id,
-                exc,
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.error(
-                "Identifier index update failed for dv_id=%s: %s",
-                dv_id,
-                exc,
-                exc_info=True,
-            )
-            raise
+        db.execute_query(
+            ident_sql,
+            (dv_id, doi, pmid, pmcid, arxiv, s2id),
+            connection=connection,
+        )
+    except (sqlite3.OperationalError, DatabaseError) as exc:
+        # Missing identifier table or unsupported upsert is not fatal.
+        logger.debug(
+            "Identifier index update skipped (missing table/unsupported upsert) for dv_id=%s: %s",
+            dv_id,
+            exc,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error(
+            "Identifier index update failed for dv_id=%s: %s",
+            dv_id,
+            exc,
+            exc_info=True,
+        )
