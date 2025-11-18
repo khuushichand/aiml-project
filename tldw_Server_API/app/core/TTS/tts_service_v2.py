@@ -97,7 +97,8 @@ class TTSServiceV2:
         self.circuit_manager = circuit_manager
         # Limit concurrent generations; honor config if available
         max_concurrent = 4
-        stream_errors_as_audio = True
+        # Default to structured HTTP errors instead of embedding error bytes in audio
+        stream_errors_as_audio = False
         env_stream_override = os.getenv("TTS_STREAM_ERRORS_AS_AUDIO")
         if env_stream_override is not None:
             normalized = env_stream_override.strip().lower()
@@ -122,7 +123,12 @@ class TTSServiceV2:
                     if env_stream_override is None and "stream_errors_as_audio" in perf_cfg:
                         try:
                             from .utils import parse_bool
-                            stream_errors_as_audio = parse_bool(perf_cfg.get("stream_errors_as_audio"), default=True)
+                            # When config entry is missing or invalid, default to False
+                            # so errors propagate as HTTP errors instead of audio bytes.
+                            stream_errors_as_audio = parse_bool(
+                                perf_cfg.get("stream_errors_as_audio"),
+                                default=False,
+                            )
                         except Exception:
                             stream_errors_as_audio = bool(perf_cfg.get("stream_errors_as_audio"))
         except Exception:

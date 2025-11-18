@@ -55,12 +55,17 @@ class OpenAISpeechRequest(BaseModel):
     )
     response_format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] = Field(
         default="mp3",
-        description="The format to return audio in. Supported formats: mp3, opus, flac, wav, pcm. PCM format returns raw 16-bit samples without headers. AAC is not currently supported.",
+        description=(
+            "The format to return audio in. Supported formats: mp3, opus, aac, flac, wav, pcm. "
+            "PCM format returns raw 16-bit samples without headers."
+        ),
     )
     download_format: Optional[Literal["mp3", "opus", "aac", "flac", "wav", "pcm"]] = (
         Field(
             default=None,
-            description="Optional different format for the final download. If not provided, uses response_format.",
+            description=(
+                "Reserved for future use. Currently ignored; the final audio format always matches response_format."
+            ),
         )
     )
     speed: float = Field(

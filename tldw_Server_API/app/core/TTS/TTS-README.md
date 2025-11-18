@@ -472,8 +472,8 @@ The service (`TTSServiceV2`) reads `performance.max_concurrent_generations` and 
 #### Error Streaming Policy
 
 Set `performance.stream_errors_as_audio` to control failure behavior during streaming:
-- `true` (default for compatibility): embed `ERROR: ...` text chunks in the audio stream and return HTTP 200. Suitable for clients/tests that expect bytes regardless of outcome.
-- `false` (recommended for production): raise provider/service errors instead. The API endpoint maps these to appropriate HTTP status codes (e.g., 400/402/429/5xx).
+- `false` (default and recommended for production): raise provider/service errors instead. The API endpoint maps these to appropriate HTTP status codes (e.g., 400/402/429/5xx).
+- `true` (compatibility mode): embed `ERROR: ...` text chunks in the audio stream and return HTTP 200. Suitable only for clients/tests that explicitly expect bytes regardless of outcome.
 
 ### Voice Cloning Requirements
 

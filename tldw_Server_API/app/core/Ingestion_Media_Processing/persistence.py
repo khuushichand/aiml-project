@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import asyncio
+import functools
 import logging
 import json
 import os
 import sqlite3
 from pathlib import Path as FilePath
 
+import aiofiles
 import httpx
 from fastapi import BackgroundTasks, HTTPException, Path, UploadFile, status
 from loguru import logger
@@ -28,6 +30,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.claims_utils import (
     extract_claims_if_requested,
+    persist_claims_if_applicable,
 )
 
 
@@ -61,7 +64,6 @@ async def add_media_orchestrate(
     _validate_inputs = legacy_media._validate_inputs  # type: ignore[attr-defined]
     _prepare_chunking_options_dict = prepare_chunking_options_dict
     _prepare_common_options = prepare_common_options
-    _process_document_like_item = legacy_media._process_document_like_item  # type: ignore[attr-defined]
     _determine_final_status = legacy_media._determine_final_status  # type: ignore[attr-defined]
     _save_uploaded_files = legacy_media._save_uploaded_files  # type: ignore[attr-defined]
     file_validator_instance = legacy_media.file_validator_instance  # type: ignore[attr-defined]
@@ -447,7 +449,7 @@ async def add_media_orchestrate(
             else:
                 # PDF / Document / Ebook / Email
                 tasks = [
-                    _process_document_like_item(
+                    process_document_like_item(
                         item_input_ref=source_to_ref_map.get(source, source),
                         processing_source=source,
                         media_type=form_data.media_type,
@@ -735,20 +737,16 @@ async def persist_primary_av_item(
     # When there is no content, mirror legacy behavior: skip DB writes but
     # still persist claims (with media_id=None) and update db_message/db_id.
     if not content_for_db:
-        from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
-            _legacy_media as legacy_media,
-        )
-
         process_result["db_message"] = "DB persistence skipped (no content)."
         process_result["db_id"] = None
         process_result["media_uuid"] = None
-        await legacy_media._persist_claims_if_applicable(  # type: ignore[attr-defined]
-            claims_context,
-            None,
-            db_path,
-            client_id,
-            loop,
-            process_result,
+        await persist_claims_if_applicable(
+            claims_context=claims_context,
+            media_id=None,
+            db_path=db_path,
+            client_id=client_id,
+            loop=loop,
+            process_result=process_result,
         )
         logger.warning(
             "Skipping DB persistence for %s due to missing content.",
@@ -917,17 +915,13 @@ async def persist_primary_av_item(
         process_result["db_message"] = db_message_result
         process_result["media_uuid"] = media_uuid_result
 
-        from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
-            _legacy_media as legacy_media,
-        )
-
-        await legacy_media._persist_claims_if_applicable(  # type: ignore[attr-defined]
-            claims_context,
-            process_result.get("db_id"),
-            db_path,
-            client_id,
-            loop,
-            process_result,
+        await persist_claims_if_applicable(
+            claims_context=claims_context,
+            media_id=process_result.get("db_id"),
+            db_path=db_path,
+            client_id=client_id,
+            loop=loop,
+            process_result=process_result,
         )
 
         logger.info(
@@ -939,10 +933,6 @@ async def persist_primary_av_item(
         )
 
     except (DatabaseError, InputError, ConflictError) as db_err:
-        from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
-            _legacy_media as legacy_media,
-        )
-
         logger.error(
             "Database operation failed for %s: %s",
             original_input_ref,
@@ -955,20 +945,16 @@ async def persist_primary_av_item(
         process_result["db_message"] = f"DB Error: {db_err}"
         process_result["db_id"] = None
         process_result["media_uuid"] = None
-        await legacy_media._persist_claims_if_applicable(  # type: ignore[attr-defined]
-            claims_context,
-            None,
-            db_path,
-            client_id,
-            loop,
-            process_result,
+        await persist_claims_if_applicable(
+            claims_context=claims_context,
+            media_id=None,
+            db_path=db_path,
+            client_id=client_id,
+            loop=loop,
+            process_result=process_result,
         )
 
     except Exception as exc:
-        from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
-            _legacy_media as legacy_media,
-        )
-
         logger.error(
             "Unexpected error during DB persistence for %s: %s",
             original_input_ref,
@@ -983,13 +969,13 @@ async def persist_primary_av_item(
         process_result["db_message"] = f"Persistence Error: {type(exc).__name__}"
         process_result["db_id"] = None
         process_result["media_uuid"] = None
-        await legacy_media._persist_claims_if_applicable(  # type: ignore[attr-defined]
-            claims_context,
-            None,
-            db_path,
-            client_id,
-            loop,
-            process_result,
+        await persist_claims_if_applicable(
+            claims_context=claims_context,
+            media_id=None,
+            db_path=db_path,
+            client_id=client_id,
+            loop=loop,
+            process_result=process_result,
         )
 
 
@@ -1452,6 +1438,559 @@ async def process_batch_media(
     return final_standardized_results
 
 
+async def process_document_like_item(
+    item_input_ref: str,
+    processing_source: str,
+    media_type: Any,
+    is_url: bool,
+    form_data: Any,
+    chunk_options: Optional[Dict[str, Any]],
+    temp_dir: FilePath,
+    loop: asyncio.AbstractEventLoop,
+    db_path: str,
+    client_id: str,
+    user_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Core helper that handles download/prep, processing, and DB persistence for
+    document-like items (PDF, generic documents/JSON, ebooks, and emails)
+    used by the `/media/add` endpoint.
+
+    This mirrors the behaviour of the legacy `_process_document_like_item`
+    implementation while living in the core ingestion module.
+    """
+    final_result: Dict[str, Any] = {
+        "status": "Pending",
+        "input_ref": item_input_ref,
+        "processing_source": processing_source,
+        "media_type": media_type,
+        "metadata": {},
+        "content": None,
+        "segments": None,
+        "chunks": None,
+        "analysis": None,
+        "summary": None,
+        "analysis_details": None,
+        "error": None,
+        "warnings": [],
+        "db_id": None,
+        "db_message": None,
+        "message": None,
+    }
+    claims_context: Optional[Dict[str, Any]] = None
+
+    # --- 2. Download/Prepare File ---
+    file_bytes: Optional[bytes] = None
+    processing_filepath: Optional[FilePath] = None
+    processing_filename: Optional[str] = None
+
+    try:
+        if is_url:
+            logger.info("Downloading URL: %s", processing_source)
+            # SSRF guard for individual item
+            try:
+                from tldw_Server_API.app.core.Security.url_validation import (  # type: ignore
+                    assert_url_safe,
+                )
+
+                assert_url_safe(processing_source)
+            except HTTPException as exc:
+                get_metrics_registry().increment(
+                    "security_ssrf_block_total",
+                    1,
+                )
+                raise exc
+
+            from tldw_Server_API.app.core.Utils.Utils import (  # type: ignore
+                smart_download,
+            )
+
+            download_func = functools.partial(
+                smart_download,
+                processing_source,
+                temp_dir,
+            )
+            downloaded_path = await loop.run_in_executor(None, download_func)
+            if (
+                downloaded_path
+                and isinstance(downloaded_path, FilePath)
+                and downloaded_path.exists()
+            ):
+                processing_filepath = downloaded_path
+                processing_filename = downloaded_path.name
+
+                if user_id is not None:
+                    try:
+                        from tldw_Server_API.app.services.storage_quota_service import (  # type: ignore  # noqa: E501
+                            get_storage_quota_service,
+                        )
+
+                        quota_service = get_storage_quota_service()
+                        size_bytes = downloaded_path.stat().st_size
+                        has_quota, info = await quota_service.check_quota(
+                            user_id,
+                            size_bytes,
+                            raise_on_exceed=False,
+                        )
+                        if not has_quota:
+                            raise HTTPException(
+                                status_code=HTTP_413_TOO_LARGE,
+                                detail=(
+                                    "Storage quota exceeded. Current: "
+                                    f"{info['current_usage_mb']}MB, "
+                                    f"New: {info['new_size_mb']}MB, "
+                                    f"Quota: {info['quota_mb']}MB, "
+                                    f"Available: {info['available_mb']}MB"
+                                ),
+                            )
+                        try:
+                            reg = get_metrics_registry()
+                            reg.increment(
+                                "uploads_total",
+                                1,
+                                labels={
+                                    "user_id": str(user_id),
+                                    "media_type": str(media_type),
+                                },
+                            )
+                            reg.increment(
+                                "upload_bytes_total",
+                                float(size_bytes),
+                                labels={
+                                    "user_id": str(user_id),
+                                    "media_type": str(media_type),
+                                },
+                            )
+                        except Exception:
+                            # Metrics must never break ingestion.
+                            pass
+                    except HTTPException:
+                        raise
+                    except Exception as quota_err:
+                        logger.warning(
+                            "Per-item quota check failed (non-fatal): %s",
+                            quota_err,
+                        )
+
+                # Read bytes for types that operate on raw content.
+                if str(media_type) in {"pdf", "email"}:
+                    async with aiofiles.open(processing_filepath, "rb") as file_obj:
+                        file_bytes = await file_obj.read()
+
+                final_result["processing_source"] = str(processing_filepath)
+            else:
+                raise IOError(
+                    f"Download failed or did not return a valid path for {processing_source}",
+                )
+        else:
+            path_obj = FilePath(processing_source)
+            if not path_obj.is_file():
+                raise FileNotFoundError(
+                    f"Uploaded file path not found or is not a file: {processing_source}",
+                )
+            processing_filepath = path_obj
+            processing_filename = path_obj.name
+
+            if str(media_type) in {"pdf", "email"}:
+                async with aiofiles.open(processing_filepath, "rb") as file_obj:
+                    file_bytes = await file_obj.read()
+
+            final_result["processing_source"] = processing_source
+
+    except (
+        httpx.HTTPStatusError,
+        httpx.RequestError,
+        IOError,
+        OSError,
+        FileNotFoundError,
+    ) as prep_err:
+        logging.error(
+            "File preparation/download error for %s: %s",
+            item_input_ref,
+            prep_err,
+            exc_info=True,
+        )
+        final_result.update(
+            {
+                "status": "Error",
+                "error": f"File preparation/download failed: {prep_err}",
+            },
+        )
+        if not final_result.get("warnings"):
+            final_result["warnings"] = None
+        return final_result
+
+    # --- 3. Select and Call Processing Function ---
+    process_result_dict: Optional[Dict[str, Any]] = None
+
+    try:
+        processing_func: Optional[Callable[..., Any]] = None
+        common_args: Dict[str, Any] = {
+            "title_override": getattr(form_data, "title", None),
+            "author_override": getattr(form_data, "author", None),
+            "keywords": getattr(form_data, "keywords", None),
+            "perform_chunking": getattr(form_data, "perform_chunking", True),
+            "chunk_options": chunk_options,
+            "perform_analysis": getattr(form_data, "perform_analysis", True),
+            "api_name": getattr(form_data, "api_name", None),
+            "api_key": None,
+            "custom_prompt": getattr(form_data, "custom_prompt", None),
+            "system_prompt": getattr(form_data, "system_prompt", None),
+            "summarize_recursively": getattr(
+                form_data,
+                "summarize_recursively",
+                False,
+            ),
+        }
+        specific_args: Dict[str, Any] = {}
+        run_in_executor = True
+
+        media_type_str = str(media_type)
+
+        if media_type_str == "pdf":
+            if file_bytes is None:
+                raise ValueError(
+                    "PDF processing requires file bytes, but they were not read.",
+                )
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import (  # type: ignore  # noqa: E501
+                process_pdf_task,
+            )
+
+            processing_func = process_pdf_task
+            run_in_executor = False
+            specific_args = {
+                "file_bytes": file_bytes,
+                "filename": processing_filename or item_input_ref,
+                "parser": str(
+                    getattr(form_data, "pdf_parsing_engine", "pymupdf4llm"),
+                ),
+                "chunk_method": (chunk_options or {}).get("method"),
+                "max_chunk_size": (chunk_options or {}).get("max_size"),
+                "chunk_overlap": (chunk_options or {}).get("overlap"),
+            }
+            common_args.pop("chunk_options", None)
+
+        elif media_type_str == "document":
+            if processing_filepath is None:
+                raise ValueError("Document processing requires a file path.")
+            import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs  # type: ignore  # noqa: E501
+
+            processing_func = docs.process_document_content
+            specific_args = {"doc_path": processing_filepath}
+
+        elif media_type_str == "json":
+            if processing_filepath is None:
+                raise ValueError("JSON processing requires a file path.")
+            import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs  # type: ignore  # noqa: E501
+
+            processing_func = docs.process_document_content
+            specific_args = {"doc_path": processing_filepath}
+
+        elif media_type_str == "ebook":
+            if processing_filepath is None:
+                raise ValueError("Ebook processing requires a file path.")
+            import tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib as books  # type: ignore  # noqa: E501
+
+            def _sync_process_ebook_wrapper(**kwargs: Any) -> Any:
+                return books.process_epub(**kwargs)
+
+            processing_func = _sync_process_ebook_wrapper
+            specific_args = {
+                "file_path": str(processing_filepath),
+                "extraction_method": "filtered",
+            }
+            custom_pattern = getattr(form_data, "custom_chapter_pattern", None)
+            if custom_pattern:
+                specific_args["custom_chapter_pattern"] = custom_pattern
+
+        elif media_type_str == "email":
+            if file_bytes is None and processing_filepath is not None:
+                try:
+                    async with aiofiles.open(
+                        processing_filepath,
+                        "rb",
+                    ) as file_obj:
+                        file_bytes = await file_obj.read()
+                except Exception as read_err:
+                    raise ValueError(
+                        f"Email processing requires file bytes: {read_err}",
+                    ) from read_err
+            if file_bytes is None:
+                raise ValueError(
+                    "Email processing requires file bytes, but they were not available.",
+                )
+
+            import tldw_Server_API.app.core.Ingestion_Media_Processing.Email.Email_Processing_Lib as email_lib  # type: ignore  # noqa: E501
+
+            name_lower = (processing_filename or item_input_ref).lower()
+            if name_lower.endswith(".zip") and getattr(
+                form_data,
+                "accept_archives",
+                False,
+            ):
+                processing_func = email_lib.process_eml_archive_bytes
+                specific_args = {
+                    "file_bytes": file_bytes,
+                    "archive_name": processing_filename or item_input_ref,
+                    "ingest_attachments": getattr(
+                        form_data,
+                        "ingest_attachments",
+                        False,
+                    ),
+                    "max_depth": getattr(form_data, "max_depth", 2),
+                }
+            elif name_lower.endswith(".mbox") and getattr(
+                form_data,
+                "accept_mbox",
+                False,
+            ):
+                processing_func = email_lib.process_mbox_bytes
+                specific_args = {
+                    "file_bytes": file_bytes,
+                    "mbox_name": processing_filename or item_input_ref,
+                    "ingest_attachments": getattr(
+                        form_data,
+                        "ingest_attachments",
+                        False,
+                    ),
+                    "max_depth": getattr(form_data, "max_depth", 2),
+                }
+            elif (name_lower.endswith(".pst") or name_lower.endswith(".ost")) and getattr(  # noqa: E501
+                form_data,
+                "accept_pst",
+                False,
+            ):
+                processing_func = email_lib.process_pst_bytes
+                specific_args = {
+                    "file_bytes": file_bytes,
+                    "pst_name": processing_filename or item_input_ref,
+                    "ingest_attachments": getattr(
+                        form_data,
+                        "ingest_attachments",
+                        False,
+                    ),
+                    "max_depth": getattr(form_data, "max_depth", 2),
+                }
+            else:
+                processing_func = email_lib.process_email_task
+                specific_args = {
+                    "file_bytes": file_bytes,
+                    "filename": processing_filename or item_input_ref,
+                    "ingest_attachments": getattr(
+                        form_data,
+                        "ingest_attachments",
+                        False,
+                    ),
+                    "max_depth": getattr(form_data, "max_depth", 2),
+                }
+
+        else:
+            raise NotImplementedError(
+                f"Processor not implemented for media type: '{media_type}'",
+            )
+
+        all_args = {**common_args, **specific_args}
+        final_args = all_args
+
+        if processing_func is not None:
+            func_name = getattr(
+                processing_func,
+                "__name__",
+                str(processing_func),
+            )
+            logging.info(
+                "Calling document-like processor '%s' for '%s' %s",
+                func_name,
+                item_input_ref,
+                "in executor" if run_in_executor else "directly",
+            )
+            if run_in_executor:
+                target_func = functools.partial(processing_func, **final_args)
+                process_result_dict = await loop.run_in_executor(
+                    None,
+                    target_func,
+                )
+            else:
+                process_result_dict = await processing_func(**final_args)
+
+            # Email containers may return a list of children.
+            if media_type_str == "email" and isinstance(
+                process_result_dict,
+                list,
+            ) and (
+                getattr(form_data, "accept_archives", False)
+                or getattr(form_data, "accept_mbox", False)
+                or getattr(form_data, "accept_pst", False)
+            ):
+                final_result.update(
+                    {
+                        "status": "Success",
+                        "media_type": "email",
+                        "content": None,
+                        "metadata": {
+                            "title": (
+                                getattr(form_data, "title", None)
+                                or (processing_filename or item_input_ref)
+                            ),
+                            "parser_used": "builtin-email",
+                        },
+                        "children": process_result_dict,
+                    },
+                )
+                try:
+                    archive_name = processing_filename or item_input_ref
+                    archive_keyword: Optional[str] = None
+                    if archive_name:
+                        lower_name = str(archive_name).lower()
+                        if lower_name.endswith(".zip"):
+                            archive_keyword = (
+                                f"email_archive:{FilePath(archive_name).stem}"
+                            )
+                        elif lower_name.endswith(".mbox"):
+                            archive_keyword = (
+                                f"email_mbox:{FilePath(archive_name).stem}"
+                            )
+                        elif lower_name.endswith(".pst") or lower_name.endswith(
+                            ".ost",
+                        ):
+                            archive_keyword = (
+                                f"email_pst:{FilePath(archive_name).stem}"
+                            )
+                    if archive_keyword:
+                        base_keywords: List[str] = []
+                        try:
+                            keywords_from_form = getattr(
+                                form_data,
+                                "keywords",
+                                None,
+                            )
+                            if isinstance(keywords_from_form, list):
+                                base_keywords = [
+                                    str(keyword).strip().lower()
+                                    for keyword in keywords_from_form
+                                    if keyword
+                                ]
+                        except Exception:
+                            base_keywords = []
+                        merged = sorted(
+                            set(
+                                (final_result.get("keywords") or [])
+                                + base_keywords
+                                + [archive_keyword],
+                            ),
+                        )
+                        final_result["keywords"] = merged
+                except Exception:
+                    # Keyword enrichment is best-effort only.
+                    pass
+            else:
+                if not isinstance(process_result_dict, dict):
+                    raise TypeError(
+                        f"Processor '{func_name}' returned non-dict: "
+                        f"{type(process_result_dict)}",
+                    )
+                final_result.update(process_result_dict)
+                final_result["status"] = process_result_dict.get(
+                    "status",
+                    "Error"
+                    if process_result_dict.get("error")
+                    else "Success",
+                )
+
+            proc_warnings: Optional[Any] = None
+            if isinstance(process_result_dict, dict):
+                proc_warnings = process_result_dict.get("warnings")
+            elif isinstance(process_result_dict, list):
+                try:
+                    aggregated: List[str] = []
+                    for child in process_result_dict:
+                        if isinstance(child, dict):
+                            warnings_value = child.get("warnings")
+                            if isinstance(warnings_value, list):
+                                aggregated.extend(warnings_value)
+                            elif warnings_value:
+                                aggregated.append(str(warnings_value))
+                    proc_warnings = aggregated or None
+                except Exception:
+                    proc_warnings = None
+
+            if isinstance(proc_warnings, list):
+                if not isinstance(final_result.get("warnings"), list):
+                    final_result["warnings"] = []
+                final_result["warnings"].extend(proc_warnings)
+            elif proc_warnings:
+                if not isinstance(final_result.get("warnings"), list):
+                    final_result["warnings"] = []
+                final_result["warnings"].append(str(proc_warnings))
+        else:
+            final_result.update(
+                {
+                    "status": "Error",
+                    "error": "No processing function selected.",
+                },
+            )
+
+    except Exception as proc_err:
+        logging.error(
+            "Error during processing call for %s: %s",
+            item_input_ref,
+            proc_err,
+            exc_info=True,
+        )
+        final_result.update(
+            {
+                "status": "Error",
+                "error": (
+                    "Processing error: "
+                    f"{type(proc_err).__name__}: {proc_err}"
+                ),
+            },
+        )
+
+    # --- 4. Post-Processing DB Logic ---
+    final_result.setdefault("status", "Error")
+    final_result["input_ref"] = item_input_ref
+    final_result["media_type"] = media_type
+
+    if final_result.get("status") in ["Success", "Warning"]:
+        claims_context = await extract_claims_if_requested(
+            final_result,
+            form_data,
+            loop,
+        )
+        await persist_doc_item_and_children(
+            final_result=final_result,
+            form_data=form_data,
+            media_type=str(media_type),
+            item_input_ref=item_input_ref,
+            processing_filename=processing_filename,
+            chunk_options=chunk_options,
+            db_path=db_path,
+            client_id=client_id,
+            loop=loop,
+            claims_context=claims_context,
+        )
+    else:
+        final_result["db_message"] = (
+            "DB operation skipped (processing failed)."
+        )
+        final_result["db_id"] = None
+        final_result["media_uuid"] = None
+
+    if not final_result.get("warnings"):
+        final_result["warnings"] = None
+
+    final_result["content"] = final_result.get("content")
+    final_result["transcript"] = final_result.get("content")
+    final_result["analysis"] = final_result.get("analysis")
+    if "claims" not in final_result:
+        final_result["claims"] = None
+    if "claims_details" not in final_result:
+        final_result["claims_details"] = None
+
+    return final_result
+
+
 async def persist_doc_item_and_children(
     *,
     final_result: Dict[str, Any],
@@ -1559,10 +2098,6 @@ async def persist_doc_item_and_children(
     author_for_db = metadata_for_db.get(
         "author",
         getattr(form_data, "author", None) or "Unknown",
-    )
-
-    from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
-        _legacy_media as legacy_media,
     )
 
     if content_for_db:
@@ -2198,13 +2733,13 @@ async def persist_doc_item_and_children(
         else:
             final_result["db_message"] = "Persisted archive children."
 
-    await legacy_media._persist_claims_if_applicable(  # type: ignore[attr-defined]
-        claims_context,
-        final_result.get("db_id"),
-        db_path,
-        client_id,
-        loop,
-        final_result,
+    await persist_claims_if_applicable(
+        claims_context=claims_context,
+        media_id=final_result.get("db_id"),
+        db_path=db_path,
+        client_id=client_id,
+        loop=loop,
+        process_result=final_result,
     )
 
 

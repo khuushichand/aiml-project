@@ -65,9 +65,10 @@ class PerformanceConfig(BaseModel):
     cache_enabled: bool = False
     cache_ttl_seconds: int = 3600
     stream_chunk_size: int = 1024
-    # Compatibility flag: when true, embed error messages as audio bytes in streams
-    # Recommended to set false in production to use HTTP errors instead
-    stream_errors_as_audio: bool = True
+    # Compatibility flag: when true, embed error messages as audio bytes in streams.
+    # Default is False so APIs surface structured HTTP errors instead of "ERROR: ..." audio.
+    # Set to true only if you explicitly rely on error-as-audio semantics.
+    stream_errors_as_audio: bool = False
     memory_warning_threshold: int = 80
     memory_critical_threshold: int = 90
     max_connections_per_provider: int = 5
@@ -137,6 +138,9 @@ class TTSConfigManager:
     def _find_yaml_config(self) -> Optional[Path]:
         """Find YAML configuration file"""
         search_paths = [
+            # Preferred project location: tldw_Server_API/Config_Files/tts_providers_config.yaml
+            Path(__file__).parent.parent.parent.parent / "Config_Files" / "tts_providers_config.yaml",
+            # Legacy/default locations kept for compatibility
             Path(__file__).parent / "tts_providers_config.yaml",
             Path.cwd() / "tts_providers_config.yaml",
             Path.home() / ".config" / "tldw" / "tts_providers_config.yaml"

@@ -89,3 +89,19 @@ async def test_stream_errors_as_audio_false_raises_exception():
         # Consume the async generator to trigger exception
         async for _ in svc.generate_speech(req, fallback=False):
             pass
+
+
+def test_tts_service_default_stream_errors_as_audio_false(monkeypatch):
+    """
+    When no environment override or registry config is present,
+    TTSServiceV2 should default to _stream_errors_as_audio == False so
+    errors propagate as HTTP errors instead of embedded audio bytes.
+    """
+    # Ensure no env override is present
+    monkeypatch.delenv("TTS_STREAM_ERRORS_AS_AUDIO", raising=False)
+
+    # Factory without a registry/config so the service falls back to defaults
+    factory = MagicMock()
+
+    svc = TTSServiceV2(factory)
+    assert svc._stream_errors_as_audio is False
