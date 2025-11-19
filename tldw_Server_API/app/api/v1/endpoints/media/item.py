@@ -327,8 +327,12 @@ async def update_media_item(
                 )
                 fts_title = cursor.fetchone()["title"]
 
-            fts_content = new_content if content_actually_changed else None
-            if fts_content is None and not content_updated:
+            fts_content = None
+            if content_actually_changed:
+                fts_content = new_content
+            else:
+                # Reuse existing DB content whenever we didn't change the hash,
+                # regardless of whether the client provided `content` in payload.
                 cursor.execute(
                     "SELECT content FROM Media WHERE id = ?",
                     (media_id,),
@@ -341,7 +345,6 @@ async def update_media_item(
                     media_id,
                 )
                 db._update_fts_media(conn, media_id, fts_title, fts_content)
-
             if content_updated:
                 logger.info(
                     "Content was present in update payload for media {}. "
