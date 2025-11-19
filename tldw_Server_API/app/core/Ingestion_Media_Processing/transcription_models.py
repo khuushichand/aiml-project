@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Any, Dict, List
 
 
-def get_transcription_models_payload() -> Dict[str, List[Dict[str, str]]]:
+def get_transcription_models_payload() -> Dict[str, Any]:
     """
     Return the static transcription models payload used by /media endpoints.
 
@@ -173,7 +173,6 @@ def get_transcription_models_payload() -> Dict[str, List[Dict[str, str]]]:
         ],
     }
 
-    all_models: List[Dict[str, str]] = []
     flat_values: List[str] = []
     for category_models in models_by_category.values():
         flat_values.extend(model["value"] for model in category_models)
@@ -185,4 +184,3 @@ def get_transcription_models_payload() -> Dict[str, List[Dict[str, str]]]:
 
 
 __all__ = ["get_transcription_models_payload"]
-

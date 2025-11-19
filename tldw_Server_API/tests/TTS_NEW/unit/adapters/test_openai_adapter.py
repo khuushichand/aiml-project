@@ -121,6 +121,44 @@ class TestOpenAIAdapterInitialization:
         assert adapter.status == adapter.status.ERROR
 
     @pytest.mark.unit
+    @pytest.mark.asyncio
+    @patch("tldw_Server_API.app.core.TTS.adapters.openai_adapter.get_resource_manager")
+    async def test_adapter_initialization_with_api_key_verify_http_401_auth_failure(self, mock_get_resource_manager):
+        """
+        HTTP 401 during verify-on-init should be treated as a fatal auth failure
+        and surfaced as TTSProviderInitializationError.
+        """
+        mock_client = AsyncMock()
+        rm = AsyncMock()
+        rm.get_http_client = AsyncMock(return_value=mock_client)
+        mock_get_resource_manager.return_value = rm
+
+        config = {
+            "openai_api_key": "bad-key",
+            "openai_base_url": "https://api.openai.com/v1/audio/speech",
+            "verify_api_key_on_init": True,
+        }
+        adapter = OpenAITTSAdapter(config)
+
+        # Simulate the real behavior of _generate_complete producing an HTTPStatusError
+        # from response.raise_for_status() with status code 401.
+        response = httpx.Response(
+            status_code=401,
+            request=httpx.Request("POST", "https://api.openai.com/v1/audio/speech"),
+            content=b'{"error":{"message":"Invalid API key"}}',
+        )
+        http_error = httpx.HTTPStatusError("401 Unauthorized", request=response.request, response=response)
+
+        with patch.object(
+            OpenAITTSAdapter,
+            "_generate_complete",
+            new=AsyncMock(side_effect=http_error),
+        ):
+            with pytest.raises(TTSProviderInitializationError):
+                await adapter.initialize()
+        assert adapter.status == adapter.status.ERROR
+
+    @pytest.mark.unit
     def test_adapter_supported_models(self):
         """Test adapter supports setting known models via config."""
         adapter_default = OpenAITTSAdapter({"openai_api_key": "test-key"})

@@ -16,7 +16,7 @@ router = APIRouter(tags=["Media Processing"])
     "/transcription-models",
     status_code=status.HTTP_200_OK,
     summary="Get Available Transcription Models",
-    response_model=Dict[str, List[Dict[str, str]]],
+    response_model=Dict[str, Any],
 )
 async def get_transcription_models() -> Dict[str, Any]:
     """

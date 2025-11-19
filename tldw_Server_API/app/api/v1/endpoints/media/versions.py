@@ -806,6 +806,11 @@ async def put_version_metadata(
             )
 
         dv_id = version_dict.get("id")
+        if not dv_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Version ID missing for metadata update",
+            )
         existing = version_dict.get("safe_metadata")
         if isinstance(existing, str):
             try:

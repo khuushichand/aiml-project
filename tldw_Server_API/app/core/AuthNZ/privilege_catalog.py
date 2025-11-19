@@ -32,8 +32,10 @@ def _default_catalog_path() -> Path:
     current working directory.
     """
     # Allow explicit override via environment variable
-    raw_path = os.getenv("PRIVILEGE_CATALOG_FILE") or "tldw_Server_API/Config_Files/privilege_catalog.yaml"
-    candidate = Path(str(raw_path))
+    raw = os.getenv("PRIVILEGE_CATALOG_FILE") or "tldw_Server_API/Config_Files/privilege_catalog.yaml"
+    # Expand ~ and $VARS for convenience
+    raw_expanded = os.path.expanduser(os.path.expandvars(str(raw)))
+    candidate = Path(raw_expanded)
 
     if candidate.is_absolute():
         return candidate

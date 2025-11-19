@@ -229,8 +229,12 @@ async def persist_claims_if_applicable(
         try:
             try:
                 db.soft_delete_claims_for_media(int(media_id))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.exception(
+                    "Failed to soft delete claims for media {}: {}",
+                    media_id,
+                    e,
+                )
             inserted = store_claims(
                 db,
                 media_id=int(media_id),
@@ -267,4 +271,3 @@ __all__ = [
     "extract_claims_if_requested",
     "persist_claims_if_applicable",
 ]
-

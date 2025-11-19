@@ -62,6 +62,18 @@ async def download_url_async(
         ) as resp:
             resp.raise_for_status()
 
+            # Normalize content-type early and enforce disallow list regardless of extension.
+            content_type = (
+                resp.headers.get("content-type") or ""
+            ).split(";", 1)[0].strip().lower()
+            if disallow_content_types and content_type in disallow_content_types:
+                allowed_list = ", ".join(sorted(allowed_extensions or [])) or "*"
+                raise ValueError(
+                    f"Downloaded file from {url} does not have an allowed extension "
+                    f"(allowed: {allowed_list}); content-type '{content_type}' unsupported "
+                    "for this endpoint"
+                )
+
             # Determine filename from Content-Disposition when present.
             filename = seed_segment
             cd = resp.headers.get("content-disposition") or ""
@@ -100,17 +112,7 @@ async def download_url_async(
                         base = Path(safe_name).stem
                         safe_name = f"{base}{effective_suffix}"
                     else:
-                        # Fallback to content-type mapping.
-                        content_type = (
-                            resp.headers.get("content-type") or ""
-                        ).split(";", 1)[0].strip().lower()
-                        if disallow_content_types and content_type in disallow_content_types:
-                            allowed_list = ", ".join(sorted(allowed_extensions or [])) or "*"
-                            raise ValueError(
-                                f"Downloaded file from {url} does not have an allowed extension "
-                                f"(allowed: {allowed_list}); content-type '{content_type}' unsupported "
-                                "for this endpoint"
-                            )
+                        # Fallback to content-type mapping (re-use normalized content_type).
                         content_type_map = {
                             "application/json": ".json",
                             "application/pdf": ".pdf",
@@ -153,4 +155,3 @@ async def download_url_async(
                 await client.aclose()
             except Exception:
                 pass
-

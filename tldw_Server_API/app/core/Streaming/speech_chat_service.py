@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import io
 import time
+import asyncio
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
@@ -189,7 +190,8 @@ async def run_speech_chat_turn(
         stt_provider = request_data.stt_config.provider
         stt_language = request_data.stt_config.language
     try:
-        transcript = transcribe_audio(
+        transcript = await asyncio.to_thread(
+            transcribe_audio,
             audio_data=audio_np,
             transcription_provider=stt_provider,
             sample_rate=sample_rate,
@@ -225,8 +227,6 @@ async def run_speech_chat_turn(
     # --- Conversation & character context ---
     loop = None
     try:
-        import asyncio
-
         loop = asyncio.get_running_loop()
     except Exception:
         loop = None
@@ -427,4 +427,3 @@ async def run_speech_chat_turn(
         token_usage=token_usage,
         metadata=request_data.metadata,
     )
-

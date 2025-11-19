@@ -163,7 +163,13 @@ class OpenAIAdapter(TTSAdapter):
                         "speed": 1.0,
                     }
                     # Reuse the same error-mapping logic as normal requests.
-                    await self._generate_complete(headers, payload)
+                    try:
+                        await self._generate_complete(headers, payload)
+                    except httpx.HTTPStatusError as e:
+                        # Map HTTP errors to TTS exceptions so that clear
+                        # auth failures are treated as fatal below while
+                        # other conditions remain non-fatal.
+                        await self._handle_http_status_error(e)
                     logger.info(f"{self.provider_name}: API key verified during initialization")
                 except TTSAuthenticationError as auth_exc:
                     logger.error(f"{self.provider_name}: API key verification failed during initialization: {auth_exc}")
@@ -294,32 +300,7 @@ class OpenAIAdapter(TTSAdapter):
                 )
 
         except httpx.HTTPStatusError as e:
-            error_content = await e.response.aread()
-            error_msg = error_content.decode()
-            logger.error(f"{self.provider_name} API error: {e.response.status_code} - {error_msg}")
-
-            if e.response.status_code == 401:
-                # Standardize message and provider fields
-                raise auth_error(self.provider_name, "Invalid API key")
-            elif e.response.status_code == 429:
-                # Try to extract retry-after header
-                retry_after = e.response.headers.get('retry-after')
-                raise rate_limit_error(
-                    self.provider_name,
-                    retry_after=int(retry_after) if retry_after else None
-                )
-            elif e.response.status_code == 400:
-                raise TTSProviderError(
-                    f"Invalid request to OpenAI: {error_msg}",
-                    provider=self.provider_name,
-                    error_code="BAD_REQUEST"
-                )
-            else:
-                raise TTSProviderError(
-                    f"OpenAI API error: {error_msg}",
-                    provider=self.provider_name,
-                    error_code=str(e.response.status_code)
-                )
+            await self._handle_http_status_error(e)
 
         except (httpx.TimeoutException, httpx.NetworkError, CoreNetworkError, RetryExhaustedError) as e:
             logger.error(f"{self.provider_name} network/timeout error: {e}")
@@ -339,6 +320,35 @@ class OpenAIAdapter(TTSAdapter):
                     details={"error": str(e), "error_type": type(e).__name__}
                 )
             raise
+
+    async def _handle_http_status_error(self, e: httpx.HTTPStatusError) -> None:
+        """Normalize HTTP status errors into TTS-specific exceptions."""
+        error_content = await e.response.aread()
+        error_msg = error_content.decode()
+        logger.error(f"{self.provider_name} API error: {e.response.status_code} - {error_msg}")
+
+        if e.response.status_code == 401:
+            # Standardize message and provider fields
+            raise auth_error(self.provider_name, "Invalid API key")
+        elif e.response.status_code == 429:
+            # Try to extract retry-after header
+            retry_after = e.response.headers.get("retry-after")
+            raise rate_limit_error(
+                self.provider_name,
+                retry_after=int(retry_after) if retry_after else None,
+            )
+        elif e.response.status_code == 400:
+            raise TTSProviderError(
+                f"Invalid request to OpenAI: {error_msg}",
+                provider=self.provider_name,
+                error_code="BAD_REQUEST",
+            )
+        else:
+            raise TTSProviderError(
+                f"OpenAI API error: {error_msg}",
+                provider=self.provider_name,
+                error_code=str(e.response.status_code),
+            )
 
     async def _stream_audio(
         self,
