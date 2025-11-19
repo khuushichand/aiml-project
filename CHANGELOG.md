@@ -22,6 +22,9 @@ and this project adheres to Some kind of Versioning
     - `POST /api/v1/chats/{chat_id}/complete-v2` for execution (with optional persistence/streaming).
     - `POST /api/v1/chats/{chat_id}/completions` to prepare messages for `/api/v1/chat/completions`.
 
+### Fixed
+- Kokoro double output bug.
+
 ### Notes for Operators
 - If clients still post bodies to the legacy endpoint, they will start receiving `422` after this change. Migrate clients to the successor endpoints above.
 

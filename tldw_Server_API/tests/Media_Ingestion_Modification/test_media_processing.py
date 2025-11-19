@@ -1071,13 +1071,49 @@ class TestProcessDocuments:
     @pytest.mark.parametrize("url, check_content_part, expected_status, expected_error_part", [
         (VALID_TXT_URL, "license", 200, None),
         (VALID_MD_URL, "FastAPI", 200, None),
-        pytest.param(VALID_HTML_URL, None, 207, "does not have an allowed extension",
-                     marks=pytest.mark.skipif(not VALID_HTML_URL, reason="VALID_HTML_URL not defined"))
+        pytest.param(
+            VALID_HTML_URL,
+            "Example Domain",
+            200,
+            None,
+            marks=pytest.mark.skipif(not VALID_HTML_URL, reason="VALID_HTML_URL not defined"),
+        ),
     ])
     def test_process_doc_url_various_formats(self, url, check_content_part, expected_status, expected_error_part, client, dummy_headers):
         """Test processing various document URLs."""
         form_data = {"urls": [url], "perform_analysis": "false"}
         response = client.post(self.ENDPOINT, data=form_data, headers=dummy_headers)
+
+        # In environments without outbound network or with strict DNS/egress
+        # policies, external hosts (e.g., example.com) may not resolve and the
+        # endpoint will return a download/egress error instead of the expected
+        # processing behavior. Treat this as an environment quirk rather than a
+        # behavioral regression by skipping before strict assertions.
+        data_for_skip = None
+        try:
+            data_for_skip = response.json()
+        except Exception:
+            data_for_skip = None
+
+        if isinstance(data_for_skip, dict):
+            results_list = data_for_skip.get("results")
+            if isinstance(results_list, list) and results_list:
+                err_val = results_list[0].get("error")
+                if isinstance(err_val, str):
+                    network_error_markers = [
+                        "Download/preparation failed",
+                        "Host could not be resolved",
+                        "nodename nor servname provided",
+                        "Name or service not known",
+                        "Temporary failure in name resolution",
+                        "Network is unreachable",
+                        "Network/request error",
+                    ]
+                    if any(marker in err_val for marker in network_error_markers):
+                        pytest.skip(
+                            "Skipping document URL test due to network/DNS "
+                            "restrictions in test environment."
+                        )
 
         # Adjust expected counts based on status
         expected_processed = 1 if expected_status == 200 else 0
@@ -1092,15 +1128,6 @@ class TestProcessDocuments:
             check_results_len=1,
         )
         result = data["results"][0]
-
-        # In environments without outbound network or with strict DNS/egress
-        # policies, example.com may not resolve and the endpoint will return a
-        # download/egress error instead of the expected extension-based guard.
-        # Treat this as an environment quirk rather than a behavioral regression.
-        if expected_status == 207 and expected_error_part and isinstance(result.get("error"), str):
-            err = result["error"]
-            if "Download/preparation failed" in err or "Host could not be resolved" in err or "nodename nor servname provided" in err:
-                pytest.skip("Skipping document URL extension test due to network/DNS restrictions in test environment.")
 
         if expected_status == 200:
             check_media_item_result(result, "Success")

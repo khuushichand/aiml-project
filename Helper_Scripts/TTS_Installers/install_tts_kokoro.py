@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """
-Install Kokoro TTS (v1.0 ONNX) assets and dependencies.
+Install Kokoro TTS assets and dependencies.
 
-Defaults:
-- Model:  models/kokoro/onnx/model.onnx
-- Voices: models/kokoro/voices/
+Defaults (PyTorch-first):
+- PyTorch model: models/kokoro/pytorch/model.pth
+- Voices dir  : models/kokoro/voices/
 
 Usage:
+  # PyTorch (default; no ONNX downloads)
   python Helper_Scripts/TTS_Installers/install_tts_kokoro.py [--model-only|--voices-only] \
       [--model-path PATH] [--voices-dir PATH] [--force]
+
+  # ONNX assets (optional)
+  python Helper_Scripts/TTS_Installers/install_tts_kokoro.py --engine onnx \
+      [--model-path PATH] [--voices-dir PATH] [--onnx-provider {auto,cpu,cuda}] [--force]
 
 Environment flags respected (optional):
 - TLDW_SETUP_SKIP_PIP=1         # skip pip installs
@@ -17,14 +22,10 @@ Environment flags respected (optional):
 
 This script:
 1) Installs required pip packages for the kokoro adapter.
-2) Downloads the v1.0 ONNX model and voices directory from HF.
-3) Detects eSpeak NG and prints platform guidance if not found.
-
-Alternative (assets only):
-  python Helper_Scripts/download_kokoro_assets.py \
-      --repo-id onnx-community/Kokoro-82M-v1.0-ONNX-timestamped \
-      --model-path models/kokoro/onnx/model.onnx \
-      --voices-dir models/kokoro/voices
+2) By default, prepares a PyTorch layout suitable for hexgrad/Kokoro-82M or similar.
+3) Optionally, when --engine onnx is specified, downloads the v1.0 ONNX model and
+   voices directory from HF and configures ONNX Runtime wheels.
+4) Detects eSpeak NG and prints platform guidance if not found.
 """
 from __future__ import annotations
 
@@ -36,7 +37,39 @@ from pathlib import Path
 from ctypes.util import find_library as _ctypes_find_library
 
 
-def _run_install(model_path: Path, voices_dir: Path, model_only: bool, voices_only: bool) -> int:
+def _set_onnx_runtime_override(onnx_provider: str | None) -> None:
+    """
+    Optionally override ONNX Runtime backend selection for this installer run.
+
+    - onnx_provider == "cuda" forces GPU wheels (onnxruntime-gpu) where available.
+    - onnx_provider == "cpu" forces CPU wheels even if CUDA is present.
+    - onnx_provider == "auto" (default) leaves detection to the installer.
+
+    The install_manager respects the following environment variables:
+      - TLDW_SETUP_FORCE_GPU=1  -> prefer GPU packages
+      - TLDW_SETUP_FORCE_CPU=1  -> force CPU-only packages
+    """
+    if not onnx_provider or onnx_provider == "auto":
+        return
+
+    # Clear any previous override in this process
+    os.environ.pop("TLDW_SETUP_FORCE_GPU", None)
+    os.environ.pop("TLDW_SETUP_FORCE_CPU", None)
+
+    if onnx_provider == "cuda":
+        os.environ["TLDW_SETUP_FORCE_GPU"] = "1"
+    elif onnx_provider == "cpu":
+        os.environ["TLDW_SETUP_FORCE_CPU"] = "1"
+
+
+def _run_install(
+    model_path: Path,
+    voices_dir: Path,
+    model_only: bool,
+    voices_only: bool,
+    onnx_provider: str | None = None,
+    engine: str = "pytorch",
+) -> int:
     # Defer heavy imports to runtime so the script can show friendly errors
     try:
         from tldw_Server_API.app.core.Setup import install_manager as im
@@ -47,7 +80,17 @@ def _run_install(model_path: Path, voices_dir: Path, model_only: bool, voices_on
         return 2
 
     errors: list[str] = []
-    plan = InstallPlan(tts=[TTSInstall(engine="kokoro", variants=["onnx", "voices"])])
+
+    variants: list[str] = []
+    if engine == "onnx":
+        # Optional: allow users to force CPU/GPU ONNX Runtime wheels for Kokoro.
+        _set_onnx_runtime_override(onnx_provider)
+        variants.extend(["onnx", "voices"])
+    else:
+        # PyTorch path: rely on generic kokoro dependencies and voices directory only.
+        variants.append("voices")
+
+    plan = InstallPlan(tts=[TTSInstall(engine="kokoro", variants=variants)])
     status = im.InstallationStatus(plan)
 
     # Step 1: dependencies
@@ -59,21 +102,15 @@ def _run_install(model_path: Path, voices_dir: Path, model_only: bool, voices_on
         print(f"ERROR installing kokoro dependencies: {e}", file=sys.stderr)
         errors.append(str(e))
 
-    # Step 2: downloads
+    # Step 2: downloads / asset preparation
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     try:
-        variants = []
-        if not voices_only:
-            variants.append("onnx")
-        if not model_only:
-            variants.append("voices")
-
         # Ensure destination directories exist
         model_path.parent.mkdir(parents=True, exist_ok=True)
         voices_dir.mkdir(parents=True, exist_ok=True)
 
         # If custom locations were provided, write them into config so the installer uses them
-        default_model = Path("models/kokoro/onnx/model.onnx")
+        default_model = Path("models/kokoro/pytorch/model.pth" if engine != "onnx" else "models/kokoro/onnx/model.onnx")
         default_voices = Path("models/kokoro/voices")
         try:
             if model_path != default_model or voices_dir != default_voices:
@@ -88,7 +125,7 @@ def _run_install(model_path: Path, voices_dir: Path, model_only: bool, voices_on
             # Non-fatal; fallback to defaults
             pass
 
-        # Perform downloads
+        # Perform downloads / snapshotting
         im._install_kokoro(variants)
     except im.DownloadBlockedError as e:  # type: ignore[attr-defined]
         print(f"[kokoro] Skipped model downloads: {e}")
@@ -104,6 +141,7 @@ def _run_install(model_path: Path, voices_dir: Path, model_only: bool, voices_on
         return 1
     status.complete()
     print("\nKokoro install completed.")
+    print(f"Engine     : {engine}")
     print(f"Model path : {model_path}")
     print(f"Voices dir : {voices_dir}")
     return 0
@@ -176,11 +214,31 @@ def _discover_espeak_library() -> str | None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Install Kokoro (v1.0 ONNX) TTS assets and deps")
-    ap.add_argument("--model-path", default="models/kokoro/onnx/model.onnx", help="Destination path for ONNX model")
+    ap = argparse.ArgumentParser(description="Install Kokoro TTS assets and deps")
+    ap.add_argument(
+        "--engine",
+        choices=["pytorch", "onnx"],
+        default="pytorch",
+        help="Which Kokoro backend to prepare: 'pytorch' (default) or 'onnx'.",
+    )
+    ap.add_argument(
+        "--model-path",
+        default="models/kokoro/pytorch/model.pth",
+        help="Destination path for Kokoro model (PyTorch or ONNX).",
+    )
     ap.add_argument("--voices-dir", default="models/kokoro/voices", help="Destination directory for voices")
     ap.add_argument("--model-only", action="store_true", help="Only install model (skip voices)")
     ap.add_argument("--voices-only", action="store_true", help="Only install voices (skip model)")
+    ap.add_argument(
+        "--onnx-provider",
+        choices=["auto", "cpu", "cuda"],
+        default="auto",
+        help=(
+            "Select ONNX Runtime backend for Kokoro dependencies when --engine onnx "
+            "is used: 'auto' (default) uses CUDA when detected, 'cpu' forces CPU "
+            "wheels, and 'cuda' forces GPU wheels where available."
+        ),
+    )
     ap.add_argument("--force", action="store_true", help="Overwrite existing assets and force re-downloads")
     args = ap.parse_args()
 
@@ -193,7 +251,14 @@ def main() -> int:
 
     model_path = Path(args.model_path)
     voices_dir = Path(args.voices_dir)
-    return _run_install(model_path, voices_dir, args.model_only, args.voices_only)
+    return _run_install(
+        model_path,
+        voices_dir,
+        args.model_only,
+        args.voices_only,
+        args.onnx_provider,
+        engine=args.engine,
+    )
 
 
 if __name__ == "__main__":

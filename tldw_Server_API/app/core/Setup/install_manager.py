@@ -254,6 +254,27 @@ def _select_package(requirement: PipRequirement) -> Optional[str]:
 
 
 def _cuda_available() -> bool:
+    """
+    Detect whether CUDA should be treated as available for dependency selection.
+
+    Priority:
+      1. Environment overrides:
+         - TLDW_SETUP_FORCE_GPU=1 -> force GPU packages
+         - TLDW_SETUP_FORCE_CPU=1 -> force CPU-only packages
+      2. Automatic detection via torch.cuda.is_available()
+    """
+
+    def _truthy(value: str | None) -> bool:
+        if not value:
+            return False
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+
+    # Explicit overrides from setup scripts (e.g., Kokoro installer)
+    if _truthy(os.getenv("TLDW_SETUP_FORCE_CPU")):
+        return False
+    if _truthy(os.getenv("TLDW_SETUP_FORCE_GPU")):
+        return True
+
     try:
         import torch
 
