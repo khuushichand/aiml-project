@@ -343,14 +343,22 @@ async def create_version(
 
         with db.transaction():
             safe_metadata_json: Optional[str] = None
-            try:
-                if request_body.safe_metadata is not None:
+            if request_body.safe_metadata is not None:
+                try:
                     safe_metadata_json = _json.dumps(
                         request_body.safe_metadata,
                         ensure_ascii=False,
                     )
-            except Exception:
-                safe_metadata_json = None
+                except Exception as exc:
+                    logger.warning(
+                        "Invalid safe_metadata for media {} on create_version: {}",
+                        media_id,
+                        exc,
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="safe_metadata is not JSON-serializable",
+                    ) from exc
 
             result_dict = db.create_document_version(
                 media_id=media_id,
@@ -414,7 +422,6 @@ async def create_version(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error during version creation",
         ) from exc
-
 
 @router.delete(
     "/{media_id:int}/versions/{version_number:int}",

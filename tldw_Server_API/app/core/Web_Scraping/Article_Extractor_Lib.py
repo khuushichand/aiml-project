@@ -366,7 +366,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             "date": "N/A",
             "content": "",
             "extraction_successful": False,
-            "error": f"Egress policy evaluation failed: {_e}"
+            "error": "Egress policy evaluation failed. Please contact system administrator."
         }
     # Resolve scraper plan via router (configurable via YAML)
     try:
