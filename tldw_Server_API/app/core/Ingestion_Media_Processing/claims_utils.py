@@ -214,7 +214,6 @@ async def persist_claims_if_applicable(
 
     if (
         not claims_context
-        or not claims_context.get("claims")
         or not media_id
         or not db_path
     ):
@@ -222,6 +221,8 @@ async def persist_claims_if_applicable(
             details.setdefault("stored_in_db", 0)
             process_result["claims_details"] = details
         return
+
+    claims = claims_context.get("claims") or []
 
     def _worker() -> int:
         db = MediaDatabase(db_path=db_path, client_id=client_id)
@@ -234,7 +235,7 @@ async def persist_claims_if_applicable(
                 db,
                 media_id=int(media_id),
                 chunk_texts_by_index=claims_context.get("chunk_text_map", {}),
-                claims=claims_context.get("claims", []),
+                claims=claims,
                 extractor=claims_context.get("extractor") or "heuristic",
                 extractor_version="v1",
             )
