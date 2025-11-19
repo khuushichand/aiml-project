@@ -1,0 +1,87 @@
+# Media Legacy Cleanup Plan
+
+This document tracks the remaining legacy media helpers and the
+planned deprecation/removal path now that the modular `/media`
+endpoints and core ingestion helpers are canonical.
+
+## Scope
+
+File: `tldw_Server_API/app/api/v1/endpoints/_legacy_media.py`
+
+Only helpers that are not used by modular endpoints, core ingestion
+modules, or the test suite are listed here. Shims that forward into
+modular/core code remain part of the supported surface for now.
+
+## Candidates (Group 1 – legacy-only, unused in modular pipeline)
+
+- `parse_advanced_query` (`_legacy_media.py:1480`)
+  - Status: Not called by `search_media_items` or any other function.
+  - Plan: Remove once an advanced search implementation is designed
+    under `media/listing.py` (or similar) and tests are updated.
+
+- Claims helpers (`_legacy_media.py:1667`–`1688`)
+  - `_claims_extraction_enabled`
+  - `_resolve_claims_parameters`
+  - `_prepare_claims_chunks`
+  - Notes:
+    - Behavior is implemented and documented in
+      `core/Ingestion_Media_Processing/claims_utils.py`.
+    - No call sites in `_legacy_media` or modular endpoints.
+  - Plan: Remove these wrappers after one minor release that clearly
+    documents `claims_utils` as the canonical location.
+
+- `_single_pdf_worker` (`_legacy_media.py:4158`)
+  - Notes:
+    - Legacy async worker for PDF processing.
+    - Modular `/process-pdfs` endpoint uses core ingestion helpers
+      instead; no direct callers reference this worker.
+  - Plan: Remove after confirming no external imports; keep only
+    `normalise_pdf_result` if still useful for debugging/tests.
+
+## Candidates (Group 2 – heavy implementations replaced by shims)
+
+These implementations are not on any live code path; the exported
+names are rebound to shim functions that delegate into core helpers.
+The alias lines must be preserved until we are certain no external
+code imports these names directly.
+
+- `_process_batch_media` (heavy implementation, `_legacy_media.py:1723`)
+  - Live behavior: `core.Ingestion_Media_Processing.persistence.process_batch_media`.
+  - Alias: `_process_batch_media = _process_batch_media_shim` at the
+    bottom of `_legacy_media.py`.
+  - Plan:
+    - Short term: keep heavy body as historical reference.
+    - Medium term: remove heavy body and keep only the shim + alias.
+
+- `_add_media_impl` (heavy legacy `/media/add` implementation, `_legacy_media.py:2124`)
+  - Live behavior: `core.Ingestion_Media_Processing.persistence.add_media_orchestrate`
+    via `add_media_persist` and `media/add.py`.
+  - Alias: `_add_media_impl = _add_media_impl_shim` at the bottom of
+    `_legacy_media.py`.
+  - Plan:
+    - Short term: keep heavy body as historical reference.
+    - Medium term: remove heavy body and keep only the shim + alias.
+
+## Safety Checks Before Removal
+
+Before deleting any of the above:
+
+1. Confirm no external imports:
+   - Run a project-wide search for the fully-qualified names (e.g.,
+     `tldw_Server_API.app.api.v1.endpoints._legacy_media._add_media_impl`).
+2. Ensure CI covers:
+   - `tldw_Server_API/tests/Media/`
+   - `tldw_Server_API/tests/MediaIngestion_NEW/`
+   - `tldw_Server_API/tests/Media_Ingestion_Modification/`
+   - Under both default mode and `TLDW_DISABLE_LEGACY_MEDIA=1`.
+3. Announce in changelog:
+   - Note removal of legacy-only helpers and direct callers (if any)
+     should migrate to `endpoints.media` and core helpers.
+
+## Current Status
+
+- All media tests pass with and without `TLDW_DISABLE_LEGACY_MEDIA=1`.
+- `_legacy_media.py` functions listed above are marked with
+  `LEGACY-ONLY` comments and are safe candidates for removal once
+  external usage is audited.
+

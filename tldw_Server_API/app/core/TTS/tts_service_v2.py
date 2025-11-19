@@ -258,6 +258,136 @@ class TTSServiceV2:
         except Exception:
             return []
 
+    async def get_capabilities(self) -> Dict[str, Any]:
+        """
+        Return capabilities for all available TTS providers.
+
+        The structure is JSON-serializable and suitable for the
+        `/api/v1/audio/providers` endpoint.
+        """
+        capabilities: Dict[str, Any] = {}
+
+        try:
+            factory = await self._ensure_factory()
+        except Exception as e:
+            logger.error(f"get_capabilities: unable to acquire TTS factory: {e}")
+            return capabilities
+
+        registry = getattr(factory, "registry", None)
+        if registry is None:
+            return capabilities
+
+        # Some tests inject a helper on the registry; prefer it when present
+        helper = getattr(registry, "get_all_capabilities", None)
+        if helper is not None:
+            try:
+                maybe = helper()
+                raw_caps = await maybe if asyncio.iscoroutine(maybe) else maybe
+                if isinstance(raw_caps, dict):
+                    for key, value in raw_caps.items():
+                        provider_key = getattr(key, "value", str(key))
+                        capabilities[provider_key] = self._serialize_capabilities(value)
+                    return capabilities
+            except Exception as e:
+                logger.debug(f"get_capabilities: get_all_capabilities helper failed: {e}")
+
+        # Fallback: iterate known providers and lazily materialize adapters
+        try:
+            from .adapter_registry import TTSProvider as _TTSProviderEnum
+            providers = list(_TTSProviderEnum)
+        except Exception:
+            providers = []
+
+        for prov in providers:
+            try:
+                adapter = await registry.get_adapter(prov)  # type: ignore[union-attr]
+            except Exception:
+                adapter = None
+            if not adapter or not getattr(adapter, "capabilities", None):
+                continue
+            capabilities[prov.value] = self._serialize_capabilities(adapter.capabilities)
+
+        return capabilities
+
+    async def list_voices(self) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Return a mapping of provider -> list of voice descriptors.
+
+        Used by `/api/v1/audio/voices/catalog` and WebUI audio configuration.
+        """
+        voices_by_provider: Dict[str, List[Dict[str, Any]]] = {}
+        caps = await self.get_capabilities()
+        for provider, provider_caps in caps.items():
+            voices: Optional[List[Dict[str, Any]]] = None
+            if isinstance(provider_caps, dict):
+                maybe_voices = provider_caps.get("voices")
+                if isinstance(maybe_voices, list):
+                    voices = maybe_voices
+            if voices:
+                voices_by_provider[provider] = voices
+        return voices_by_provider
+
+    def _serialize_capabilities(self, caps_obj: Any) -> Dict[str, Any]:
+        """
+        Convert a TTSCapabilities instance (or compatible mapping)
+        into a JSON-serializable dictionary.
+        """
+        # If already a mapping, normalize formats and return
+        if isinstance(caps_obj, dict):
+            out = dict(caps_obj)
+            fmts = out.get("formats")
+            if isinstance(fmts, (set, list, tuple)):
+                out["formats"] = [getattr(f, "value", str(f)) for f in fmts]
+            return out
+
+        # Dataclass / object case
+        try:
+            from dataclasses import asdict
+            data = asdict(caps_obj)
+        except Exception:
+            try:
+                data = dict(caps_obj)
+            except Exception:
+                return {}
+
+        languages = data.get("supported_languages") or []
+        formats = data.get("supported_formats") or []
+        voices = data.get("supported_voices") or []
+
+        # Normalize language set and formats
+        try:
+            data["languages"] = sorted(list(languages))
+        except Exception:
+            data["languages"] = list(languages)
+        data["formats"] = [getattr(f, "value", str(f)) for f in formats]
+
+        # Normalize voices (VoiceInfo dataclasses) into plain dicts
+        norm_voices: List[Dict[str, Any]] = []
+        for v in voices:
+            v_dict: Optional[Dict[str, Any]] = None
+            try:
+                from dataclasses import asdict as _asdict
+                v_dict = _asdict(v)
+            except Exception:
+                try:
+                    v_dict = dict(v)
+                except Exception:
+                    v_dict = None
+            if v_dict is not None:
+                norm_voices.append(v_dict)
+        data["voices"] = norm_voices
+
+        # Drop internal fields not needed by API callers
+        for key in ("supported_languages", "supported_formats", "supported_voices"):
+            data.pop(key, None)
+
+        # Default format as string when present
+        df = data.get("default_format")
+        if df is not None:
+            data["default_format"] = getattr(df, "value", str(df))
+
+        return data
+
     async def get_provider_info(self, provider: str) -> Dict[str, Any]:
         """Legacy provider information wrapper used by tests."""
         adapter = None
@@ -429,6 +559,17 @@ class TTSServiceV2:
                 yield f"ERROR: {str(error)}".encode()
                 return
             raise error
+
+        # Re-validate against the concrete adapter's provider (important for fallback providers)
+        try:
+            validate_tts_request(tts_request, provider=adapter.provider_name.lower())
+        except TTSValidationError as e:
+            logger.error(f"TTS request validation failed for provider {adapter.provider_name}: {e}")
+            if self._stream_errors_as_audio:
+                yield b"ERROR: Unable to generate audio."
+                return
+            else:
+                raise
 
         # Track metrics
         start_time = time.time()
@@ -642,6 +783,17 @@ class TTSServiceV2:
         request: TTSRequest
     ) -> AsyncGenerator[bytes, None]:
         """Generate audio with a specific adapter"""
+        # Ensure the request is valid for the concrete adapter/provider.
+        try:
+            validate_tts_request(request, provider=adapter.provider_name.lower())
+        except TTSValidationError as e:
+            logger.error(f"TTS request validation failed for provider {adapter.provider_name}: {e}")
+            if self._stream_errors_as_audio:
+                yield b"ERROR: Unable to generate audio."
+                return
+            else:
+                raise
+
         await self._increment_active_requests(adapter.provider_name)
         start_time = time.time()
         audio_size = 0

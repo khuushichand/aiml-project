@@ -7,6 +7,10 @@ and this project adheres to Some kind of Versioning
     
 ## [Unreleased]
 
+### Changed
+- Modularized `/api/v1/media` endpoints into `tldw_Server_API.app.api.v1.endpoints.media.*` while keeping response shapes and status codes backward compatible. The legacy monolith `_legacy_media.py` now acts as a compatibility shim that forwards to core helpers and modular routers.
+- Added `TLDW_DISABLE_LEGACY_MEDIA` flag to allow running the server in a legacy-free media mode where `/api/v1/media` behavior is owned entirely by the modular endpoints and core ingestion/persistence helpers.
+
 ### Deprecated
 - Character Chat legacy completion endpoint `POST /api/v1/chats/{chat_id}/complete` is deprecated.
   - The request body is no longer supported. Non-empty bodies now return `422 Unprocessable Entity`.
@@ -72,4 +76,3 @@ and this project adheres to Some kind of Versioning
 - Version 0.1
 ### Fixed 
 - Use of gradio
-

@@ -355,9 +355,10 @@ print(response.json()["text"])
 ### Provider Configuration (tts_providers_config.yaml)
 
 Location resolution:
-- `tldw_Server_API/app/core/TTS/tts_providers_config.yaml`
+- `tldw_Server_API/Config_Files/tts_providers_config.yaml` (project-level override)
+- `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` (in-repo default)
 - `./tts_providers_config.yaml` (working directory)
-- `~/.config/tldw/tts_providers_config.yaml`
+- `~/.config/tldw/tts_providers_config.yaml` (user config)
 
 Notes:
 - Local providers will not download models unless `auto_download: true` (or `TTS_AUTO_DOWNLOAD=1`).

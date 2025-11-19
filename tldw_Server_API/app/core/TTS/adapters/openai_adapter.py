@@ -5,11 +5,13 @@
 import os
 from typing import Optional, Dict, Any, AsyncGenerator, Set
 #
+from loguru import logger
 # Third-party Imports
 import httpx
-from loguru import logger
 #
 # Local Imports
+from tldw_Server_API.app.core.http_client import apost
+from tldw_Server_API.app.core.exceptions import NetworkError as CoreNetworkError, RetryExhaustedError
 from .base import (
     TTSAdapter,
     TTSCapabilities,
@@ -319,14 +321,13 @@ class OpenAIAdapter(TTSAdapter):
                     error_code=str(e.response.status_code)
                 )
 
-        except httpx.TimeoutException as e:
-            logger.error(f"{self.provider_name} timeout error: {e}")
-            # Use correct kwarg name to avoid TypeError
-            raise timeout_error(self.provider_name, timeout_seconds=60.0)
-
-        except httpx.NetworkError as e:
-            logger.error(f"{self.provider_name} network error: {e}")
-            # Preserve original exception context and correct argument order
+        except (httpx.TimeoutException, httpx.NetworkError, CoreNetworkError, RetryExhaustedError) as e:
+            logger.error(f"{self.provider_name} network/timeout error: {e}")
+            reason = str(e) or e.__class__.__name__
+            if isinstance(e, httpx.TimeoutException) or "timeout" in reason.lower():
+                # Map any timeout-like condition (including wrapped ones) to TTSTimeoutError
+                raise timeout_error(self.provider_name, timeout_seconds=60.0)
+            # All other transport failures are treated as network errors
             raise network_error(self.provider_name, e)
 
         except Exception as e:
@@ -344,20 +345,30 @@ class OpenAIAdapter(TTSAdapter):
         headers: Dict[str, str],
         payload: Dict[str, Any]
     ) -> AsyncGenerator[bytes, None]:
-        """Stream audio from OpenAI API"""
+        """Stream audio from OpenAI API with egress policy enforcement."""
         try:
-            # Use POST returning a response object that supports aiter_bytes.
-            # This aligns with unit tests that patch AsyncClient.post and attach
-            # aiter_bytes directly on the mocked response.
-            response = await self.client.post(self.base_url, headers=headers, json=payload)
+            logger.debug(f"{self.provider_name}: _stream_audio calling apost url={self.base_url}")
+            response = await apost(
+                url=self.base_url,
+                client=self.client,
+                headers=headers,
+                json=payload,
+            )
             response.raise_for_status()
             total_bytes = 0
-            async for chunk in response.aiter_bytes(chunk_size=1024):
-                if not chunk:
-                    continue
-                total_bytes += len(chunk)
-                yield chunk
-            logger.debug(f"{self.provider_name}: Streamed {total_bytes} bytes")
+            try:
+                async for chunk in response.aiter_bytes(chunk_size=1024):
+                    if not chunk:
+                        continue
+                    total_bytes += len(chunk)
+                    yield chunk
+                logger.debug(f"{self.provider_name}: Streamed {total_bytes} bytes")
+            finally:
+                try:
+                    if hasattr(response, "aclose"):
+                        await response.aclose()  # type: ignore[func-returns-value]
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"{self.provider_name} streaming error: {e}")
             raise
@@ -368,7 +379,14 @@ class OpenAIAdapter(TTSAdapter):
         payload: Dict[str, Any]
     ) -> bytes:
         """Generate complete audio from OpenAI API"""
-        response = await self.client.post(self.base_url, headers=headers, json=payload)
+        logger.debug(f"{self.provider_name}: _generate_complete calling apost url={self.base_url}")
+        response = await apost(
+            url=self.base_url,
+            client=self.client,
+            headers=headers,
+            json=payload,
+        )
+        logger.debug(f"{self.provider_name}: _generate_complete received response status={getattr(response, 'status_code', 'n/a')}")
         response.raise_for_status()
         return response.content
 

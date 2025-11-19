@@ -236,6 +236,32 @@ def _get_failopen_cap_minutes() -> float:
     return 5.0
 
 
+def _infer_tts_provider_from_model(model: Optional[str]) -> Optional[str]:
+    """Best-effort mapping from model id to provider key for sanitization."""
+    if not model:
+        return None
+    m = str(model).strip().lower()
+    if m in {"tts-1", "tts-1-hd"}:
+        return "openai"
+    if m.startswith("kokoro"):
+        return "kokoro"
+    if m.startswith("higgs"):
+        return "higgs"
+    if m.startswith("dia"):
+        return "dia"
+    if m.startswith("chatterbox"):
+        return "chatterbox"
+    if m.startswith("vibevoice"):
+        return "vibevoice"
+    if m.startswith("neutts"):
+        return "neutts"
+    if m.startswith("eleven"):
+        return "elevenlabs"
+    if m.startswith("index_tts") or m.startswith("indextts"):
+        return "index_tts"
+    return None
+
+
 
 # V2 TTS Service handles all provider mapping internally
 # No need for manual model/voice mappings here
@@ -309,7 +335,8 @@ async def create_speech(
         validator = TTSInputValidator({"strict_validation": tts_config.strict_validation})
 
         # Validate and sanitize input text
-        sanitized_text = validator.sanitize_text(request_data.input)
+        provider_hint = _infer_tts_provider_from_model(getattr(request_data, "model", None))
+        sanitized_text = validator.sanitize_text(request_data.input, provider=provider_hint)
 
         # Check for empty input after sanitization
         if not sanitized_text or len(sanitized_text.strip()) == 0:
@@ -440,9 +467,14 @@ async def create_speech(
         except Exception as exc:
             _raise_for_tts_error(exc)
 
-
     if request_data.stream:
         first_chunk = await _pull_first_chunk()
+        if not first_chunk:
+            logger.error("Streaming generation resulted in empty audio data.")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Audio generation failed to produce data.",
+            )
         return StreamingResponse(
             _stream_chunks(first_chunk),
             media_type=content_type,

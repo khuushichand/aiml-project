@@ -126,7 +126,7 @@ providers:
 
   # NeuTTS Air (Neuphonic) Configuration
   neutts:
-    enabled: true  # Enabled per user request; ensure prerequisites are installed
+    enabled: false  # Disabled by default; explicitly enable only after completing NeuTTS setup
     # Backbone options:
     #  - "neuphonic/neutts-air" (HF transformers)
     #  - "neuphonic/neutts-air-q4-gguf" or "neuphonic/neutts-air-q8-gguf" (llama-cpp; enables streaming)

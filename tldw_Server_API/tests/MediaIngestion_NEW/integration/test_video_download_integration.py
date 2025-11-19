@@ -25,16 +25,19 @@ def _serve_directory(directory: Path):
     class ReusableTCPServer(socketserver.ThreadingTCPServer):
         allow_reuse_address = True
 
-    with ReusableTCPServer(("127.0.0.1", 0), QuietHandler) as server:
-        host, port = server.server_address
+    try:
+        with ReusableTCPServer(("127.0.0.1", 0), QuietHandler) as server:
+            host, port = server.server_address
 
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            yield f"http://{host}:{port}"
-        finally:
-            server.shutdown()
-            thread.join()
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                yield f"http://{host}:{port}"
+            finally:
+                server.shutdown()
+                thread.join()
+    except PermissionError as exc:  # pragma: no cover - environment specific
+        pytest.skip(f"Cannot bind local HTTP server for video download test: {exc}")
 
 
 @pytest.mark.integration

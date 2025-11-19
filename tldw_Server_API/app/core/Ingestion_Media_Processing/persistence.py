@@ -40,6 +40,51 @@ except AttributeError:  # Starlette < 0.27
     HTTP_413_TOO_LARGE = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
 
 
+def validate_add_media_inputs(
+    media_type: Any,
+    urls: Optional[List[str]],
+    files: Optional[List[UploadFile]],
+) -> None:
+    """
+    Validate basic inputs for the `/media/add` endpoint.
+
+    This is the core implementation of the legacy `_validate_inputs`
+    helper previously defined in `_legacy_media`.
+    """
+    if not urls and not files:
+        logger.warning("No URLs or files provided in add_media request")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "No valid media sources supplied. At least one 'url' in the "
+                "'urls' list or one 'file' in the 'files' list must be provided."
+            ),
+        )
+
+
+def determine_add_media_final_status(results: List[Dict[str, Any]]) -> int:
+    """
+    Determine the overall HTTP status code for `/media/add` responses.
+
+    Mirrors the legacy `_determine_final_status` behaviour while living
+    in the core ingestion module.
+    """
+    if not results:
+        # This case should ideally be handled earlier if no inputs were valid.
+        return status.HTTP_400_BAD_REQUEST
+
+    processing_results = results
+    if not processing_results:
+        return status.HTTP_200_OK
+
+    if all(
+        str(r.get("status", "")).lower() == "success"
+        for r in processing_results
+    ):
+        return status.HTTP_200_OK
+    return status.HTTP_207_MULTI_STATUS
+
+
 async def add_media_orchestrate(
     background_tasks: BackgroundTasks,
     form_data: Any,
@@ -58,10 +103,9 @@ async def add_media_orchestrate(
     `media` shim so tests can continue to monkeypatch helpers via
     `endpoints.media`.
     """
-    # Imported lazily to avoid circular imports at module import time.
-    from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
-        _legacy_media as legacy_media,
-    )
+    # Resolve helpers via the modular `media` shim when available so
+    # tests that patch `endpoints.media.*` continue to work. Fall back
+    # to core implementations when the shim is unavailable.
     try:
         from tldw_Server_API.app.api.v1.endpoints import (  # type: ignore
             media as media_mod,
@@ -69,32 +113,39 @@ async def add_media_orchestrate(
     except Exception:  # pragma: no cover - ultra-minimal profiles
         media_mod = None  # type: ignore[assignment]
 
-    _validate_inputs = legacy_media._validate_inputs  # type: ignore[attr-defined]
+    _validate_inputs = validate_add_media_inputs
     _prepare_chunking_options_dict = prepare_chunking_options_dict
     _prepare_common_options = prepare_common_options
-    _determine_final_status = legacy_media._determine_final_status  # type: ignore[attr-defined]
-    # Resolve helpers via the modular `media` shim when available so
-    # tests that patch `endpoints.media.*` continue to work.
+    _determine_final_status = determine_add_media_final_status
+
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (  # type: ignore  # noqa: E501
+        TempDirManager as CoreTempDirManager,
+        save_uploaded_files as core_save_uploaded_files,
+    )
+    from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (  # type: ignore  # noqa: E501
+        file_validator_instance as core_file_validator_instance,
+    )
+
     if media_mod is not None:
         _save_uploaded_files = getattr(  # type: ignore[assignment]
             media_mod,
             "_save_uploaded_files",
-            legacy_media._save_uploaded_files,  # type: ignore[attr-defined]
+            core_save_uploaded_files,
         )
         file_validator_instance = getattr(  # type: ignore[assignment]
             media_mod,
             "file_validator_instance",
-            legacy_media.file_validator_instance,  # type: ignore[attr-defined]
+            core_file_validator_instance,
         )
         TemplateClassifier = getattr(  # type: ignore[assignment]
             media_mod,
             "TemplateClassifier",
-            legacy_media.TemplateClassifier,  # type: ignore[attr-defined]
+            None,
         )
         TempDirManagerCls = getattr(  # type: ignore[assignment]
             media_mod,
             "TempDirManager",
-            legacy_media.TempDirManager,  # type: ignore[attr-defined]
+            CoreTempDirManager,
         )
         _process_doc_item_fn = getattr(  # type: ignore[assignment]
             media_mod,
@@ -102,10 +153,10 @@ async def add_media_orchestrate(
             None,
         )
     else:  # pragma: no cover - fallback for minimal profiles
-        _save_uploaded_files = legacy_media._save_uploaded_files  # type: ignore[attr-defined,assignment]
-        file_validator_instance = legacy_media.file_validator_instance  # type: ignore[attr-defined,assignment]
-        TemplateClassifier = legacy_media.TemplateClassifier  # type: ignore[attr-defined,assignment]
-        TempDirManagerCls = legacy_media.TempDirManager  # type: ignore[attr-defined,assignment]
+        _save_uploaded_files = core_save_uploaded_files  # type: ignore[assignment]
+        file_validator_instance = core_file_validator_instance  # type: ignore[assignment]
+        TemplateClassifier = None  # type: ignore[assignment]
+        TempDirManagerCls = CoreTempDirManager  # type: ignore[assignment]
         _process_doc_item_fn = None
 
     if _process_doc_item_fn is None:

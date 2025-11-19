@@ -474,16 +474,37 @@ This table serves as a migration checklist to ensure the compatibility shim cont
       - `tldw_Server_API/app/api/v1/endpoints/web_scraping.py` exposes `/web-scraping/status`, `/web-scraping/service/initialize`, `/web-scraping/service/shutdown`, cookies, progress, and duplicate‑detection helpers.
       - `main.py` imports `web_scraping_router` alongside `media_router` and attempts to include it both at `/web-scraping/...` and `/api/v1/web-scraping/...` via `_include_if_enabled("web-scraping", ...)`. In some CI/minimal configurations route policy or import ordering may still gate these endpoints; the integration tests for `/web-scraping/service/initialize` and `/web-scraping/cookies/{domain}` now treat a 404 as a reason to `pytest.skip`, avoiding false negatives when the router is intentionally disabled.
     - Web scraping tests (`tldw_Server_API/tests/WebScraping/test_webscraping_usage_events.py`, `tldw_Server_API/tests/WebScraping/test_custom_headers_support.py`, `tldw_Server_API/tests/Web_Scraping/test_friendly_ingest_crawl_flags.py`, and management integration tests) pass or skip appropriately with the updated orchestration, confirming unchanged behavior for usage logging, crawl‑flag forwarding, custom‑header propagation, and response shapes for `/ingest-web-content` and management routes in supported environments.
-- Stage 6: Debug Endpoint
+- Stage 6: Debug Endpoint **(Status: Complete – modular debug route + health test)**
   - Move schema introspection to `debug.py`.
-  - Tests: basic health assertions.
-- Stage 7: Cleanup & Docs
-  - Ensure `media.py` shim only re-exports router (and any temporary compatibility helpers identified in Stage 0/1).
-  - Update docs:
-    - `Docs/Code_Documentation/Ingestion_Media_Processing.md`
-    - `Docs/Code_Documentation/Ingestion_Pipeline_*`
-    - Add `Docs/Design/Media_Endpoint_Refactor.md` overview.
-  - Tests: full suite with coverage.
+  - Implemented as `media/debug.py` with a typed `/debug/schema` route using `get_media_db_for_user` and returning table/column metadata plus counts via `DebugSchemaResponse`.
+  - Tests: `tldw_Server_API/tests/Media/test_media_debug_schema.py` exercises the route and verifies shape; passes under both normal and legacy-disabled modes.
+- Stage 7: Cleanup & Docs **(Status: In Progress – legacy-free media mode implemented; legacy module in shim/compatibility role)**
+  - Legacy-free media mode:
+    - Environment flag `TLDW_DISABLE_LEGACY_MEDIA=1` now disables inclusion of `_legacy_media.router` while keeping the `media` package importable as the canonical router:
+      - `media/__init__.py` exposes a combined router built solely from modular sub-routers (`add`, `listing`, `item`, `versions`, `process_*`, `debug`, `ingest_web_content`, `transcription_models`) when `_legacy_media` is not imported.
+      - All hot `/media` paths covered by the Media and MediaIngestion_NEW test suites (list/detail, versioning, `/media/add`, process-only endpoints, cache/index, JSON download, usage events, upload cleanup) now pass with `TLDW_DISABLE_LEGACY_MEDIA=1`, proving that behavior is fully owned by core + modular endpoints.
+    - The `media` shim re-exports internal helpers backed by core modules so tests can patch them without depending on `_legacy_media`:
+      - `_save_uploaded_files`, `TempDirManager`, `file_validator_instance`, `_process_document_like_item`, `_download_url_async`, `books`, `pdf_lib`, `docs`, `aiofiles`, and cache helpers (`cache`, `cache_response`, `invalidate_cache`) are all defined in `media/__init__.py` when legacy is disabled.
+      - `_process_document_like_item` is a thin async wrapper that imports and awaits `persistence.process_document_like_item` at call time, ensuring patches of `persistence.process_document_like_item` are visible to callers that go through `endpoints.media`.
+      - `_download_url_async` is backed by `core/Ingestion_Media_Processing/download_utils.download_url_async` when `_legacy_media` is disabled; this helper centralizes URL→file handling for JSON/document flows and test stubs.
+    - Test matrix:
+      - `TLDW_DISABLE_LEGACY_MEDIA=1 python -m pytest -q tldw_Server_API/tests/MediaIngestion_NEW tldw_Server_API/tests/Media` now reports all Media/MediaIngestion_NEW tests passing (with a small, expected set of skips and one xfail), validating that `_legacy_media` is no longer required for the main media surface.
+  - Legacy module status:
+    - `_legacy_media.py` has been reduced to:
+      - Router definitions for historical endpoints (still importable) that now call into modular implementations (`media/listing.py`, `media/item.py`, `media/versions.py`, `media/add.py`, modular process-* endpoints, web scraping orchestrators, etc.).
+      - Shared constants, type aliases, and a subset of helpers that are still referenced by modules outside `endpoints/media` or by external integrations.
+    - A first pass of dead-code marking has started:
+      - Helpers and endpoints not referenced by modular code, core ingestion modules, or the test suite have been annotated as deprecated/legacy-only within `_legacy_media.py` and are candidates for future removal once external usage is audited.
+      - The expectation is that, over time, `_legacy_media` will contain only shims and shared constants/enums, with all real behavior living in core + modular endpoints.
+  - Docs:
+    - `Docs/Code_Documentation/Ingestion_Media_Processing.md` and `Docs/Code_Documentation/Ingestion_Pipeline_*` have been updated to describe:
+      - `add_media_persist` / `add_media_orchestrate` as the canonical `/media/add` pipeline.
+      - `process_batch_media` as the canonical A/V inline ingestion helper.
+      - `process_document_like_item` as the canonical document/email/JSON ingestion helper.
+      - `download_url_async` as the shared URL→file helper used by modular JSON/document flows and tests.
+    - A design/overview doc (`Docs/Design/Media_Endpoint_Refactor.md`) remains planned to capture the final architecture and legacy-free mode semantics once cleanup of `_legacy_media` is complete.
+  - Tests:
+    - Full suites (`MediaIngestion_NEW` + `Media`) are exercised under both default and `TLDW_DISABLE_LEGACY_MEDIA=1` modes for CI, ensuring the refactor remains behavior-preserving while `_legacy_media` continues to serve as an optional compatibility layer.
 - Definition of Done (per stage)
   - Tests passing (unit + integration for impacted endpoints).
   - Response shapes verified with golden samples.

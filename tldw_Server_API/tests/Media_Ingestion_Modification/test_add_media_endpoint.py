@@ -31,7 +31,9 @@ import zipfile
 # Local Imports
 # Adjust import paths based on your project structure if needed
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.endpoints.media import _process_document_like_item
+from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (  # type: ignore
+    process_document_like_item as _process_document_like_item,
+)
 from tldw_Server_API.tests.test_utils import temp_db
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.config import settings

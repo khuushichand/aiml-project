@@ -427,7 +427,26 @@ class TTSInputValidator:
 
     def _validate_voice(self, voice: str, provider: Optional[str] = None):
         """Validate voice selection"""
-        # Basic voice name validation
+        normalized_provider = (provider or "").lower()
+
+        # For unknown/third-party providers, avoid over-constraining opaque
+        # voice identifiers. Adapters are expected to perform any provider-
+        # specific validation. Here we only enforce non-emptiness and a
+        # generous upper bound on length.
+        if normalized_provider and normalized_provider not in self.SUPPORTED_LANGUAGES and normalized_provider not in self.SUPPORTED_FORMATS:
+            if not voice or not str(voice).strip():
+                raise TTSVoiceNotFoundError(
+                    "Voice name cannot be empty",
+                    provider=provider,
+                )
+            if len(voice) > 200:
+                raise TTSVoiceNotFoundError(
+                    "Voice name too long",
+                    provider=provider,
+                )
+            return
+
+        # Basic voice name validation for providers we know about
         if not re.match(r'^[a-zA-Z0-9_-]+$', voice):
             raise TTSVoiceNotFoundError(
                 f"Invalid voice name format: {voice}",

@@ -191,63 +191,26 @@ async def list_media_endpoint(
     current_user: User = Depends(get_request_user),
     response: FastAPIResponse = None,
 ):
-    """Return paginated list of active media items (basic fields only)."""
-    try:
-        # Minimal TEST_MODE diagnostics to help tests surface state
-        try:
-            if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
-                _dbp = getattr(db, 'db_path_str', getattr(db, 'db_path', '?'))
-                _hdrs = getattr(request, 'headers', {}) or {}
-                logger.warning(
-                    f"TEST_MODE: list_media db_path={_dbp} user_id={getattr(current_user, 'id', '?')} "
-                    f"auth_headers={{'X-API-KEY': {'present': bool(_hdrs.get('X-API-KEY'))}, 'Authorization': {'present': bool(_hdrs.get('authorization'))}}}"
-                )
-        except Exception:
-            pass
-        rows, total_pages, current_page, total_items = get_paginated_files(
-            db_instance=db, page=page, results_per_page=results_per_page
-        )
-        try:
-            if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
-                logger.warning(
-                    f"TEST_MODE: list_media summary page={page} rpp={results_per_page} total_items={total_items} rows_returned={len(rows or [])}"
-                )
-                # Emit response headers to make diagnostics visible to tests
-                try:
-                    if response is not None:
-                        _dbp = getattr(db, 'db_path_str', getattr(db, 'db_path', '?'))
-                        response.headers["X-TLDW-DB-Path"] = str(_dbp)
-                        response.headers["X-TLDW-List-Total"] = str(int(total_items))
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        # Build items without content fields
-        items: List[Dict[str, Any]] = []
-        for r in rows or []:
-            rid = r["id"] if isinstance(r, dict) else r[0]
-            title = r["title"] if isinstance(r, dict) else r[1]
-            rtype = r["type"] if isinstance(r, dict) else r[2]
-            items.append({
-                "id": int(rid),
-                "title": str(title),
-                "type": str(rtype),
-                "url": f"/api/v1/media/{int(rid)}",
-            })
-        return {
-            "items": items,
-            "pagination": {
-                "page": int(current_page),
-                "results_per_page": int(results_per_page),
-                "total_pages": int(total_pages),
-                "total_items": int(total_items),
-            },
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error listing media: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to list media")
+    """
+    Compatibility shim for the legacy list endpoint.
+
+    Delegates to the modular ``media.listing.list_media_endpoint`` so
+    pagination and TEST_MODE behaviour are defined in one place.
+    """
+    from tldw_Server_API.app.api.v1.endpoints.media.listing import (  # type: ignore  # noqa: E501
+        list_media_endpoint as _list_media_impl,
+    )
+
+    # The modular implementation already accepts request/response/current_user.
+    return await _list_media_impl(
+        request=request,
+        response=response,
+        current_user=current_user,
+        page=page,
+        results_per_page=results_per_page,
+        db=db,
+        if_none_match=None,
+    )
 
 # Dependency to parse multipart/form-data for code processing
 async def get_process_code_form(
@@ -878,78 +841,25 @@ async def get_media_item(
 )
 async def create_version(
     media_id: int,
-    request_body: VersionCreateRequest, # Renamed for clarity (vs request object)
-    # --- Use the new DB dependency ---
+    request_body: VersionCreateRequest,
     db: MediaDatabase = Depends(get_media_db_for_user),
     request: Request = None,
     current_user: User = Depends(get_request_user),
 ):
     """
-    **Create a New Document Version**
-
-    Creates a new version record for an existing *active* media item based on the
-    provided content, prompt, and analysis.
+    Shim that forwards to the modular media.versions implementation.
     """
-    logger.debug(f"Attempting to create version for media_id: {media_id}")
-    # TEST_MODE diagnostics
-    try:
-        if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
-            _dbp = getattr(db, 'db_path_str', getattr(db, 'db_path', '?'))
-            _hdrs = getattr(request, 'headers', {}) or {}
-            logger.info(
-                f"TEST_MODE: create_version media_id={media_id} db_path={_dbp} user_id={getattr(current_user, 'id', '?')} "
-                f"auth_headers={{'X-API-KEY': {'present': bool(_hdrs.get('X-API-KEY'))}, 'Authorization': {'present': bool(_hdrs.get('authorization'))}}}"
-            )
-    except Exception:
-        pass
-    try:
-        # No explicit media check needed here if db.create_document_version handles it
-        # (It checks for active parent Media ID internally)
+    from tldw_Server_API.app.api.v1.endpoints.media.versions import (  # noqa: WPS433
+        create_version as _create_version_impl,
+    )
 
-        # Use the Database instance method within a transaction context
-        # The method handles its own sync logging
-        with db.transaction():
-            import json as _json
-            smj = None
-            try:
-                if request_body.safe_metadata is not None:
-                    smj = _json.dumps(request_body.safe_metadata, ensure_ascii=False)
-            except Exception:
-                smj = None
-            result_dict = db.create_document_version(
-                media_id=media_id,
-                content=request_body.content,
-                prompt=request_body.prompt,
-                analysis_content=request_body.analysis_content,
-                safe_metadata=smj,
-            )
-
-        # New method returns a dict with id, uuid, media_id, version_number
-        logger.info(f"Successfully created version {result_dict.get('version_number')} (UUID: {result_dict.get('uuid')}) for media_id: {media_id}")
-
-        # Return updated rich details for consistency
-        details = get_full_media_details_rich2(
-            db_instance=db,
-            media_id=media_id,
-            include_content=True,
-            include_versions=True,
-            include_version_content=False,
-        )
-        if not details:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after version creation")
-        return MediaDetailResponse(**details)
-
-    except InputError as e: # Catch specific error if media_id not found/inactive
-        logger.warning(f"Cannot create version for media {media_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found or deleted")
-    except (DatabaseError, ConflictError) as e: # Catch DB errors from new library
-        logger.error(f"Database error creating version for media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error occurred")
-    except HTTPException: # Re-raise FastAPI exceptions
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error creating version for media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error during version creation")
+    return await _create_version_impl(
+        media_id=media_id,
+        request_body=request_body,
+        db=db,
+        request=request,
+        current_user=current_user,
+    )
 
 
 @router.get(
@@ -1166,102 +1076,18 @@ async def patch_metadata(
     body: MetadataPatchRequest = Body(...),
     db: MediaDatabase = Depends(get_media_db_for_user),
 ):
-    """Update the safe_metadata JSON on the latest active version, or create a new version with merged metadata.
-
-    Examples:
-    - Merge in new DOI and journal on latest version:
-      PATCH /api/v1/media/123/metadata
-      {"safe_metadata": {"doi": "10.1234/xyz", "journal": "Nature"}, "merge": true, "new_version": false}
-
-    - Create a new version with updated metadata:
-      PATCH /api/v1/media/123/metadata
-      {"safe_metadata": {"license": "CC BY 4.0"}, "merge": true, "new_version": true}
     """
-    import json as _json
-    try:
-        # Normalize incoming safe_metadata payload to enforce identifier rules
-        # BEFORE any DB access so invalid identifiers yield 400 even when the
-        # DB dependency is a lightweight stub in tests.
-        try:
-            normalized = normalize_safe_metadata(body.safe_metadata or {})
-        except ValueError as ve:
-            raise HTTPException(status_code=400, detail=str(ve))
+    Shim that forwards to the modular media.versions implementation.
+    """
+    from tldw_Server_API.app.api.v1.endpoints.media.versions import (  # noqa: WPS433
+        patch_metadata as _patch_metadata_impl,
+    )
 
-        latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
-        if not latest:
-            raise HTTPException(status_code=404, detail="No active version found for this media.")
-
-        existing = latest.get('safe_metadata')
-        if isinstance(existing, str):
-            try:
-                existing = _json.loads(existing)
-            except Exception:
-                existing = None
-        if not isinstance(existing, dict):
-            existing = {}
-
-        new_meta = dict(existing)
-        if body.merge:
-            new_meta.update(normalized)
-        else:
-            new_meta = dict(normalized)
-
-        new_meta_json = None
-        try:
-            new_meta_json = _json.dumps(new_meta, ensure_ascii=False)
-        except Exception:
-            raise HTTPException(status_code=400, detail="safe_metadata is not JSON-serializable")
-
-        if body.new_version:
-            with db.transaction():
-                db.create_document_version(
-                    media_id=media_id,
-                    content=latest.get('content') or '',
-                    prompt=latest.get('prompt'),
-                    analysis_content=latest.get('analysis_content'),
-                    safe_metadata=new_meta_json,
-                )
-            # Return updated rich details for consistency
-            details = get_full_media_details_rich2(
-                db_instance=db,
-                media_id=media_id,
-                include_content=True,
-                include_versions=True,
-                include_version_content=False,
-            )
-            if not details:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after metadata update")
-            return MediaDetailResponse(**details)
-        else:
-            # Update in place on latest version
-            dv_id = latest.get('id')
-            if not dv_id:
-                raise HTTPException(status_code=500, detail="Latest version record missing identifier")
-            # Use the same connection from the transaction context and keep identifier index in sync
-            with db.transaction() as conn:
-                update_version_safe_metadata_in_transaction(
-                    db=db,
-                    dv_id=dv_id,
-                    safe_metadata_json=new_meta_json,
-                    merged_metadata=new_meta,
-                    connection=conn,
-                )
-            # Return updated rich details for consistency
-            details = get_full_media_details_rich2(
-                db_instance=db,
-                media_id=media_id,
-                include_content=True,
-                include_versions=True,
-                include_version_content=False,
-            )
-            if not details:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after metadata update")
-            return MediaDetailResponse(**details)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error patching safe metadata for media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to update metadata")
+    return await _patch_metadata_impl(
+        media_id=media_id,
+        body=body,
+        db=db,
+    )
 
 
 @router.put(
@@ -1276,68 +1102,19 @@ async def put_version_metadata(
     body: MetadataPatchRequest = Body(...),
     db: MediaDatabase = Depends(get_media_db_for_user),
 ):
-    """Set or merge safe_metadata JSON on a specific active version.
-
-    Example:
-      PUT /api/v1/media/123/versions/2/metadata
-      {"safe_metadata": {"pmid": "123456"}, "merge": true}
     """
-    import json as _json
-    try:
-        # Normalize incoming safe_metadata payload to enforce identifier rules
-        # BEFORE any DB access so invalid identifiers yield 400 even when the
-        # DB dependency is a lightweight stub in tests.
-        try:
-            normalized = normalize_safe_metadata(body.safe_metadata or {})
-        except ValueError as ve:
-            raise HTTPException(status_code=400, detail=str(ve))
+    Shim that forwards to the modular media.versions implementation.
+    """
+    from tldw_Server_API.app.api.v1.endpoints.media.versions import (  # noqa: WPS433
+        put_version_metadata as _put_version_metadata_impl,
+    )
 
-        version_dict = get_document_version(db, media_id=media_id, version_number=version_number, include_content=False)
-        if not version_dict:
-            raise HTTPException(status_code=404, detail="Version not found")
-        dv_id = version_dict.get('id')
-        existing = version_dict.get('safe_metadata')
-        if isinstance(existing, str):
-            try:
-                existing = _json.loads(existing)
-            except Exception:
-                existing = None
-        if not isinstance(existing, dict):
-            existing = {}
-
-        new_meta = dict(existing)
-        if body.merge:
-            new_meta.update(normalized)
-        else:
-            new_meta = dict(normalized)
-        try:
-            smj = _json.dumps(new_meta, ensure_ascii=False)
-        except Exception:
-            raise HTTPException(status_code=400, detail="safe_metadata is not JSON-serializable")
-        with db.transaction() as conn:
-            update_version_safe_metadata_in_transaction(
-                db=db,
-                dv_id=dv_id,
-                safe_metadata_json=smj,
-                merged_metadata=new_meta,
-                connection=conn,
-            )
-        # Return updated rich details for consistency
-        details = get_full_media_details_rich2(
-            db_instance=db,
-            media_id=media_id,
-            include_content=True,
-            include_versions=True,
-            include_version_content=False,
-        )
-        if not details:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after metadata update")
-        return MediaDetailResponse(**details)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating metadata for media {media_id} v{version_number}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to update version metadata")
+    return await _put_version_metadata_impl(
+        media_id=media_id,
+        version_number=version_number,
+        body=body,
+        db=db,
+    )
 
 
 @router.get(
@@ -1415,108 +1192,18 @@ async def create_or_update_version_advanced(
     body: AdvancedVersionUpsertRequest,
     db: MediaDatabase = Depends(get_media_db_for_user)
 ):
-    """Convenience endpoint to create a new version (default) or update latest metadata.
-
-    Rules:
-    - If new_version=true (default):
-        - content/prompt/analysis_content use provided values or fall back to latest.
-        - safe_metadata: if provided and merge=true, merged with latest; else replaces.
-    - If new_version=false:
-        - Only safe_metadata updates are allowed (content/prompt/analysis_content forbidden).
     """
-    import json as _json
-    try:
-        # Normalize incoming safe_metadata first so malformed identifiers
-        # yield 400 before any DB access.
-        normalized: Optional[Dict[str, Any]] = None
-        if body.safe_metadata is not None:
-            try:
-                normalized = normalize_safe_metadata(body.safe_metadata)
-            except ValueError as ve:
-                raise HTTPException(status_code=400, detail=str(ve))
+    Shim that forwards to the modular media.versions implementation.
+    """
+    from tldw_Server_API.app.api.v1.endpoints.media.versions import (  # noqa: WPS433
+        create_or_update_version_advanced as _advanced_impl,
+    )
 
-        latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
-        if not latest:
-            raise HTTPException(status_code=404, detail="No active version found for this media.")
-
-        if not body.new_version and (body.content is not None or body.prompt is not None or body.analysis_content is not None):
-            raise HTTPException(status_code=400, detail="When new_version=false, only safe_metadata updates are allowed")
-
-        # Prepare safe_metadata
-        latest_sm = latest.get('safe_metadata')
-        if isinstance(latest_sm, str):
-            try:
-                latest_sm = _json.loads(latest_sm)
-            except Exception:
-                latest_sm = None
-        if not isinstance(latest_sm, dict):
-            latest_sm = {}
-        if body.safe_metadata is not None:
-            assert normalized is not None
-            if body.merge:
-                merged_sm = dict(latest_sm)
-                merged_sm.update(normalized)
-            else:
-                merged_sm = dict(normalized)
-        else:
-            merged_sm = dict(latest_sm)
-        try:
-            smj = _json.dumps(merged_sm, ensure_ascii=False) if merged_sm else None
-        except Exception:
-            raise HTTPException(status_code=400, detail="safe_metadata is not JSON-serializable")
-
-        if body.new_version:
-            # Determine fields for new version
-            content = body.content if body.content is not None else (latest.get('content') or '')
-            prompt = body.prompt if body.prompt is not None else latest.get('prompt')
-            analysis = body.analysis_content if body.analysis_content is not None else latest.get('analysis_content')
-            with db.transaction():
-                db.create_document_version(
-                    media_id=media_id,
-                    content=content,
-                    prompt=prompt,
-                    analysis_content=analysis,
-                    safe_metadata=smj,
-                )
-            # Return updated rich details for consistency
-            details = get_full_media_details_rich2(
-                db_instance=db,
-                media_id=media_id,
-                include_content=True,
-                include_versions=True,
-                include_version_content=False,
-            )
-            if not details:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after version upsert")
-            return MediaDetailResponse(**details)
-        else:
-            # Update latest safe_metadata only
-            dv_id = latest.get('id')
-            with db.transaction() as conn:
-                update_version_safe_metadata_in_transaction(
-                    db=db,
-                    dv_id=dv_id,
-                    safe_metadata_json=smj,
-                    merged_metadata=merged_sm,
-                    connection=conn,
-                )
-
-            # Return updated rich details for consistency
-            details = get_full_media_details_rich2(
-                db_instance=db,
-                media_id=media_id,
-                include_content=True,
-                include_versions=True,
-                include_version_content=False,
-            )
-            if not details:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after version upsert")
-            return MediaDetailResponse(**details)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Advanced version upsert error for media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to process advanced version upsert")
+    return await _advanced_impl(
+        media_id=media_id,
+        body=body,
+        db=db,
+    )
 
 @router.get(
     "/{media_id:int}/versions/{version_number:int}",
@@ -1604,64 +1291,17 @@ async def delete_version(
     db: MediaDatabase = Depends(get_media_db_for_user)
 ):
     """
-    **Soft Delete a Specific Version**
-
-    Marks a specific version of an active media item as deleted (`deleted=1`).
-    Cannot delete the only remaining active version for a media item.
-    This action is logged for synchronization but does not permanently remove data.
+    Shim that forwards to the modular media.versions implementation.
     """
-    logger.debug(f"Attempting to soft delete version {version_number} for media_id: {media_id}")
-    try:
-        # 1. Find the UUID for the given media_id and version_number
-        # Ensure both the target version and the parent media are active
-        query_uuid = """
-            SELECT dv.uuid
-            FROM DocumentVersions dv
-            JOIN Media m ON dv.media_id = m.id
-            WHERE dv.media_id = ?
-              AND dv.version_number = ?
-              AND dv.deleted = 0
-              AND m.deleted = 0
-              AND m.is_trash = 0
-        """
-        cursor = db.execute_query(query_uuid, (media_id, version_number))
-        result_uuid = cursor.fetchone()
+    from tldw_Server_API.app.api.v1.endpoints.media.versions import (  # noqa: WPS433
+        delete_version as _delete_version_impl,
+    )
 
-        if not result_uuid:
-            logger.warning(f"Active version {version_number} for active media {media_id} not found.")
-            # Raise 404 whether media or version wasn't found/active
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active media or specific active version not found.")
-
-        version_uuid = result_uuid['uuid']
-        logger.debug(f"Found UUID {version_uuid} for version {version_number} of media {media_id}")
-
-        # 2. Call the instance method using the UUID
-        # The method handles sync logging and checks for 'last active version'.
-        with db.transaction(): # Use transaction for consistency
-             success = db.soft_delete_document_version(version_uuid=version_uuid)
-
-        if success:
-            # Return 204 No Content, FastAPI handles the response body
-            return Response(status_code=status.HTTP_204_NO_CONTENT)
-        else:
-            # soft_delete_document_version returns False if it was the last active version
-            logger.warning(f"Failed to delete version {version_number} (UUID: {version_uuid}) for media {media_id} - likely the last active version.")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete the only active version of the document.")
-
-    except ConflictError as e: # Catch conflict during DB update
-         logger.error(f"Conflict deleting version {version_number} (UUID: {version_uuid}) for media {media_id}: {e}", exc_info=True)
-         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Conflict during deletion")
-    except InputError as e: # Catch invalid input errors from DB method
-        logger.error(f"Input error deleting version {version_number} for media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid input provided")
-    except DatabaseError as e: # Catch general DB errors
-        logger.error(f"Database error deleting version {version_number} for media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error occurred")
-    except HTTPException: # Re-raise FastAPI exceptions
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error deleting version {version_number} for media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error deleting version")
+    return await _delete_version_impl(
+        media_id=media_id,
+        version_number=version_number,
+        db=db,
+    )
 
 
 @router.post(
@@ -1677,66 +1317,17 @@ async def rollback_version(
     db: MediaDatabase = Depends(get_media_db_for_user)
 ):
     """
-    **Rollback to a Previous Version**
-
-    Restores the main content of an *active* media item to the state of a specified *active*
-    previous version. Creates a *new* version reflecting the rolled-back content and
-    updates the main Media record.
+    Shim that forwards to the modular media.versions implementation.
     """
-    target_version_number = request_body.version_number
-    logger.debug(f"Attempting to rollback media_id {media_id} to version {target_version_number}")
-    try:
-        # Use the Database instance method within a transaction context
-        # The method handles checking media/version existence, 'cannot rollback to latest',
-        # creating the new version, updating Media, and logging sync events.
-        with db.transaction():
-            rollback_result = db.rollback_to_version(
-                media_id=media_id,
-                target_version_number=target_version_number
-            )
+    from tldw_Server_API.app.api.v1.endpoints.media.versions import (  # noqa: WPS433
+        rollback_version as _rollback_version_impl,
+    )
 
-        # Check the result dictionary from the DB method
-        if "error" in rollback_result:
-            error_msg = rollback_result["error"]
-            logger.warning(f"Rollback failed for media {media_id} to version {target_version_number}: {error_msg}")
-            # Map specific errors to HTTP status codes
-            if "not found" in error_msg.lower():
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=error_msg)
-            elif "Cannot rollback to the current latest version" in error_msg:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg)
-            else: # Other rollback errors reported by DB function
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg)
-
-        # Success case - DB method returns success details
-        logger.info(
-            f"Rollback successful for media {media_id} to version {target_version_number}. "
-            f"New doc version: {rollback_result.get('new_document_version_number')}"
-        )
-        details = get_full_media_details_rich2(
-            db_instance=db,
-            media_id=media_id,
-            include_content=True,
-            include_versions=True,
-            include_version_content=False,
-        )
-        if not details:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after rollback")
-        return MediaDetailResponse(**details)
-
-    except ValueError as e: # Catch invalid target_version_number
-        logger.warning(f"Invalid input for rollback media {media_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request parameters")
-    except ConflictError as e: # Catch conflict during Media update
-         logger.error(f"Conflict rolling back media {media_id} to version {target_version_number}: {e}", exc_info=True)
-         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Conflict during rollback")
-    except (InputError, DatabaseError) as e: # Catch DB errors
-        logger.error(f"Database error rolling back media {media_id} to version {target_version_number}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error during rollback")
-    except HTTPException: # Re-raise FastAPI exceptions
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error rolling back media {media_id} to version {target_version_number}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error during rollback")
+    return await _rollback_version_impl(
+        media_id=media_id,
+        request_body=request_body,
+        db=db,
+    )
 
 
 @router.put(
@@ -1749,192 +1340,20 @@ async def rollback_version(
 async def update_media_item(
     payload: MediaUpdateRequest,
     media_id: int = Path(..., description="The ID of the media item"),
-    # --- Use the new DB dependency ---
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: MediaDatabase = Depends(get_media_db_for_user),
 ):
     """
-    **Update Media Item Details**
-
-    Modifies attributes of an *active* main media item record (e.g., title, author).
-
-    If **content** is updated (`payload.content` is not None):
-      - A *new document version* is created using the provided `payload.content`.
-      - The `payload.prompt` and `payload.analysis` (if provided) are stored in this *new* version.
-      - The main `Media` record's `content`, `content_hash`, `last_modified`, and `version` (sync) are updated.
-      - FTS index for the media item is updated.
-
-    If only non-content fields (e.g., title, author) are updated:
-      - Only the main `Media` record is updated (fields, `last_modified`, `version`).
-      - No new document version is created.
-      - FTS index is updated if `title` changed.
+    Compatibility shim delegating to the modular media.item implementation.
     """
-    logger.debug(f"Received request to update media_id={media_id} with payload: {payload.model_dump(exclude_unset=True)}")
+    from tldw_Server_API.app.api.v1.endpoints.media.item import (  # type: ignore  # noqa: E501
+        update_media_item as _update_media_item_impl,
+    )
 
-    # Prepare data for the update, excluding None values from payload
-    # Use `exclude_unset=True` to only include fields explicitly set in the request
-    update_fields = payload.model_dump(exclude_unset=True)
-
-    # Check if any fields were actually provided for update
-    if not update_fields:
-        logger.info(f"Update request for media {media_id} received with no fields to update.")
-        # Return 200 OK but indicate no changes were made
-        # Fetch current data to return a representation? Or just a message?
-        # Fetching current data seems appropriate for a PUT response.
-        current_data = db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
-        if not current_data:
-             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media item not found or inactive.")
-        return {"message": "No update fields provided.", "media_item": current_data}
-
-
-    new_doc_version_info: Optional[Dict] = None
-    updated_media_info: Optional[Dict] = None
-    message: str = ""
-
-    try:
-        # --- Use a single transaction for all potential DB operations ---
-        with db.transaction() as conn: # Get connection for potential direct use if needed
-
-            # --- 1. Get Current State (needed for hash comparison & version increment) ---
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, uuid, content_hash, version FROM Media WHERE id = ? AND deleted = 0 AND is_trash = 0", (media_id,))
-            current_media = cursor.fetchone()
-            if not current_media:
-                logger.warning(f"Update failed: Media not found or inactive/trashed for ID {media_id}")
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media item not found or is inactive/trashed")
-
-            current_hash = current_media['content_hash']
-            current_sync_version = current_media['version']
-            media_uuid = current_media['uuid']
-            new_sync_version = current_sync_version + 1
-
-            # --- 2. Check if Content is being Updated ---
-            content_updated = 'content' in update_fields and update_fields['content'] is not None
-            new_content = update_fields.get('content') if content_updated else None
-            new_content_hash = hashlib.sha256(new_content.encode()).hexdigest() if content_updated else current_hash
-            content_actually_changed = content_updated and (new_content_hash != current_hash)
-
-            # --- 3. Prepare SQL SET clause and parameters ---
-            set_parts = []
-            params = []
-            # Always update last_modified, version, and client_id on any change
-            current_time = db._get_current_utc_timestamp_str() # Use internal helper
-            client_id = db.client_id
-            set_parts.extend(["last_modified = ?", "version = ?", "client_id = ?"])
-            params.extend([current_time, new_sync_version, client_id])
-
-            # Add specific fields from payload
-            if 'title' in update_fields:
-                set_parts.append("title = ?")
-                params.append(update_fields['title'])
-            if 'author' in update_fields:
-                set_parts.append("author = ?")
-                params.append(update_fields['author'])
-            if 'type' in update_fields: # Allow updating type?
-                set_parts.append("type = ?")
-                params.append(update_fields['type'])
-            # Add other updatable Media fields here...
-
-            # Handle content change specifically
-            if content_actually_changed:
-                logger.info(f"Content changed for media {media_id}. Updating content and hash.")
-                set_parts.extend(["content = ?", "content_hash = ?"])
-                params.extend([new_content, new_content_hash])
-                # Reset chunking status if content changes
-                set_parts.append("chunking_status = ?")
-                params.append('pending')
-            elif content_updated and not content_actually_changed:
-                 logger.info(f"Content provided for media {media_id} but hash is identical. Content field not updated.")
-                 # Do not add content/hash to SET clause
-                 # We still create a new version if content was in payload (as per original logic)
-
-            # --- 4. Execute Media Table Update ---
-            sql_set_clause = ", ".join(set_parts)
-            update_query = f"UPDATE Media SET {sql_set_clause} WHERE id = ? AND version = ?"
-            update_params = tuple(params + [media_id, current_sync_version])
-
-            logger.debug(f"Executing Media UPDATE: {update_query} | Params: {update_params}")
-            update_cursor = conn.cursor()
-            update_cursor.execute(update_query, update_params)
-
-            if update_cursor.rowcount == 0:
-                # Check if it was a conflict or if the item disappeared
-                cursor.execute("SELECT version FROM Media WHERE id = ?", (media_id,))
-                check_conflict = cursor.fetchone()
-                if check_conflict and check_conflict['version'] != current_sync_version:
-                     raise ConflictError("Media", media_id)
-                else: # Item disappeared between read and write? Unlikely in transaction but possible.
-                      raise DatabaseError(f"Failed to update media {media_id}, possibly deleted concurrently.")
-
-            logger.info(f"Successfully updated Media record for ID: {media_id}. New sync version: {new_sync_version}")
-            message = f"Media item {media_id} updated successfully."
-
-            # --- 5. Update FTS if title or content changed ---
-            fts_title = update_fields.get('title', None) # Use new title if provided
-            if fts_title is None: # If title not in payload, fetch current title for FTS
-                cursor.execute("SELECT title FROM Media WHERE id = ?", (media_id,))
-                fts_title = cursor.fetchone()['title']
-
-            fts_content = new_content if content_actually_changed else None # Only pass content if it changed
-            if fts_content is None and not content_updated: # If content didn't change and wasn't in payload, fetch current for FTS
-                 cursor.execute("SELECT content FROM Media WHERE id = ?", (media_id,))
-                 fts_content = cursor.fetchone()['content']
-
-            if 'title' in update_fields or content_actually_changed:
-                 logger.debug(f"Updating FTS for media {media_id} due to title/content change.")
-                 db._update_fts_media(conn, media_id, fts_title, fts_content) # Use internal helper
-
-            # --- 6. Create New Document Version if Content was in Payload ---
-            if content_updated: # Create version even if content hash was identical (matches original logic)
-                logger.info(f"Content was present in update payload for media {media_id}. Creating new document version.")
-                # Use the payload content, prompt, and analysis
-                # db.create_document_version handles its own sync logging internally
-                new_doc_version_info = db.create_document_version(
-                    media_id=media_id,
-                    content=new_content, # Content from payload
-                    prompt=payload.prompt, # Prompt from payload (can be None)
-                    analysis_content=payload.analysis # Analysis from payload (can be None)
-                )
-                message += f" New version {new_doc_version_info.get('version_number')} created."
-                logger.info(f"Created new version {new_doc_version_info.get('version_number')} (UUID: {new_doc_version_info.get('uuid')}) for media {media_id} during update.")
-
-            # --- 7. Log Media Update Sync Event ---
-            # Fetch the final state of the updated media record for the payload
-            cursor.execute("SELECT * FROM Media WHERE id = ?", (media_id,))
-            updated_media_info = dict(cursor.fetchone())
-            if new_doc_version_info:
-                 # Add context about the new version to the sync payload (optional)
-                 updated_media_info['created_doc_ver_uuid'] = new_doc_version_info.get('uuid')
-                 updated_media_info['created_doc_ver_num'] = new_doc_version_info.get('version_number')
-
-            db._log_sync_event(conn, 'Media', media_uuid, 'update', new_sync_version, updated_media_info)
-
-            # Commit happens automatically via context manager 'with db.transaction()'
-
-        # --- 8. Prepare and Return Response ---
-        # Return the updated rich view for consistency with GET response
-        details = get_full_media_details_rich2(
-            db_instance=db,
-            media_id=media_id,
-            include_content=True,
-            include_versions=True,
-            include_version_content=False,
-        )
-        if not details:
-            # Should not happen for active update
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found after update")
-        return MediaDetailResponse(**details)
-
-    except HTTPException: # Re-raise FastAPI/manual HTTP exceptions
-        raise
-    except ConflictError as e:
-        logger.error(f"Conflict updating media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Conflict detected during update")
-    except (DatabaseError, InputError) as e: # Catch DB errors from new library
-        logger.error(f"Database/Input error updating media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error during update")
-    except Exception as e:
-        logger.error(f"Unexpected error updating media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+    return await _update_media_item_impl(
+        payload=payload,
+        media_id=media_id,
+        db=db,
+    )
 
 
 ##############################################################################
@@ -1955,63 +1374,68 @@ async def update_media_item(
 )
 @limiter.limit("50/minute")
 async def list_all_media(
-    request: Request, # Keep request for limiter
+    request: Request,
     page: int = Query(1, ge=1, description="Page number"),
     results_per_page: int = Query(10, ge=1, le=100, description="Results per page"),
-    db: MediaDatabase = Depends(get_media_db_for_user)
+    db: MediaDatabase = Depends(get_media_db_for_user),
 ):
     """
-    Retrieve a paginated listing of all active (non-deleted, non-trash) media items.
-    Returns "items" and a "pagination" dictionary matching the MediaListResponse schema.
-    """
-    try:
-        # Use the new Database method
-        items_data, total_pages, current_page, total_items = db.get_paginated_media_list(
-            page=page,
-            results_per_page=results_per_page
-        )
+    Compatibility wrapper around the main list endpoint used by tests.
 
-        formatted_items = [
+    The richer list implementation now lives in the modular ``media.listing``
+    module, so this endpoint simply forwards to that handler and preserves the
+    response model.
+    """
+    from tldw_Server_API.app.api.v1.endpoints.media.listing import (  # type: ignore  # noqa: E501
+        list_media_endpoint as _list_media_impl,
+    )
+
+    # Reuse the modular list handler but adapt its dict payload into the
+    # historical ``MediaListResponse`` shape.
+    # Note: we intentionally do not pass if_none_match here to keep
+    # behaviour aligned with legacy tests that do not use ETags.
+    from fastapi import Response as _Response  # Local import to avoid cycles
+
+    _response = _Response()
+    payload = await _list_media_impl(
+        request=request,
+        response=_response,
+        current_user=await get_request_user(),  # type: ignore[arg-type]
+        page=page,
+        results_per_page=results_per_page,
+        db=db,
+        if_none_match=None,
+    )
+
+    try:
+        # Build MediaListResponse using the modular payload.
+        items = [
             MediaListItem(
                 id=item["id"],
                 title=item["title"],
                 type=item["type"],
-                # UUID is now available from items_data if needed, but MediaListItem doesn't use it.
-                # The URL can still be constructed here.
-                url=f"/api/v1/media/{item['id']}"
+                url=item.get("url", f"/api/v1/media/{item['id']}"),
             )
-            for item in items_data # items_data is now a list of dicts
+            for item in payload.get("items", [])
         ]
-
+        pagination = payload.get("pagination") or {}
         pagination_info = PaginationInfo(
-             page=current_page, # Use current_page returned from DB method
-             results_per_page=results_per_page,
-             total_pages=total_pages,
-             total_items=total_items
-         )
-
-        try:
-            response_obj = MediaListResponse(
-                items=formatted_items,
-                pagination=pagination_info
-            )
-            return response_obj
-        except ValidationError as ve:
-            logger.error(f"Pydantic validation error creating MediaListResponse: {ve.errors()}", exc_info=True) # Log Pydantic errors
-            logger.debug(f"Data causing validation error: items_count={len(formatted_items)}, pagination={pagination_info.model_dump_json(indent=2) if pagination_info else 'None'}")
-            raise HTTPException(status_code=500, detail="Internal server error: Response creation failed.")
-
-    except ValueError as ve:  # Catch ValueError from db.get_paginated_media_list
-        logger.warning(f"Invalid pagination parameters for list_all_media: {ve}")
-        raise HTTPException(status_code=HTTP_422_UNPROCESSABLE, detail=str(ve)) from ve
-    except DatabaseError as e:
-        logger.error(f"Database error fetching paginated media in list_all_media endpoint: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Database error retrieving media list.")
-    except HTTPException: # Re-raise existing HTTPExceptions
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error in list_all_media endpoint: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected internal server error occurred.")
+            page=pagination.get("page", 1),
+            per_page=pagination.get("results_per_page", results_per_page),
+            total=pagination.get("total_items", 0),
+            total_pages=pagination.get("total_pages", 1),
+        )
+        return MediaListResponse(items=items, pagination=pagination_info)
+    except ValidationError as ve:
+        logger.error(
+            "Pydantic validation error creating MediaListResponse: {}",
+            ve.errors(),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error: Response creation failed.",
+        ) from ve
 
 
 @router.get(
@@ -2024,60 +1448,16 @@ async def list_all_media(
 async def get_transcription_models():
     """
     Get all available transcription models grouped by category.
-    Returns models suitable for populating dropdown menus.
+
+    Delegates to the core ``get_transcription_models_payload`` helper
+    so the data definition lives under the core ingestion module while
+    preserving the original response envelope.
     """
-    models_by_category = {
-        "Whisper Models": [
-            {"value": "whisper-tiny", "label": "Whisper Tiny (39M)", "description": "Fastest, least accurate"},
-            {"value": "whisper-tiny.en", "label": "Whisper Tiny English (39M)", "description": "English only, faster"},
-            {"value": "whisper-base", "label": "Whisper Base (74M)", "description": "Fast, good accuracy"},
-            {"value": "whisper-base.en", "label": "Whisper Base English (74M)", "description": "English only, better"},
-            {"value": "whisper-small", "label": "Whisper Small (244M)", "description": "Balanced speed/accuracy"},
-            {"value": "whisper-small.en", "label": "Whisper Small English (244M)", "description": "English only, recommended"},
-            {"value": "whisper-medium", "label": "Whisper Medium (769M)", "description": "Good accuracy, slower"},
-            {"value": "whisper-medium.en", "label": "Whisper Medium English (769M)", "description": "English only, high quality"},
-            {"value": "whisper-large-v1", "label": "Whisper Large v1 (1550M)", "description": "Original large model"},
-            {"value": "whisper-large-v2", "label": "Whisper Large v2 (1550M)", "description": "Improved large model"},
-            {"value": "whisper-large-v3", "label": "Whisper Large v3 (1550M)", "description": "Latest, most accurate"},
-            {"value": "whisper-large-v3-turbo", "label": "Whisper Large v3 Turbo", "description": "Faster large model"}
-        ],
-        "Distil-Whisper Models": [
-            {"value": "distil-whisper-small.en", "label": "Distil-Whisper Small English", "description": "6x faster, similar accuracy"},
-            {"value": "distil-whisper-medium.en", "label": "Distil-Whisper Medium English", "description": "6x faster, good quality"},
-            {"value": "distil-whisper-large-v2", "label": "Distil-Whisper Large v2", "description": "5.8x faster"},
-            {"value": "distil-whisper-large-v3", "label": "Distil-Whisper Large v3", "description": "Latest distilled model"}
-        ],
-        "Optimized Models": [
-            {"value": "whisper-tiny-ct2", "label": "Whisper Tiny CT2", "description": "CTranslate2 optimized"},
-            {"value": "whisper-base-ct2", "label": "Whisper Base CT2", "description": "CTranslate2 optimized"},
-            {"value": "whisper-small-ct2", "label": "Whisper Small CT2", "description": "CTranslate2 optimized"},
-            {"value": "whisper-medium-ct2", "label": "Whisper Medium CT2", "description": "CTranslate2 optimized"},
-            {"value": "whisper-large-v2-ct2", "label": "Whisper Large v2 CT2", "description": "CTranslate2 optimized"},
-            {"value": "whisper-large-v3-ct2", "label": "Whisper Large v3 CT2", "description": "CTranslate2 optimized"}
-        ],
-        "Nemo Models": [
-            {"value": "nemo-canary", "label": "Nemo Canary", "description": "NVIDIA's multilingual model"},
-            {"value": "nemo-parakeet-0.11b", "label": "Nemo Parakeet 0.11B", "description": "Lightweight model"},
-            {"value": "nemo-parakeet-1.1b", "label": "Nemo Parakeet 1.1B", "description": "Standard model"},
-            {"value": "nemo-parakeet-tdt-1.1b", "label": "Nemo Parakeet TDT 1.1B", "description": "Timestamped model"}
-        ],
-        "Parakeet Backends": [
-            {"value": "parakeet-standard", "label": "Parakeet Standard", "description": "Default CPU backend"},
-            {"value": "parakeet-cuda", "label": "Parakeet CUDA", "description": "GPU acceleration (NVIDIA)"},
-            {"value": "parakeet-mlx", "label": "Parakeet MLX", "description": "Apple Silicon acceleration"},
-            {"value": "parakeet-onnx", "label": "Parakeet ONNX", "description": "Cross-platform optimization"}
-        ]
-    }
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.transcription_models import (  # type: ignore  # noqa: E501
+        get_transcription_models_payload,
+    )
 
-    # Also return a flat list of all values for validation
-    all_models = []
-    for category_models in models_by_category.values():
-        all_models.extend([model["value"] for model in category_models])
-
-    return {
-        "categories": models_by_category,
-        "all_models": all_models
-    }
+    return get_transcription_models_payload()
 
 
 # FIXME - Add an 'advanced search' option for searching by date range, media type, etc. - update DB schema to add new fields
@@ -2085,6 +1465,10 @@ async def get_transcription_models():
 # Enhanced Search Endpoint with ETags
 #
 
+# LEGACY-ONLY / unused in modular pipeline; candidate for removal.
+# The modular search endpoint does not call this. Any future
+# advanced-search work should live alongside the modular
+# listing/search helpers instead.
 def parse_advanced_query(search_request: SearchRequest) -> Dict:
     """Convert advanced search request to DB query format"""
     query_params = {
@@ -2228,19 +1612,23 @@ async def search_media_items(
 
 # Per-User Media Ingestion and Analysis
 # FIXME - Ensure that each function processes multiple files/URLs at once
-def _validate_inputs(media_type: MediaType, urls: Optional[List[str]], files: Optional[List[UploadFile]]):
-    """Validates initial media type and presence of input sources."""
-    # media_type validation is handled by Pydantic's Literal type
-    # Ensure at least one URL or file is provided
-    if not urls and not files:
-        logger.warning("No URLs or files provided in add_media request")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No valid media sources supplied. At least one 'url' in the 'urls' list or one 'file' in the 'files' list must be provided."
-        )
-    # Note: URL safety (SSRF) validation is performed at per-item processing time
-    # to avoid aborting mixed batches prematurely. This ensures mixed inputs
-    # (some URLs + some uploads) return 207 Multi-Status instead of a blanket 400.
+def _validate_inputs(
+    media_type: MediaType,
+    urls: Optional[List[str]],
+    files: Optional[List[UploadFile]],
+) -> None:
+    """
+    Backwards-compatible shim for input validation.
+
+    Delegates to the core ``validate_add_media_inputs`` helper so the
+    actual behaviour lives under the core ingestion module while
+    preserving the original name and signature.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
+        validate_add_media_inputs,
+    )
+
+    validate_add_media_inputs(media_type=media_type, urls=urls, files=files)
 
 
 # Backwards-compatibility alias for tests referencing old private helper name
@@ -2280,6 +1668,10 @@ def _prepare_common_options(
     return prepare_common_options(form_data, chunk_options)
 
 
+# LEGACY-ONLY / unused in modular pipeline; candidate for removal.
+# These thin wrappers mirror the core claims helpers in
+# `claims_utils.py` but are not called by the modular
+# ingestion pipeline.
 def _claims_extraction_enabled(form_data: AddMediaForm) -> bool:
     """Backwards-compatible wrapper delegating to core claims utils."""
     from tldw_Server_API.app.core.Ingestion_Media_Processing.claims_utils import (
@@ -2361,7 +1753,12 @@ async def _process_batch_media(
     temp_dir: Path # Pass temp_dir Path object
 ) -> List[Dict[str, Any]]:
     """
-    Handles PRE-CHECK, external processing, and DB persistence for video/audio.
+    LEGACY-ONLY / not on any live code path; kept only as historical reference.
+
+    The live implementation now lives in
+    ``core.Ingestion_Media_Processing.persistence.process_batch_media``,
+    and the exported `_process_batch_media` name is rebound to a shim
+    at the end of this file.
     """
     combined_results = []
     all_processing_sources = urls + uploaded_file_paths
@@ -2706,23 +2103,18 @@ async def _process_document_like_item(
 
 
 def _determine_final_status(results: List[Dict[str, Any]]) -> int:
-    """Determines the overall HTTP status code based on individual results."""
-    if not results:
-        # This case should ideally be handled earlier if no inputs were valid
-        return status.HTTP_400_BAD_REQUEST
+    """
+    Backwards-compatible shim for HTTP status determination.
 
-    # Consider only results from actual processing attempts (exclude file saving errors if desired)
-    # processing_results = [r for r in results if "Failed to save uploaded file" not in r.get("error", "")]
-    processing_results = results # Or consider all results
+    Delegates to the core ``determine_add_media_final_status`` helper so
+    the decision logic lives under the core ingestion module while
+    preserving the original name and signature.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
+        determine_add_media_final_status,
+    )
 
-    if not processing_results:
-        return status.HTTP_200_OK # Or 207 if file saving errors occurred but no processing started
-
-    if all(r.get("status", "").lower() == "success" for r in processing_results):
-        return status.HTTP_200_OK
-    else:
-        # If any result is not "Success", return 207 Multi-Status
-        return status.HTTP_207_MULTI_STATUS
+    return determine_add_media_final_status(results)
 
 
 async def _add_media_impl(
@@ -2778,21 +2170,14 @@ async def _add_media_impl(
     current_user: User = Depends(get_request_user),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
     response: FastAPIResponse = None,
-):
+) -> Any:
     """
-    **Add Media Endpoint**
+    LEGACY-ONLY / not on any live code path; kept only as historical reference.
 
-    Add multiple media items (from URLs and/or uploaded files) to the database with processing.
-
-    Ingests media from URLs or uploads, processes it (transcription, analysis, etc.),
-    and **persists** the results and metadata to the database.
-
-    Use this endpoint for adding new content to the system permanently.
-
-    Hierarchical chunking (optional):
-    - Set `hierarchical_chunking=true` to enable structure-aware parsing and flattened chunks.
-    - Optionally pass `hierarchical_template` with custom boundary rules:
-      `{"boundaries": [{"kind":"my_section","pattern":"^##\\s+Custom","flags":"im"}]}`
+    The live `/media/add` pipeline now lives in
+    ``core.Ingestion_Media_Processing.persistence.add_media_orchestrate``,
+    and callers should use `add_media_persist` via the modular
+    `media/add.py` endpoint instead.
     """
     from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
         add_media_orchestrate,
@@ -4774,7 +4159,10 @@ async def _single_pdf_worker(
     chunk_opts: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
-    1) Read file bytes, 2) call process_pdf_task(), 3) normalise the result dict.
+    LEGACY-ONLY worker kept for reference.
+
+    The modular `/process-pdfs` endpoint now routes through the core
+    ingestion helpers; new PDF ingestion work should not call this.
     """
     try:
         file_bytes = pdf_path.read_bytes()

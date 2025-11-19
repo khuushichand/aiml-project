@@ -64,6 +64,69 @@ Streaming variant (Python, httpx):
 
   ———
 
+  1.b Provider and Voice Catalog Shapes
+
+  `GET /api/v1/audio/providers` returns capabilities and voice catalog:
+
+```json
+  {
+    "providers": {
+      "openai": {
+        "provider_name": "OpenAI",
+        "languages": ["en"],
+        "formats": ["mp3", "opus", "aac", "flac", "wav", "pcm"],
+        "max_text_length": 4096,
+        "supports_streaming": true,
+        "supports_voice_cloning": false,
+        "default_format": "mp3",
+        "sample_rate": 24000,
+        "voices": [
+          { "id": "alloy", "name": "Alloy", "gender": "neutral", "language": "en" },
+          { "id": "nova",  "name": "Nova",  "gender": "female",  "language": "en" }
+        ]
+      },
+      "kokoro": {
+        "provider_name": "Kokoro",
+        "languages": ["en-us", "en-gb", "en"],
+        "formats": ["mp3", "wav", "opus"],
+        "max_text_length": 1000000,
+        "supports_streaming": true,
+        "default_format": "wav",
+        "sample_rate": 24000,
+        "voices": [
+          { "id": "af_bella", "name": "Bella", "gender": "female", "language": "en-us" }
+        ]
+      }
+    },
+    "voices": {
+      "openai": [
+        { "id": "alloy", "name": "Alloy", "gender": "neutral", "language": "en" },
+        { "id": "nova",  "name": "Nova",  "gender": "female",  "language": "en" }
+      ],
+      "kokoro": [
+        { "id": "af_bella", "name": "Bella", "gender": "female", "language": "en-us" }
+      ]
+    },
+    "timestamp": "2025-01-01T12:00:00Z"
+  }
+```
+
+  `GET /api/v1/audio/voices/catalog` (optionally `?provider=openai`) returns a provider→voices map:
+
+```json
+  {
+    "openai": [
+      { "id": "alloy", "name": "Alloy", "gender": "neutral", "language": "en" },
+      { "id": "echo",  "name": "Echo",  "gender": "male",    "language": "en" },
+      { "id": "nova",  "name": "Nova",  "gender": "female",  "language": "en" }
+    ]
+  }
+```
+
+  These shapes are approximate but match the real fields produced by `TTSServiceV2.get_capabilities()` and `TTSServiceV2.list_voices()`.
+
+  ———
+
   2. Client pattern (JavaScript / TypeScript)
 
   Non‑streaming with fetch:
@@ -249,7 +312,3 @@ Streaming variant (Python, httpx):
       - Annotation summary: TTS p95 latency > 5s.
 
   ———
-  
-
-
-FIXME

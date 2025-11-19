@@ -291,6 +291,7 @@ Each section highlights installation, configuration, and a smoke test.
 ## YAML Configuration Reference
 
 Location precedence (first found is used):
+- `tldw_Server_API/Config_Files/tts_providers_config.yaml` (project-level override)
 - `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` (in-repo default)
 - `./tts_providers_config.yaml` (current working directory)
 - `~/.config/tldw/tts_providers_config.yaml` (user config)
