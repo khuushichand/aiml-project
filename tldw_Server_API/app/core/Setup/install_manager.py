@@ -810,6 +810,10 @@ STT_DEPENDENCIES: Dict[str, List[PipRequirement]] = {
 
 TTS_DEPENDENCIES: Dict[str, List[PipRequirement]] = {
     'kokoro': [
+        # PyTorch + ONNX support for Kokoro:
+        # - `kokoro` provides KModel/KPipeline (PyTorch backend)
+        # - `kokoro-onnx` + onnxruntime enable the ONNX backend
+        PipRequirement(package='kokoro>=0.1.0', import_name='kokoro'),
         PipRequirement(package='kokoro-onnx>=0.3.0', import_name='kokoro_onnx'),
         PipRequirement(package='onnxruntime>=1.16.0', gpu_package='onnxruntime-gpu>=1.16.0', import_name='onnxruntime'),
         PipRequirement(package='phonemizer>=3.2.1', import_name='phonemizer'),

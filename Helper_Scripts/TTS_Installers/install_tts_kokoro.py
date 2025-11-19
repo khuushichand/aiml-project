@@ -2,12 +2,12 @@
 """
 Install Kokoro TTS assets and dependencies.
 
-Defaults (PyTorch-first):
-- PyTorch model: models/kokoro/pytorch/model.pth
+Defaults (PyTorch-first, matching hexgrad/Kokoro-82M layout):
+- PyTorch model: models/kokoro/kokoro-v1_0.pth
 - Voices dir  : models/kokoro/voices/
 
 Usage:
-  # PyTorch (default; no ONNX downloads)
+  # PyTorch (default; does not download the model checkpoint by default)
   python Helper_Scripts/TTS_Installers/install_tts_kokoro.py [--model-only|--voices-only] \
       [--model-path PATH] [--voices-dir PATH] [--force]
 
@@ -22,7 +22,9 @@ Environment flags respected (optional):
 
 This script:
 1) Installs required pip packages for the kokoro adapter.
-2) By default, prepares a PyTorch layout suitable for hexgrad/Kokoro-82M or similar.
+2) By default, prepares a PyTorch layout suitable for hexgrad/Kokoro-82M or similar
+   (installs dependencies and voices; you still supply the .pth checkpoint unless
+   you override --model-path in combination with a custom installer).
 3) Optionally, when --engine onnx is specified, downloads the v1.0 ONNX model and
    voices directory from HF and configures ONNX Runtime wheels.
 4) Detects eSpeak NG and prints platform guidance if not found.
@@ -110,7 +112,7 @@ def _run_install(
         voices_dir.mkdir(parents=True, exist_ok=True)
 
         # If custom locations were provided, write them into config so the installer uses them
-        default_model = Path("models/kokoro/pytorch/model.pth" if engine != "onnx" else "models/kokoro/onnx/model.onnx")
+        default_model = Path("models/kokoro/kokoro-v1_0.pth" if engine != "onnx" else "models/kokoro/onnx/model.onnx")
         default_voices = Path("models/kokoro/voices")
         try:
             if model_path != default_model or voices_dir != default_voices:
@@ -223,8 +225,12 @@ def main() -> int:
     )
     ap.add_argument(
         "--model-path",
-        default="models/kokoro/pytorch/model.pth",
-        help="Destination path for Kokoro model (PyTorch or ONNX).",
+        default=None,
+        help=(
+            "Destination path for Kokoro model (PyTorch or ONNX). "
+            "Defaults: PyTorch -> models/kokoro/kokoro-v1_0.pth; "
+            "ONNX -> models/kokoro/onnx/model.onnx."
+        ),
     )
     ap.add_argument("--voices-dir", default="models/kokoro/voices", help="Destination directory for voices")
     ap.add_argument("--model-only", action="store_true", help="Only install model (skip voices)")
@@ -249,7 +255,14 @@ def main() -> int:
     if args.force:
         os.environ['TLDW_SETUP_FORCE_DOWNLOADS'] = '1'
 
-    model_path = Path(args.model_path)
+    # Choose sensible defaults per engine when model_path not explicitly provided
+    if args.model_path:
+        model_path = Path(args.model_path)
+    else:
+        if args.engine == "onnx":
+            model_path = Path("models/kokoro/onnx/model.onnx")
+        else:
+            model_path = Path("models/kokoro/kokoro-v1_0.pth")
     voices_dir = Path(args.voices_dir)
     return _run_install(
         model_path,
