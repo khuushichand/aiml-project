@@ -179,6 +179,23 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/audio-stream-transcribe
+  - id: audio.chat
+    description: Non-streaming speech-to-speech chat (STT → LLM → TTS).
+    resource_tags:
+      - audio
+      - stt
+      - tts
+      - chat
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-chat
   - id: workflows
     description: Create and manage automated workflow schedules and runs.
     resource_tags:

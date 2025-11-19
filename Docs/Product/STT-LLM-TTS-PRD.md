@@ -19,6 +19,12 @@ Build a first-class speech-to-speech chat experience on top of existing STT, LLM
   - Latency, error handling, and UX patterns differ per client.
 - Goal: provide a single, well-defined speech chat API that bundles these into a coherent, low-friction experience for the WebUI and external clients.
 
+### 2.1 Assumptions
+
+- v1 is strictly non-streaming: one REST request per turn, with the server running STT → LLM → TTS sequentially for that audio clip.
+- v1 does not introduce background jobs or async workers for audio chat; any such offload would be a later optimization or separate design.
+- v2 builds on existing unified streaming STT/TTS infrastructure and may evolve in lockstep with `Docs/Audio_Streaming_Protocol.md` and `Docs/Product/Realtime_Voice_Latency_PRD.md`.
+
 ## 3. Goals
 
 - Provide a unified speech-to-speech chat pipeline: speech in → text transcript → LLM response → speech out.
@@ -62,7 +68,7 @@ Build a first-class speech-to-speech chat experience on top of existing STT, LLM
 1. **Ask & answer**
    - User presses a button and speaks a short question.
    - Server transcribes, calls LLM, and returns both text and an audio reply.
-2. **Streaming conversation**
+2. **Streaming conversation (v2)**
    - User holds-to-talk or uses VAD-based streaming.
    - Receives partial transcripts followed by streamed TTS of the LLM reply.
 3. **Contextual voice chat**
@@ -104,7 +110,9 @@ Build a first-class speech-to-speech chat experience on top of existing STT, LLM
 
 ### 7.1 Core Pipeline Behavior
 
-- Accept user audio input (file or streaming).
+- Accept user audio input:
+  - v1: uploaded audio file via a non-streaming REST request.
+  - v2: streaming audio frames over WebSocket.
 - Produce:
   - Text transcript of user input.
   - Text response from LLM.
@@ -121,9 +129,10 @@ Build a first-class speech-to-speech chat experience on top of existing STT, LLM
 - `POST /api/v1/audio/chat`
 - Request (high-level):
   - Auth: same AuthNZ as existing APIs (API key or JWT).
+  - Content type: `application/json` (v1).
   - Body:
     - `session_id` (optional): identifies the chat session.
-    - `audio` (required): binary audio (file upload or base64).
+    - `input_audio` (required): base64-encoded audio data for the user utterance.
     - `input_audio_format`: `wav`, `mp3`, `ogg`, etc.
     - `stt_config`:
       - `provider`/`model` (reusing existing audio STT config).
@@ -137,10 +146,12 @@ Build a first-class speech-to-speech chat experience on top of existing STT, LLM
     - `metadata`:
       - Client metadata, trace IDs, etc.
 - Response (high-level):
+  - Content type: `application/json` (v1).
   - `session_id`: assigned or reused.
   - `user_transcript`: full user text.
   - `assistant_text`: full LLM reply text.
-  - `output_audio`: binary or base64; format per `tts_config`.
+  - `output_audio`: base64-encoded audio data; format per `tts_config`.
+  - `output_audio_mime_type`: MIME type for `output_audio` (e.g., `audio/mpeg`, `audio/wav`).
   - `timing`:
     - STT duration, LLM duration, TTS duration.
   - `token_usage`:
@@ -166,7 +177,7 @@ Build a first-class speech-to-speech chat experience on top of existing STT, LLM
 ### 7.3 Session & Context Management
 
 - A “speech chat session” maps 1:1 with existing chat sessions:
-  - Stored in existing notes/chats DB where possible.
+  - Stored in existing notes/chats DB (ChaChaNotes conversations/messages) where possible.
   - Each turn adds:
     - `user` message: STT transcript + reference to audio input.
     - `assistant` message: LLM reply + reference to audio output.
@@ -234,7 +245,7 @@ Build a first-class speech-to-speech chat experience on top of existing STT, LLM
 - Reuse AuthNZ middleware and rate limiting:
   - `X-API-KEY` (single-user) or JWT (multi-user).
 - Audio/media:
-  - Stored only when explicitly configured (e.g., for chatbooks/evals).
+  - Stored only when explicitly configured (e.g., via server config and/or a per-request `store_audio` flag, for chatbooks/evals).
   - Encrypted at rest where supported by current DB/filesystem config.
 - Never log:
   - Raw audio payloads.
@@ -265,6 +276,8 @@ Build a first-class speech-to-speech chat experience on top of existing STT, LLM
   - Add a dedicated service (e.g., `SpeechChatService`) in a suitable `core` submodule to:
     - Orchestrate STT → LLM → TTS.
     - Manage sessions, timing, and error propagation.
+- **Streaming alignment (v2)**:
+  - The streaming endpoint (`WS /api/v1/audio/chat/stream`) should align with `Docs/Audio_Streaming_Protocol.md` and `Docs/Product/Realtime_Voice_Latency_PRD.md` for transport details, metrics, and latency/SLO definitions.
 
 ## 10. WebUI Integration Requirements
 
@@ -317,3 +330,100 @@ Build a first-class speech-to-speech chat experience on top of existing STT, LLM
 - Do we want interruption (“barge-in”) support in v2 or later?
 - Which defaults should we ship for STT/LLM/TTS to balance latency vs quality?
 - Any additional metadata (e.g., emotion, confidence scores) that should be exposed in API responses?
+
+---
+
+## Implementation Plan
+
+This plan tracks staged implementation for the Speech-to-Speech pipeline as specified above. Each stage lists goals, success criteria, and concrete test notes. Update **Status** as work progresses.
+
+### Stage 1: v1 API & Schemas
+**Goal**: Define and ship the non-streaming REST endpoint `POST /api/v1/audio/chat` with validated schemas and docs.
+
+**Success Criteria**:
+- New request/response schemas for `audio chat` live under `tldw_Server_API/app/api/v1/schemas/` and are wired into OpenAPI.
+- `POST /api/v1/audio/chat` accepts multipart uploads (or base64) and basic `stt_config`, `llm_config`, and `tts_config`.
+- AuthNZ, rate limiting, and basic validation (audio type/size, model availability) match existing `/audio/transcriptions`, `/chat/completions`, and `/audio/speech` patterns.
+- Docs page in `Docs/API` describes the endpoint, parameters, and example requests/responses.
+
+**Tests**:
+- Unit: schema validation for required/optional fields, config normalization, and error responses for invalid audio or unsupported models.
+- Integration: happy-path call using local test audio that exercises STT → stub LLM → stub TTS (or small real models when available), verifying full JSON response shape and HTTP status codes.
+
+**Status**: Not Started
+
+### Stage 2: v1 Orchestration Service (STT → LLM → TTS)
+**Goal**: Implement a dedicated orchestration service that performs the end-to-end STT → LLM → TTS pipeline for non-streaming turns.
+
+**Success Criteria**:
+- New `SpeechChatService` (or equivalent) lives under `tldw_Server_API/app/core/` and:
+  - Invokes existing STT APIs/providers to produce a user transcript.
+  - Invokes the unified LLM chat pipeline using existing `/chat/completions` helpers.
+  - Invokes TTS providers to synthesize assistant audio.
+- Service returns structured results: user transcript, assistant text, audio payload, timings, and token usage.
+- Endpoint handler for `POST /api/v1/audio/chat` delegates all core logic to this service.
+- Errors in any step (STT, LLM, TTS) propagate as structured errors while returning any partial outputs when available.
+
+**Tests**:
+- Unit: orchestration logic with mocked STT/LLM/TTS modules (success, each failure mode, and timeout paths).
+- Integration: end-to-end pipeline with at least one configured provider stack (e.g., faster-whisper + a small LLM + Kokoro), verifying timings are recorded and partial failures behave as specified in the PRD.
+
+**Status**: Not Started
+
+### Stage 3: v1 Session Persistence, Context & WebUI Integration
+**Goal**: Wire speech turns into existing chat/session storage and expose a usable “press to talk” experience in `tldw-frontend`.
+
+**Success Criteria**:
+- Speech chat sessions reuse existing chat/notes storage:
+  - Each user utterance is persisted as a `user` message with transcript + audio reference.
+  - Each assistant reply is persisted as an `assistant` message with text + audio reference.
+- `session_id` semantics match text chat sessions (create on first call, reuse thereafter).
+- WebUI adds a “Voice Chat” mode with:
+  - Mic button to record and send audio via `POST /api/v1/audio/chat`.
+  - Playback of assistant audio and display of both transcripts.
+- Default STT/LLM/TTS model/voice selections are surfaced in WebUI settings and persisted per session.
+
+**Tests**:
+- Unit: DB/session helpers for storing and retrieving speech messages; mapping between session IDs and WebUI conversations.
+- Integration: browser or headless WebUI test that records a short clip (or uses a canned file), sends it to the endpoint, and verifies messages appear correctly in the conversation with working audio playback.
+
+**Status**: Not Started
+
+### Stage 4: v1 Hardening (Metrics, Limits, Error UX)
+**Goal**: Harden the non-streaming pipeline with metrics, limits, and clear error UX across API and WebUI.
+
+**Success Criteria**:
+- Metrics emitted for:
+  - End-to-end non-streaming latency.
+  - STT/LLM/TTS durations and error counts.
+- Configurable limits:
+  - Max audio duration and size per turn.
+  - Per-user and global concurrency limits for `audio chat`.
+- WebUI surfaces clear errors (e.g., audio too long, provider unavailable, quota exceeded) without breaking sessions.
+- Logging uses loguru with correlation IDs and avoids raw audio or full transcripts in production logs.
+
+**Tests**:
+- Unit: limit-enforcement helpers, metrics registration, and error-mapping functions.
+- Integration: load-style tests for multiple concurrent speech turns (within local constraints), and API/WebUI tests that hit known error paths (oversized audio, disabled provider, invalid config) and validate responses/UX.
+
+**Status**: Not Started
+
+### Stage 5: v2 Streaming Pipeline
+**Goal**: Implement the streaming speech chat experience (backend and WebUI) building on v1 primitives.
+
+**Success Criteria**:
+- New WebSocket endpoint `WS /api/v1/audio/chat/stream` implements the v2 contract:
+  - Accepts audio frames plus config/control messages.
+  - Emits partial/final STT, optional LLM deltas, and TTS audio chunks.
+- VAD-based turn detection is integrated into the streaming STT path and used to finalize turns promptly.
+- Streaming TTS uses existing Kokoro/streaming infrastructure where possible and exposes a low-latency PCM option.
+- WebUI “live conversation” mode:
+  - Captures and streams mic audio.
+  - Shows live captions and plays incremental TTS audio.
+- Streaming metrics collected (voice-to-voice latency, stream error rates) and exposed alongside v1 metrics.
+
+**Tests**:
+- Unit: streaming handlers with mocked STT/LLM/TTS; VAD configuration and turn-finalization logic; backpressure handling.
+- Integration: WebSocket tests that simulate audio frames and verify event sequencing; manual/automated WebUI tests measuring approximate voice-to-voice latency on a reference setup.
+
+**Status**: Not Started

@@ -1,0 +1,430 @@
+"""
+speech_chat_service.py
+
+Non-streaming Speech-to-Speech chat orchestration (STT → LLM → TTS).
+
+This module wires together:
+  - STT: Audio_Transcription_Lib.transcribe_audio
+  - LLM: chat_orchestrator.chat_api_call_async
+  - TTS: TTSServiceV2.generate_speech
+  - Session storage: ChaChaNotes conversations/messages
+
+It is intentionally lean and avoids advanced features (queues, moderation,
+tool calling) to keep the v1 speech chat path simple and testable.
+"""
+from __future__ import annotations
+
+import base64
+import io
+import time
+from typing import Any, Dict, Optional, Tuple
+
+import numpy as np
+import soundfile as sf
+from fastapi import HTTPException, status
+from loguru import logger
+
+from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
+    SpeechChatRequest,
+    SpeechChatResponse,
+    SpeechChatTiming,
+    SpeechChatTokenUsage,
+    OpenAISpeechRequest,
+)
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
+    get_api_keys,
+    DEFAULT_LLM_PROVIDER,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+    transcribe_audio,
+)
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
+from tldw_Server_API.app.core.Chat.chat_helpers import (
+    get_or_create_character_context,
+    get_or_create_conversation,
+    load_conversation_history,
+    extract_response_content,
+)
+from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
+from tldw_Server_API.app.core.TTS.tts_exceptions import (
+    TTSError,
+    TTSValidationError,
+    TTSProviderNotConfiguredError,
+    TTSAuthenticationError,
+    TTSRateLimitError,
+    TTSQuotaExceededError,
+)
+
+
+def _decode_base64_audio(data: str) -> bytes:
+    """Decode base64 audio, raising HTTP 400 on failure."""
+    try:
+        return base64.b64decode(data, validate=True)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Failed to decode base64 audio: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid base64 encoding for input_audio",
+        ) from e
+
+
+def _load_audio_to_mono_np(audio_bytes: bytes) -> Tuple[np.ndarray, int]:
+    """
+    Load audio bytes into a mono float32 numpy array and return (audio, sample_rate).
+
+    Uses soundfile to support common formats (wav, mp3, ogg, etc.). Raises HTTP 400 on failure.
+    """
+    try:
+        with io.BytesIO(audio_bytes) as buf:
+            audio, sample_rate = sf.read(buf, dtype="float32", always_2d=False)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Failed to read audio bytes for speech chat: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported or corrupt audio format in input_audio",
+        ) from e
+
+    if audio.size == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Empty audio input",
+        )
+
+    # Ensure mono
+    if audio.ndim > 1:
+        audio = np.mean(audio, axis=1)
+
+    return audio, int(sample_rate or 16000)
+
+
+def _is_transcription_error(msg: str) -> bool:
+    """Heuristic used by transcription endpoint to detect error sentinel strings."""
+    lower_msg = msg.lower()
+    return (
+        lower_msg.startswith("[error")
+        or lower_msg.startswith("[transcription error")
+        or lower_msg.startswith("canary transcription error")
+        or lower_msg.startswith("parakeet transcription error")
+        or lower_msg.startswith("external provider transcription error")
+        or lower_msg.startswith("nemo transcription module not available")
+        or lower_msg.startswith("failed to import nemo")
+        or lower_msg.startswith("failed to import external provider")
+    )
+
+
+def _map_tts_exception(exc: Exception) -> HTTPException:
+    """Map TTS exceptions to HTTPException consistent with /audio/speech."""
+    if isinstance(exc, TTSValidationError):
+        logger.warning(f"TTS validation error in speech chat: {exc}")
+        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if isinstance(exc, TTSProviderNotConfiguredError):
+        logger.error(f"TTS provider not configured in speech chat: {exc}")
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"TTS service unavailable: {str(exc)}",
+        )
+    if isinstance(exc, TTSAuthenticationError):
+        logger.error(f"TTS authentication error in speech chat: {exc}")
+        return HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="TTS provider authentication failed",
+        )
+    if isinstance(exc, TTSRateLimitError):
+        logger.warning(f"TTS rate limit exceeded in speech chat: {exc}")
+        return HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="TTS provider rate limit exceeded. Please try again later.",
+        )
+    if isinstance(exc, TTSQuotaExceededError):
+        logger.warning(f"TTS quota exceeded in speech chat: {exc}")
+        return HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="TTS quota exceeded. Please review your plan or quota.",
+        )
+
+    # Fallback for other TTSError subclasses and unexpected errors
+    if isinstance(exc, TTSError):
+        logger.error(f"TTS error in speech chat: {exc}")
+        return HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="TTS provider error while generating speech",
+        )
+
+    logger.error(f"Unexpected TTS error in speech chat: {exc}")
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Unexpected error during TTS generation",
+    )
+
+
+async def run_speech_chat_turn(
+    *,
+    request_data: SpeechChatRequest,
+    current_user: User,
+    chat_db: CharactersRAGDB,
+    tts_service: TTSServiceV2,
+) -> SpeechChatResponse:
+    """
+    Execute a single non-streaming speech chat turn.
+
+    Steps:
+      1. Decode and normalize input audio to mono.
+      2. Run STT to obtain a user transcript.
+      3. Resolve character + conversation and load recent history.
+      4. Call LLM via chat_api_call_async to get assistant text.
+      5. Persist user/assistant messages into ChaChaNotes.
+      6. Run TTS to synthesize assistant reply and base64-encode it.
+    """
+    # --- Decode audio ---
+    raw_audio_bytes = _decode_base64_audio(request_data.input_audio)
+    audio_np, sample_rate = _load_audio_to_mono_np(raw_audio_bytes)
+
+    # --- STT ---
+    stt_start = time.time()
+    stt_provider = None
+    stt_language = None
+    if request_data.stt_config is not None:
+        stt_provider = request_data.stt_config.provider
+        stt_language = request_data.stt_config.language
+    try:
+        transcript = transcribe_audio(
+            audio_data=audio_np,
+            transcription_provider=stt_provider,
+            sample_rate=sample_rate,
+            speaker_lang=stt_language,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Speech chat STT failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Transcription failed for speech chat",
+        ) from e
+
+    if not isinstance(transcript, str):
+        transcript = str(transcript)
+
+    if _is_transcription_error(transcript):
+        logger.error(f"Speech chat STT returned error sentinel: {transcript}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Transcription failed. Please try again or use a different model.",
+        )
+
+    transcript = transcript.strip()
+    if not transcript:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Transcription produced empty text from input_audio",
+        )
+    stt_ms = (time.time() - stt_start) * 1000.0
+
+    # --- Conversation & character context ---
+    loop = None
+    try:
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+    except Exception:
+        loop = None
+
+    if loop is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Async event loop unavailable for speech chat",
+        )
+
+    character_card, character_db_id = await get_or_create_character_context(
+        chat_db,
+        character_id=None,
+        loop=loop,
+    )
+    if not character_db_id:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to resolve character context for speech chat",
+        )
+
+    client_id = getattr(chat_db, "client_id", None) or str(
+        getattr(current_user, "id", "speech_chat_client")
+    )
+    character_name = (character_card or {}).get("name") or "Assistant"
+    conversation_id, _was_created = await get_or_create_conversation(
+        db=chat_db,
+        conversation_id=request_data.session_id,
+        character_id=character_db_id,
+        character_name=character_name,
+        client_id=client_id,
+        loop=loop,
+    )
+
+    # Load prior history for context (simple fixed limit)
+    try:
+        history_messages = await load_conversation_history(
+            chat_db,
+            conversation_id,
+            character_card,
+            limit=20,
+            loop=loop,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Failed to load conversation history for speech chat: {e}", exc_info=True)
+        history_messages = []
+
+    # --- LLM call ---
+    if request_data.llm_config is None or not request_data.llm_config.model:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="llm_config.model is required for speech chat v1",
+        )
+
+    llm_provider = (
+        (request_data.llm_config.api_provider or "").strip().lower()
+        or DEFAULT_LLM_PROVIDER
+    )
+    llm_model = request_data.llm_config.model
+
+    messages_payload = list(history_messages)
+    messages_payload.append({"role": "user", "content": transcript})
+
+    api_keys = get_api_keys()
+    provider_api_key = api_keys.get(llm_provider)
+
+    llm_start = time.time()
+    try:
+        llm_response: Any = await chat_api_call_async(
+            api_endpoint=llm_provider,
+            messages_payload=messages_payload,
+            api_key=provider_api_key,
+            temp=request_data.llm_config.temperature,
+            maxp=None,
+            model=llm_model,
+            topk=None,
+            topp=None,
+            max_tokens=request_data.llm_config.max_tokens,
+            response_format={"type": "text"},
+            streaming=False,
+            user_identifier=str(getattr(current_user, "id", client_id)),
+            system_message=(character_card or {}).get("system_prompt"),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Speech chat LLM call failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="LLM provider error during speech chat",
+        ) from e
+
+    llm_ms = (time.time() - llm_start) * 1000.0
+
+    assistant_text = extract_response_content(llm_response) or ""
+    assistant_text = assistant_text.strip()
+    if not assistant_text:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="LLM returned empty completion for speech chat",
+        )
+
+    # Extract token usage if available
+    token_usage: Optional[SpeechChatTokenUsage] = None
+    if isinstance(llm_response, dict):
+        usage = llm_response.get("usage") or {}
+        if isinstance(usage, dict):
+            token_usage = SpeechChatTokenUsage(
+                prompt_tokens=usage.get("prompt_tokens"),
+                completion_tokens=usage.get("completion_tokens"),
+                total_tokens=usage.get("total_tokens"),
+            )
+
+    # --- Persist messages into ChaChaNotes ---
+    try:
+        chat_db.add_message(
+            {
+                "conversation_id": conversation_id,
+                "sender": "user",
+                "content": transcript,
+                "client_id": client_id,
+            }
+        )
+        chat_db.add_message(
+            {
+                "conversation_id": conversation_id,
+                "sender": "assistant",
+                "content": assistant_text,
+                "client_id": client_id,
+            }
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Failed to persist speech chat messages: {e}", exc_info=True)
+        # Do not fail the user-facing request solely due to DB persistence issues
+
+    # --- TTS ---
+    tts_start = time.time()
+    tts_config = request_data.tts_config
+    response_format = (tts_config.response_format if tts_config and tts_config.response_format else "mp3")
+
+    tts_request = OpenAISpeechRequest(
+        model=(tts_config.model if tts_config and tts_config.model else "kokoro"),
+        input=assistant_text,
+        voice=(tts_config.voice if tts_config and tts_config.voice else "af_heart"),
+        response_format=response_format,
+        speed=(tts_config.speed if tts_config and tts_config.speed is not None else 1.0),
+        extra_params=(tts_config.extra_params if tts_config else None),
+        stream=False,
+    )
+
+    try:
+        audio_chunks = []
+        async for chunk in tts_service.generate_speech(
+            tts_request,
+            provider=(tts_config.provider if tts_config and tts_config.provider else None),
+            fallback=True,
+        ):
+            if chunk:
+                audio_chunks.append(chunk)
+        audio_bytes = b"".join(audio_chunks)
+    except Exception as e:  # noqa: BLE001
+        raise _map_tts_exception(e)
+
+    if not audio_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="TTS produced empty audio for speech chat",
+        )
+
+    tts_ms = (time.time() - tts_start) * 1000.0
+
+    # --- Build response ---
+    mime_map: Dict[str, str] = {
+        "mp3": "audio/mpeg",
+        "opus": "audio/opus",
+        "aac": "audio/aac",
+        "flac": "audio/flac",
+        "wav": "audio/wav",
+        "pcm": "audio/L16; rate=24000; channels=1",
+    }
+    mime_type = mime_map.get(response_format, "audio/mpeg")
+
+    output_b64 = base64.b64encode(audio_bytes).decode("ascii")
+
+    timing = SpeechChatTiming(
+        stt_ms=stt_ms,
+        llm_ms=llm_ms,
+        tts_ms=tts_ms,
+    )
+
+    return SpeechChatResponse(
+        session_id=conversation_id,
+        user_transcript=transcript,
+        assistant_text=assistant_text,
+        output_audio=output_b64,
+        output_audio_mime_type=mime_type,
+        timing=timing,
+        token_usage=token_usage,
+        metadata=request_data.metadata,
+    )
+

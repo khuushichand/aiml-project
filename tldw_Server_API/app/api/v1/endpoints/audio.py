@@ -29,6 +29,8 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
     OpenAITranslationRequest,
     TranscriptSegmentationRequest,
     TranscriptSegmentationResponse,
+    SpeechChatRequest,
+    SpeechChatResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.config import AUTH_BEARER_PREFIX
@@ -120,6 +122,13 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
+    get_chacha_db_for_user,
+)
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.Streaming.speech_chat_service import (
+    run_speech_chat_turn,
+)
 
 # Initialize rate limiter
 from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import (
@@ -1028,6 +1037,72 @@ async def create_translation(
         timestamp_granularities="segment",
         current_user=current_user,
     )
+
+
+@router.post(
+    "/chat",
+    response_model=SpeechChatResponse,
+    summary="Non-streaming Speech-to-Speech chat (STT → LLM → TTS)",
+    dependencies=[
+        Depends(
+            require_token_scope(
+                "any",
+                require_if_present=False,
+                endpoint_id="audio.chat",
+                count_as="call",
+            )
+        )
+    ],
+)
+@limiter.limit("10/minute", key_func=_rate_limit_key)
+async def audio_chat_turn(
+    request_data: SpeechChatRequest,
+    request: Request,
+    tts_service: TTSServiceV2 = Depends(get_tts_service),
+    current_user: User = Depends(get_request_user),
+    chat_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
+) -> SpeechChatResponse:
+    """
+    Execute a single non-streaming speech chat turn:
+
+      - Accept base64-encoded user audio.
+      - Run STT to obtain a transcript.
+      - Call the LLM with recent conversation history.
+      - Persist user/assistant messages into ChaChaNotes.
+      - Run TTS on the assistant reply and return base64-encoded audio.
+
+    This endpoint focuses on the v1 non-streaming path; streaming speech chat
+    is handled by a separate WebSocket endpoint in v2.
+    """
+    rid = ensure_request_id(request)
+    try:
+        usage_log.log_event(
+            "audio.chat",
+            tags=[str(getattr(current_user, "id", ""))],
+            metadata={
+                "session_id": request_data.session_id or "",
+                "input_audio_format": request_data.input_audio_format,
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"usage_log audio.chat failed: error={e}; request_id={rid}")
+
+    try:
+        return await run_speech_chat_turn(
+            request_data=request_data,
+            current_user=current_user,
+            chat_db=chat_db,
+            tts_service=tts_service,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Speech chat turn failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Speech chat pipeline failed",
+        ) from e
 
 
 # Add other OpenAI compatible endpoints like /models, /voices later

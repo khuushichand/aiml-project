@@ -14,10 +14,15 @@ modular/core code remain part of the supported surface for now.
 
 ## Candidates (Group 1 – legacy-only, unused in modular pipeline)
 
+Status: **Completed** – helpers removed from `_legacy_media.py`
+after auditing external usage and updating the changelog.
+
 - `parse_advanced_query` (`_legacy_media.py:1480`)
-  - Status: Not called by `search_media_items` or any other function.
-  - Plan: Remove once an advanced search implementation is designed
-    under `media/listing.py` (or similar) and tests are updated.
+  - Previous status: Not called by `search_media_items` or any other
+    function.
+  - Outcome: Removed from `_legacy_media.py` after confirming no
+    external imports; future advanced-search work should live under
+    the modular media listing/search helpers instead.
 
 - Claims helpers (`_legacy_media.py:1667`–`1688`)
   - `_claims_extraction_enabled`
@@ -27,16 +32,17 @@ modular/core code remain part of the supported surface for now.
     - Behavior is implemented and documented in
       `core/Ingestion_Media_Processing/claims_utils.py`.
     - No call sites in `_legacy_media` or modular endpoints.
-  - Plan: Remove these wrappers after one minor release that clearly
-    documents `claims_utils` as the canonical location.
+  - Outcome: Removed from `_legacy_media.py` after one minor release,
+    leaving `claims_utils` as the canonical implementation.
 
 - `_single_pdf_worker` (`_legacy_media.py:4158`)
   - Notes:
     - Legacy async worker for PDF processing.
     - Modular `/process-pdfs` endpoint uses core ingestion helpers
       instead; no direct callers reference this worker.
-  - Plan: Remove after confirming no external imports; keep only
-    `normalise_pdf_result` if still useful for debugging/tests.
+  - Outcome: Removed after confirming no external imports; the
+    `normalise_pdf_result` helper is retained for debugging/tests and
+    is used by the modular PDF processing endpoint.
 
 ## Candidates (Group 2 – heavy implementations replaced by shims)
 
@@ -80,8 +86,10 @@ Before deleting any of the above:
 
 ## Current Status
 
-- All media tests pass with and without `TLDW_DISABLE_LEGACY_MEDIA=1`.
-- `_legacy_media.py` functions listed above are marked with
-  `LEGACY-ONLY` comments and are safe candidates for removal once
-  external usage is audited.
-
+- Group 1 helpers (`parse_advanced_query`, claims wrappers, and
+  `_single_pdf_worker`) have been removed from `_legacy_media.py`
+  after auditing external usage and updating the changelog.
+- Group 2 helpers remain defined in `_legacy_media.py` but are not on
+  any live code path; exported names are bound to shim functions that
+  delegate into core ingestion helpers. The next cleanup step is to
+  drop the heavy bodies while keeping the shims and aliases.

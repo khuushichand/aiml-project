@@ -1465,27 +1465,6 @@ async def get_transcription_models():
 # Enhanced Search Endpoint with ETags
 #
 
-# LEGACY-ONLY / unused in modular pipeline; candidate for removal.
-# The modular search endpoint does not call this. Any future
-# advanced-search work should live alongside the modular
-# listing/search helpers instead.
-def parse_advanced_query(search_request: SearchRequest) -> Dict:
-    """Convert advanced search request to DB query format"""
-    query_params = {
-        'search_query': search_request.query,
-        'exact_phrase': search_request.exact_phrase,
-        'filters': {
-            'media_types': search_request.media_types,
-            'date_range': search_request.date_range,
-            'must_have': search_request.must_have,
-            'must_not_have': search_request.must_not_have
-        },
-        'sort': search_request.sort_by,
-        'boost': search_request.boost_fields or {'title': 2.0, 'content': 1.0}
-    }
-    return query_params
-
-
 @router.post(
     "/search",
     status_code=status.HTTP_200_OK,
@@ -1666,39 +1645,6 @@ def _prepare_common_options(
     )
 
     return prepare_common_options(form_data, chunk_options)
-
-
-# LEGACY-ONLY / unused in modular pipeline; candidate for removal.
-# These thin wrappers mirror the core claims helpers in
-# `claims_utils.py` but are not called by the modular
-# ingestion pipeline.
-def _claims_extraction_enabled(form_data: AddMediaForm) -> bool:
-    """Backwards-compatible wrapper delegating to core claims utils."""
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.claims_utils import (
-        claims_extraction_enabled,
-    )
-
-    return claims_extraction_enabled(form_data)
-
-
-def _resolve_claims_parameters(form_data: AddMediaForm) -> Tuple[str, int]:
-    """Backwards-compatible wrapper delegating to core claims utils."""
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.claims_utils import (
-        resolve_claims_parameters,
-    )
-
-    return resolve_claims_parameters(form_data)
-
-
-def _prepare_claims_chunks(
-    process_result: Dict[str, Any],
-) -> Tuple[List[Dict[str, Any]], Dict[int, str]]:
-    """Backwards-compatible wrapper delegating to core claims utils."""
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.claims_utils import (
-        prepare_claims_chunks,
-    )
-
-    return prepare_claims_chunks(process_result)
 
 
 async def _extract_claims_if_requested(
@@ -4152,59 +4098,6 @@ def get_process_pdfs_form(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal server error during form processing: {type(e).__name__}"
         )
-
-async def _single_pdf_worker(
-    pdf_path: FilePath,
-    form,                      # ProcessPDFsForm instance
-    chunk_opts: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    LEGACY-ONLY worker kept for reference.
-
-    The modular `/process-pdfs` endpoint now routes through the core
-    ingestion helpers; new PDF ingestion work should not call this.
-    """
-    try:
-        file_bytes = pdf_path.read_bytes()
-
-        pdf_kwargs = {
-            "file_bytes": file_bytes,
-            "filename": pdf_path.name,
-            "parser": form.pdf_parsing_engine,
-            "custom_prompt": form.custom_prompt,
-            "system_prompt": form.system_prompt,
-            "api_name": form.api_name if form.perform_analysis else None,
-            # api_key removed - retrieved from server config
-            "perform_analysis": form.perform_analysis,
-            "keywords": form.keywords,
-            "perform_chunking": form.perform_chunking and form.perform_analysis,
-            "chunk_method":  chunk_opts["method"]      if form.perform_analysis else None,
-            "max_chunk_size": chunk_opts["max_size"]   if form.perform_analysis else None,
-            "chunk_overlap":  chunk_opts["overlap"]    if form.perform_analysis else None,
-            # OCR options
-            "enable_ocr": getattr(form, "enable_ocr", False),
-            "ocr_backend": getattr(form, "ocr_backend", None),
-            "ocr_lang": getattr(form, "ocr_lang", "eng"),
-            "ocr_dpi": getattr(form, "ocr_dpi", 300),
-            "ocr_mode": getattr(form, "ocr_mode", "fallback"),
-            "ocr_min_page_text_chars": getattr(form, "ocr_min_page_text_chars", 40),
-        }
-
-        # process_pdf_task is async
-        raw = await pdf_lib.process_pdf_task(**pdf_kwargs)
-
-        # Ensure minimal envelope consistency
-        if isinstance(raw, dict):
-            raw.setdefault("status", "Success")
-            raw.setdefault("input", str(pdf_path))
-            return raw
-        else:
-            return {"input": str(pdf_path), "status": "Error",
-                    "error": f"Unexpected return type: {type(raw).__name__}"}
-
-    except Exception as e:
-        logging.error(f"PDF worker failed for {pdf_path}: {e}", exc_info=True)
-        return {"input": str(pdf_path), "status": "Error", "error": str(e)}
 
 def normalise_pdf_result(item: dict, original_ref: str) -> dict:
     """Ensure every required key is present and correctly typed for PDF results."""
