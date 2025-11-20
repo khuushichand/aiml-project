@@ -6,6 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.media_add_deps import get_add_media_form
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE, PermissionChecker
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
@@ -29,9 +30,7 @@ router = APIRouter()
 )
 async def add_media(
     background_tasks: BackgroundTasks,
-    form_data: legacy_media.AddMediaForm = Depends(  # type: ignore[attr-defined]
-        legacy_media.get_add_media_form  # type: ignore[attr-defined]
-    ),
+    form_data: legacy_media.AddMediaForm = Depends(get_add_media_form),  # type: ignore[attr-defined]
     files: Optional[List[UploadFile]] = File(
         None,
         description="List of files to upload",

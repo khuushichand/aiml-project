@@ -120,6 +120,7 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
     UsageEventLogger,
 )
+from tldw_Server_API.app.api.v1.API_Deps.media_add_deps import get_add_media_form
 from tldw_Server_API.app.api.v1.API_Deps.media_code_deps import get_process_code_form
 from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 
@@ -521,267 +522,63 @@ def invalidate_cache(media_id: int):
 #
 # Bare Media Endpoint
 #
-# Endpoints:\
+# Endpoints:
 #     GET /api/v1/media - `"/"`
 #     GET /api/v1/media/{media_id} - `"/{media_id}"`
 
-# =============================================================================
-# Dependency Function for Add Media Form Processing
-# =============================================================================
-def get_add_media_form(
-    # Replicate ALL Form(...) fields from the endpoint signature
-    # Accept string here so AddMediaForm can control error messaging for invalid values
-    media_type: str = Form(..., description="Type of media (e.g., 'audio', 'video', 'pdf')"),
-    urls: Optional[List[str]] = Form(None, description="List of URLs of the media items to add"),
-    title: Optional[str] = Form(None, description="Optional title (applied if only one item processed)"),
-    author: Optional[str] = Form(None, description="Optional author (applied similarly to title)"),
-    keywords: str = Form("", description="Comma-separated keywords (applied to all processed items)"), # Receive as string
-    custom_prompt: Optional[str] = Form(None, description="Optional custom prompt (applied to all)"),
-    system_prompt: Optional[str] = Form(None, description="Optional system prompt (applied to all)"),
-    overwrite_existing: bool = Form(False, description="Overwrite existing media"),
-    keep_original_file: bool = Form(False, description="Retain original uploaded files"),
-    perform_analysis: bool = Form(True, description="Perform analysis (default=True)"),
-    perform_claims_extraction: Optional[bool] = Form(
-        None,
-        description="Extract factual claims during analysis (defaults to server configuration)."
-    ),
-    claims_extractor_mode: Optional[str] = Form(
-        None,
-        description="Override claims extractor mode (heuristic|ner|provider id)."
-    ),
-    claims_max_per_chunk: Optional[int] = Form(
-        None,
-        description="Maximum number of claims to extract per chunk (uses config default when unset)."
-    ),
-    api_name: Optional[str] = Form(None, description="Optional API name"),
-    # api_key removed - SECURITY: Never accept API keys from client
-    use_cookies: bool = Form(False, description="Use cookies for URL download requests"),
-    cookies: Optional[str] = Form(None, description="Cookie string if `use_cookies` is True"),
-    transcription_model: str = Form("large-v3", description="Transcription model"),
-    transcription_language: str = Form("en", description="Transcription language"),
-    diarize: bool = Form(False, description="Enable speaker diarization"),
-    timestamp_option: bool = Form(True, description="Include timestamps in transcription"),
-    vad_use: bool = Form(False, description="Enable VAD filter"),
-    perform_confabulation_check_of_analysis: bool = Form(False, description="Enable confabulation check"),
-    start_time: Optional[str] = Form(None, description="Optional start time (HH:MM:SS or seconds)"),
-    end_time: Optional[str] = Form(None, description="Optional end time (HH:MM:SS or seconds)"),
-    pdf_parsing_engine: Optional[PdfEngine] = Form("pymupdf4llm", description="PDF parsing engine"),
-    perform_chunking: bool = Form(True, description="Enable chunking"),
-    chunk_method: Optional[ChunkMethod] = Form(None, description="Chunking method"),
-    use_adaptive_chunking: bool = Form(False, description="Enable adaptive chunking"),
-    use_multi_level_chunking: bool = Form(False, description="Enable multi-level chunking"),
-    chunk_language: Optional[str] = Form(None, description="Chunking language override"),
-    chunk_size: int = Form(500, description="Target chunk size"),
-    chunk_overlap: int = Form(200, description="Chunk overlap size"),
-    custom_chapter_pattern: Optional[str] = Form(None, description="Regex pattern for custom chapter splitting"),
-    perform_rolling_summarization: bool = Form(False, description="Perform rolling summarization"),
-    # Email options
-    ingest_attachments: bool = Form(False, description="For emails: parse nested .eml attachments and ingest as separate items"),
-    max_depth: int = Form(2, description="Max depth for nested email parsing when ingest_attachments is true"),
-    accept_archives: bool = Form(False, description="Accept .zip archives of EMLs and expand/process members"),
-    accept_mbox: bool = Form(False, description="Accept .mbox mailboxes and expand/process messages"),
-    accept_pst: bool = Form(False, description="Accept .pst/.ost containers (feature-flag; parsing may require external tools)"),
-    # Contextual chunking options
-    enable_contextual_chunking: bool = Form(False, description="Enable contextual chunking"),
-    contextual_llm_model: Optional[str] = Form(None, description="LLM model for contextual chunking"),
-    context_window_size: Optional[int] = Form(None, description="Context window size (chars)"),
-    context_strategy: Optional[str] = Form(None, description="Context strategy: auto|full|window|outline_window"),
-    context_token_budget: Optional[int] = Form(None, description="Approx token budget for auto strategy"),
-    summarize_recursively: bool = Form(False, description="Perform recursive summarization"),
-    # Embedding options
-    generate_embeddings: bool = Form(False, description="Generate embeddings after media processing"),
-    embedding_model: Optional[str] = Form(None, description="Specific embedding model to use"),
-    embedding_provider: Optional[str] = Form(None, description="Embedding provider (huggingface, openai, etc)"),
-    # Don't need token here, it's a Header dep
-    # Don't need files here, it's a File dep
-    # Don't need db here, it's a separate Depends
-) -> AddMediaForm:
-    """
-    Dependency function to parse form data for the /add endpoint
-    and validate it against the AddMediaForm model.
-    """
-    # Validate transcription_model against TranscriptionModel enum
-    if transcription_model:
-        valid_models = [model.value for model in TranscriptionModel]
-        if transcription_model not in valid_models:
-            logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
-            transcription_model = "whisper-large-v3"  # Default to a reliable model
-
-    try:
-        # Coerce JSON string inputs for urls into a list for robustness
-        if isinstance(urls, str):
-            try:
-                parsed = json.loads(urls)
-                urls = parsed if isinstance(parsed, list) else [parsed]
-            except Exception:
-                urls = [urls]
-        elif isinstance(urls, list) and len(urls) == 1 and isinstance(urls[0], str):
-            # Some clients send a single form field 'urls' containing a JSON array string
-            first = urls[0]
-            if first.strip().startswith("[") or first.strip().startswith("\""):
-                try:
-                    parsed = json.loads(first)
-                    urls = parsed if isinstance(parsed, list) else [parsed]
-                except Exception:
-                    pass
-        # Normalize common boolean/integer coercions for robust form handling
-        if isinstance(enable_contextual_chunking, str):
-            enable_contextual_chunking = enable_contextual_chunking.strip().lower() in {"true", "1", "yes", "on"}
-        if isinstance(use_adaptive_chunking, str):
-            use_adaptive_chunking = use_adaptive_chunking.strip().lower() in {"true", "1", "yes", "on"}
-        if isinstance(use_multi_level_chunking, str):
-            use_multi_level_chunking = use_multi_level_chunking.strip().lower() in {"true", "1", "yes", "on"}
-        if isinstance(perform_chunking, str):
-            perform_chunking = perform_chunking.strip().lower() in {"true", "1", "yes", "on"}
-        try:
-            if isinstance(context_window_size, str):
-                context_window_size = int(context_window_size)
-        except Exception:
-            pass
-        # Normalize optional context strategy/token budget
-        if isinstance(context_strategy, str):
-            context_strategy = context_strategy.strip().lower() or None
-        try:
-            if isinstance(context_token_budget, str):
-                context_token_budget = int(context_token_budget)
-        except Exception:
-            context_token_budget = None
-
-        # Create the Pydantic model instance using the parsed form data.
-        # Pass the received Form(...) parameters to the model constructor
-        form_instance = AddMediaForm(
-            media_type=media_type,
-            urls=urls,
-            title=title,
-            author=author,
-            keywords=keywords, # Pydantic model handles alias mapping to keywords_str
-            custom_prompt=custom_prompt,
-            system_prompt=system_prompt,
-            overwrite_existing=overwrite_existing,
-            keep_original_file=keep_original_file,
-            perform_analysis=perform_analysis,
-            perform_claims_extraction=perform_claims_extraction,
-            claims_extractor_mode=claims_extractor_mode,
-            claims_max_per_chunk=claims_max_per_chunk,
-            start_time=start_time,
-            end_time=end_time,
-            api_name=api_name,
-            # api_key removed - retrieved from server config
-            use_cookies=use_cookies,
-            cookies=cookies,
-            transcription_model=transcription_model,
-            transcription_language=transcription_language,
-            diarize=diarize,
-            timestamp_option=timestamp_option,
-            vad_use=vad_use,
-            perform_confabulation_check_of_analysis=perform_confabulation_check_of_analysis,
-            pdf_parsing_engine=pdf_parsing_engine,
-            perform_chunking=perform_chunking,
-            chunk_method=chunk_method,
-            use_adaptive_chunking=use_adaptive_chunking,
-            use_multi_level_chunking=use_multi_level_chunking,
-            chunk_language=chunk_language,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            custom_chapter_pattern=custom_chapter_pattern,
-            perform_rolling_summarization=perform_rolling_summarization,
-            summarize_recursively=summarize_recursively,
-            # Contextual chunking options must be forwarded so validation applies
-            enable_contextual_chunking=enable_contextual_chunking,
-            contextual_llm_model=contextual_llm_model,
-            context_window_size=context_window_size,
-            context_strategy=context_strategy,  # pydantic will validate allowed values
-            context_token_budget=context_token_budget,
-            # Email options
-            ingest_attachments=ingest_attachments,
-            max_depth=max_depth,
-            accept_archives=accept_archives,
-            accept_mbox=accept_mbox,
-            accept_pst=accept_pst,
-            generate_embeddings=generate_embeddings,
-            embedding_model=embedding_model,
-            embedding_provider=embedding_provider,
-        )
-        return form_instance
-    except ValidationError as e:
-        # Reuse the detailed error handling from get_process_videos_form
-        serializable_errors = []
-        for error in e.errors():
-             serializable_error = error.copy()
-             if 'ctx' in serializable_error and isinstance(serializable_error.get('ctx'), dict):
-                 new_ctx = {}
-                 for k, v in serializable_error['ctx'].items():
-                     if isinstance(v, Exception): new_ctx[k] = str(v)
-                     else: new_ctx[k] = v
-                 serializable_error['ctx'] = new_ctx
-             serializable_errors.append(serializable_error)
-        logger.warning(f"Pydantic validation failed for /add endpoint: {json.dumps(serializable_errors)}")
-        raise HTTPException(
-            status_code=HTTP_422_UNPROCESSABLE,
-            detail=serializable_errors,
-        ) from e
-    except Exception as e: # Catch other potential errors during instantiation
-        logger.error(f"Unexpected error creating AddMediaForm: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error during form processing: {type(e).__name__}"
-        )
-
-#Obtain details of a single media item using its ID
+# Obtain details of a single media item using its ID
 @router.get(
-    "/{media_id:int}", # Restrict to ints to avoid shadowing static routes
+    "/{media_id:int}",  # Restrict to ints to avoid shadowing static routes
     status_code=status.HTTP_200_OK,
     summary="Get Media Item Details",
     tags=["Media Management"],
-    # response_model=MediaDetailResponse # Define a Pydantic model for this response if desired
 )
 async def get_media_item(
     media_id: int = Path(..., description="The ID of the media item"),
-    include_content: bool = Query(True, description="Include main content text in response"),
-    include_versions: bool = Query(True, description="Include versions list"),
-    include_version_content: bool = Query(False, description="Include content for each version in versions list"),
+    include_content: bool = Query(
+        True,
+        description="Include main content text in response",
+    ),
+    include_versions: bool = Query(
+        True,
+        description="Include versions list",
+    ),
+    include_version_content: bool = Query(
+        False,
+        description="Include content for each version in versions list",
+    ),
     db: MediaDatabase = Depends(get_media_db_for_user),
     request: Request = None,
     current_user: User = Depends(get_request_user),
+    response: FastAPIResponse = None,
+    if_none_match: Optional[str] = Header(None),
 ):
     """
-    **Retrieve Media Item by ID**
+    Compatibility shim delegating to the modular ``media.item.get_media_item``.
 
-    Fetches the details for a specific *active* (non-deleted, non-trash) media item,
-    including its associated keywords, its latest prompt/analysis, and document versions.
+    The canonical implementation now lives in
+    ``tldw_Server_API.app.api.v1.endpoints.media.item.get_media_item``.
+    This wrapper keeps the legacy signature for direct imports while
+    forwarding all work to the modular endpoint.
     """
-    logger.debug(f"Attempting to fetch rich details for media_id: {media_id}")
-    # TEST_MODE diagnostics
-    try:
-        if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
-            _dbp = getattr(db, 'db_path_str', getattr(db, 'db_path', '?'))
-            _hdrs = getattr(request, 'headers', {}) or {}
-            logger.info(
-                f"TEST_MODE: get_media_item id={media_id} db_path={_dbp} user_id={getattr(current_user, 'id', '?')} "
-                f"auth_headers={{'X-API-KEY': {'present': bool(_hdrs.get('X-API-KEY'))}, 'Authorization': {'present': bool(_hdrs.get('authorization'))}}}"
-            )
-    except Exception:
-        pass
-    try:
-        details = get_full_media_details_rich2(
-            db_instance=db,
-            media_id=media_id,
-            include_content=include_content,
-            include_versions=include_versions,
-            include_version_content=include_version_content,
-        )
-        if not details:
-            logger.warning(f"Media not found or not active for ID: {media_id}")
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found or is inactive/trashed")
-        return MediaDetailResponse(**details)
-    except HTTPException:
-        raise
-    except DatabaseError as e:
-        logger.error(f"Database error fetching details for media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Database error retrieving media details")
-    except Exception as e:
-        logger.error(f"Unexpected error fetching details for media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred retrieving media details")
+    from tldw_Server_API.app.api.v1.endpoints.media.item import (  # noqa: WPS433
+        get_media_item as _get_media_item_impl,
+    )
+
+    if response is None:
+        response = FastAPIResponse()
+
+    return await _get_media_item_impl(
+        request=request,
+        response=response,
+        media_id=media_id,
+        include_content=include_content,
+        include_versions=include_versions,
+        include_version_content=include_version_content,
+        db=db,
+        current_user=current_user,
+        if_none_match=if_none_match,
+    )
 
 
 ##############################################################################
@@ -843,99 +640,22 @@ async def list_versions(
     current_user: User = Depends(get_request_user),
 ):
     """
-    **List Active Versions for an Active Media Item**
+    Compatibility shim delegating to the modular media.versions implementation.
 
-    Retrieves a paginated list of *active* versions (`deleted=0`) for a specific
-    *active* media item (`deleted=0`, `is_trash=0`).
-    Optionally includes the full content for each version. Ordered by version number descending.
+    The canonical implementation now lives in
+    ``tldw_Server_API.app.api.v1.endpoints.media.versions.list_versions``.
     """
-    logger.debug(f"Listing versions for media_id: {media_id} (Page: {page}, Limit: {limit}, Content: {include_content})")
-    # TEST_MODE diagnostics
-    try:
-        if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
-            _dbp = getattr(db, 'db_path_str', getattr(db, 'db_path', '?'))
-            _hdrs = getattr(request, 'headers', {}) or {}
-            logger.info(
-                f"TEST_MODE: list_versions media_id={media_id} db_path={_dbp} user_id={getattr(current_user, 'id', '?')} "
-                f"auth_headers={{'X-API-KEY': {'present': bool(_hdrs.get('X-API-KEY'))}, 'Authorization': {'present': bool(_hdrs.get('authorization'))}}}"
-            )
-    except Exception:
-        pass
-    offset = (page - 1) * limit
+    from tldw_Server_API.app.api.v1.endpoints.media.versions import (  # noqa: WPS433
+        list_versions as _list_versions_impl,
+    )
 
-    try:
-        # Check if the parent media item is active first
-        media_exists = check_media_exists(db_instance=db, media_id=media_id) # Uses standalone check
-        if not media_exists:
-             logger.warning(f"Cannot list versions: Media ID {media_id} not found or deleted.")
-             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media item not found or deleted")
-
-        # --- Query active versions directly ---
-        select_cols_list = ["dv.id", "dv.uuid", "dv.media_id", "dv.version_number", "dv.created_at",
-                           "dv.prompt", "dv.analysis_content", "dv.safe_metadata", "dv.last_modified", "dv.version"]
-        if include_content: select_cols_list.append("dv.content")
-        select_cols = ", ".join(select_cols_list)
-
-        # Query Explanation:
-        # - Select columns from DocumentVersions (dv)
-        # - WHERE clause ensures:
-        #   - Matching media_id
-        #   - DocumentVersion is not deleted (dv.deleted = 0)
-        # - ORDER BY version_number descending (latest first)
-        # - LIMIT and OFFSET for pagination
-        query = f"""
-            SELECT {select_cols}
-            FROM DocumentVersions dv
-            WHERE dv.media_id = ? AND dv.deleted = 0
-            ORDER BY dv.version_number DESC
-            LIMIT ? OFFSET ?
-        """
-        params = (media_id, limit, offset)
-        cursor = db.execute_query(query, params)
-        raw_rows = [dict(row) for row in cursor.fetchall()]
-
-        # Build typed response with parsed safe_metadata
-        versions: List[VersionDetailResponse] = []
-        for rv in raw_rows:
-            created_at_dt = rv.get("created_at")
-            if isinstance(created_at_dt, str):
-                try:
-                    created_at_dt = datetime.fromisoformat(created_at_dt.replace('Z', '+00:00'))
-                except Exception:
-                    pass
-            safe_md = rv.get("safe_metadata")
-            if isinstance(safe_md, str):
-                try:
-                    safe_md = json.loads(safe_md)
-                except Exception:
-                    safe_md = None
-            versions.append(
-                VersionDetailResponse(
-                    uuid=rv.get("uuid"),
-                    media_id=rv.get("media_id"),
-                    version_number=rv.get("version_number"),
-                    created_at=created_at_dt,
-                    prompt=rv.get("prompt"),
-                    analysis_content=rv.get("analysis_content"),
-                    safe_metadata=safe_md,
-                    content=rv.get("content") if include_content else None,
-                )
-            )
-
-        # Optionally, add pagination info (total count) - requires another query
-        count_cursor = db.execute_query("SELECT COUNT(*) FROM DocumentVersions WHERE media_id = ?", (media_id,))
-        total_versions = count_cursor.fetchone()[0]
-
-        return versions  #, total_versions
-
-    except DatabaseError as e: # Catch DB errors from new library
-        logger.error(f"Database error listing versions for media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error occurred")
-    except HTTPException: # Re-raise FastAPI exceptions
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error listing versions for media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error listing versions")
+    return await _list_versions_impl(
+        media_id=media_id,
+        include_content=include_content,
+        limit=limit,
+        page=page,
+        db=db,
+    )
 
 
 @router.get(
@@ -954,78 +674,33 @@ async def search_by_metadata(
     per_page: int = Query(20, ge=1, le=100),
     db: MediaDatabase = Depends(get_media_db_for_user),
 ):
-    """Search media items based on version safe_metadata fields and identifier indices.
-
-    Examples:
-    - Single filter by DOI (exact):
-      GET /api/v1/media/metadata-search?field=doi&op=eq&value=10.1234/xyz
-
-    - Multiple filters (journal contains, license contains) via JSON:
-      GET /api/v1/media/metadata-search?filters=%5B%7B%22field%22%3A%22journal%22%2C%22op%22%3A%22icontains%22%2C%22value%22%3A%22Nature%22%7D%2C%7B%22field%22%3A%22license%22%2C%22op%22%3A%22icontains%22%2C%22value%22%3A%22CC%20BY%22%7D%5D
     """
-    try:
-        flt_list: List[Dict[str, Any]] = []
-        import json as _json
-        if filters:
-            try:
-                parsed = _json.loads(filters)
-                if isinstance(parsed, list):
-                    for f in parsed:
-                        if isinstance(f, dict) and 'field' in f and 'value' in f:
-                            flt_list.append({'field': f['field'], 'op': f.get('op', 'icontains'), 'value': f['value']})
-            except Exception as je:
-                raise HTTPException(status_code=400, detail=f"Invalid 'filters' JSON: {je}")
-        elif field and value is not None:
-            flt_list.append({'field': field, 'op': op or 'icontains', 'value': value})
+    Compatibility shim delegating to the modular metadata search implementation.
 
-        # Normalize identifier filters where applicable (doi/pmid/pmcid/arxiv_id)
-        norm_fields = {"doi", "pmid", "pmcid", "arxiv_id", "DOI", "PMID", "PMCID", "arXiv", "ArXiv"}
-        canonical_order = ("doi", "pmid", "pmcid", "arxiv_id", "s2_paper_id")
-        normalized_filters = []
-        for f in (flt_list or []):
-            try:
-                fld = f.get('field')
-                if fld in norm_fields:
-                    norm = normalize_safe_metadata({fld: f.get('value')})
-                    # Prefer canonical lowercase identifier keys when present
-                    key = next((k for k in canonical_order if k in norm), (fld or '').lower())
-                    val = norm.get(key, f.get('value'))
-                    normalized_filters.append({'field': key, 'op': f.get('op', 'icontains'), 'value': val})
-                else:
-                    normalized_filters.append(f)
-            except ValueError as ve:
-                raise HTTPException(status_code=400, detail=str(ve))
+    The canonical implementation now lives in
+    ``tldw_Server_API.app.api.v1.endpoints.media.listing.search_by_metadata``.
+    """
+    from tldw_Server_API.app.api.v1.endpoints.media.listing import (  # noqa: WPS433
+        search_by_metadata as _search_by_metadata_impl,
+    )
 
-        rows, total = db.search_by_safe_metadata(
-            filters=normalized_filters or None,
-            match_all=(match_mode.lower() == 'all'),
-            page=page,
-            per_page=per_page,
-            group_by_media=group_by_media,
-        )
-
-        # Parse safe_metadata JSON per row
-        for r in rows:
-            sm = r.get('safe_metadata')
-            if isinstance(sm, str):
-                try:
-                    r['safe_metadata'] = _json.loads(sm)
-                except Exception:
-                    r['safe_metadata'] = None
-        return {
-            'results': rows,
-            'pagination': {
-                'page': page,
-                'per_page': per_page,
-                'total': total,
-                'total_pages': (total + per_page - 1) // per_page,
-            }
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Metadata search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Error performing metadata search")
+    # The modular implementation handles all validation, normalization,
+    # and ETag behaviour. For direct imports/tests we invoke it with a
+    # fresh Response object and no conditional headers.
+    return await _search_by_metadata_impl(
+        request=None,
+        response=FastAPIResponse(),
+        filters=filters,
+        field=field,
+        op=op,
+        value=value,
+        match_mode=match_mode,
+        group_by_media=group_by_media,
+        page=page,
+        per_page=per_page,
+        db=db,
+        if_none_match=None,
+    )
 
 
 @router.patch(
@@ -1163,62 +838,21 @@ async def get_version(
     db: MediaDatabase = Depends(get_media_db_for_user)
 ):
     """
-    **Get Specific Active Version Details**
+    Compatibility shim delegating to the modular media.versions implementation.
 
-    Retrieves the details of a single, specific *active* version (`deleted=0`)
-    for an *active* media item (`deleted=0`, `is_trash=0`).
+    The canonical implementation now lives in
+    ``tldw_Server_API.app.api.v1.endpoints.media.versions.get_version``.
     """
-    logger.debug(f"Getting version {version_number} for media_id: {media_id} (Content: {include_content})")
-    try:
-        # Use the standalone function from the new DB library.
-        # It handles checking for active media and active version.
-        version_dict = get_document_version(
-            db_instance=db,
-            media_id=media_id,
-            version_number=version_number,
-            include_content=include_content
-        )
+    from tldw_Server_API.app.api.v1.endpoints.media.versions import (  # noqa: WPS433
+        get_version as _get_version_impl,
+    )
 
-        if version_dict is None:
-            # Function returns None if media inactive, version inactive, or version number doesn't exist
-            logger.warning(f"Active version {version_number} not found for active media {media_id}")
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found or media/version is inactive")
-
-        # Parse into VersionDetailResponse with safe_metadata
-        created_at_dt = version_dict.get("created_at")
-        if isinstance(created_at_dt, str):
-            try:
-                created_at_dt = datetime.fromisoformat(created_at_dt.replace('Z', '+00:00'))
-            except Exception:
-                pass
-        safe_md = version_dict.get("safe_metadata")
-        if isinstance(safe_md, str):
-            try:
-                safe_md = json.loads(safe_md)
-            except Exception:
-                safe_md = None
-        return VersionDetailResponse(
-            uuid=version_dict.get("uuid"),
-            media_id=version_dict.get("media_id"),
-            version_number=version_dict.get("version_number"),
-            created_at=created_at_dt,
-            prompt=version_dict.get("prompt"),
-            analysis_content=version_dict.get("analysis_content"),
-            safe_metadata=safe_md,
-            content=version_dict.get("content") if include_content else None,
-        )
-
-    except ValueError as e: # Catch invalid version_number from standalone function
-        logger.warning(f"Invalid input for get_document_version: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request parameters")
-    except DatabaseError as e: # Catch DB errors from new library
-        logger.error(f"Database error getting version {version_number} for media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error occurred")
-    except HTTPException: # Re-raise FastAPI exceptions
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error getting version {version_number} for media {media_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error getting version")
+    return await _get_version_impl(
+        media_id=media_id,
+        version_number=version_number,
+        include_content=include_content,
+        db=db,
+    )
 
 
 @router.delete(
@@ -1557,7 +1191,7 @@ async def _persist_claims_if_applicable(
         process_result=process_result,
     )
 
-async def _process_batch_media(
+async def _process_batch_media_disabled(
     media_type: MediaType,
     urls: List[str],
     uploaded_file_paths: List[str],
@@ -1570,321 +1204,24 @@ async def _process_batch_media(
     temp_dir: Path,  # Pass temp_dir Path object
 ) -> List[Dict[str, Any]]:
     """
-    LEGACY-ONLY / not on any live code path; kept only as historical reference.
+    LEGACY-ONLY / name-preserving stub.
 
     The live implementation now lives in
-    ``core.Ingestion_Media_Processing.persistence.process_batch_media``,
-    and the exported `_process_batch_media` name is rebound to a shim
-    at the end of this file.
+    ``core.Ingestion_Media_Processing.persistence.process_batch_media``.
+    This placeholder exists only so historical imports of
+    ``_process_batch_media_disabled`` (and the alias
+    ``_process_batch_media``) continue to resolve.
     """
     raise RuntimeError(
-        "_process_batch_media legacy implementation is inactive; "
-        "the shim-bound core implementation should be used instead."
+        "_process_batch_media_disabled is no longer active; "
+        "use core.Ingestion_Media_Processing.persistence.process_batch_media instead.",
     )
-    combined_results = []
-    all_processing_sources = urls + uploaded_file_paths
-    items_to_process = [] # Sources that pass pre-check or overwrite=True
-
-    logger.debug(f"Starting pre-check for {len(all_processing_sources)} {media_type} items...")
-
-    # --- 1. Pre-check ---
-    for source_path_or_url in all_processing_sources:
-        input_ref_info = source_to_ref_map.get(source_path_or_url)
-        input_ref = input_ref_info[0] if isinstance(input_ref_info, tuple) else input_ref_info
-        if not input_ref:
-            logger.error(f"CRITICAL: Could not find original input reference for {source_path_or_url}.")
-            input_ref = source_path_or_url
-
-        identifier_for_check = input_ref # Use original URL/filename for DB check
-        should_process = True
-        existing_id = None
-        reason = "Ready for processing."
-        pre_check_warning = None
-
-        # --- Perform DB pre-check only if overwrite is False AND for relevant types ---
-        if not form_data.overwrite_existing and media_type in ['video', 'audio']:
-            try:
-                # --- Create a temporary DB instance JUST for the check ---
-                # NOTE: This adds overhead. Consider if pre-check is strictly needed here.
-                # If the check is vital, this ensures it uses the correct DB file.
-                # FIXME
-                # Alternatively, move the check inside the executor task later.
-                # For now, let's instantiate temporarily for the check:
-                temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
-                model_for_check = form_data.transcription_model
-                pre_check_query = """
-                                  SELECT id \
-                                  FROM Media
-                                  WHERE url = ?
-                                    AND transcription_model = ?
-                                    AND is_trash = 0 \
-                                  """
-                cursor = temp_db_for_check.execute_query(pre_check_query, (identifier_for_check, model_for_check))
-                existing_record = cursor.fetchone()
-                temp_db_for_check.close_connection()  # Close the temporary connection
-                # --- End temporary DB instance ---
-
-                if existing_record:
-                    existing_id = existing_record['id']
-                    should_process = False
-                    reason = f"Media exists (ID: {existing_id}) with the same URL/identifier and transcription model ('{model_for_check}'). Overwrite is False."
-                else:
-                    should_process = True # No matching item found
-                    reason = "Media not found with this URL/identifier and transcription model."
-
-            except (DatabaseError, sqlite3.Error) as check_err: # Catch specific DB errors
-                logger.error(f"DB pre-check (custom query) failed for {identifier_for_check}: {check_err}", exc_info=True)
-                should_process, existing_id, reason = True, None, f"DB pre-check failed: {check_err}"
-                pre_check_warning = f"Database pre-check failed: {check_err}"
-            except Exception as check_err: # Catch unexpected errors during check
-                logger.error(f"Unexpected error during DB pre-check (custom query) for {identifier_for_check}: {check_err}", exc_info=True)
-                should_process, existing_id, reason = True, None, f"Unexpected pre-check error: {check_err}"
-                pre_check_warning = f"Unexpected database pre-check error: {check_err}"
-        else:
-             # Overwrite is True, so no need to check existence beforehand
-             should_process = True
-             reason = "Overwrite requested or not applicable, proceeding regardless of existence."
-
-        # --- Skip Logic ---
-        if not should_process: # This now correctly handles the overwrite=False case
-            logger.info(f"Skipping processing for {input_ref}: {reason}")
-            skipped_result = {
-                "status": "Skipped", "input_ref": input_ref, "processing_source": source_path_or_url,
-                "media_type": media_type, "message": reason, "db_id": existing_id,
-                "metadata": {}, "content": None, "transcript": None, "segments": None, "chunks": None,
-                "analysis": None, "summary": None, "analysis_details": None, "error": None, "warnings": None,
-                "db_message": "Skipped processing, no DB action."
-            }
-            combined_results.append(skipped_result)
-        else:
-            items_to_process.append(source_path_or_url)
-            log_msg = f"Proceeding with processing for {input_ref}: {reason}"
-            if pre_check_warning:
-                log_msg += f" (Pre-check Warning: {pre_check_warning})"
-                # Store warning with ref
-                source_to_ref_map[source_path_or_url] = (input_ref, pre_check_warning)
-            logger.info(log_msg)
 
 
-    # --- 2. Perform Batch Processing (External Library Call) ---
-    if not items_to_process:
-        logging.info("No items require processing after pre-checks.")
-        return combined_results # Return only skipped items if any
-
-    processing_output: Optional[Dict] = None # Result from process_videos / process_audio_files
-    try:
-        if media_type == 'video':
-            # Import here or ensure it's available globally
-            from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import process_videos
-            video_args = {
-                 "inputs": items_to_process,
-                 "temp_dir": str(temp_dir), # <<< Pass the temp_dir path
-                 "start_time": form_data.start_time, "end_time": form_data.end_time,
-                 "diarize": form_data.diarize, "vad_use": form_data.vad_use,
-                 "transcription_model": form_data.transcription_model,
-                 "transcription_language": form_data.transcription_language,
-                 "custom_prompt": form_data.custom_prompt, "system_prompt": form_data.system_prompt,
-                 "perform_analysis": form_data.perform_analysis,
-                 "perform_chunking": form_data.perform_chunking,
-                 "chunk_method": chunk_options.get('method') if chunk_options else None,
-                 "max_chunk_size": chunk_options.get('max_size') if chunk_options else 500,
-                 "chunk_overlap": chunk_options.get('overlap') if chunk_options else 200,
-                 "use_adaptive_chunking": chunk_options.get('adaptive', False) if chunk_options else False,
-                 "use_multi_level_chunking": chunk_options.get('multi_level', False) if chunk_options else False,
-                 "chunk_language": chunk_options.get('language') if chunk_options else None,
-                 "summarize_recursively": form_data.summarize_recursively,
-                 "api_name": form_data.api_name if form_data.perform_analysis else None,
-                 # api_key removed - retrieved from server config
-                 "use_cookies": form_data.use_cookies, "cookies": form_data.cookies,
-                 "timestamp_option": form_data.timestamp_option,
-                 "perform_confabulation_check": form_data.perform_confabulation_check_of_analysis,
-                 "keep_original": form_data.keep_original_file,
-            }
-            logging.debug(f"Calling external process_videos with args including temp_dir: {list(video_args.keys())}")
-            target_func = functools.partial(process_videos, **video_args)
-            processing_output = await loop.run_in_executor(None, target_func)
-
-        elif media_type == 'audio':
-            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import process_audio_files
-            audio_args = {
-                 "inputs": items_to_process,
-                 "temp_dir": str(temp_dir), # <<< Pass the temp_dir path
-                 "transcription_model": form_data.transcription_model,
-                 "transcription_language": form_data.transcription_language,
-                 "perform_chunking": form_data.perform_chunking,
-                 "chunk_method": chunk_options.get('method') if chunk_options else None,
-                 "max_chunk_size": chunk_options.get('max_size') if chunk_options else 500,
-                 "chunk_overlap": chunk_options.get('overlap') if chunk_options else 200,
-                 "use_adaptive_chunking": chunk_options.get('adaptive', False) if chunk_options else False,
-                 "use_multi_level_chunking": chunk_options.get('multi_level', False) if chunk_options else False,
-                 "chunk_language": chunk_options.get('language') if chunk_options else None,
-                 "diarize": form_data.diarize, "vad_use": form_data.vad_use, "timestamp_option": form_data.timestamp_option,
-                 "perform_analysis": form_data.perform_analysis,
-                 "api_name": form_data.api_name if form_data.perform_analysis else None,
-                 # api_key removed - retrieved from server config
-                 "custom_prompt_input": form_data.custom_prompt, "system_prompt_input": form_data.system_prompt,
-                 "summarize_recursively": form_data.summarize_recursively,
-                 "use_cookies": form_data.use_cookies, "cookies": form_data.cookies,
-                 "keep_original": form_data.keep_original_file,
-                 "custom_title": form_data.title, "author": form_data.author,
-                 # temp_dir: Managed by the caller endpoint
-                 # NOTE: No DB argument passed to process_audio_files
-            }
-            logging.debug(f"Calling external process_audio_files with args including temp_dir: {list(audio_args.keys())}")
-            target_func = functools.partial(process_audio_files, **audio_args)
-            processing_output = await loop.run_in_executor(None, target_func)
-
-        else:
-             raise ValueError(f"Invalid media type '{media_type}' for batch processing.")
-
-    except Exception as call_e:
-        logging.error(f"Error calling external batch processor for {media_type}: {call_e}", exc_info=True)
-        # Create error results for all items intended for processing
-        failed_items_results = [
-            {
-                "status": "Error", "input_ref": source_to_ref_map.get(item, (item, None))[0], # Get ref from tuple/str
-                "processing_source": item,
-                "media_type": media_type, "error": f"Failed to call processor: {type(call_e).__name__}",
-                "metadata": None, "content": None, "transcript": None, "segments": None, "chunks": None,
-                "analysis": None, "summary": None, "analysis_details": None, "warnings": None, "db_id": None, "db_message": None
-            } for item in items_to_process
-        ]
-        combined_results.extend(failed_items_results)
-        return combined_results # Return early
-
-    # --- 3. Process Results and Perform DB Interaction ---
-    final_batch_results = []
-    processing_results_list = [] # Individual results from the batch output
-
-    # Extract the list of individual results from the batch processor's output
-    if processing_output and isinstance(processing_output.get("results"), list):
-        processing_results_list = processing_output["results"]
-        if processing_output.get("errors_count", 0) > 0:
-             logging.warning(f"Batch {media_type} processor reported errors: {processing_output.get('errors')}")
-    else:
-        logging.error(f"Batch {media_type} processor returned unexpected output format: {processing_output}")
-        # Create error entries based on items_to_process
-        processing_results_list = []
-        for item in items_to_process:
-            input_ref = source_to_ref_map.get(item, (item, None))[0] # Get ref
-            processing_results_list.append({"input_ref": input_ref, "processing_source": item, "status": "Error", "error": f"Batch {media_type} processor returned invalid data or failed execution."})
-
-
-    for process_result in processing_results_list:
-        # Standardize: Ensure result is a dict and has necessary keys
-        if not isinstance(process_result, dict):
-            logging.error(f"Processor returned non-dict item: {process_result}")
-            # Create a placeholder error result
-            malformed_result = {
-                 "status": "Error", "input_ref": "Unknown Input", "processing_source": "Unknown",
-                 "media_type": media_type, "error": "Processor returned invalid result format.",
-                 "metadata": None, "content": None, "transcript": None, "segments": None, "chunks": None,
-                 "analysis": None, "summary": None, "analysis_details": None, "warnings": None, "db_id": None, "db_message": None
-             }
-            final_batch_results.append(malformed_result)
-            continue
-
-        # Determine input_ref (original URL/filename) and processing source
-        input_ref = process_result.get("input_ref")
-        processing_source = process_result.get("processing_source")
-        if processing_source:
-            # Use the processing_source (temp path or URL) to look up the original ref
-            ref_info = source_to_ref_map.get(str(processing_source))  # Ensure key is string
-
-            if isinstance(ref_info, tuple):
-                original_input_ref = ref_info[0]  # Get the ref part from (ref, warning) tuple
-            elif isinstance(ref_info, str):
-                original_input_ref = ref_info  # It's just the ref string
-            else:  # Lookup failed or ref_info is None/unexpected
-                logger.warning(
-                    f"Could not find original input reference in source_to_ref_map for processing_source: {processing_source}. Falling back.")
-                # Fallback: Try using input_ref from result if present, else use processing_source itself
-                original_input_ref = process_result.get("input_ref") or processing_source or "Unknown Input"
-        else:
-            # If processing_source is missing, try input_ref from result, fallback to Unknown
-            original_input_ref = process_result.get("input_ref") or "Unknown Input (Missing Source)"
-            logger.warning(
-                f"Processing result missing 'processing_source'. Using fallback input_ref: {original_input_ref}")
-            # Try to set processing_source if possible for consistency, though it's unknown
-            # Make sure original_input_ref is a string before assigning
-            process_result["processing_source"] = str(original_input_ref) if original_input_ref else "Unknown"
-
-        # Store it in the dictionary that will be added to the final results list
-        # Make sure original_input_ref is a string before assigning
-        process_result["input_ref"] = str(original_input_ref) if original_input_ref else "Unknown"
-
-        pre_check_info = source_to_ref_map.get(processing_source) if processing_source else None
-        pre_check_warning_msg = None
-        if isinstance(pre_check_info, tuple): pre_check_warning_msg = pre_check_info[1]
-        if pre_check_warning_msg:
-             process_result.setdefault("warnings", []).append(pre_check_warning_msg)
-
-        claims_context: Optional[Dict[str, Any]] = None
-        if process_result.get("status") in ("Success", "Warning"):
-            try:
-                claims_context = await _extract_claims_if_requested(process_result, form_data, loop)
-            except Exception as claims_err:
-                logger.debug(f"Claim extraction skipped for {original_input_ref}: {claims_err}")
-
-        # --- DB Interaction Logic ---
-        await persist_primary_av_item(
-            process_result=process_result,
-            form_data=form_data,
-            media_type=media_type,
-            original_input_ref=str(original_input_ref) if original_input_ref else "",
-            chunk_options=chunk_options,
-            db_path=db_path,
-            client_id=client_id,
-            loop=loop,
-            claims_context=claims_context,
-        )
-
-        # Add the (potentially updated) result to the final list
-        final_batch_results.append(process_result)
-
-    # Combine skipped results with processed results
-    combined_results.extend(final_batch_results)
-
-    # --- 4. Final Standardization ---
-    final_standardized_results = []
-    processed_input_refs = set() # Track to avoid duplicates
-
-    for res in combined_results:
-        input_ref = res.get("input_ref", "Unknown")
-        if input_ref in processed_input_refs and input_ref != "Unknown":
-            continue
-        processed_input_refs.add(input_ref)
-
-        # Ensure standard fields exist
-        standardized = {
-            "status": res.get("status", "Error"),
-            "input_ref": input_ref,
-            "processing_source": res.get("processing_source", "Unknown"),
-            "media_type": res.get("media_type", media_type),
-            "metadata": res.get("metadata", {}),
-            "content": res.get("content", res.get("transcript")),
-            "transcript": res.get("transcript"),
-            "segments": res.get("segments"),
-            "chunks": res.get("chunks"),
-            "analysis": res.get("analysis", res.get("summary")),
-            "summary": res.get("summary"),
-            "analysis_details": res.get("analysis_details"),
-            "claims": res.get("claims"),
-            "claims_details": res.get("claims_details"),
-            "error": res.get("error"),
-            "warnings": res.get("warnings"),
-            "db_id": res.get("db_id"),
-            "db_message": res.get("db_message"),
-            "message": res.get("message"),
-            "media_uuid": res.get("media_uuid"),
-        }
-        # Ensure warnings list is None if empty
-        if isinstance(standardized.get("warnings"), list) and not standardized["warnings"]:
-            standardized["warnings"] = None
-
-        final_standardized_results.append(standardized)
-
-    return final_standardized_results
+# Backwards-compatibility alias for any imports that still reference the
+# original `_process_batch_media` name. The implementation is not used on
+# any live HTTP code path.
+_process_batch_media = _process_batch_media_disabled
 
 
 async def _process_document_like_item(
@@ -3027,261 +2364,18 @@ async def process_ebooks_endpoint(
     - set `Content-Type: application/epub+zip`.
     Other URLs are rejected with a clear error entry in the batch response.
     """
-    logger.info("Request received for /process-ebooks (no persistence).")
-    try:
-        usage_log.log_event(
-            "media.process.ebook",
-            tags=["no_db"],
-            metadata={"has_urls": bool(form_data.urls), "has_files": bool(files)},
-        )
-    except Exception:
-        pass
-    # Log form data safely (exclude sensitive fields)
-    # Use .model_dump() for Pydantic v2
-    logger.debug(f"Form data received: {form_data.model_dump()}") # api_key no longer exists in form
+    # Compatibility shim: delegate to the modular implementation.
+    from tldw_Server_API.app.api.v1.endpoints.media.process_ebooks import (  # noqa: WPS433
+        process_ebooks_endpoint as _process_ebooks_impl,
+    )
 
-    if form_data.urls and form_data.urls == ['']:
-        logger.info("Received urls=[''], treating as no URLs provided for ebook processing.")
-        form_data.urls = None # Or []
-
-    _validate_inputs("ebook", form_data.urls, files)
-
-    # --- Prepare result structure ---
-    batch_result: Dict[str, Any] = {
-        "processed_count": 0,
-        "errors_count": 0,
-        "errors": [],
-        "results": []
-    }
-    # Map to track original ref -> temp path (still useful for context)
-    source_map: Dict[str, str] = {}
-
-    loop = asyncio.get_running_loop()
-    temp_dir_manager = TempDirManager(cleanup=True) # Handles temp dir creation/cleanup
-
-    local_paths_to_process: List[Tuple[str, Path]] = [] # (original_ref, local_path)
-
-    # Use httpx.AsyncClient for concurrent downloads
-    # Use module-local httpx.AsyncClient so tests can monkeypatch it
-    async with httpx.AsyncClient() as client:
-        with temp_dir_manager as tmp_dir_path:
-            temp_dir = FilePath(tmp_dir_path)
-            logger.info(f"Using temporary directory: {temp_dir}")
-
-            # --- Handle Uploads ---
-            if files:
-                saved_files, upload_errors = await _save_uploaded_files(
-                    files,
-                    temp_dir,
-                    validator=file_validator_instance,
-                    allowed_extensions=[".epub"]
-                )
-                # Add file saving/validation errors to batch_result
-                for err_info in upload_errors:
-                    # (Error handling for uploads remains the same as original)
-                    err_detail = f"Upload error: {err_info['error']}"
-                    batch_result["results"].append({
-                        "status": "Error", "input_ref": err_info["original_filename"],
-                        "error": err_detail, "media_type": "ebook",
-                        "processing_source": None, "metadata": {}, "content": None, "chunks": None,
-                        "analysis": None, "keywords": form_data.keywords, "warnings": None, # Use parsed keywords
-                        "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
-                    })
-                    batch_result["errors_count"] += 1
-                    batch_result["errors"].append(f"{err_info['original_filename']}: {err_detail}")
-
-                for info in saved_files:
-                    original_ref = info["original_filename"]
-                    local_path = FilePath(info["path"])
-                    local_paths_to_process.append((original_ref, local_path))
-                    source_map[original_ref] = str(local_path)
-                    logger.debug(f"Prepared uploaded file for processing: {original_ref} -> {local_path}")
-
-            # --- Handle URLs (Asynchronously) ---
-            if form_data.urls:
-                logger.info(f"Attempting to download {len(form_data.urls)} URLs asynchronously...")
-                download_tasks = [
-                    _download_url_async(client, url, temp_dir, allowed_extensions={".epub"})
-                    for url in form_data.urls
-                ]
-                # Associate tasks with original URLs for error reporting
-                url_task_map = {task: url for task, url in zip(download_tasks, form_data.urls)}
-
-                # Gather results, return_exceptions=True prevents gather from stopping on first error
-                download_results = await asyncio.gather(*download_tasks, return_exceptions=True)
-
-                for task, result in zip(download_tasks, download_results):
-                    original_url = url_task_map[task] # Get URL associated with this task/result
-                    if isinstance(result, FilePath):
-                        # Success
-                        downloaded_path = result
-                        local_paths_to_process.append((original_url, downloaded_path))
-                        source_map[original_url] = str(downloaded_path)
-                        logger.debug(f"Prepared downloaded URL for processing: {original_url} -> {downloaded_path}")
-                    elif isinstance(result, Exception):
-                        # Failure
-                        error = result
-                        logger.error(f"Download or preparation failed for URL {original_url}: {error}", exc_info=False) # Log exception details separately if needed
-                        err_detail = f"Download/preparation failed: {error}"
-                        batch_result["results"].append({
-                            "status": "Error", "input_ref": original_url, "error": err_detail,
-                            "media_type": "ebook",
-                            "processing_source": None, "metadata": {}, "content": None, "chunks": None,
-                            "analysis": None, "keywords": form_data.keywords, "warnings": None, # Use parsed keywords
-                            "analysis_details": {}, "db_id": None, "db_message": "Processing only endpoint."
-                         })
-                        batch_result["errors_count"] += 1
-                        batch_result["errors"].append(f"{original_url}: {err_detail}")
-                    else:
-                         # Should not happen if _download_url_async returns Path or raises Exception
-                         logger.error(f"Unexpected result type '{type(result)}' for URL download task: {original_url}")
-                         err_detail = f"Unexpected download result type: {type(result).__name__}"
-                         batch_result["results"].append({
-                             "status": "Error", "input_ref": original_url, "error": err_detail,
-                             "media_type": "ebook",
-                             # Add default fields
-                             "processing_source": None, "metadata": {}, "content": None, "chunks": None,
-                             "analysis": None, "keywords": None, "warnings": None, "analysis_details": {},
-                             "db_id": None, "db_message": "Processing only endpoint."
-                         })
-                         batch_result["errors_count"] += 1
-                         batch_result["errors"].append(f"{original_url}: {err_detail}")
-
-
-            # --- Check if any files are ready for processing ---
-            if not local_paths_to_process:
-                logger.warning("No valid EPUB sources found or prepared after handling uploads/URLs.")
-                status_code = status.HTTP_207_MULTI_STATUS if batch_result["errors_count"] > 0 else status.HTTP_400_BAD_REQUEST
-                return JSONResponse(status_code=status_code, content=batch_result)
-
-            logger.info(f"Starting processing for {len(local_paths_to_process)} ebook(s).")
-
-            # --- Prepare options for the worker ---
-            chunk_options_dict = None
-            if form_data.perform_chunking:
-                 # Use form_data directly for chunk options
-                 chunk_options_dict = {
-                     'method': form_data.chunk_method,
-                     'max_size': form_data.chunk_size,
-                     'overlap': form_data.chunk_overlap,
-                     'language': form_data.chunk_language,
-                     'custom_chapter_pattern': form_data.custom_chapter_pattern
-                 }
-                 chunk_options_dict = {k: v for k, v in chunk_options_dict.items() if v is not None}
-
-
-            # --- Create and run processing tasks ---
-            processing_tasks = []
-            for original_ref, ebook_path in local_paths_to_process:
-                partial_func = functools.partial(
-                    _process_single_ebook, # Our sync helper
-                    ebook_path=ebook_path,
-                    original_ref=original_ref,
-                    # Pass relevant options from form_data
-                    title_override=form_data.title,
-                    author_override=form_data.author,
-                    keywords=form_data.keywords, # Pass the LIST validated by Pydantic
-                    perform_chunking=form_data.perform_chunking,
-                    chunk_options=chunk_options_dict,
-                    perform_analysis=form_data.perform_analysis,
-                    summarize_recursively=form_data.summarize_recursively,
-                    api_name=form_data.api_name,
-                    # api_key removed - retrieved from server config
-                    custom_prompt=form_data.custom_prompt,
-                    system_prompt=form_data.system_prompt,
-                    # --- Pass the extraction method ---
-                    extraction_method=form_data.extraction_method
-                )
-                processing_tasks.append(loop.run_in_executor(None, partial_func))
-
-            # Gather results from processing tasks
-            processing_results = await asyncio.gather(*processing_tasks, return_exceptions=True)
-
-    # --- Combine and Finalize Results (Outside temp dir and async client context) ---
-    # (Result combination logic remains largely the same as original)
-    for res in processing_results:
-        if isinstance(res, dict):
-            # Ensure mandatory fields and DB fields are null/default
-            res["db_id"] = None
-            res["db_message"] = "Processing only endpoint."
-            res.setdefault("status", "Error") # Default if worker crashed badly
-            res.setdefault("input_ref", "Unknown") # Should be set by worker
-            res.setdefault("media_type", "ebook")
-            res.setdefault("error", None)
-            res.setdefault("warnings", None)
-            res.setdefault("metadata", {})
-            res.setdefault("content", None)
-            res.setdefault("chunks", None)
-            res.setdefault("analysis", None)
-            res.setdefault("keywords", [])
-            res.setdefault("analysis_details", {}) # Ensure exists
-
-            batch_result["results"].append(res) # Add the processed/error dict
-
-            # Update counts based on status
-            if res["status"] == "Success" or res["status"] == "Warning":
-                 batch_result["processed_count"] += 1
-                 # Optionally add warnings to the main errors list or handle separately
-                 if res["status"] == "Warning" and res.get("warnings"):
-                     # Add warnings to the main list, prefixed by input ref?
-                     for warn in res["warnings"]:
-                          batch_result["errors"].append(f"{res.get('input_ref', 'Unknown')}: [Warning] {warn}")
-                     # Don't increment errors_count for warnings
-            else: # Status is Error
-                 batch_result["errors_count"] += 1
-                 error_msg = f"{res.get('input_ref', 'Unknown')}: {res.get('error', 'Unknown processing error')}"
-                 if error_msg not in batch_result["errors"]: # Avoid duplicates if already added
-                    batch_result["errors"].append(error_msg)
-
-        elif isinstance(res, Exception): # Handle exceptions returned by asyncio.gather
-             # Try to find original ref based on the exception context if possible (difficult)
-             # For now, log and add a generic error
-             logger.error(f"Task execution failed with exception: {res}", exc_info=res)
-             error_detail = f"Task execution failed: {type(res).__name__}: {str(res)}"
-             batch_result["results"].append({
-                 "status": "Error", "input_ref": "Unknown Task", "error": error_detail,
-                 "media_type": "ebook", "db_id": None, "db_message": "Processing only endpoint.",
-                 "metadata": {}, "content": None, "chunks": None, "analysis": None,
-                 "keywords": [], "warnings": None, "analysis_details": {},
-             })
-             batch_result["errors_count"] += 1
-             if error_detail not in batch_result["errors"]:
-                batch_result["errors"].append(error_detail)
-        else: # Should not happen
-             logger.error(f"Received unexpected result type from ebook worker task: {type(res)}")
-             error_detail = "Invalid result type from ebook worker."
-             batch_result["results"].append({
-                 "status": "Error", "input_ref": "Unknown Task Type", "error": error_detail,
-                 "media_type": "ebook", "db_id": None, "db_message": "Processing only endpoint.",
-                 "metadata": {}, "content": None, "chunks": None, "analysis": None,
-                 "keywords": [], "warnings": None, "analysis_details": {},
-             })
-             batch_result["errors_count"] += 1
-             if error_detail not in batch_result["errors"]:
-                 batch_result["errors"].append(error_detail)
-
-    # --- Determine Final Status Code ---
-    if batch_result["errors_count"] == 0 and batch_result["processed_count"] > 0:
-        final_status_code = status.HTTP_200_OK
-    elif batch_result["errors_count"] > 0 and batch_result["processed_count"] >= 0: # Allow 0 processed if all inputs failed
-        # Includes cases: only input errors, only processing errors, mixed errors
-        final_status_code = status.HTTP_207_MULTI_STATUS
-    # Handle case where no inputs were valid / processed successfully or with error
-    elif batch_result["processed_count"] == 0 and batch_result["errors_count"] == 0 and not local_paths_to_process:
-         # This case should be caught earlier if no valid inputs were found
-         final_status_code = status.HTTP_400_BAD_REQUEST # No valid input provided or prepared
-    else: # Should ideally not be reached if logic above is sound
-        logger.warning("Reached unexpected state for final status code determination.")
-        final_status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-
-
-    log_level = "INFO" if final_status_code == status.HTTP_200_OK else "WARNING"
-    logger.log(log_level,
-               f"/process-ebooks request finished with status {final_status_code}. "
-               f"Processed: {batch_result['processed_count']}, Errors: {batch_result['errors_count']}")
-
-    # --- Return Final Response ---
-    return JSONResponse(status_code=final_status_code, content=batch_result)
+    return await _process_ebooks_impl(
+        background_tasks=background_tasks,
+        db=db,
+        form_data=form_data,
+        files=files,
+        usage_log=usage_log,
+    )
 
 #
 # End of Ebook Processing Endpoint
@@ -3424,8 +2518,21 @@ async def process_emails_endpoint(
     form_data: ProcessEmailsForm = Depends(get_process_emails_form),
     files: Optional[List[UploadFile]] = File(None),
 ):
-    if not files:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one EML file must be uploaded.")
+    """
+    Compatibility shim that forwards to the modular
+    ``media.process_emails.process_emails_endpoint`` implementation.
+
+    The HTTP route for ``/process-emails`` is now owned by the modular
+    endpoint; this function remains for direct imports/tests.
+    """
+    from tldw_Server_API.app.api.v1.endpoints.media.process_emails import (  # noqa: WPS433
+        process_emails_endpoint as _process_emails_impl,
+    )
+
+    return await _process_emails_impl(
+        form_data=form_data,
+        files=files,
+    )
 
     loop = asyncio.get_running_loop()
     batch_result: Dict[str, Any] = {
@@ -4045,25 +3152,28 @@ async def process_pdfs_endpoint(
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
-    **Process PDFs (No Persistence)**
+    Compatibility shim that forwards to the modular
+    ``media.process_pdfs.process_pdfs_endpoint`` implementation.
 
-    Extracts text/metadata from PDFs using `pymupdf4llm`/PyMuPDF (optionally Docling/OCR),
-    with optional chunking and analysis. Returns artifacts without DB writes.
-
-    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_PDF.md`
-
-    Example:
-    ```python
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
-    await process_pdf_task(file_bytes, filename="paper.pdf", parser="pymupdf4llm", perform_chunking=True, api_name="openai")
-    ```
-
-    URL inputs must resolve to a PDF. The server accepts URLs that either:
-    - end with `.pdf`, or
-    - provide `Content-Disposition` with a filename ending in `.pdf`, or
-    - set `Content-Type: application/pdf`.
-    Other URLs are rejected with a clear error entry in the batch response.
+    The HTTP route for ``/process-pdfs`` is now owned by the modular
+    endpoint; this function remains for direct imports/tests.
     """
+    from tldw_Server_API.app.api.v1.endpoints.media.process_pdfs import (  # noqa: WPS433
+        process_pdfs_endpoint as _process_pdfs_impl,
+    )
+
+    return await _process_pdfs_impl(
+        background_tasks=background_tasks,
+        db=db,
+        form_data=form_data,
+        files=files,
+        vlm_enable=vlm_enable,
+        vlm_backend=vlm_backend,
+        vlm_detect_tables_only=vlm_detect_tables_only,
+        vlm_max_pages=vlm_max_pages,
+        usage_log=usage_log,
+    )
+
     logger.info("Request received for /process-pdfs (no persistence).")
     try:
         usage_log.log_event(
@@ -4397,39 +3507,10 @@ class XMLIngestRequest(BaseModel):
 # MediaWiki Processing Endpoints
 #######################################################################################################################
 
-# Dependency function for MediaWiki form data
-def get_mediawiki_form_data(
-        wiki_name: str = Form(..., description="A unique name for this MediaWiki instance."),
-        namespaces_str: Optional[str] = Form(None,
-                                             description="Comma-separated namespace IDs (e.g., '0,1'). All if None."),
-        skip_redirects: bool = Form(True, description="Skip redirect pages."),
-        chunk_max_size: int = Form(
-            default_factory=lambda: media_wiki_global_config.get('chunking', {}).get('default_size', 1000),
-            description="Max chunk size."),
-        api_name_vector_db: Optional[str] = Form(None, description="API name for vector DB/embedding service."),
-        api_key_vector_db: Optional[str] = Form(None, description="API key for vector DB/embedding service.")
-) -> Dict[str, Any]:
-    namespaces = None
-    if namespaces_str:
-        try:
-            namespaces = [int(ns.strip()) for ns in namespaces_str.split(',')]
-        except ValueError as ve:
-            raise HTTPException(
-                status_code=HTTP_422_UNPROCESSABLE,
-                detail="Invalid namespace format. Must be comma-separated integers."
-            ) from ve
-
-    chunk_options_override = {'max_size': chunk_max_size}
-    # Potentially add other chunk options from config or form here if needed by optimized_chunking
-
-    return {
-        "wiki_name": wiki_name,
-        "namespaces": namespaces,
-        "skip_redirects": skip_redirects,
-        "chunk_options_override": chunk_options_override,
-        "api_name_vector_db": api_name_vector_db,
-        "api_key_vector_db": api_key_vector_db
-    }
+# Backwards-compatible alias; implementation now lives in API_Deps.
+from tldw_Server_API.app.api.v1.API_Deps.media_mediawiki_deps import (  # noqa: E402
+    get_mediawiki_form_data,
+)
 
 
 @router.post(
