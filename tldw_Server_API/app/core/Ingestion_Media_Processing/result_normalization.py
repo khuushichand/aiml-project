@@ -74,5 +74,62 @@ def normalize_process_batch(batch: Dict[str, Any]) -> Dict[str, Any]:
     return batch
 
 
-__all__ = ["MediaItemProcessResponse", "sort_results_success_first", "normalize_process_batch"]
+def normalise_pdf_result(item: Dict[str, Any], original_ref: str) -> Dict[str, Any]:
+    """
+    Ensure every required key is present and correctly typed for PDF results.
 
+    This mirrors the legacy `_legacy_media.normalise_pdf_result` helper so
+    that process-only PDF endpoints share a consistent, fully-populated
+    result shape.
+    """
+    # Ensure base keys are present
+    item.setdefault("status", "Error")
+    item["input_ref"] = original_ref
+    item.setdefault("processing_source", original_ref)
+    item.setdefault("media_type", "pdf")
+
+    # Ensure metadata is a dict (can be empty)
+    metadata = item.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {"original_metadata": metadata}
+    item["metadata"] = metadata
+
+    # Keys that can be None
+    item.setdefault("content", None)
+    item.setdefault("chunks", None)
+    item.setdefault("analysis", None)
+    item.setdefault("warnings", None)
+    item.setdefault("error", None)
+    item.setdefault("segments", None)
+
+    # Analysis details should be a dict
+    analysis_details = item.get("analysis_details") or {}
+    if not isinstance(analysis_details, dict):
+        analysis_details = {"original_details": analysis_details}
+    item["analysis_details"] = analysis_details
+
+    # Normalize keywords to a list
+    keywords = item.get("keywords", metadata.get("keywords"))
+    if keywords is None:
+        keywords_list: List[str] = []
+    elif isinstance(keywords, list):
+        keywords_list = keywords
+    elif isinstance(keywords, str):
+        keywords_list = [k.strip() for k in keywords.split(",") if k.strip()]
+    else:
+        keywords_list = [str(keywords)]
+    item["keywords"] = keywords_list
+
+    # No persistence on this endpoint
+    item["db_id"] = None
+    item.setdefault("db_message", "Processing only endpoint.")
+
+    return item
+
+
+__all__ = [
+    "MediaItemProcessResponse",
+    "sort_results_success_first",
+    "normalize_process_batch",
+    "normalise_pdf_result",
+]

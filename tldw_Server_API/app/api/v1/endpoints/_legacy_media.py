@@ -122,6 +122,9 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.media_add_deps import get_add_media_form
 from tldw_Server_API.app.api.v1.API_Deps.media_code_deps import get_process_code_form
+from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
+    get_process_videos_form,
+)
 from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 
 # -----------------------------
@@ -1740,158 +1743,6 @@ async def add_media(*args: Any, **kwargs: Any) -> Any:
     return await add_media_persist(*args, **kwargs)
 
 
-######################## Video Processing Endpoint ###################################
-#
-# Video Processing Endpoint
-# Endpoints:
-# POST /api/v1/process-video
-
-def get_process_videos_form(
-    # Replicate Form(...) definitions from the original endpoint signature.
-    # Use the field names from the Pydantic model where possible.
-    # The 'alias' in Form(...) helps map incoming form keys.
-    urls: Optional[List[str]] = Form(None, description="List of URLs of the video items"),
-    title: Optional[str] = Form(None, description="Optional title (applied if only one item processed)"),
-    author: Optional[str] = Form(None, description="Optional author (applied similarly to title)"),
-    # Use the alias 'keywords' for the form field, matching AddMediaForm's alias for 'keywords_str'
-    keywords: str = Form("", alias="keywords", description="Comma-separated keywords"),
-    custom_prompt: Optional[str] = Form(None, description="Optional custom prompt"),
-    system_prompt: Optional[str] = Form(None, description="Optional system prompt"),
-    overwrite_existing: bool = Form(False, description="Overwrite existing media (Not used in this endpoint, but needed for model)"),
-    perform_analysis: bool = Form(True, description="Perform analysis"),
-    perform_claims_extraction: Optional[bool] = Form(
-        None,
-        description="Extract factual claims during analysis (defaults to server configuration)."
-    ),
-    claims_extractor_mode: Optional[str] = Form(
-        None,
-        description="Override claims extractor mode (heuristic|ner|provider id)."
-    ),
-    claims_max_per_chunk: Optional[int] = Form(
-        None,
-        description="Maximum number of claims to extract per chunk (uses config default when unset)."
-    ),
-    start_time: Optional[str] = Form(None, description="Optional start time (HH:MM:SS or seconds)"),
-    end_time: Optional[str] = Form(None, description="Optional end time (HH:MM:SS or seconds)"),
-    api_name: Optional[str] = Form(None, description="Optional API name"),
-    # api_key removed - SECURITY: Never accept API keys from client
-    use_cookies: bool = Form(False, description="Use cookies for URL download requests"),
-    cookies: Optional[str] = Form(None, description="Cookie string if `use_cookies` is True"),
-    transcription_model: str = Form("deepdml/faster-whisper-large-v3-turbo-ct2", description="Transcription model"),
-    transcription_language: str = Form("en", description="Transcription language"),
-    diarize: bool = Form(False, description="Enable speaker diarization"),
-    timestamp_option: bool = Form(True, description="Include timestamps in transcription"),
-    vad_use: bool = Form(False, description="Enable VAD filter"),
-    perform_confabulation_check_of_analysis: bool = Form(False, description="Enable confabulation check"),
-    pdf_parsing_engine: Optional[PdfEngine] = Form("pymupdf4llm", description="PDF parsing engine (for model compatibility)"),
-    perform_chunking: bool = Form(True, description="Enable chunking"), # Default from ChunkingOptions
-    chunk_method: Optional[ChunkMethod] = Form(None, description="Chunking method"),
-    use_adaptive_chunking: bool = Form(False, description="Enable adaptive chunking"),
-    use_multi_level_chunking: bool = Form(False, description="Enable multi-level chunking"),
-    chunk_language: Optional[str] = Form(None, description="Chunking language override"),
-    chunk_size: int = Form(500, description="Target chunk size"),
-    chunk_overlap: int = Form(200, description="Chunk overlap size"),
-    custom_chapter_pattern: Optional[str] = Form(None, description="Regex pattern for custom chapter splitting"),
-    perform_rolling_summarization: bool = Form(False, description="Perform rolling summarization"),
-    summarize_recursively: bool = Form(False, description="Perform recursive summarization"),
-    # Contextual chunking options (missing earlier; add to avoid NameError and enable validation)
-    enable_contextual_chunking: bool = Form(False, description="Enable contextual chunking"),
-    contextual_llm_model: Optional[str] = Form(None, description="LLM model for contextual chunking"),
-    context_window_size: Optional[int] = Form(None, description="Context window size (chars)"),
-    context_strategy: Optional[str] = Form(None, description="Context strategy: auto|full|window|outline_window"),
-    context_token_budget: Optional[int] = Form(None, description="Approx token budget for auto strategy"),
-    # --- Keep Token and Files separate ---
-    #token: str = Header(..., description="Authentication token"),  # Auth handled by get_media_db_for_user
-    db=Depends(get_media_db_for_user)
-) -> ProcessVideosForm:
-    """
-    Dependency function to parse form data and validate it
-    against the ProcessVideosForm model.
-    """
-    # Validate transcription_model against TranscriptionModel enum
-    if transcription_model:
-        valid_models = [model.value for model in TranscriptionModel]
-        if transcription_model not in valid_models:
-            logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
-            transcription_model = "whisper-large-v3"  # Default to a reliable model
-
-    try:
-        # Create the Pydantic model instance using the parsed form data.
-        form_instance = ProcessVideosForm(
-            media_type="video", # Fixed by ProcessVideosForm
-            urls=urls,
-            title=title,
-            author=author,
-            keywords=keywords, # Pydantic handles mapping this to keywords_str via alias
-            custom_prompt=custom_prompt,
-            system_prompt=system_prompt,
-            overwrite_existing=overwrite_existing,
-            keep_original_file=False, # Fixed by ProcessVideosForm
-            perform_analysis=perform_analysis,
-            perform_claims_extraction=perform_claims_extraction,
-            claims_extractor_mode=claims_extractor_mode,
-            claims_max_per_chunk=claims_max_per_chunk,
-            start_time=start_time,
-            end_time=end_time,
-            api_name=api_name,
-            # api_key removed - retrieved from server config
-            use_cookies=use_cookies,
-            cookies=cookies,
-            transcription_model=transcription_model,
-            transcription_language=transcription_language,
-            diarize=diarize,
-            timestamp_option=timestamp_option,
-            vad_use=vad_use,
-            perform_confabulation_check_of_analysis=perform_confabulation_check_of_analysis,
-            pdf_parsing_engine=pdf_parsing_engine,
-            perform_chunking=perform_chunking,
-            chunk_method=chunk_method,
-            use_adaptive_chunking=use_adaptive_chunking,
-            use_multi_level_chunking=use_multi_level_chunking,
-            chunk_language=chunk_language,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            custom_chapter_pattern=custom_chapter_pattern,
-            perform_rolling_summarization=perform_rolling_summarization,
-            summarize_recursively=summarize_recursively,
-            enable_contextual_chunking=enable_contextual_chunking,
-            contextual_llm_model=contextual_llm_model,
-            context_window_size=context_window_size,
-            context_strategy=(context_strategy.strip().lower() if isinstance(context_strategy, str) and context_strategy.strip() else context_strategy),
-            context_token_budget=(int(context_token_budget) if isinstance(context_token_budget, str) and context_token_budget.isdigit() else context_token_budget),
-        )
-        return form_instance
-    except ValidationError as e:
-        # Process errors to make them JSON serializable by handling exceptions in 'ctx'
-        serializable_errors = []
-        for error in e.errors():
-            serializable_error = error.copy()  # Work on a copy
-            if 'ctx' in serializable_error and isinstance(serializable_error.get('ctx'), dict):
-                # Create a new ctx dict, stringifying any exceptions
-                new_ctx = {}
-                for k, v in serializable_error['ctx'].items():
-                    if isinstance(v, Exception):
-                        new_ctx[k] = str(v)  # Convert Exception to string
-                    else:
-                        new_ctx[k] = v  # Keep other values as is
-                serializable_error['ctx'] = new_ctx
-                # Alternatively, if client doesn't need ctx, uncomment the next line:
-                # del serializable_error['ctx']
-            serializable_errors.append(serializable_error)
-
-        logger.warning(f"Pydantic validation failed: {json.dumps(serializable_errors)}")
-        # Raise HTTPException with the processed, serializable error details
-        raise HTTPException(
-            status_code=HTTP_422_UNPROCESSABLE,
-            detail=serializable_errors,  # Pass the cleaned list
-        ) from e
-    except Exception as e: # Catch other potential errors during instantiation
-        logger.error(f"Unexpected error creating ProcessVideosForm: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error during form processing: {type(e).__name__}"
-        )
-
 async def process_videos_endpoint(
     background_tasks: BackgroundTasks,
     db: MediaDatabase = Depends(get_media_db_for_user),
@@ -1930,136 +1781,9 @@ async def process_videos_endpoint(
 # Endpoints:
 #   /process-audio
 
-# =============================================================================
-# Dependency Function for Audio Form Processing
-# =============================================================================
-def get_process_audios_form(
-    # Replicate relevant Form(...) definitions for audio
-    urls: Optional[List[str]] = Form(None, description="List of URLs of the audio items"),
-    title: Optional[str] = Form(None, description="Optional title (applied if only one item processed)"),
-    author: Optional[str] = Form(None, description="Optional author (applied similarly to title)"),
-    keywords: str = Form("", alias="keywords", description="Comma-separated keywords"),
-    custom_prompt: Optional[str] = Form(None, description="Optional custom prompt"),
-    system_prompt: Optional[str] = Form(None, description="Optional system prompt"),
-    overwrite_existing: bool = Form(False, description="Overwrite existing media (Not used in this endpoint, but needed for model)"),
-    perform_analysis: bool = Form(True, description="Perform analysis"),
-    perform_claims_extraction: Optional[bool] = Form(
-        None,
-        description="Extract factual claims during analysis (defaults to server configuration)."
-    ),
-    claims_extractor_mode: Optional[str] = Form(
-        None,
-        description="Override claims extractor mode (heuristic|ner|provider id)."
-    ),
-    claims_max_per_chunk: Optional[int] = Form(
-        None,
-        description="Maximum number of claims to extract per chunk (uses config default when unset)."
-    ),
-    api_name: Optional[str] = Form(None, description="Optional API name"),
-    # api_key removed - SECURITY: Never accept API keys from client
-    use_cookies: bool = Form(False, description="Use cookies for URL download requests"),
-    cookies: Optional[str] = Form(None, description="Cookie string if `use_cookies` is True"),
-    transcription_model: str = Form("deepdml/faster-distil-whisper-large-v3.5", description="Transcription model"),
-    transcription_language: str = Form("en", description="Transcription language"),
-    diarize: bool = Form(False, description="Enable speaker diarization"),
-    timestamp_option: bool = Form(True, description="Include timestamps in transcription"),
-    vad_use: bool = Form(False, description="Enable VAD filter"),
-    perform_confabulation_check_of_analysis: bool = Form(False, description="Enable confabulation check"),
-    # Chunking options
-    perform_chunking: bool = Form(True, description="Enable chunking"),
-    chunk_method: Optional[ChunkMethod] = Form(None, description="Chunking method"),
-    use_adaptive_chunking: bool = Form(False, description="Enable adaptive chunking"),
-    use_multi_level_chunking: bool = Form(False, description="Enable multi-level chunking"),
-    chunk_language: Optional[str] = Form(None, description="Chunking language override"),
-    chunk_size: int = Form(500, description="Target chunk size"),
-    chunk_overlap: int = Form(200, description="Chunk overlap size"),
-    # Summarization options
-    perform_rolling_summarization: bool = Form(False, description="Perform rolling summarization"), # Keep if AddMediaForm has it
-    summarize_recursively: bool = Form(False, description="Perform recursive summarization"),
-    # PDF options (Needed for AddMediaForm compatibility, ignored for audio)
-    pdf_parsing_engine: Optional[PdfEngine] = Form("pymupdf4llm", description="PDF parsing engine (for model compatibility)"),
-    custom_chapter_pattern: Optional[str] = Form(None, description="Regex pattern for custom chapter splitting (for model compatibility)"),
-    # Audio/Video specific timing (Not applicable to audio-only usually, but keep for model compatibility if needed)
-    start_time: Optional[str] = Form(None, description="Optional start time (HH:MM:SS or seconds)"),
-    end_time: Optional[str] = Form(None, description="Optional end time (HH:MM:SS or seconds)"),
-    # Contextual chunking
-    enable_contextual_chunking: bool = Form(False, description="Enable contextual chunking"),
-    contextual_llm_model: Optional[str] = Form(None, description="LLM model for contextualization"),
-    context_window_size: Optional[int] = Form(None, description="Context window size (chars)"),
-    context_strategy: Optional[str] = Form(None, description="Context strategy: auto|full|window|outline_window"),
-    context_token_budget: Optional[int] = Form(None, description="Approx token budget for auto strategy"),
-
-) -> ProcessAudiosForm:
-    """
-    Dependency function to parse form data and validate it
-    against the ProcessAudiosForm model.
-    """
-    # Validate transcription_model against TranscriptionModel enum
-    if transcription_model:
-        valid_models = [model.value for model in TranscriptionModel]
-        if transcription_model not in valid_models:
-            logger.warning(f"Invalid transcription model provided: {transcription_model}, using default")
-            transcription_model = "whisper-large-v3"  # Default to a reliable model
-
-    try:
-        # Map form fields to ProcessAudiosForm fields
-        form_instance = ProcessAudiosForm(
-            urls=urls,
-            title=title,
-            author=author,
-            keywords=keywords,
-            custom_prompt=custom_prompt,
-            system_prompt=system_prompt,
-            overwrite_existing=overwrite_existing,
-            keep_original_file=False,
-            perform_analysis=perform_analysis,
-            perform_claims_extraction=perform_claims_extraction,
-            claims_extractor_mode=claims_extractor_mode,
-            claims_max_per_chunk=claims_max_per_chunk,
-            api_name=api_name,
-            # api_key removed - retrieved from server config
-            use_cookies=use_cookies,
-            cookies=cookies,
-            transcription_model=transcription_model,
-            transcription_language=transcription_language,
-            diarize=diarize,
-            timestamp_option=timestamp_option,
-            vad_use=vad_use,
-            perform_confabulation_check_of_analysis=perform_confabulation_check_of_analysis,
-            perform_chunking=perform_chunking,
-            chunk_method=chunk_method,
-            use_adaptive_chunking=use_adaptive_chunking,
-            use_multi_level_chunking=use_multi_level_chunking,
-            chunk_language=chunk_language,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            summarize_recursively=summarize_recursively,
-            # Include fields inherited from AddMediaForm even if not directly used for audio
-            perform_rolling_summarization=perform_rolling_summarization,
-            pdf_parsing_engine=pdf_parsing_engine,
-            custom_chapter_pattern=custom_chapter_pattern,
-            start_time=start_time,
-            end_time=end_time,
-            enable_contextual_chunking=enable_contextual_chunking,
-            contextual_llm_model=contextual_llm_model,
-            context_window_size=context_window_size,
-            context_strategy=(context_strategy.strip().lower() if isinstance(context_strategy, str) and context_strategy.strip() else context_strategy),
-            context_token_budget=(int(context_token_budget) if isinstance(context_token_budget, str) and str(context_token_budget).isdigit() else context_token_budget),
-        )
-        return form_instance
-    except ValidationError as e:
-        # Log the validation error details for debugging
-        logger.warning(f"Form validation failed for /process-audios: {e.errors()}")
-        raise HTTPException(
-            status_code=HTTP_422_UNPROCESSABLE,
-            detail=e.errors(),
-        ) from e
-    except Exception as e:
-        logger.error(f"Unexpected error creating ProcessAudiosForm: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error during form processing: {type(e).__name__}"
-        )
+from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (  # noqa: E402
+    get_process_audios_form,
+)
 
 
 # =============================================================================
@@ -2736,153 +2460,9 @@ async def process_emails_endpoint(
 
 ######################## Document Processing Endpoint ###################################
 
-# ─────────────────────── Form Model ─────────────────────────
-class ProcessDocumentsForm(AddMediaForm):
-    media_type: Literal["document"] = "document"
-    keep_original_file: bool = False # Always cleanup tmp dir for this endpoint
-
-    # Override chunking defaults if desired for documents
-    perform_chunking: bool = True
-    chunk_method: Optional[ChunkMethod] = Field('sentences', description="Default chunking method for documents")
-    chunk_size: int = Field(1000, gt=0, description="Target chunk size for documents")
-    chunk_overlap: int = Field(200, ge=0, description="Chunk overlap size for documents")
-
-    # Note: No need for extraction_method specific to documents here
-
-# ────────────────────── Dependency Function ───────────────────
-def get_process_documents_form(
-    # --- Inherited Fields from AddMediaForm ---
-    # KEEP all Form(...) definitions to accept the data if sent by client
-    urls: Optional[List[str]] = Form(None, description="List of URLs of the documents"),
-    title: Optional[str] = Form(None, description="Optional title override"),
-    author: Optional[str] = Form(None, description="Optional author override"),
-    keywords: str = Form("", alias="keywords_str", description="Comma-separated keywords"),
-    custom_prompt: Optional[str] = Form(None, description="Optional custom prompt for analysis"),
-    system_prompt: Optional[str] = Form(None, description="Optional system prompt for analysis"),
-    overwrite_existing: bool = Form(False), # Keep for model validation
-    perform_analysis: bool = Form(True),
-    perform_claims_extraction: Optional[bool] = Form(
-        None,
-        description="Extract factual claims during analysis (defaults to server configuration)."
-    ),
-    claims_extractor_mode: Optional[str] = Form(
-        None,
-        description="Override claims extractor mode (heuristic|ner|provider id)."
-    ),
-    claims_max_per_chunk: Optional[int] = Form(
-        None,
-        description="Maximum number of claims to extract per chunk (uses config default when unset)."
-    ),
-    api_name: Optional[str] = Form(None),
-    # api_key removed - SECURITY: Never accept API keys from client
-    use_cookies: bool = Form(False),
-    cookies: Optional[str] = Form(None),
-    summarize_recursively: bool = Form(False),
-    perform_rolling_summarization: bool = Form(False), # Keep for model validation
-
-    # --- Fields from ChunkingOptions ---
-    perform_chunking: bool = Form(True), # Use default from ProcessDocumentsForm
-    chunk_method: Optional[ChunkMethod] = Form('sentences'), # Use default from ProcessDocumentsForm
-    chunk_language: Optional[str] = Form(None),
-    chunk_size: int = Form(1000), # Use default from ProcessDocumentsForm
-    chunk_overlap: int = Form(200), # Use default from ProcessDocumentsForm
-    custom_chapter_pattern: Optional[str] = Form(None), # Less relevant but keep for model
-    use_adaptive_chunking: bool = Form(False), # Keep for model validation
-    use_multi_level_chunking: bool = Form(False), # Keep for model validation
-
-    # --- Fields from other options (Audio/Video/PDF/Ebook) ---
-    # KEEP Form() defs, but DON'T pass them explicitly to constructor below
-    start_time: Optional[str] = Form(None), end_time: Optional[str] = Form(None),
-    transcription_model: Optional[str] = Form(None), transcription_language: Optional[str] = Form(None),
-    diarize: Optional[bool] = Form(None), timestamp_option: Optional[bool] = Form(None),
-    vad_use: Optional[bool] = Form(None), perform_confabulation_check_of_analysis: Optional[bool] = Form(None),
-    pdf_parsing_engine: Optional[Any] = Form(None), # Use Any if PdfEngine not imported/needed
-    extraction_method: Optional[Any] = Form(None), # Keep placeholder
-    # Contextual chunking (documents)
-    enable_contextual_chunking: bool = Form(False, description="Enable contextual chunking"),
-    contextual_llm_model: Optional[str] = Form(None, description="LLM model for contextualization"),
-    context_window_size: Optional[int] = Form(None, description="Context window size (chars)"),
-    context_strategy: Optional[str] = Form(None, description="Context strategy: auto|full|window|outline_window"),
-    context_token_budget: Optional[int] = Form(None, description="Approx token budget for auto strategy"),
-
-) -> ProcessDocumentsForm:
-    """
-    Dependency function to parse form data and validate it
-    against the ProcessDocumentsForm model.
-    """
-    try:
-        # Selectively create the data dict, omitting irrelevant fields
-        doc_form_data = {
-            "media_type": "document",
-            "keep_original_file": False,
-            "urls": urls,
-            "title": title,
-            "author": author,
-            "keywords": keywords, # Pydantic handles alias mapping
-            "custom_prompt": custom_prompt,
-            "system_prompt": system_prompt,
-            "overwrite_existing": overwrite_existing,
-            "perform_analysis": perform_analysis,
-            "perform_claims_extraction": perform_claims_extraction,
-            "claims_extractor_mode": claims_extractor_mode,
-            "claims_max_per_chunk": claims_max_per_chunk,
-            "api_name": api_name,
-            # api_key removed - retrieved from server config
-            "use_cookies": use_cookies,
-            "cookies": cookies,
-            "summarize_recursively": summarize_recursively,
-            "perform_rolling_summarization": perform_rolling_summarization,
-            # Chunking
-            "perform_chunking": perform_chunking,
-            "chunk_method": chunk_method,
-            "chunk_language": chunk_language,
-            "chunk_size": chunk_size,
-            "chunk_overlap": chunk_overlap,
-            "custom_chapter_pattern": custom_chapter_pattern,
-            "use_adaptive_chunking": use_adaptive_chunking, # Keep if part of base ChunkingOptions
-            "use_multi_level_chunking": use_multi_level_chunking, # Keep if part of base ChunkingOptions
-            # Contextual
-            "enable_contextual_chunking": enable_contextual_chunking,
-            "contextual_llm_model": contextual_llm_model,
-            "context_window_size": context_window_size,
-            "context_strategy": (context_strategy.strip().lower() if isinstance(context_strategy, str) and context_strategy.strip() else context_strategy),
-            "context_token_budget": (int(context_token_budget) if isinstance(context_token_budget, str) and str(context_token_budget).isdigit() else context_token_budget),
-            # Omit: start/end_time, transcription_*, diarize, timestamp_option, vad_use, pdf_*, ebook_*
-        }
-
-        # Filter out None values to allow Pydantic defaults to apply correctly
-        filtered_form_data = {k: v for k, v in doc_form_data.items() if v is not None}
-        # Re-add fixed fields that might have been filtered if None (shouldn't be)
-        filtered_form_data["media_type"] = "document"
-        filtered_form_data["keep_original_file"] = False
-
-        form_instance = ProcessDocumentsForm(**filtered_form_data)
-        return form_instance
-    except ValidationError as e:
-        # Use the detailed error handling from previous examples
-        serializable_errors = []
-        for error in e.errors():
-             serializable_error = error.copy()
-             # ... (copy the detailed error serialization logic here) ...
-             if 'ctx' in serializable_error and isinstance(serializable_error.get('ctx'), dict):
-                 new_ctx = {}
-                 for k, v in serializable_error['ctx'].items():
-                     if isinstance(v, Exception): new_ctx[k] = str(v)
-                     else: new_ctx[k] = v
-                 serializable_error['ctx'] = new_ctx
-             serializable_error['input'] = serializable_error.get('input', serializable_error.get('loc'))
-             serializable_errors.append(serializable_error)
-        logger.warning(f"Pydantic validation failed for Document processing: {json.dumps(serializable_errors)}")
-        raise HTTPException(
-            status_code=HTTP_422_UNPROCESSABLE,
-            detail=serializable_errors,
-        ) from e
-    except Exception as e:
-        logger.error(f"Unexpected error creating ProcessDocumentsForm: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error during form processing: {type(e).__name__}"
-        )
+from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (  # noqa: E402
+    get_process_documents_form,
+)
 
 
 # ─────────────────────── Endpoint Implementation ────────────────
@@ -3081,53 +2661,9 @@ def get_process_pdfs_form(
             detail=f"Internal server error during form processing: {type(e).__name__}"
         )
 
-def normalise_pdf_result(item: dict, original_ref: str) -> dict:
-    """Ensure every required key is present and correctly typed for PDF results."""
-    # Ensure base keys are present
-    item.setdefault("status", "Error") # Default to Error if not set
-    item["input_ref"] = original_ref   # Use the passed original ref
-    # Add processing_source if missing, default to original ref
-    item.setdefault("processing_source", original_ref)
-    item.setdefault("media_type", "pdf")
-
-    # Ensure metadata is a dict (can be empty)
-    item["metadata"] = item.get("metadata") or {}
-    if not isinstance(item["metadata"], dict):
-        logger.warning(f"Normalizing non-dict metadata for {original_ref}: {item['metadata']}")
-        item["metadata"] = {"original_metadata": item["metadata"]} # Wrap non-dict metadata
-
-    # Keys that can be None
-    item.setdefault("content", None)
-    item.setdefault("chunks", None)
-    item.setdefault("analysis", None)
-    item.setdefault("warnings", None)
-    item.setdefault("error", None)
-    item.setdefault("segments", None) # Add segments default
-
-    # Analysis details should be a dict
-    item["analysis_details"] = item.get("analysis_details") or {}
-    if not isinstance(item["analysis_details"], dict):
-         logger.warning(f"Normalizing non-dict analysis_details for {original_ref}: {item['analysis_details']}")
-         item["analysis_details"] = {"original_details": item["analysis_details"]}
-
-    # Ensure keywords is a list (can be empty) - Use metadata keywords if present
-    item.setdefault("keywords", item.get("metadata", {}).get("keywords"))
-    if item["keywords"] is None:
-        item["keywords"] = []
-    elif not isinstance(item["keywords"], list):
-        logger.warning(f"Normalizing non-list keywords for {original_ref}: {item['keywords']}")
-        # Attempt to split if it's a comma-separated string, else wrap in list
-        if isinstance(item["keywords"], str):
-            item["keywords"] = [k.strip() for k in item["keywords"].split(',') if k.strip()]
-        else:
-            item["keywords"] = [str(item["keywords"])]
-
-
-    # No persistence on this endpoint
-    item["db_id"] = None
-    item["db_message"] = "Processing only endpoint."
-
-    return item
+from tldw_Server_API.app.core.Ingestion_Media_Processing.result_normalization import (
+    normalise_pdf_result,
+)
 
 # ───────────────────────────── endpoint ──────────────────────────────────────
 @router.post(
@@ -3529,64 +3065,20 @@ async def ingest_mediawiki_dump_endpoint(
     """
     **MediaWiki Ingest (Streaming)**
 
-    Streams ingestion events while processing a MediaWiki XML dump and persisting results.
+    Compatibility shim that delegates to the modular
+    ``media.process_mediawiki.ingest_mediawiki_dump_endpoint`` implementation.
 
-    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_MediaWiki.md`
-
-    Example (core iterator):
-    ```python
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki import import_mediawiki_dump
-    events = import_mediawiki_dump("/abs/enwiki.xml.bz2", wiki_name="enwiki", namespaces=[0], skip_redirects=True)
-    for ev in events: print(ev.get("type"))
-    ```
+    The HTTP route for ``/mediawiki/ingest-dump`` is now owned by the
+    modular endpoint; this function remains for direct imports/tests.
     """
-    if core_import_mediawiki_dump is None:
-        raise HTTPException(status_code=501, detail="MediaWiki processing module not loaded.")
+    from tldw_Server_API.app.api.v1.endpoints.media.process_mediawiki import (  # noqa: WPS433,E402
+        ingest_mediawiki_dump_endpoint as _ingest_impl,
+    )
 
-    if not dump_file.filename:
-        raise HTTPException(status_code=400, detail="Dump file has no filename.")
-
-    # Use a temp directory that persists for the duration of streaming
-    # Cleanup is handled at the end of the streaming generator.
-    with TempDirManager(prefix="mediawiki_ingest_", cleanup=False) as temp_dir:
-        temp_file_path = FilePath(temp_dir) / sanitize_filename(dump_file.filename)  # Sanitize filename
-        try:
-            async with aiofiles.open(temp_file_path, 'wb') as f:
-                content = await dump_file.read()  # Read file content
-                await f.write(content)
-        except Exception as e:
-            logger.error(f"Failed to save uploaded MediaWiki dump: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Failed to save uploaded file")
-        finally:
-            await dump_file.close()
-
-        logger.info(f"MediaWiki dump for ingestion saved to temporary path: {temp_file_path}")
-
-        async def stream_ingestion_results():
-            try:
-                # store_to_db and store_to_vector_db are True for ingest
-                for result_event in core_import_mediawiki_dump(
-                        file_path=str(temp_file_path),
-                        wiki_name=form_data["wiki_name"],
-                        namespaces=form_data["namespaces"],
-                        skip_redirects=form_data["skip_redirects"],
-                        chunk_options_override=form_data["chunk_options_override"],
-                        store_to_db=True,
-                        store_to_vector_db=True,
-                        api_name_vector_db=form_data.get("api_name_vector_db"),
-                        api_key_vector_db=form_data.get("api_key_vector_db"),
-                ):
-                    yield json.dumps(result_event) + "\n"
-                    await asyncio.sleep(0.01)  # Allow other tasks to run, prevent tight loop blocking
-            finally:
-                # Ensure temp directory is cleaned up after streaming completes
-                try:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                    logger.info(f"Cleaned up temporary directory: {temp_dir}")
-                except Exception:
-                    logger.warning(f"Failed to cleanup temporary directory: {temp_dir}")
-
-        return StreamingResponse(stream_ingestion_results(), media_type="application/x-ndjson")
+    return await _ingest_impl(
+        form_data=form_data,
+        dump_file=dump_file,
+    )
 
 
 @router.post(
@@ -3606,81 +3098,21 @@ async def process_mediawiki_dump_ephemeral_endpoint(
     """
     **MediaWiki Process (Ephemeral, Streaming)**
 
-    Streams processed items from a MediaWiki XML dump without saving to the database.
+    Compatibility shim that delegates to the modular
+    ``media.process_mediawiki.process_mediawiki_dump_ephemeral_endpoint``
+    implementation.
 
-    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_MediaWiki.md`
+    The HTTP route for ``/mediawiki/process-dump`` is now owned by the
+    modular endpoint; this function remains for direct imports/tests.
     """
-    if core_import_mediawiki_dump is None:
-        raise HTTPException(status_code=501, detail="MediaWiki processing module not loaded.")
+    from tldw_Server_API.app.api.v1.endpoints.media.process_mediawiki import (  # noqa: WPS433,E402
+        process_mediawiki_dump_ephemeral_endpoint as _process_ephemeral_impl,
+    )
 
-    if not dump_file.filename:
-        raise HTTPException(status_code=400, detail="Dump file has no filename.")
-
-    with TempDirManager(prefix="mediawiki_process_", cleanup=False) as temp_dir:
-        temp_file_path = FilePath(temp_dir) / sanitize_filename(dump_file.filename)  # Sanitize filename
-        try:
-            async with aiofiles.open(temp_file_path, 'wb') as f:
-                content = await dump_file.read()
-                await f.write(content)
-        except Exception as e:
-            logger.error(f"Failed to save uploaded MediaWiki dump for processing: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Failed to save uploaded file")
-        finally:
-            await dump_file.close()
-
-        logger.info(f"MediaWiki dump for ephemeral processing saved to: {temp_file_path}")
-
-        async def stream_processed_data():
-            try:
-                # store_to_db and store_to_vector_db are False for ephemeral processing
-                for result_event in core_import_mediawiki_dump(
-                        file_path=str(temp_file_path),
-                        wiki_name=form_data["wiki_name"],  # Still useful for collection naming if vector DB was used
-                        namespaces=form_data["namespaces"],
-                        skip_redirects=form_data["skip_redirects"],
-                        chunk_options_override=form_data["chunk_options_override"],
-                        store_to_db=False,
-                        store_to_vector_db=False,  # No storage to ChromaDB either for this endpoint
-                        # api_name_vector_db and api_key_vector_db are not strictly needed if store_to_vector_db is False,
-                        # but pass them in case some underlying part of process_single_item still uses them for non-storage tasks.
-                        # However, the modified process_single_item only uses them if store_to_vector_db is True.
-                        api_name_vector_db=form_data.get("api_name_vector_db"),
-                        # Will be ignored by process_single_item if store_to_vector_db is False
-                        api_key_vector_db=form_data.get("api_key_vector_db")  # Same as above
-                ):
-                    # We are interested in the "item_result" type which contains the processed page data
-                    if result_event.get("type") == "item_result":
-                        page_data = result_event.get("data", {})
-                        # Validate with Pydantic model before yielding for this endpoint
-                        try:
-                            # The page_data from process_single_item should now match ProcessedMediaWikiPage
-                            processed_page_model = ProcessedMediaWikiPage(**page_data)
-                            yield json.dumps(processed_page_model.model_dump()) + "\n"  # Use .model_dump() for Pydantic v2+
-                        except ValidationError as ve:
-                            # Log validation error and yield a structured error for this item
-                            logger.error(
-                                f"Validation error for processed MediaWiki page '{page_data.get('title', 'Unknown')}': {ve.errors()}")
-                            error_output = {
-                                "type": "validation_error",
-                                "title": page_data.get("title", "Unknown"),
-                                "page_id": page_data.get("page_id"),
-                                "detail": ve.errors()
-                            }
-                            yield json.dumps(error_output) + "\n"
-                    elif result_event.get("type") in ["error", "progress_total", "summary"]:
-                        # Stream other event types as well (errors, total count, final summary)
-                        yield json.dumps(result_event) + "\n"
-
-                    await asyncio.sleep(0.01)  # Prevent tight loop blocking
-            finally:
-                # Ensure temp directory is cleaned up after streaming completes
-                try:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                    logger.info(f"Cleaned up temporary directory: {temp_dir}")
-                except Exception:
-                    logger.warning(f"Failed to cleanup temporary directory: {temp_dir}")
-
-        return StreamingResponse(stream_processed_data(), media_type="application/x-ndjson")
+    return await _process_ephemeral_impl(
+        form_data=form_data,
+        dump_file=dump_file,
+    )
 #
 # End of MediaWiki Processing Endpoints
 #################################################################################################################
