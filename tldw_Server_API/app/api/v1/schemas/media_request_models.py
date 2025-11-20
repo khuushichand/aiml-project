@@ -5,7 +5,7 @@
 import re
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Any, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal
 #
 # 3rd-party imports
 from fastapi import HTTPException
@@ -89,6 +89,33 @@ class SearchRequest(BaseModel):
     must_not_have: Optional[List[str]] = None
     sort_by: Optional[str] = "relevance"
     boost_fields: Optional[Dict[str, float]] = None
+
+
+class ProcessCodeForm(BaseModel):
+    """
+    Form-style payload for the /media/process-code endpoint.
+
+    This model is populated from multipart/form-data via a FastAPI
+    dependency so tests can exercise validation directly.
+    """
+
+    urls: Optional[List[str]] = None
+    perform_chunking: bool = True
+    # Supports 'code' (structure-aware) and 'lines' (simple line windowing)
+    chunk_method: Optional[str] = Field(
+        default="code",
+        description="Chunk method for code: 'code' or 'lines'",
+    )
+    # For 'code' method, interpreted as max characters per chunk; for 'lines', interpreted as lines per chunk
+    chunk_size: int = Field(
+        default=4000,
+        description="Chunk size: chars for 'code', lines for 'lines'",
+    )
+    # Overlap is in characters for 'code' and in lines for 'lines'
+    chunk_overlap: int = Field(
+        default=200,
+        description="Overlap: chars for 'code', lines for 'lines'",
+    )
 
 class MetadataFilter(BaseModel):
     field: str = Field(..., description="Metadata key to search (e.g., doi, pmid, journal, license)")
@@ -408,17 +435,34 @@ class MediaItemProcessResponse(BaseModel):
         extra="forbid"  # Disallow extra fields not defined in the model
     )
 
-######################## Video Ingestion Model ###################################
+######################## Processing-only Forms ###################################
 #
-# This is a schema for video ingestion and analysis.
+# These forms share the same surface as AddMediaForm but lock media_type for
+# specific processing-only endpoints (no DB writes).
+
+
+class ProcessDocumentsForm(AddMediaForm):
+    """
+    Processing-only form for document-like content.
+
+    Mirrors AddMediaForm while forcing media_type to "document" and ensuring
+    keep_original_file defaults to False so temporary files are cleaned up by
+    default for /process-documents.
+    """
+
+    media_type: Literal["document"] = "document"
+    keep_original_file: bool = Field(False)
+
 
 class ProcessVideosForm(AddMediaForm):
     """
+    Processing-only form for video content used by /process-videos.
+
     Same field-surface as AddMediaForm, but:
-      • media_type forced to `"video"` (so client does not need to send it)
-      • keep_original_file defaults to False (tmp dir always wiped)
-      • perform_analysis stays default=True (caller may disable)
+      • media_type forced to "video" (clients need not send it)
+      • keep_original_file defaults to False (temporary files are wiped)
     """
+
     media_type: Literal["video"] = "video"
     keep_original_file: bool = Field(False)
 
@@ -461,12 +505,14 @@ class VideoIngestRequest(BaseModel):
 ####################################################################################
 
 
-######################## Audio Ingestion Model ###################################
-#
-# This is a schema for audio ingestion and analysis.
-
 class ProcessAudiosForm(AddMediaForm):
-    """Identical surface to AddMediaForm but restricted to 'audio'."""
+    """
+    Processing-only form for audio content used by /process-audios.
+
+    Identical surface to AddMediaForm but restricted to "audio" and with
+    keep_original_file defaulting to False for temporary uploads.
+    """
+
     media_type: Literal["audio"] = "audio"
     keep_original_file: bool = Field(False)
 

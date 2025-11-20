@@ -12,7 +12,11 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
+    get_process_documents_form,
+)
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
+from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessDocumentsForm
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
@@ -45,9 +49,7 @@ ALLOWED_DOC_EXTENSIONS = [
 )
 async def process_documents_endpoint(
     db: MediaDatabase = Depends(get_media_db_for_user),
-    form_data: legacy_media.ProcessDocumentsForm = Depends(
-        legacy_media.get_process_documents_form
-    ),
+    form_data: ProcessDocumentsForm = Depends(get_process_documents_form),
     files: Optional[List[UploadFile]] = File(
         None,
         description="Document file uploads (.txt, .md, .docx, .rtf, .html, .xml)",

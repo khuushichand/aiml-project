@@ -17,7 +17,11 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
+    get_process_videos_form,
+)
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
+from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessVideosForm
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
@@ -40,9 +44,7 @@ router = APIRouter()
 async def process_videos_endpoint(
     background_tasks: BackgroundTasks,
     db: MediaDatabase = Depends(get_media_db_for_user),
-    form_data: legacy_media.ProcessVideosForm = Depends(  # type: ignore[attr-defined]
-        legacy_media.get_process_videos_form  # type: ignore[attr-defined]
-    ),
+    form_data: ProcessVideosForm = Depends(get_process_videos_form),
     files: Optional[List[UploadFile]] = File(
         None,
         description="Video file uploads",
@@ -269,4 +271,3 @@ async def process_videos_endpoint(
 
 
 __all__ = ["router"]
-

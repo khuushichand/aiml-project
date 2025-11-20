@@ -12,6 +12,8 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.media_code_deps import get_process_code_form
+from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessCodeForm
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.code_utils import (
     chunk_code_lines,
@@ -25,8 +27,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.result_normalization im
     normalize_process_batch,
 )
 
-# Reuse existing form model and helpers from the legacy module to preserve
-# behavior while gradually extracting endpoints into per-type modules.
 from tldw_Server_API.app.api.v1.endpoints import _legacy_media as legacy_media  # type: ignore
 
 router = APIRouter()
@@ -39,7 +39,7 @@ router = APIRouter()
 )
 async def process_code_endpoint(
     db: MediaDatabase = Depends(get_media_db_for_user),  # Parity with legacy signature
-    form_data: legacy_media.ProcessCodeForm = Depends(legacy_media.get_process_code_form),
+    form_data: ProcessCodeForm = Depends(get_process_code_form),
     files: Optional[List[UploadFile]] = File(
         None,
         description="Code uploads (.py, .c, .cpp, .java, .ts, etc.)",

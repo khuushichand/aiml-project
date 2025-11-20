@@ -16,7 +16,11 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
+    get_process_audios_form,
+)
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
+from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessAudiosForm
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Ingestion_Media_Processing.audio_batch import (
@@ -40,9 +44,7 @@ router = APIRouter()
 async def process_audios_endpoint(
     background_tasks: BackgroundTasks,
     db: MediaDatabase = Depends(get_media_db_for_user),
-    form_data: legacy_media.ProcessAudiosForm = Depends(  # type: ignore[attr-defined]
-        legacy_media.get_process_audios_form  # type: ignore[attr-defined]
-    ),
+    form_data: ProcessAudiosForm = Depends(get_process_audios_form),
     files: Optional[List[UploadFile]] = File(
         None,
         description="Audio file uploads",

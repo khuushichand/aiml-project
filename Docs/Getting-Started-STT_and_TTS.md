@@ -155,13 +155,43 @@ Troubleshooting
 - Missing dependencies
   - kokoro_onnx: `pip install kokoro-onnx`
   - onnxruntime: `pip install onnxruntime` (or `onnxruntime-gpu`)
-  - phonemizer / espeak-phonemizer: `pip install phonemizer espeak-phonemizer`
+ - phonemizer / espeak-phonemizer: `pip install phonemizer espeak-phonemizer`
 - `voices assets not found` or `model not found`: fix `voices` directory or model path in YAML.
 - `eSpeak lib not found`: install `espeak-ng` and set `PHONEMIZER_ESPEAK_LIBRARY` to the library path.
 - Adapter previously failed and won’t retry: we enable retry by default (`performance.adapter_failure_retry_seconds: 300`). Or restart the server after fixing assets.
 
 Notes
 - PyTorch variant (hexgrad/Kokoro-82M): set `use_onnx: false`, set `model_path: models/kokoro/kokoro-v1_0.pth`, ensure `config.json` sits alongside it, and set `voice_dir: models/kokoro/voices`. Requires `torch` and a compatible Kokoro PyTorch package. Set `device` to `cuda` or `mps` if available.
+
+### Kokoro Voice Mixing & Custom Voices
+
+Kokoro supports lightweight “blended” voices and additional custom voice profiles:
+
+- **Blend existing voices in a single request** using a mix pattern:
+  - Syntax: `voice_id1(weight1)+voice_id2(weight2)+...`
+  - Example (2 parts Bella, 1 part Adam):
+    ```bash
+    curl -sS -X POST http://127.0.0.1:8000/api/v1/audio/speech \
+      -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+            "model": "kokoro",
+            "voice": "af_bella(2)+am_adam(1)",
+            "input": "This is a blended Kokoro voice",
+            "response_format": "mp3"
+          }' \
+      --output kokoro_mix.mp3
+    ```
+  - You can mix more voices, for example: `af_bella(3)+am_adam(1)+bf_emma(2)`. The numbers are relative weights (2:1 is the same ratio as 4:2).
+
+- **Add custom Kokoro voices** if you have extra voice profiles from upstream Kokoro tools (e.g., Kokoro‑82M WebUI or other pipelines):
+  - Place the voice files under the configured voices directory, typically:
+    - ONNX: `models/kokoro/voices/*.bin`
+    - PyTorch: `models/kokoro/voices/*.pt`
+  - Restart the server; the adapter will auto-discover them and expose new voice IDs based on filenames (for example, `my_custom_voice.bin` → `voice: "my_custom_voice"`).
+  - You can then mix them exactly like built-in voices, for example: `"my_custom_voice(2)+af_bella(1)"`.
+
+> Tip: The `/api/v1/audio/voices/catalog` endpoint shows all available Kokoro voices, including dynamically discovered ones.
 
 ---
 

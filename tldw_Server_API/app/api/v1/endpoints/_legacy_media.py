@@ -120,6 +120,7 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
     UsageEventLogger,
 )
+from tldw_Server_API.app.api.v1.API_Deps.media_code_deps import get_process_code_form
 from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 
 # -----------------------------
@@ -127,17 +128,6 @@ from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 # -----------------------------
 # Rate limit tuning for search endpoint; must be defined after imports
 _SEARCH_RATE_LIMIT = "600/minute" if _is_test_mode() else "30/minute"
-
-
-class ProcessCodeForm(BaseModel):
-    urls: Optional[List[str]] = None
-    perform_chunking: bool = True
-    # Supports 'code' (structure-aware) and 'lines' (simple line windowing)
-    chunk_method: Optional[str] = Field(default='code', description="Chunk method for code: 'code' or 'lines'")
-    # For 'code' method, interpreted as max characters per chunk; for 'lines', interpreted as lines per chunk
-    chunk_size: int = Field(default=4000, description="Chunk size: chars for 'code', lines for 'lines'")
-    # Overlap is in characters for 'code' and in lines for 'lines'
-    chunk_overlap: int = Field(default=200, description="Overlap: chars for 'code', lines for 'lines'")
 
 CODE_ALLOWED_EXTENSIONS: Set[str] = {
     ".py",
@@ -212,36 +202,9 @@ async def list_media_endpoint(
         if_none_match=None,
     )
 
-# Dependency to parse multipart/form-data for code processing
-async def get_process_code_form(
-    urls: Optional[List[str]] = Form(None),
-    perform_chunking: bool = Form(True),
-    chunk_method: Optional[str] = Form('code'),
-    chunk_size: int = Form(4000),
-    chunk_overlap: int = Form(200),
-):
-    try:
-        return ProcessCodeForm(
-            urls=urls,
-            perform_chunking=perform_chunking,
-            chunk_method=chunk_method,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-        )
-    except ValidationError as e:
-        # Normalize Pydantic errors for API response
-        serializable_errors = []
-        for error in e.errors():
-            err = error.copy()
-            ctx = err.get('ctx')
-            if isinstance(ctx, dict):
-                err['ctx'] = {k: (str(v) if isinstance(v, Exception) else v) for k, v in ctx.items()}
-            serializable_errors.append(err)
-        raise HTTPException(status_code=HTTP_422_UNPROCESSABLE, detail=serializable_errors) from e
-
 async def process_code_endpoint(
     db: MediaDatabase = Depends(get_media_db_for_user),
-    form_data: ProcessCodeForm = Depends(get_process_code_form),
+    form_data: "ProcessCodeForm" = Depends(get_process_code_form),
     files: Optional[List[UploadFile]] = File(None, description="Code uploads (.py, .c, .cpp, .java, .ts, etc.)"),
 ):
     """
@@ -1125,6 +1088,8 @@ async def put_version_metadata(
     dependencies=[Depends(_validate_identifier_query)],
 )
 async def get_by_identifier(
+    request: Request,
+    response: FastAPIResponse,
     doi: Optional[str] = Query(None),
     pmid: Optional[str] = Query(None),
     pmcid: Optional[str] = Query(None),
@@ -1132,53 +1097,31 @@ async def get_by_identifier(
     s2_paper_id: Optional[str] = Query(None),
     group_by_media: bool = Query(True),
     db: Optional[MediaDatabase] = Depends(try_get_media_db_for_user),
+    if_none_match: Optional[str] = Header(None),
 ):
-    """Quick lookup by canonical identifiers. Returns latest matching version per media by default.
-
-    Example:
-      GET /api/v1/media/by-identifier?doi=10.1234/xyz
     """
-    try:
-        flt_list = []
-        # Build and normalize identifier filters
-        raw_filters = []
-        if doi: raw_filters.append({'field': 'doi', 'op': 'eq', 'value': doi})
-        if pmid: raw_filters.append({'field': 'pmid', 'op': 'eq', 'value': pmid})
-        if pmcid: raw_filters.append({'field': 'pmcid', 'op': 'eq', 'value': pmcid})
-        if arxiv_id: raw_filters.append({'field': 'arxiv_id', 'op': 'eq', 'value': arxiv_id})
-        if s2_paper_id: raw_filters.append({'field': 's2_paper_id', 'op': 'eq', 'value': s2_paper_id})
-        for f in raw_filters:
-            try:
-                norm = normalize_safe_metadata({f['field']: f['value']}) if f['field'] != 's2_paper_id' else {f['field']: f['value']}
-                # Prefer canonical lowercase identifier keys when present
-                canonical_order = ("doi", "pmid", "pmcid", "arxiv_id", "s2_paper_id")
-                key = next((k for k in canonical_order if k in norm), (f['field'] or '').lower())
-                val = norm.get(key, f['value'])
-                flt_list.append({'field': key, 'op': f['op'], 'value': val})
-            except ValueError as ve:
-                raise HTTPException(status_code=400, detail=str(ve))
-        if not flt_list:
-            raise HTTPException(status_code=400, detail="Provide at least one identifier")
-        if db is None:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Media DB initialization failed",
-            )
-        rows, total = db.search_by_safe_metadata(filters=flt_list, match_all=True, page=1, per_page=50, group_by_media=group_by_media)
-        import json as _json
-        for r in rows:
-            sm = r.get('safe_metadata')
-            if isinstance(sm, str):
-                try:
-                    r['safe_metadata'] = _json.loads(sm)
-                except Exception:
-                    r['safe_metadata'] = None
-        return {'results': rows, 'total': total}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Identifier lookup error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Error in identifier lookup")
+    Compatibility shim delegating to the modular media.listing implementation.
+
+    The actual identifier lookup behaviour (including normalization and ETag
+    handling) now lives in
+    ``tldw_Server_API.app.api.v1.endpoints.media.listing.get_by_identifier``.
+    """
+    from tldw_Server_API.app.api.v1.endpoints.media.listing import (  # noqa: WPS433
+        get_by_identifier as _get_by_identifier_impl,
+    )
+
+    return await _get_by_identifier_impl(
+        request=request,
+        response=response,
+        doi=doi,
+        pmid=pmid,
+        pmcid=pmcid,
+        arxiv_id=arxiv_id,
+        s2_paper_id=s2_paper_id,
+        group_by_media=group_by_media,
+        db=db,
+        if_none_match=if_none_match,
+    )
 
 
 @router.post(
@@ -1447,17 +1390,16 @@ async def list_all_media(
 )
 async def get_transcription_models():
     """
-    Get all available transcription models grouped by category.
+    Compatibility shim for the transcription models endpoint.
 
-    Delegates to the core ``get_transcription_models_payload`` helper
-    so the data definition lives under the core ingestion module while
-    preserving the original response envelope.
+    Delegates to the modular ``media.transcription_models`` endpoint so
+    the data definition and HTTP contract live in a single place.
     """
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.transcription_models import (  # type: ignore  # noqa: E501
-        get_transcription_models_payload,
+    from tldw_Server_API.app.api.v1.endpoints.media.transcription_models import (  # noqa: WPS433,E501
+        get_transcription_models as _get_transcription_models_impl,
     )
 
-    return get_transcription_models_payload()
+    return await _get_transcription_models_impl()
 
 
 # FIXME - Add an 'advanced search' option for searching by date range, media type, etc. - update DB schema to add new fields
@@ -1475,106 +1417,35 @@ async def get_transcription_models():
 # Use a higher rate limit during automated tests to avoid false 429s under load
 @limiter.limit(_SEARCH_RATE_LIMIT)
 async def search_media_items(
-        request: Request,
-        search_params: SearchRequest,
-        page: int = Query(1, ge=1, description="Page number"),
-        results_per_page: int = Query(10, ge=1, le=100, description="Results per page"),
-        db: MediaDatabase = Depends(get_media_db_for_user),
-        if_none_match: Optional[str] = Header(None) # For ETag
+    request: Request,
+    search_params: SearchRequest,
+    page: int = Query(1, ge=1, description="Page number"),
+    results_per_page: int = Query(10, ge=1, le=100, description="Results per page"),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    if_none_match: Optional[str] = Header(None),  # For ETag
 ):
     """
-    Search across media items based on various criteria.
-    The search is case-insensitive for LIKE queries and uses SQLite FTS capabilities.
-    Supports ETag-based caching.
+    Compatibility shim delegating to the modular media.listing implementation.
+
+    The actual search behaviour (including validation and ETag handling)
+    now lives in
+    ``tldw_Server_API.app.api.v1.endpoints.media.listing.search_media_items``.
     """
-    try:
-        # Prepare the text query for FTS or LIKE
-        query_text_for_match: Optional[str] = None
-        if search_params.exact_phrase:
-            # Ensure it's correctly quoted for FTS if it contains spaces or special chars
-            # Simple double quoting is a common approach for FTS exact phrase
-            query_text_for_match = f'"{search_params.exact_phrase.strip()}"'
-        elif search_params.query:
-            query_text_for_match = search_params.query.strip()
+    from tldw_Server_API.app.api.v1.endpoints.media.listing import (  # noqa: WPS433
+        search_media_items as _search_media_items_impl,
+    )
 
-        # Convert date_range from SearchRequest (which might have string dates from JSON)
-        # to datetime objects if they are not already. FastAPI usually handles this
-        # if the model field is `datetime`.
-        # Your `SearchRequest.date_range` is `Optional[Dict[str, datetime]]`
-        # so FastAPI should provide datetime objects directly.
-
-        # Call the enhanced database search function
-        items_data, total_items = db.search_media_db( # Ensure search_media_db is an instance method
-            search_query=query_text_for_match, # This will be the main text query for FTS/LIKE
-            # exact_phrase is handled by formatting query_text_for_match
-            search_fields=search_params.fields,
-            media_types=search_params.media_types,
-            date_range=search_params.date_range,
-            must_have_keywords=search_params.must_have,
-            must_not_have_keywords=search_params.must_not_have,
-            sort_by=search_params.sort_by,
-            # boost_fields=search_params.boost_fields, # Pass if DB layer supports it
-            page=page,
-            results_per_page=results_per_page,
-            include_trash=False, # Assuming search doesn't include trash by default
-            include_deleted=False # Assuming search doesn't include deleted by default
-        )
-
-        formatted_items = [
-            MediaListItem(
-                id=item["id"],
-                title=item["title"],
-                type=item["type"],
-                url=f"/api/v1/media/{item['id']}"
-            )
-            for item in items_data
-        ]
-
-        total_pages = ceil(total_items / results_per_page) if results_per_page > 0 and total_items > 0 else 0
-        current_page_for_response = page
-
-        pagination_info = PaginationInfo(
-            page=current_page_for_response,
-            results_per_page=results_per_page, # Ensure this matches PaginationInfo field name
-            total_pages=total_pages,
-            total_items=total_items
-        )
-
-        try:
-            response_obj = MediaListResponse(
-                items=formatted_items,
-                pagination=pagination_info
-            )
-
-            # Build payload and ETag; include legacy 'results' alias for compatibility
-            payload_dict = response_obj.model_dump()
-            payload_dict["results"] = payload_dict.get("items", [])
-
-            response_json = json.dumps(payload_dict)
-            current_etag = hashlib.md5(response_json.encode('utf-8')).hexdigest()
-
-            if if_none_match == current_etag:
-                return Response(status_code=status.HTTP_304_NOT_MODIFIED)
-
-            return Response(content=response_json, media_type="application/json", headers={"ETag": current_etag})
-
-
-        except ValidationError as ve:
-            logger.debug(f"Data causing validation error in search: items_count={len(formatted_items)}, pagination={pagination_info.model_dump_json(indent=2) if pagination_info else 'None'}")
-            logger.error(f"Pydantic validation error creating MediaListResponse for search: {ve.errors()}", exc_info=True)
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error: Response creation failed.")
-
-    except ValueError as ve:  # Catch custom ValueErrors from db.search_media_db or param validation
-        logger.warning(f"Invalid parameters for media search: {ve}", exc_info=True)
-        raise HTTPException(status_code=HTTP_422_UNPROCESSABLE, detail=str(ve)) from ve
-    except DatabaseError as e:
-        logger.error(f"Database error during media search: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="A database error occurred during the search.")
-    except HTTPException: # Re-raise HTTPExceptions directly
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error in search_media_items endpoint: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected internal server error occurred.")
+    # Reuse the canonical implementation by adapting the SearchRequest
+    # model into the dict payload it expects.
+    payload = search_params.model_dump(exclude_unset=True)
+    return await _search_media_items_impl(
+        request=request,
+        payload=payload,
+        page=page,
+        results_per_page=results_per_page,
+        db=db,
+        if_none_match=if_none_match,
+    )
 
 #
 # End of Bare Media Endpoint Functions/Routes
@@ -1696,7 +1567,7 @@ async def _process_batch_media(
     loop: asyncio.AbstractEventLoop,
     db_path: str,
     client_id: str,
-    temp_dir: Path # Pass temp_dir Path object
+    temp_dir: Path,  # Pass temp_dir Path object
 ) -> List[Dict[str, Any]]:
     """
     LEGACY-ONLY / not on any live code path; kept only as historical reference.
@@ -1706,6 +1577,10 @@ async def _process_batch_media(
     and the exported `_process_batch_media` name is rebound to a shim
     at the end of this file.
     """
+    raise RuntimeError(
+        "_process_batch_media legacy implementation is inactive; "
+        "the shim-bound core implementation should be used instead."
+    )
     combined_results = []
     all_processing_sources = urls + uploaded_file_paths
     items_to_process = [] # Sources that pass pre-check or overwrite=True
