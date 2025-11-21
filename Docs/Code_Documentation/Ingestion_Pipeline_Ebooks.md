@@ -62,7 +62,7 @@ print(book["status"], book.get("metadata", {}).get("title"))
 
 ## Endpoint Integration
 
-- `POST /api/v1/media/process-ebooks` (modular endpoint in `endpoints/media/process_ebooks.py`) prepares URLs/uploads and invokes `process_epub` per file using batch helpers in `core.Ingestion_Media_Processing.pipeline`.
+- `POST /api/v1/media/process-ebooks` (modular endpoint in `endpoints/media/process_ebooks.py`) prepares URLs/uploads and invokes `process_epub` per file for ephemeral processing.
 - Persistent ebook ingestion via `POST /api/v1/media/add` uses the shared `process_document_like_item(...)` helper in `core.Ingestion_Media_Processing.persistence`, which dispatches to `process_epub` and then calls `persist_doc_item_and_children(...)` to write results to the Media DB.
 
 Supported files: `.epub` (uploads and URLs). This endpoint forces chunking method `ebook_chapters` for ebooks.
