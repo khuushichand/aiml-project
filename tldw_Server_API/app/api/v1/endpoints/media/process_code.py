@@ -23,8 +23,9 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.code_utils import (
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.result_normalization import (
-    normalize_process_batch,
+from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
+    ProcessItem,
+    run_batch_processor,
 )
 
 from tldw_Server_API.app.api.v1.endpoints import _legacy_media as legacy_media  # type: ignore
@@ -62,10 +63,11 @@ async def process_code_endpoint(
     # Do not preemptively hard-fail entire batch on URL policy here.
     # URL safety is handled during per-item download to allow partial 207
     # batches in tests.
-    batch: Dict[str, Any] = {"processed_count": 0, "errors_count": 0, "errors": [], "results": []}
+    batch: Dict[str, Any] = {"errors": [], "results": []}
 
     with TempDirManager(cleanup=True, prefix="process_code_") as temp_dir_path:
         temp_dir = Path(temp_dir_path)
+        items: List[ProcessItem] = []
 
         # Handle uploads
         if files:
@@ -131,156 +133,18 @@ async def process_code_endpoint(
                         "db_message": "Processing only endpoint.",
                     }
                 )
-                batch["errors_count"] += 1
 
             for info in saved:
                 filename = info["original_filename"]
                 local_path = Path(info["path"])
-                language = detect_code_language(filename)
-                try:
-                    text = read_text_safe(local_path)
-                    if form_data.perform_chunking:
-                        if str(form_data.chunk_method or "code").lower() == "lines":
-                            chunks = chunk_code_lines(
-                                text,
-                                form_data.chunk_size,
-                                form_data.chunk_overlap,
-                                language,
-                            )
-                            op_status = "Success"
-                            op_warnings = None
-                        else:
-                            # Structure-aware code chunking via core Chunker with
-                            # metadata. On failure, fall back to simple line-based
-                            # chunking and downgrade status to Warning.
-                            from tldw_Server_API.app.core.Chunking.chunker import (  # noqa: WPS433
-                                Chunker,
-                                ChunkerConfig,
-                            )
-
-                            try:
-                                chunker = Chunker(
-                                    config=ChunkerConfig(
-                                        default_method="code",
-                                        default_max_size=form_data.chunk_size,
-                                        default_overlap=form_data.chunk_overlap,
-                                    )
-                                )
-                                crs = chunker.chunk_text_with_metadata(
-                                    text,
-                                    method="code",
-                                    max_size=form_data.chunk_size,
-                                    overlap=form_data.chunk_overlap,
-                                    language=language,
-                                )
-                                total = len(crs)
-                                chunks = []
-                                for idx, cr in enumerate(crs):
-                                    md = asdict(cr.metadata)
-                                    # Flatten options into metadata top-level for ease of use
-                                    opts = md.pop("options", {}) or {}
-                                    md.update(opts)
-                                    md.setdefault("chunk_method", "code")
-                                    md.setdefault("language", language)
-                                    # Ensure top-level start/end lines exist for convenience
-                                    if md.get("start_line") is None or md.get("end_line") is None:
-                                        try:
-                                            blocks = md.get("blocks") or []
-                                            starts = [
-                                                b.get("start_line")
-                                                for b in blocks
-                                                if isinstance(b, dict) and b.get("start_line") is not None
-                                            ]
-                                            ends = [
-                                                b.get("end_line")
-                                                for b in blocks
-                                                if isinstance(b, dict) and b.get("end_line") is not None
-                                            ]
-                                            if starts:
-                                                md["start_line"] = int(min(starts))
-                                            if ends:
-                                                md["end_line"] = int(max(ends))
-                                        except Exception:
-                                            pass
-                                    md["chunk_index"] = idx + 1
-                                    md["total_chunks"] = total
-                                    chunks.append({"text": cr.text, "metadata": md})
-                                op_status = "Success"
-                                op_warnings = None
-                            except Exception as code_chunk_err:  # pragma: no cover - rare fallback
-                                # Fallback: simple line-based chunking
-                                chunks = chunk_code_lines(
-                                    text,
-                                    form_data.chunk_size,
-                                    form_data.chunk_overlap,
-                                    language,
-                                )
-                                op_status = "Warning"
-                                op_warnings = [
-                                    "Structure-aware code chunker failed; "
-                                    f"fell back to line chunking: {code_chunk_err}"
-                                ]
-                    else:
-                        chunks = []
-                        op_status = "Success"
-                        op_warnings = None
-
-                    batch["results"].append(
-                        {
-                            "status": op_status,
-                            "input_ref": filename,
-                            "processing_source": str(local_path),
-                            "media_type": "code",
-                            "content": text,
-                            "metadata": {
-                                "language": language,
-                                "filename": filename,
-                                "lines": text.count("\n") + 1,
-                            },
-                            "chunks": chunks,
-                            "analysis": None,
-                            "keywords": None,
-                            "warnings": op_warnings,
-                            "analysis_details": {},
-                            "db_id": None,
-                            "db_message": "Processing only endpoint.",
-                        }
+                items.append(
+                    ProcessItem(
+                        input_ref=filename,
+                        local_path=local_path,
+                        media_type="code",
+                        metadata={"source": "upload"},
                     )
-                    batch["processed_count"] += 1
-                except Exception as exc:
-                    # TEST_MODE diagnostics for read errors after successful save
-                    try:
-                        if str(os.getenv("TEST_MODE", "")).lower() in {
-                            "1",
-                            "true",
-                            "yes",
-                            "on",
-                        }:
-                            logger.warning(
-                                "TEST_MODE: process-code read-error "
-                                f"file='{filename}' path='{local_path}': {type(exc).__name__}: {exc}"
-                            )
-                    except Exception:
-                        pass
-                    batch["results"].append(
-                        {
-                            "status": "Error",
-                            "input_ref": filename,
-                            "processing_source": str(local_path),
-                            "media_type": "code",
-                            "error": f"Failed to read code file: {exc}",
-                            "metadata": {},
-                            "content": None,
-                            "chunks": None,
-                            "analysis": None,
-                            "keywords": None,
-                            "warnings": None,
-                            "analysis_details": {},
-                            "db_id": None,
-                            "db_message": "Processing only endpoint.",
-                        }
-                    )
-                    batch["errors_count"] += 1
+                )
 
         # Handle URLs
         if urls:
@@ -325,119 +189,185 @@ async def process_code_endpoint(
                                 "db_message": "Processing only endpoint.",
                             }
                         )
-                        batch["errors_count"] += 1
                         continue
 
                     local_path = Path(res)
-                    language = detect_code_language(local_path.name)
+                    items.append(
+                        ProcessItem(
+                            input_ref=url,
+                            local_path=local_path,
+                            media_type="code",
+                            metadata={"source": "url"},
+                        )
+                    )
+
+        if not items and not batch["results"]:
+            # No valid inputs at all
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={**batch, "processed_count": 0, "errors_count": 0},
+            )
+        if not items and batch["results"]:
+            # Only validation/download errors; treat as partial failure
+            return JSONResponse(
+                status_code=status.HTTP_207_MULTI_STATUS,
+                content={**batch, "processed_count": 0, "errors_count": len(batch["results"])},
+            )
+
+        async def _code_batch_processor(
+            process_items: List[ProcessItem],
+        ) -> List[Dict[str, Any]]:
+            results: List[Dict[str, Any]] = []
+            for item in process_items:
+                local_path = item.local_path
+                input_ref = item.input_ref
+                filename = local_path.name
+                language = detect_code_language(filename)
+                try:
+                    text = read_text_safe(local_path)
+                except Exception as exc:
+                    # TEST_MODE diagnostics for read errors after successful save
                     try:
-                        text = read_text_safe(local_path)
-                        if form_data.perform_chunking:
-                            if str(form_data.chunk_method or "code").lower() == "lines":
-                                chunks = chunk_code_lines(
-                                    text,
-                                    form_data.chunk_size,
-                                    form_data.chunk_overlap,
-                                    language,
-                                )
-                            else:
-                                from tldw_Server_API.app.core.Chunking.chunker import (  # noqa: WPS433
-                                    Chunker,
-                                    ChunkerConfig,
-                                )
+                        if str(os.getenv("TEST_MODE", "")).lower() in {
+                            "1",
+                            "true",
+                            "yes",
+                            "on",
+                        }:
+                            logger.warning(
+                                "TEST_MODE: process-code read-error "
+                                f"file='{filename}' path='{local_path}': {type(exc).__name__}: {exc}"
+                            )
+                    except Exception:
+                        pass
+                    results.append(
+                        {
+                            "status": "Error",
+                            "input_ref": input_ref,
+                            "processing_source": str(local_path),
+                            "media_type": "code",
+                            "error": f"Failed to read code file: {exc}",
+                            "metadata": {},
+                            "content": None,
+                            "chunks": None,
+                            "analysis": None,
+                            "keywords": None,
+                            "warnings": None,
+                            "analysis_details": {},
+                            "db_id": None,
+                            "db_message": "Processing only endpoint.",
+                        }
+                    )
+                    continue
 
-                                chunker = Chunker(
-                                    config=ChunkerConfig(
-                                        default_method="code",
-                                        default_max_size=form_data.chunk_size,
-                                        default_overlap=form_data.chunk_overlap,
-                                    )
+                chunks = []
+                op_status = "Success"
+                op_warnings: Optional[List[str]] = None
+
+                if form_data.perform_chunking:
+                    if str(form_data.chunk_method or "code").lower() == "lines":
+                        chunks = chunk_code_lines(
+                            text,
+                            form_data.chunk_size,
+                            form_data.chunk_overlap,
+                            language,
+                        )
+                    else:
+                        from tldw_Server_API.app.core.Chunking.chunker import (  # noqa: WPS433
+                            Chunker,
+                            ChunkerConfig,
+                        )
+
+                        try:
+                            chunker = Chunker(
+                                config=ChunkerConfig(
+                                    default_method="code",
+                                    default_max_size=form_data.chunk_size,
+                                    default_overlap=form_data.chunk_overlap,
                                 )
-                                crs = chunker.chunk_text_with_metadata(
-                                    text,
-                                    method="code",
-                                    max_size=form_data.chunk_size,
-                                    overlap=form_data.chunk_overlap,
-                                    language=language,
-                                )
-                                total = len(crs)
-                                chunks = []
-                                for idx, cr in enumerate(crs):
-                                    md = asdict(cr.metadata)
-                                    opts = md.pop("options", {}) or {}
-                                    md.update(opts)
-                                    md.setdefault("chunk_method", "code")
-                                    md.setdefault("language", language)
-                                    if md.get("start_line") is None or md.get("end_line") is None:
-                                        try:
-                                            blocks = md.get("blocks") or []
-                                            starts = [
-                                                b.get("start_line")
-                                                for b in blocks
-                                                if isinstance(b, dict) and b.get("start_line") is not None
-                                            ]
-                                            ends = [
-                                                b.get("end_line")
-                                                for b in blocks
-                                                if isinstance(b, dict) and b.get("end_line") is not None
-                                            ]
-                                            if starts:
-                                                md["start_line"] = int(min(starts))
-                                            if ends:
-                                                md["end_line"] = int(max(ends))
-                                        except Exception:
-                                            pass
-                                    md["chunk_index"] = idx + 1
-                                    md["total_chunks"] = total
-                                    chunks.append({"text": cr.text, "metadata": md})
-                        else:
+                            )
+                            crs = chunker.chunk_text_with_metadata(
+                                text,
+                                method="code",
+                                max_size=form_data.chunk_size,
+                                overlap=form_data.chunk_overlap,
+                                language=language,
+                            )
+                            total = len(crs)
                             chunks = []
+                            for idx, cr in enumerate(crs):
+                                md = asdict(cr.metadata)
+                                opts = md.pop("options", {}) or {}
+                                md.update(opts)
+                                md.setdefault("chunk_method", "code")
+                                md.setdefault("language", language)
+                                if md.get("start_line") is None or md.get("end_line") is None:
+                                    try:
+                                        blocks = md.get("blocks") or []
+                                        starts = [
+                                            b.get("start_line")
+                                            for b in blocks
+                                            if isinstance(b, dict) and b.get("start_line") is not None
+                                        ]
+                                        ends = [
+                                            b.get("end_line")
+                                            for b in blocks
+                                            if isinstance(b, dict) and b.get("end_line") is not None
+                                        ]
+                                        if starts:
+                                            md["start_line"] = int(min(starts))
+                                        if ends:
+                                            md["end_line"] = int(max(ends))
+                                    except Exception:
+                                        pass
+                                md["chunk_index"] = idx + 1
+                                md["total_chunks"] = total
+                                chunks.append({"text": cr.text, "metadata": md})
+                        except Exception as code_chunk_err:  # pragma: no cover - rare fallback
+                            chunks = chunk_code_lines(
+                                text,
+                                form_data.chunk_size,
+                                form_data.chunk_overlap,
+                                language,
+                            )
+                            op_status = "Warning"
+                            op_warnings = [
+                                "Structure-aware code chunker failed; "
+                                f"fell back to line chunking: {code_chunk_err}"
+                            ]
 
-                        batch["results"].append(
-                            {
-                                "status": "Success",
-                                "input_ref": url,
-                                "processing_source": str(local_path),
-                                "media_type": "code",
-                                "content": text,
-                                "metadata": {
-                                    "language": language,
-                                    "filename": local_path.name,
-                                    "lines": text.count("\n") + 1,
-                                },
-                                "chunks": chunks,
-                                "analysis": None,
-                                "keywords": None,
-                                "warnings": None,
-                                "analysis_details": {},
-                                "db_id": None,
-                                "db_message": "Processing only endpoint.",
-                            }
-                        )
-                        batch["processed_count"] += 1
-                    except Exception as exc:
-                        batch["results"].append(
-                            {
-                                "status": "Error",
-                                "input_ref": url,
-                                "processing_source": str(local_path),
-                                "media_type": "code",
-                                "error": f"Failed to read code file: {exc}",
-                                "metadata": {},
-                                "content": None,
-                                "chunks": None,
-                                "analysis": None,
-                                "keywords": None,
-                                "warnings": None,
-                                "analysis_details": {},
-                                "db_id": None,
-                                "db_message": "Processing only endpoint.",
-                            }
-                        )
-                        batch["errors_count"] += 1
+                results.append(
+                    {
+                        "status": op_status,
+                        "input_ref": input_ref,
+                        "processing_source": str(local_path),
+                        "media_type": "code",
+                        "content": text,
+                        "metadata": {
+                            "language": language,
+                            "filename": filename,
+                            "lines": text.count("\n") + 1,
+                        },
+                        "chunks": chunks,
+                        "analysis": None,
+                        "keywords": None,
+                        "warnings": op_warnings,
+                        "analysis_details": {},
+                        "db_id": None,
+                        "db_message": "Processing only endpoint.",
+                    }
+                )
 
-    # Normalize batch ordering and ensure standard counters exist.
-    batch = normalize_process_batch(batch)
+            return results
+
+        # Use shared batch processor to compute counts and ordering while the
+        # temporary directory is still available.
+        batch = await run_batch_processor(
+            items=items,
+            processor=_code_batch_processor,
+            base_batch={"results": batch["results"], "errors": batch["errors"]},
+        )
+
     final_status = (
         status.HTTP_200_OK
         if (batch["processed_count"] > 0 and batch["errors_count"] == 0)

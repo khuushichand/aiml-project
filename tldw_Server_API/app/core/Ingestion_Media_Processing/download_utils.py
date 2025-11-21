@@ -10,7 +10,7 @@ import httpx
 from loguru import logger
 
 from tldw_Server_API.app.core.testing import is_test_mode
-
+from tldw_Server_API.app.core.http_client import afetch as _m_afetch, adownload as _m_adownload, DEFAULT_MAX_REDIRECTS as _DEFAULT_MAX_REDIRECTS
 
 async def download_url_async(
     client: Optional[httpx.AsyncClient],
@@ -46,7 +46,39 @@ async def download_url_async(
     except Exception:
         seed_segment = f"downloaded_{hash(url)}.tmp"
 
-    # Use provided client when available; otherwise create a short-lived one.
+    test_mode_active = bool(is_test_mode()) or bool(__import__("os").getenv("PYTEST_CURRENT_TEST"))
+
+    # When a client is provided, reuse the richer legacy-style logic so behaviour
+    # matches `_legacy_media._download_url_async` (including offline stubs) in both
+    # legacy-enabled and legacy-free modes.
+    if client is not None:
+        try:
+            from tldw_Server_API.app.api.v1.endpoints._legacy_media import (  # type: ignore
+                _download_url_async as _legacy_download,
+            )
+        except Exception:
+            _legacy_download = None  # type: ignore[assignment]
+
+        if _legacy_download is not None:
+            return await _legacy_download(  # type: ignore[return-value]
+                client=client,
+                url=url,
+                target_dir=target_dir,
+                allowed_extensions=allowed_extensions,
+                check_extension=check_extension,
+                disallow_content_types=disallow_content_types,
+                allow_redirects=allow_redirects,
+            )
+
+    # No client supplied (or legacy helper unavailable): create one and delegate
+    # back into this helper so that tests which patch the media shim still see
+    # consistent behaviour.
+    owns_client = False
+    if client is None:
+        timeout = httpx.Timeout(60.0)
+        client = httpx.AsyncClient(timeout=timeout, follow_redirects=False)
+        owns_client = True
+
     owns_client = False
     if client is None:
         timeout = httpx.Timeout(60.0)

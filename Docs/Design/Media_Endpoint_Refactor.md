@@ -36,10 +36,14 @@
     - Other:
       - `ingest_web_content.py`, `debug.py`, `transcription_models.py`.
 
-- Shim module:
-  - `tldw_Server_API/app/api/v1/endpoints/media.py`
-  - Very small file that imports `router` from `endpoints/media/__init__.py` so existing imports of
-    `tldw_Server_API.app.api.v1.endpoints.media` continue to work.
+- Shim package entry:
+  - Importing `tldw_Server_API.app.api.v1.endpoints.media` resolves to the
+    `media/__init__.py` package shim, not a separate `media.py` file.
+  - That `__init__.py` file builds the combined router (modular endpoints
+    plus optional `_legacy_media` router) and re-exports a small set of
+    helpers (`_download_url_async`, `_save_uploaded_files`, `TempDirManager`,
+    `file_validator_instance`, cache helpers, and processor shims) so
+    existing imports of `...endpoints.media` continue to work.
 
 ### Core Ingestion and Persistence Helpers
 
@@ -78,6 +82,43 @@
       - Provides TEST_MODE stubs for selected hosts so JSON/document tests do not require real network access.
   - `result_normalization.py`, `pipeline.py`
     - `MediaItemProcessResponse`, `ProcessItem`, `run_batch_processor(...)` – unify batch semantics and counters for process-only endpoints.
+
+### Process-Only Endpoint Patterns (Current State)
+
+- Shared pipeline pattern:
+  - `process_pdfs.py`, `process_ebooks.py`, `process_emails.py`:
+    - Use `TempDirManager` + `media._save_uploaded_files` to stage inputs.
+    - Build `ProcessItem` instances and call `run_batch_processor(...)`
+      around the existing per-type processors, preserving legacy result
+      envelopes and 200/207/400 status semantics.
+  - `process_documents.py`:
+    - Uses the same staging helpers plus `media._download_url_async` for
+      URL inputs, then builds `ProcessItem` items and calls
+      `run_batch_processor(...)` with a `_document_batch_processor` that
+      bridges to `Plaintext_Files.process_document_content` and normalizes
+      batch results.
+  - `process_code.py`:
+    - Uses `TempDirManager` + `media._save_uploaded_files` /
+      `media._download_url_async`, builds `ProcessItem` items, then runs
+      them through `run_batch_processor(...)` with a per-item processor
+      that performs language detection and line/code chunking while keeping
+      the legacy batch envelope and counters.
+
+- Intentional bespoke/exception cases:
+  - `process_audios.py`, `process_videos.py`:
+    - Use the shared upload/TempDir helpers but delegate orchestration to
+      the core audio/video batch helpers that also power `/media/add`
+      (rather than `run_batch_processor(...)`), so A/V processing remains
+      aligned between process-only and ingest-and-persist flows.
+  - `process_mediawiki.py`:
+    - Implements streaming NDJSON-style responses for MediaWiki imports and
+      does not use `run_batch_processor(...)`; this is an intentional
+      divergence due to long-running, incremental processing.
+  - `process_web_scraping.py`:
+    - Delegates to the web scraping service layer for orchestration and
+      returns already-normalized batch results; it does not go through
+      `run_batch_processor(...)` and is treated as a documented special
+      case.
 
 ## Media Shim Behavior (`endpoints/media/__init__.py`)
 

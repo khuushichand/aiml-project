@@ -1194,7 +1194,7 @@ async def _persist_claims_if_applicable(
         process_result=process_result,
     )
 
-async def _process_batch_media_disabled(
+async def _process_batch_media_legacy_disabled(
     media_type: MediaType,
     urls: List[str],
     uploaded_file_paths: List[str],
@@ -1219,12 +1219,6 @@ async def _process_batch_media_disabled(
         "_process_batch_media_disabled is no longer active; "
         "use core.Ingestion_Media_Processing.persistence.process_batch_media instead.",
     )
-
-
-# Backwards-compatibility alias for any imports that still reference the
-# original `_process_batch_media` name. The implementation is not used on
-# any live HTTP code path.
-_process_batch_media = _process_batch_media_disabled
 
 
 async def _process_document_like_item(
@@ -1278,7 +1272,7 @@ def _determine_final_status(results: List[Dict[str, Any]]) -> int:
     return determine_add_media_final_status(results)
 
 
-async def _add_media_impl(
+async def _add_media_impl_legacy(
     background_tasks: BackgroundTasks,
     # # --- Required Fields ---
     # #media_type: MediaType = Form(..., description="Type of media (e.g., 'audio', 'video', 'pdf')"),
@@ -2463,6 +2457,9 @@ async def process_emails_endpoint(
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (  # noqa: E402
     get_process_documents_form,
 )
+from tldw_Server_API.app.api.v1.schemas.media_request_models import (  # noqa: E402
+    ProcessDocumentsForm,
+)
 
 
 # ─────────────────────── Endpoint Implementation ────────────────
@@ -3391,557 +3388,31 @@ async def _download_url_async(
         client: Optional[httpx.AsyncClient],
         url: str,
         target_dir: Path,
-        allowed_extensions: Optional[Set[str]] = None,  # Use a Set for faster lookups
-        check_extension: bool = True,  # Flag to enable/disable check
-        disallow_content_types: Optional[Set[str]] = None,  # Optional set of content-types to reject for inference
+        allowed_extensions: Optional[Set[str]] = None,
+        check_extension: bool = True,
+        disallow_content_types: Optional[Set[str]] = None,
         allow_redirects: bool = True,
 ) -> Path:
     """
-    Downloads a URL asynchronously and saves it to the target directory.
-    Optionally validates the file extension against a set of allowed extensions.
+    Backwards-compatible shim that delegates to the core helper.
+
+    All rich behaviour (TEST_MODE stubs, content-type/extension logic,
+    and redirect handling) now lives in
+    `core.Ingestion_Media_Processing.download_utils.download_url_async`.
     """
-    if allowed_extensions is None:
-        allowed_extensions = set()  # Default to empty set if None
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
+        download_url_async as _core_download,
+    )
 
-    # Generate a safe filename (defer final naming until after we see headers)
-    test_mode_active = _is_test_mode() or bool(os.getenv("PYTEST_CURRENT_TEST"))
-    try:
-        # Extract last path segment from original URL as a fallback seed
-        try:
-            url_path_segment = httpx.URL(url).path.split('/')[-1]
-            seed_segment = url_path_segment or f"downloaded_{hash(url)}.tmp"
-        except Exception:  # Broad catch for URL parsing issues
-            seed_segment = f"downloaded_{hash(url)}.tmp"
-
-        # If a client is provided, use a single GET stream to both infer
-        # filename/extension (from headers + final URL) and to download bytes.
-        # Otherwise, fall back to HEAD + centralized adownload helper.
-        if client is not None:
-            # Test-mode offline stub for well-known public hosts when networking is disabled in CI
-            try:
-                _u = httpx.URL(url)
-                _host = (_u.host or "").lower()
-            except Exception:
-                _host = ""
-                _u = None
-            # Avoid hard-coded failures for example.com when a client is supplied;
-            # tests commonly use example.com with MockTransport.
-            # Simulate redirect behavior for httpstat.us in tests to avoid network egress
-            if test_mode_active and _host in {"httpstat.us", "www.httpstat.us"}:
-                raise ValueError(
-                    f"Redirect encountered while downloading {url}; redirects not followed in test mode.")
-            if test_mode_active and _host in {"raw.githubusercontent.com"}:
-                # Derive a candidate filename and extension
-                path_seg = _u.path.split('/')[-1] if _u is not None else ""
-                candidate_name = path_seg or f"downloaded_{hash(url)}.txt"
-                # Sanitize
-                candidate_name = "".join(c if c.isalnum() or c in ('-', '_', '.') else '_' for c in candidate_name)
-                effective_suffix = FilePath(candidate_name).suffix.lower() or ".txt"
-                if allowed_extensions and effective_suffix not in allowed_extensions:
-                    for pref in (".txt", ".md"):
-                        if pref in allowed_extensions:
-                            base = FilePath(candidate_name).stem
-                            candidate_name = f"{base}{pref}"
-                            effective_suffix = pref
-                            break
-                    else:
-                        try:
-                            first = sorted(allowed_extensions)[0]
-                            base = FilePath(candidate_name).stem
-                            candidate_name = f"{base}{first}"
-                            effective_suffix = first
-                        except Exception:
-                            pass
-                target_path = target_dir / candidate_name
-                # Build small deterministic content to satisfy assertions
-                lower_path = (path_seg or "").lower()
-                if "license" in lower_path:
-                    content = "This is a LICENSE file for testing; license terms apply.\n"
-                elif lower_path.endswith(".md") or "readme" in lower_path:
-                    content = "# FastAPI\n\nThis is a README stub used in tests.\n"
-                else:
-                    content = "OK test content\n"
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                target_path.write_text(content, encoding="utf-8")
-                return target_path
-            if test_mode_active and _host in {"www.w3.org", "w3.org"}:
-                # Offline-friendly stub for the W3C dummy PDF used in tests.
-                # When networking is unavailable, synthesize a small local PDF
-                # so process-only endpoints can still exercise their pipelines.
-                try:
-                    tests_root = FilePath(__file__).resolve().parents[4] / "tests"
-                    sample_pdf = (
-                        tests_root
-                        / "Media_Ingestion_Modification"
-                        / "test_media"
-                        / "sample.pdf"
-                    )
-                    candidate_name = "dummy_test.pdf"
-                    target_path = target_dir / candidate_name
-                    target_path.parent.mkdir(parents=True, exist_ok=True)
-                    if sample_pdf.is_file():
-                        target_path.write_bytes(sample_pdf.read_bytes())
-                    else:
-                        # Minimal PDF stub; robust parsers tolerate this structure.
-                        target_path.write_bytes(
-                            b"%PDF-1.4\n% Test PDF\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
-                        )
-                    return target_path
-                except Exception:
-                    # Fall through to the normal network path on any failure.
-                    pass
-            if test_mode_active and _host in {"filesamples.com", "www.filesamples.com"}:
-                # Offline-friendly stub for the public EPUB used in tests.
-                # When networking is unavailable, copy the bundled sample
-                # EPUB into the target directory so ebook processing tests
-                # can still exercise the pipeline.
-                try:
-                    tests_root = FilePath(__file__).resolve().parents[4] / "tests"
-                    sample_epub = (
-                        tests_root
-                        / "Media_Ingestion_Modification"
-                        / "test_media"
-                        / "sample.epub"
-                    )
-                    candidate_name = sample_epub.name if sample_epub.is_file() else "sample.epub"
-                    target_path = target_dir / candidate_name
-                    target_path.parent.mkdir(parents=True, exist_ok=True)
-                    if sample_epub.is_file():
-                        target_path.write_bytes(sample_epub.read_bytes())
-                    else:
-                        target_path.write_text(
-                            "EPUB STUB for offline tests\n",
-                            encoding="utf-8",
-                        )
-                    return target_path
-                except Exception:
-                    # Fall through to the normal network path on any failure.
-                    pass
-            if test_mode_active and _host in {"cdn.pixabay.com", "pixabay.com"}:
-                # Offline-friendly stub for the public audio URL used in tests.
-                # When networking is unavailable, copy the bundled sample audio
-                # file into the target directory so /process-audios can still
-                # exercise its pipeline.
-                try:
-                    tests_root = FilePath(__file__).resolve().parents[4] / "tests"
-                    sample_audio = (
-                        tests_root
-                        / "Media_Ingestion_Modification"
-                        / "test_media"
-                        / "sample.mp3"
-                    )
-                    candidate_name = sample_audio.name if sample_audio.is_file() else "sample.mp3"
-                    target_path = target_dir / candidate_name
-                    target_path.parent.mkdir(parents=True, exist_ok=True)
-                    if sample_audio.is_file():
-                        target_path.write_bytes(sample_audio.read_bytes())
-                    else:
-                        target_path.write_bytes(b"FAKE_AUDIO_DATA_FOR_OFFLINE_TESTS")
-                    return target_path
-                except Exception:
-                    # Fall through to the normal network path on any failure.
-                    pass
-            final_url = url
-            if not test_mode_active:
-                try:
-                    _probe_headers = {"Range": "bytes=0-0"}
-                    # Probe without following redirects to avoid external redirect loops
-                    # (e.g., http -> https) causing retries/timeouts. The actual GET stream
-                    # below has redirect checks and runs with follow_redirects=False.
-                    probe = await _m_afetch(
-                        method="GET",
-                        url=url,
-                        headers=_probe_headers,
-                        client=None,
-                        timeout=10.0,
-                        allow_redirects=False,
-                    )
-                    try:
-                        final_url = str(getattr(probe, "request", probe).url)
-                    except Exception:
-                        final_url = url
-                    finally:
-                        try:
-                            await probe.aclose()
-                        except Exception:
-                            pass
-                except Exception:
-                    final_url = url
-            # Resolve safe redirects manually before streaming body to disk
-            max_redirects = int(os.getenv("HTTP_MAX_REDIRECTS", str(_DEFAULT_MAX_REDIRECTS)))
-            # Allow overrides from config/env
-            env_allow_redirects = os.getenv("HTTP_ALLOW_REDIRECTS")
-            if env_allow_redirects is not None:
-                allow_redirects = str(env_allow_redirects).strip().lower() in {"1", "true", "yes", "on"}
-            allow_cross_host = str(os.getenv("HTTP_ALLOW_CROSS_HOST_REDIRECTS", "")).strip().lower() in {"1", "true", "yes", "on"}
-            allow_downgrade = str(os.getenv("HTTP_ALLOW_SCHEME_DOWNGRADE", "")).strip().lower() in {"1", "true", "yes", "on"}
-            cur_url = final_url
-            redirects = 0
-
-            def _redirect_allowed(prev: str, nxt: str) -> bool:
-                try:
-                    pu = httpx.URL(prev)
-                    nu = httpx.URL(nxt)
-                except Exception:
-                    return False
-                # Disallow scheme downgrade
-                if not allow_downgrade and (pu.scheme or "").lower() == "https" and (nu.scheme or "").lower() == "http":
-                    return False
-                # Allow same-host redirects; allow http->https upgrade on same host
-                if (pu.host or "").lower() == (nu.host or "").lower():
-                    return True
-                # Cross-host redirects configurable (default disabled)
-                return bool(allow_cross_host)
-
-            # Follow redirects (headers-only) to find final download URL, if the client supports request()
-            supports_request = hasattr(client, "request") and callable(getattr(client, "request", None))
-            if supports_request:
-                while True:
-                    r = await client.request("GET", cur_url, follow_redirects=False, timeout=30.0)
-                    try:
-                        # Some servers return 3xx without error on raise_for_status; tolerate
-                        try:
-                            r.raise_for_status()
-                        except Exception:
-                            pass
-                        sc = int(getattr(r, "status_code", 200) or 200)
-                        if 300 <= sc < 400:
-                            if not allow_redirects:
-                                raise ValueError(f"Redirect encountered while downloading {cur_url}; redirects disabled.")
-                            loc = r.headers.get("location")
-                            if not loc:
-                                raise ValueError("Redirect without Location header")
-                            try:
-                                nxt = str(r.request.url.join(httpx.URL(loc)))
-                            except Exception:
-                                try:
-                                    nxt = str(httpx.URL(loc))
-                                except Exception:
-                                    raise ValueError("Invalid redirect Location header")
-                            if not _redirect_allowed(cur_url, nxt):
-                                raise ValueError("Redirect not allowed by policy (cross-host or downgrade)")
-                            redirects += 1
-                            if redirects > max_redirects:
-                                raise ValueError("Too many redirects")
-                            cur_url = nxt
-                            continue
-                        # Non-redirect: use this URL for streaming
-                        break
-                    finally:
-                        try:
-                            await r.aclose()
-                        except Exception:
-                            pass
-
-            async with client.stream("GET", cur_url, follow_redirects=False, timeout=60.0) as get_resp:
-                # Rely on raise_for_status; some test stubs don't expose status_code
-                try:
-                    get_resp.raise_for_status()
-                except Exception:
-                    # Allow tests' minimal stubs that implement no-op raise_for_status
-                    pass
-                # Avoid hard dependency on status_code attribute for redirect detection in tests
-                try:
-                    _sc = int(getattr(get_resp, "status_code", 200) or 200)
-                except Exception:
-                    _sc = 200
-                if 300 <= _sc < 400:
-                    # Should not happen because we resolved redirects just above, but guard anyway
-                    raise ValueError(
-                        f"Redirect encountered while downloading {cur_url}; redirects must be resolved pre-stream.")
-
-                # Decide final filename using (1) Content-Disposition, (2) final response URL path, (3) original seed
-                candidate_name = None
-                content_disposition = get_resp.headers.get('content-disposition')
-                if content_disposition:
-                    # Try RFC 5987 filename* then fallback to filename
-                    match_star = re.search(r"filename\*=(?:[^']*'[^']*')?([^;]+)", content_disposition, flags=re.IGNORECASE)
-                    if match_star:
-                        from urllib.parse import unquote
-                        candidate_name = unquote(match_star.group(1).strip().strip('"\''))
-                    if not candidate_name:
-                        match_q = re.search(r'filename\s*=\s*"([^"]+)"', content_disposition, flags=re.IGNORECASE)
-                        if match_q:
-                            candidate_name = match_q.group(1)
-                        else:
-                            match_u = re.search(r'filename\s*=\s*([^;\s]+)', content_disposition, flags=re.IGNORECASE)
-                            candidate_name = (match_u.group(1) if match_u else None)
-
-                if not candidate_name:
-                    try:
-                        final_path_seg = getattr(get_resp, 'url', httpx.URL(url)).path.split('/')[-1]
-                        candidate_name = final_path_seg or seed_segment
-                    except Exception:
-                        candidate_name = seed_segment
-
-                # Basic sanitization
-                candidate_name = "".join(c if c.isalnum() or c in ('-', '_', '.') else '_' for c in candidate_name)
-
-                # Determine effective suffix with fallbacks based on GET response
-                effective_suffix = FilePath(candidate_name).suffix.lower()
-                if check_extension and allowed_extensions:
-                    if not effective_suffix or effective_suffix not in allowed_extensions:
-                        # Attempt to derive from final response URL path
-                        try:
-                            alt_seg = getattr(get_resp, 'url', httpx.URL(url)).path.split('/')[-1]
-                            alt_suffix = FilePath(alt_seg).suffix.lower()
-                        except Exception:
-                            alt_suffix = ''
-                        if alt_suffix and alt_suffix in allowed_extensions:
-                            effective_suffix = alt_suffix
-                            base = FilePath(candidate_name).stem
-                            candidate_name = f"{base}{effective_suffix}"
-                        else:
-                            # Use Content-Type header for known mappings
-                            content_type = (get_resp.headers.get('content-type') or '').split(';')[0].strip().lower()
-                            if disallow_content_types and content_type in disallow_content_types:
-                                allowed_list = ', '.join(sorted(allowed_extensions or [])) or '*'
-                                raise ValueError(
-                                    f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
-                            content_type_map = {
-                                'application/epub+zip': '.epub',
-                                'application/pdf': '.pdf',
-                                'text/plain': '.txt',
-                                'text/markdown': '.md',
-                                'text/x-markdown': '.md',
-                                'text/html': '.html',
-                                'application/xhtml+xml': '.html',
-                                'application/xml': '.xml',
-                                'text/xml': '.xml',
-                                'application/rtf': '.rtf',
-                                'text/rtf': '.rtf',
-                                'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-                                'application/json': '.json',
-                            }
-                            mapped_ext = content_type_map.get(content_type)
-                            if mapped_ext and (mapped_ext in allowed_extensions):
-                                effective_suffix = mapped_ext
-                                base = FilePath(candidate_name).stem
-                                candidate_name = f"{base}{effective_suffix}"
-                            else:
-                                allowed_list = ', '.join(sorted(allowed_extensions))
-                                raise ValueError(
-                                    f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
-
-                # Finalize target path and ensure uniqueness
-                target_path = target_dir / (candidate_name or seed_segment)
-                counter = 1
-                base_name = target_path.stem
-                suffix = target_path.suffix
-                while target_path.exists():
-                    target_path = target_dir / f"{base_name}_{counter}{suffix}"
-                    counter += 1
-
-                # Stream body to file
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                async with aiofiles.open(target_path, 'wb') as f:
-                    async for chunk in get_resp.aiter_bytes():
-                        if chunk:
-                            await f.write(chunk)
-
-                logger.info(f"Successfully downloaded {url} to {target_path}")
-                return target_path
-
-        # Fallback: no client provided. Prefer HEAD for naming; if it fails, stream download with a fresh client.
-        response = None
-        try:
-            _probe_headers = {"Range": "bytes=0-0"}
-            # Do not follow redirects in the lightweight probe to avoid
-            # redirect ping-pong (e.g., http->https) and long retries.
-            # We only need headers here; the main GET (below) already
-            # performs explicit redirect checks with follow_redirects=False.
-            head_resp = await _m_afetch(
-                method="GET",
-                url=url,
-                headers=_probe_headers,
-                timeout=10.0,
-                allow_redirects=False,
-            )
-
-            class _RespLike:
-                def __init__(self, u, headers):
-                    self.url = u
-                    self.headers = headers
-
-            # Use the resolved request URL (after redirects) so filenames/extensions reflect the final destination.
-            resolved_url = None
-            try:
-                resolved_url = getattr(head_resp, "request", head_resp).url
-            except Exception:
-                resolved_url = getattr(head_resp, "url", None)
-            if resolved_url is None:
-                resolved_url = httpx.URL(url)
-            response = _RespLike(resolved_url, head_resp.headers)
-            try:
-                await head_resp.aclose()
-            except Exception:
-                pass
-        except Exception:
-            response = None
-
-        if response is None:
-            temp_client = _m_create_async_client()
-            try:
-                return await _download_url_async(
-                    client=temp_client,
-                    url=url,
-                    target_dir=target_dir,
-                    allowed_extensions=allowed_extensions,
-                    check_extension=check_extension,
-                    disallow_content_types=disallow_content_types,
-                    allow_redirects=allow_redirects,
-                )
-            finally:
-                try:
-                    await temp_client.aclose()
-                except Exception:
-                    pass
-
-        # Decide final filename using (1) Content-Disposition, (2) final response URL path, (3) original seed
-        candidate_name = None
-        content_disposition = response.headers.get('content-disposition')
-        if content_disposition:
-            # Try RFC 5987 filename* then fallback to filename
-            # e.g., filename*=UTF-8''file.json OR filename*=UTF-8'en'US'file.json
-            match_star = re.search(r"filename\*=(?:[^']*'[^']*')?([^;]+)", content_disposition, flags=re.IGNORECASE)
-            if match_star:
-                from urllib.parse import unquote
-                candidate_name = unquote(match_star.group(1).strip().strip('"\''))
-            if not candidate_name:
-                # Quoted filename= "file.json"
-                match_q = re.search(r'filename\s*=\s*"([^"]+)"', content_disposition, flags=re.IGNORECASE)
-                if match_q:
-                    candidate_name = match_q.group(1)
-                else:
-                    # Unquoted filename=file.json
-                    match_u = re.search(r'filename\s*=\s*([^;\s]+)', content_disposition, flags=re.IGNORECASE)
-                    candidate_name = (match_u.group(1) if match_u else None)
-
-        if not candidate_name:
-            try:
-                final_path_seg = response.url.path.split('/')[-1]
-                candidate_name = final_path_seg or seed_segment
-            except Exception:
-                candidate_name = seed_segment
-
-        # Basic sanitization
-        candidate_name = "".join(c if c.isalnum() or c in ('-', '_', '.') else '_' for c in candidate_name)
-
-        # Determine effective suffix with fallbacks
-        effective_suffix = FilePath(candidate_name).suffix.lower()
-        # If suffix missing or not allowed, try alternatives
-        if check_extension and allowed_extensions:
-            if not effective_suffix or effective_suffix not in allowed_extensions:
-                # Attempt to derive from response URL path
-                try:
-                    alt_seg = response.url.path.split('/')[-1]
-                    alt_suffix = FilePath(alt_seg).suffix.lower()
-                except Exception:
-                    alt_suffix = ''
-                if alt_suffix and alt_suffix in allowed_extensions:
-                    effective_suffix = alt_suffix
-                    # ensure filename has this suffix
-                    base = FilePath(candidate_name).stem
-                    candidate_name = f"{base}{effective_suffix}"
-                else:
-                    # As a last resort, rely on Content-Type for known mappings
-                    content_type = response.headers.get('content-type', '').split(';')[0].strip().lower()
-                    # Special-case: avoid accepting generic example.com HTML with no extension
-                    try:
-                        host = getattr(response.url, 'host', None) or getattr(response.url, 'hostname', None)
-                    except Exception:
-                        host = None
-                    if isinstance(host, str) and host.lower() in {"example.com", "www.example.com"}:
-                        allowed_list = ', '.join(sorted(allowed_extensions or [])) or '*'
-                        raise ValueError(
-                            f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
-                    # If the caller provided disallowed content-types (e.g., text/html for documents), enforce here
-                    if disallow_content_types and content_type in disallow_content_types:
-                        allowed_list = ', '.join(sorted(allowed_extensions or [])) or '*'
-                        raise ValueError(
-                            f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
-                    content_type_map = {
-                        'application/epub+zip': '.epub',
-                        'application/pdf': '.pdf',
-                        'text/plain': '.txt',
-                        'text/markdown': '.md',
-                        'text/x-markdown': '.md',
-                        'text/html': '.html',
-                        'application/xhtml+xml': '.html',
-                        'application/xml': '.xml',
-                        'text/xml': '.xml',
-                        'application/rtf': '.rtf',
-                        'text/rtf': '.rtf',
-                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-                        'application/json': '.json',
-                    }
-                    mapped_ext = content_type_map.get(content_type)
-                    if mapped_ext and (mapped_ext in allowed_extensions):
-                        effective_suffix = mapped_ext
-                        base = FilePath(candidate_name).stem
-                        candidate_name = f"{base}{effective_suffix}"
-                    else:
-                        allowed_list = ', '.join(sorted(allowed_extensions))
-                        raise ValueError(
-                            f"Downloaded file from {url} does not have an allowed extension (allowed: {allowed_list}); content-type '{content_type}' unsupported for this endpoint")
-
-        # Finalize target path and ensure uniqueness
-        target_path = target_dir / (candidate_name or seed_segment)
-        counter = 1
-        base_name = target_path.stem
-        suffix = target_path.suffix
-        while target_path.exists():
-            target_path = target_dir / f"{base_name}_{counter}{suffix}"
-            counter += 1
-
-        # Download the body using the standard streaming path to avoid code duplication
-        temp_client = _m_create_async_client()
-        try:
-            return await _download_url_async(
-                client=temp_client,
-                url=str(response.url),
-                target_dir=target_dir,
-                allowed_extensions=allowed_extensions,
-                check_extension=check_extension,
-                disallow_content_types=disallow_content_types,
-                allow_redirects=allow_redirects,
-            )
-        finally:
-            try:
-                await temp_client.aclose()
-            except Exception:
-                pass
-
-    except httpx.HTTPStatusError as e:
-        logger.error(
-            f"HTTP error downloading {url}: {e.response.status_code} - {e.response.text[:200]}...")
-        if 'target_path' in locals() and target_path.exists():
-            try:
-                target_path.unlink()
-            except OSError as e2:
-                logger.debug(f"Failed to remove temporary file {target_path}: {e2}")
-        raise ConnectionError(f"HTTP error {e.response.status_code} for {url}") from e
-    except httpx.RequestError as e:
-        logger.error(f"Request error downloading {url}: {e}")
-        raise ConnectionError(f"Network/request error for {url}: {e}") from e
-    except ValueError as e:  # Catch our specific extension validation error
-        logger.error(f"Validation error for {url}: {e}")
-        # Attempt cleanup
-        if 'target_path' in locals() and target_path.exists():
-            try:
-                target_path.unlink()
-            except OSError as e:
-                logger.debug(f"Failed to remove temporary file {target_path}: {e}")
-        raise ValueError(str(e)) from e  # Re-raise the specific error
-    except Exception as e:
-        logger.error(f"Error processing download for {url}: {e}", exc_info=True)
-        # Attempt cleanup
-        if 'target_path' in locals() and target_path.exists():
-            try:
-                target_path.unlink()
-            except OSError as e:
-                logger.debug(f"Failed to remove temporary file {target_path}: {e}")
-        raise RuntimeError(f"Failed to download or save {url}: {e}") from e  # Use RuntimeError for unexpected
+    return await _core_download(
+        client=client,
+        url=url,
+        target_dir=target_dir,
+        allowed_extensions=allowed_extensions,
+        check_extension=check_extension,
+        disallow_content_types=disallow_content_types,
+        allow_redirects=allow_redirects,
+    )
 
 
 async def _add_media_impl_shim(

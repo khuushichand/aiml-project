@@ -6,10 +6,10 @@ allow_remote_setup_access = false
 
 [Server]
 disable_cors = false
-allow_remote_webui_access = false
+allow_remote_webui_access = true
 # Optional: restrict which remote clients can access /webui
 # Provide CIDR ranges or individual IPs, comma-separated
-webui_ip_allowlist = 192.168.1.0/24, 10.0.0.5
+webui_ip_allowlist = 192.168.1.0/24, 192.168.5.0/24, 10.0.0.5
 
 [Processing]
 processing_choice = cuda

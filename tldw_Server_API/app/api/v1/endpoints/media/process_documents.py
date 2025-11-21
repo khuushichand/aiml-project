@@ -24,6 +24,10 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     prepare_chunking_options_dict,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
+    ProcessItem,
+    run_batch_processor,
+)
 import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs
 from tldw_Server_API.app.api.v1.endpoints import _legacy_media as legacy_media  # type: ignore
 
@@ -84,8 +88,6 @@ async def process_documents_endpoint(
 
     # --- Prepare result structure ---
     batch_result: Dict[str, Any] = {
-        "processed_count": 0,
-        "errors_count": 0,
         "errors": [],
         "results": [],
     }
@@ -152,7 +154,6 @@ async def process_documents_endpoint(
                         "segments": None,
                     }
                 )
-                batch_result["errors_count"] += 1
                 batch_result["errors"].append(f"{original_filename}: {err_detail}")
 
             for info in saved_files:
@@ -258,7 +259,6 @@ async def process_documents_endpoint(
                                 "segments": None,
                             }
                         )
-                        batch_result["errors_count"] += 1
                         batch_result["errors"].append(f"{original_url}: {err_detail}")
                     else:
                         logger.error(
@@ -288,7 +288,6 @@ async def process_documents_endpoint(
                                 "segments": None,
                             }
                         )
-                        batch_result["errors_count"] += 1
                         batch_result["errors"].append(f"{original_url}: {err_detail}")
 
         # --- Check if any files are ready for processing ---
@@ -298,7 +297,7 @@ async def process_documents_endpoint(
             )
             status_code = (
                 status.HTTP_207_MULTI_STATUS
-                if batch_result["errors_count"] > 0
+                if batch_result["results"]
                 else status.HTTP_400_BAD_REQUEST
             )
             return JSONResponse(status_code=status_code, content=batch_result)
@@ -315,135 +314,140 @@ async def process_documents_endpoint(
         else:
             chunk_options_dict = None
 
-        # --- Create and run processing tasks ---
-        processing_tasks: List[asyncio.Future] = []
-        for original_ref, doc_path in local_paths_to_process:
-            partial_func = functools.partial(
-                docs.process_document_content,
-                doc_path=doc_path,
-                perform_chunking=form_data.perform_chunking,
-                chunk_options=chunk_options_dict,
-                perform_analysis=form_data.perform_analysis,
-                summarize_recursively=form_data.summarize_recursively,
-                api_name=form_data.api_name,
-                api_key=None,
-                custom_prompt=form_data.custom_prompt,
-                system_prompt=form_data.system_prompt,
-                title_override=form_data.title,
-                author_override=form_data.author,
-                keywords=form_data.keywords,
+        # --- Build ProcessItem list and run batch processor ---
+        items: List[ProcessItem] = [
+            ProcessItem(
+                input_ref=original_ref,
+                local_path=doc_path,
+                media_type="document",
+                metadata={},
             )
-            processing_tasks.append(loop.run_in_executor(None, partial_func))
+            for original_ref, doc_path in local_paths_to_process
+        ]
 
-        task_results = await asyncio.gather(*processing_tasks, return_exceptions=True)
+        async def _document_batch_processor(
+            process_items: List[ProcessItem],
+        ) -> List[Dict[str, Any]]:
+            results: List[Dict[str, Any]] = []
+            loop = asyncio.get_running_loop()
 
-    # --- Combine and finalize results (outside temp dir context) ---
-    for i, res in enumerate(task_results):
-        original_ref = local_paths_to_process[i][0]
-
-        if isinstance(res, dict):
-            res["input_ref"] = original_ref
-            res["db_id"] = None
-            res["db_message"] = "Processing only endpoint."
-            res.setdefault("status", "Error")
-            res.setdefault("media_type", "document")
-            res.setdefault("error", None)
-            res.setdefault("warnings", None)
-            res.setdefault("metadata", {})
-            res.setdefault("content", None)
-            res.setdefault("chunks", None)
-            res.setdefault("analysis", None)
-            res.setdefault("keywords", [])
-            res.setdefault("analysis_details", {})
-            res.setdefault("segments", None)
-
-            batch_result["results"].append(res)
-
-            if res["status"] in ["Success", "Warning"]:
-                batch_result["processed_count"] += 1
-                if res["status"] == "Warning" and res.get("warnings"):
-                    for warn in res["warnings"]:
-                        batch_result["errors"].append(
-                            f"{original_ref}: [Warning] {warn}"
-                        )
-            else:
-                batch_result["errors_count"] += 1
-                error_msg = (
-                    f"{original_ref}: {res.get('error', 'Unknown processing error')}"
+            tasks: List[asyncio.Future] = []
+            for item in process_items:
+                partial_func = functools.partial(
+                    docs.process_document_content,
+                    doc_path=item.local_path,
+                    perform_chunking=form_data.perform_chunking,
+                    chunk_options=chunk_options_dict,
+                    perform_analysis=form_data.perform_analysis,
+                    summarize_recursively=form_data.summarize_recursively,
+                    api_name=form_data.api_name,
+                    api_key=None,
+                    custom_prompt=form_data.custom_prompt,
+                    system_prompt=form_data.system_prompt,
+                    title_override=form_data.title,
+                    author_override=form_data.author,
+                    keywords=form_data.keywords,
                 )
-                if error_msg not in batch_result["errors"]:
-                    batch_result["errors"].append(error_msg)
+                tasks.append(loop.run_in_executor(None, partial_func))
 
-        elif isinstance(res, Exception):
-            logger.error(
-                "Task execution failed for {} with exception: {}",
-                original_ref,
-                res,
-                exc_info=res,
-            )
-            error_detail = (
-                f"Task execution failed: {type(res).__name__}: {str(res)}"
-            )
-            batch_result["results"].append(
-                {
-                    "status": "Error",
-                    "input_ref": original_ref,
-                    "error": error_detail,
-                    "media_type": "document",
-                    "db_id": None,
-                    "db_message": "Processing only endpoint.",
-                    "processing_source": str(local_paths_to_process[i][1]),
-                    "metadata": {},
-                    "content": None,
-                    "chunks": None,
-                    "analysis": None,
-                    "keywords": form_data.keywords,
-                    "warnings": None,
-                    "analysis_details": {},
-                    "segments": None,
-                }
-            )
-            batch_result["errors_count"] += 1
-            if error_detail not in batch_result["errors"]:
-                batch_result["errors"].append(f"{original_ref}: {error_detail}")
-        else:
-            logger.error(
-                "Received unexpected result type from document worker task for {}: {}",
-                original_ref,
-                type(res),
-            )
-            error_detail = "Invalid result type from document worker."
-            batch_result["results"].append(
-                {
-                    "status": "Error",
-                    "input_ref": original_ref,
-                    "error": error_detail,
-                    "media_type": "document",
-                    "db_id": None,
-                    "db_message": "Processing only endpoint.",
-                    "processing_source": str(local_paths_to_process[i][1]),
-                    "metadata": {},
-                    "content": None,
-                    "chunks": None,
-                    "analysis": None,
-                    "keywords": form_data.keywords,
-                    "warnings": None,
-                    "analysis_details": {},
-                    "segments": None,
-                }
-            )
-            batch_result["errors_count"] += 1
-            if error_detail not in batch_result["errors"]:
-                batch_result["errors"].append(f"{original_ref}: {error_detail}")
+            task_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for item, res in zip(process_items, task_results):
+                original_ref = item.input_ref
+
+                if isinstance(res, dict):
+                    res["input_ref"] = original_ref
+                    res["db_id"] = None
+                    res["db_message"] = "Processing only endpoint."
+                    res.setdefault("status", "Error")
+                    res.setdefault("media_type", "document")
+                    res.setdefault("error", None)
+                    res.setdefault("warnings", None)
+                    res.setdefault("metadata", {})
+                    res.setdefault("content", None)
+                    res.setdefault("chunks", None)
+                    res.setdefault("analysis", None)
+                    res.setdefault("keywords", [])
+                    res.setdefault("analysis_details", {})
+                    res.setdefault("segments", None)
+
+                    results.append(res)
+                elif isinstance(res, Exception):
+                    logger.error(
+                        "Task execution failed for {} with exception: {}",
+                        original_ref,
+                        res,
+                        exc_info=res,
+                    )
+                    error_detail = (
+                        f"Task execution failed: {type(res).__name__}: {res}"
+                    )
+                    results.append(
+                        {
+                            "status": "Error",
+                            "input_ref": original_ref,
+                            "error": error_detail,
+                            "media_type": "document",
+                            "processing_source": str(item.local_path),
+                            "metadata": {},
+                            "content": None,
+                            "chunks": None,
+                            "analysis": None,
+                            "keywords": form_data.keywords,
+                            "warnings": None,
+                            "analysis_details": {},
+                            "db_id": None,
+                            "db_message": "Processing only endpoint.",
+                            "segments": None,
+                        }
+                    )
+                else:
+                    logger.error(
+                        "Received unexpected result type from document worker task for {}: {}",
+                        original_ref,
+                        type(res),
+                    )
+                    error_detail = "Invalid result type from document worker."
+                    results.append(
+                        {
+                            "status": "Error",
+                            "input_ref": original_ref,
+                            "error": error_detail,
+                            "media_type": "document",
+                            "processing_source": str(item.local_path),
+                            "metadata": {},
+                            "content": None,
+                            "chunks": None,
+                            "analysis": None,
+                            "keywords": form_data.keywords,
+                            "warnings": None,
+                            "analysis_details": {},
+                            "db_id": None,
+                            "db_message": "Processing only endpoint.",
+                            "segments": None,
+                        }
+                    )
+
+            return results
+
+        base_batch: Dict[str, Any] = {
+            "results": list(batch_result["results"]),
+            "errors": list(batch_result["errors"]),
+        }
+        batch_result = await run_batch_processor(
+            items=items,
+            processor=_document_batch_processor,
+            base_batch=base_batch,
+        )
 
     # --- Determine final status code ---
-    if batch_result["errors_count"] == 0 and batch_result["processed_count"] > 0:
+    if batch_result.get("errors_count", 0) == 0 and batch_result.get("processed_count", 0) > 0:
         final_status_code = status.HTTP_200_OK
-    elif batch_result["errors_count"] > 0:
+    elif batch_result.get("errors_count", 0) > 0:
         final_status_code = status.HTTP_207_MULTI_STATUS
     elif (
-        batch_result["processed_count"] == 0
-        and batch_result["errors_count"] == 0
+        batch_result.get("processed_count", 0) == 0
+        and batch_result.get("errors_count", 0) == 0
     ):
         if batch_result["results"]:
             final_status_code = status.HTTP_207_MULTI_STATUS
@@ -462,8 +466,8 @@ async def process_documents_endpoint(
         "/process-documents request finished with status {}. "
         "Processed: {}, Errors: {}",
         final_status_code,
-        batch_result["processed_count"],
-        batch_result["errors_count"],
+        batch_result.get("processed_count", 0),
+        batch_result.get("errors_count", 0),
     )
 
     return JSONResponse(status_code=final_status_code, content=batch_result)

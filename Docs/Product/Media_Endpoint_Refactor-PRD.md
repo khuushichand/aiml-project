@@ -478,7 +478,7 @@ This table serves as a migration checklist to ensure the compatibility shim cont
   - Move schema introspection to `debug.py`.
   - Implemented as `media/debug.py` with a typed `/debug/schema` route using `get_media_db_for_user` and returning table/column metadata plus counts via `DebugSchemaResponse`.
   - Tests: `tldw_Server_API/tests/Media/test_media_debug_schema.py` exercises the route and verifies shape; passes under both normal and legacy-disabled modes.
-- Stage 7: Cleanup & Docs **(Status: In Progress – legacy-free media mode implemented; legacy module in shim/compatibility role)**
+- Stage 7: Cleanup & Docs **(Status: Complete – legacy-free media mode documented; legacy module reduced to shim/compatibility role)**
   - Legacy-free media mode:
     - Environment flag `TLDW_DISABLE_LEGACY_MEDIA=1` now disables inclusion of `_legacy_media.router` while keeping the `media` package importable as the canonical router:
       - `media/__init__.py` exposes a combined router built solely from modular sub-routers (`add`, `listing`, `item`, `versions`, `process_*`, `debug`, `ingest_web_content`, `transcription_models`) when `_legacy_media` is not imported.
@@ -502,7 +502,7 @@ This table serves as a migration checklist to ensure the compatibility shim cont
       - `process_batch_media` as the canonical A/V inline ingestion helper.
       - `process_document_like_item` as the canonical document/email/JSON ingestion helper.
       - `download_url_async` as the shared URL→file helper used by modular JSON/document flows and tests.
-    - A design/overview doc (`Docs/Design/Media_Endpoint_Refactor.md`) remains planned to capture the final architecture and legacy-free mode semantics once cleanup of `_legacy_media` is complete.
+    - A design/overview doc (`Docs/Design/Media_Endpoint_Refactor.md`) now captures the final architecture, legacy-free mode semantics, and the current roles of the `media` package shim and `_legacy_media` compatibility layer.
   - Tests:
     - Full suites (`MediaIngestion_NEW` + `Media`) are exercised under both default and `TLDW_DISABLE_LEGACY_MEDIA=1` modes for CI, ensuring the refactor remains behavior-preserving while `_legacy_media` continues to serve as an optional compatibility layer.
 - Definition of Done (per stage)
