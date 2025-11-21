@@ -96,7 +96,7 @@ async def get_add_media_form(
         description="Cookie string if `use_cookies` is True",
     ),
     transcription_model: str = Form(
-        "large-v3",
+        "whisper-large-v3",
         description="Transcription model",
     ),
     transcription_language: str = Form(

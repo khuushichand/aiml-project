@@ -1406,13 +1406,13 @@ class UnifiedEvaluationService:
                     return eval_id
 
             # Fallback to standard approach
-                eval_id = self.db.create_evaluation(
-                    name=f"{evaluation_type}_{int(time.time())}",
-                    eval_type=evaluation_type,
-                    eval_spec={"type": evaluation_type, "input": input_data},
-                    created_by=metadata.get("user_id", "system"),
-                    metadata=metadata
-                )
+            eval_id = self.db.create_evaluation(
+                name=f"{evaluation_type}_{int(time.time())}",
+                eval_type=evaluation_type,
+                eval_spec={"type": evaluation_type, "input": input_data},
+                created_by=metadata.get("user_id", "system"),
+                metadata=metadata
+            )
 
             # Create and complete a run with results
             run_id = self.db.create_run(

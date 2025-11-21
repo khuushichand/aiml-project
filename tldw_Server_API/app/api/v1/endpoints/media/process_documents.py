@@ -84,7 +84,14 @@ async def process_documents_endpoint(
     except Exception:
         # Usage logging is best-effort; never fail the request.
         pass
-    logger.debug("Form data received for /process-documents: {}", form_data.model_dump())
+    logger.debug(
+        "Form data for /process-documents: has_urls={}, has_files={}, "
+        "perform_analysis={}, perform_chunking={}",
+        bool(form_data.urls),
+        bool(files),
+        form_data.perform_analysis,
+        form_data.perform_chunking,
+    )
 
     # Guardrails: restrict to a known set of document extensions for this endpoint.
     media_mod._validate_inputs("document", form_data.urls, files)  # type: ignore[arg-type]

@@ -60,10 +60,7 @@ async def _process_mediawiki_dump(
         temp_file_path = temp_dir_path / sanitize_filename(dump_file.filename)
         try:
             async with aiofiles.open(temp_file_path, "wb") as f:
-                while True:
-                    chunk = await dump_file.read(8192)
-                    if not chunk:
-                        break
+                while chunk := await dump_file.read(8192):
                     await f.write(chunk)
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to save uploaded MediaWiki dump: {}", exc, exc_info=True)

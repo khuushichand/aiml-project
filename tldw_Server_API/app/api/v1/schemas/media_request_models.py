@@ -537,10 +537,6 @@ class ProcessEbooksForm(AddMediaForm):
         description="EPUB text extraction method ('filtered', 'markdown', 'basic')",
     )
     keep_original_file: bool = Field(False)
-    api_key: Optional[str] = Field(
-        None, description="Optional API key forwarded to analysis for processing-only runs"
-    )
-
 
 class ProcessEmailsForm(AddMediaForm):
     """
