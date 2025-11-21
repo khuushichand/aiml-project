@@ -10,7 +10,12 @@ import httpx
 from loguru import logger
 
 from tldw_Server_API.app.core.testing import is_test_mode
-from tldw_Server_API.app.core.http_client import afetch as _m_afetch, adownload as _m_adownload, DEFAULT_MAX_REDIRECTS as _DEFAULT_MAX_REDIRECTS
+from tldw_Server_API.app.core.http_client import (
+    afetch as _m_afetch,
+    adownload as _m_adownload,
+    DEFAULT_MAX_REDIRECTS as _DEFAULT_MAX_REDIRECTS,
+    create_async_client as _create_async_client,
+)
 
 async def download_url_async(
     client: Optional[httpx.AsyncClient],
@@ -52,112 +57,114 @@ async def download_url_async(
     owns_client = client is None
     if owns_client:
         timeout = httpx.Timeout(60.0)
-        client = httpx.AsyncClient(timeout=timeout, follow_redirects=False)
+        client = _create_async_client(timeout=timeout)
 
     try:
-        async with client.stream(
-            "GET",
-            url,
-            follow_redirects=allow_redirects,
+        resp = await _m_afetch(
+            method="GET",
+            url=url,
+            client=client,
             timeout=60.0,
-        ) as resp:
-            resp.raise_for_status()
+            allow_redirects=allow_redirects,
+            retry=None,
+        )
+        resp.raise_for_status()
 
-            # Normalize content-type early and enforce disallow list regardless of extension.
-            content_type = (
-                resp.headers.get("content-type") or ""
-            ).split(";", 1)[0].strip().lower()
-            if disallow_content_types and content_type in disallow_content_types:
-                allowed_list = ", ".join(sorted(allowed_extensions or [])) or "*"
-                raise ValueError(
-                    f"Downloaded file from {url} does not have an allowed extension "
-                    f"(allowed: {allowed_list}); content-type '{content_type}' unsupported "
-                    "for this endpoint"
-                )
+        # Normalize content-type early and enforce disallow list regardless of extension.
+        content_type = (
+            resp.headers.get("content-type") or ""
+        ).split(";", 1)[0].strip().lower()
+        if disallow_content_types and content_type in disallow_content_types:
+            allowed_list = ", ".join(sorted(allowed_extensions or [])) or "*"
+            raise ValueError(
+                f"Downloaded file from {url} does not have an allowed extension "
+                f"(allowed: {allowed_list}); content-type '{content_type}' unsupported "
+                "for this endpoint"
+            )
 
-            # Determine filename from Content-Disposition when present.
-            filename = seed_segment
-            cd = resp.headers.get("content-disposition") or ""
-            if "filename=" in cd:
+        # Determine filename from Content-Disposition when present.
+        filename = seed_segment
+        cd = resp.headers.get("content-disposition") or ""
+        if "filename=" in cd:
+            try:
+                # naive parse: filename="name.ext"
+                part = cd.split("filename=", 1)[1]
+                if part.startswith("\""):
+                    part = part.split("\"", 2)[1]
+                else:
+                    part = part.split(";", 1)[0]
+                part = part.strip()
+                if part:
+                    filename = part
+            except Exception:
+                pass
+
+        # Basic sanitization
+        safe_name = "".join(
+            c if c.isalnum() or c in ("-", "_", ".") else "_"
+            for c in filename
+        ) or seed_segment
+
+        # Determine effective suffix, checking allowed_extensions when requested.
+        effective_suffix = Path(safe_name).suffix.lower()
+        if check_extension and allowed_extensions:
+            if not effective_suffix or effective_suffix not in allowed_extensions:
+                # Try inferring from final response URL path.
                 try:
-                    # naive parse: filename="name.ext"
-                    part = cd.split("filename=", 1)[1]
-                    if part.startswith("\""):
-                        part = part.split("\"", 2)[1]
-                    else:
-                        part = part.split(";", 1)[0]
-                    part = part.strip()
-                    if part:
-                        filename = part
+                    alt_seg = resp.url.path.split("/")[-1]
+                    alt_suffix = Path(alt_seg).suffix.lower()
                 except Exception:
-                    pass
-
-            # Basic sanitization
-            safe_name = "".join(
-                c if c.isalnum() or c in ("-", "_", ".") else "_"
-                for c in filename
-            ) or seed_segment
-
-            # Determine effective suffix, checking allowed_extensions when requested.
-            effective_suffix = Path(safe_name).suffix.lower()
-            if check_extension and allowed_extensions:
-                if not effective_suffix or effective_suffix not in allowed_extensions:
-                    # Try inferring from final response URL path.
-                    try:
-                        alt_seg = resp.url.path.split("/")[-1]
-                        alt_suffix = Path(alt_seg).suffix.lower()
-                    except Exception:
-                        alt_suffix = ""
-                    if alt_suffix and alt_suffix in allowed_extensions:
-                        effective_suffix = alt_suffix
+                    alt_suffix = ""
+                if alt_suffix and alt_suffix in allowed_extensions:
+                    effective_suffix = alt_suffix
+                    base = Path(safe_name).stem
+                    safe_name = f"{base}{effective_suffix}"
+                else:
+                    # Fallback to content-type mapping (re-use normalized content_type).
+                    content_type_map = {
+                        "application/json": ".json",
+                        "application/pdf": ".pdf",
+                        "application/epub+zip": ".epub",
+                        "application/msword": ".doc",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+                        "application/rtf": ".rtf",
+                        "application/xml": ".xml",
+                        "text/xml": ".xml",
+                        "text/html": ".html",
+                        "application/xhtml+xml": ".xhtml",
+                        "text/plain": ".txt",
+                        "text/markdown": ".md",
+                        "text/x-markdown": ".md",
+                    }
+                    mapped_ext = content_type_map.get(content_type)
+                    if mapped_ext and mapped_ext in allowed_extensions:
+                        effective_suffix = mapped_ext
                         base = Path(safe_name).stem
                         safe_name = f"{base}{effective_suffix}"
                     else:
-                        # Fallback to content-type mapping (re-use normalized content_type).
-                        content_type_map = {
-                            "application/json": ".json",
-                            "application/pdf": ".pdf",
-                            "application/epub+zip": ".epub",
-                            "application/msword": ".doc",
-                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-                            "application/rtf": ".rtf",
-                            "application/xml": ".xml",
-                            "text/xml": ".xml",
-                            "text/html": ".html",
-                            "application/xhtml+xml": ".xhtml",
-                            "text/plain": ".txt",
-                            "text/markdown": ".md",
-                            "text/x-markdown": ".md",
-                        }
-                        mapped_ext = content_type_map.get(content_type)
-                        if mapped_ext and mapped_ext in allowed_extensions:
-                            effective_suffix = mapped_ext
-                            base = Path(safe_name).stem
-                            safe_name = f"{base}{effective_suffix}"
-                        else:
-                            allowed_list = ", ".join(sorted(allowed_extensions))
-                            raise ValueError(
-                                f"Downloaded file from {url} does not have an allowed extension "
-                                f"(allowed: {allowed_list}); content-type '{content_type}' unsupported "
-                                "for this endpoint"
-                            )
+                        allowed_list = ", ".join(sorted(allowed_extensions))
+                        raise ValueError(
+                            f"Downloaded file from {url} does not have an allowed extension "
+                            f"(allowed: {allowed_list}); content-type '{content_type}' unsupported "
+                            "for this endpoint"
+                        )
 
-            target_path = target_dir / safe_name
-            counter = 1
-            stem = target_path.stem
-            suffix = target_path.suffix
-            while target_path.exists():
-                target_path = target_dir / f"{stem}_{counter}{suffix}"
-                counter += 1
+        target_path = target_dir / safe_name
+        counter = 1
+        stem = target_path.stem
+        suffix = target_path.suffix
+        while target_path.exists():
+            target_path = target_dir / f"{stem}_{counter}{suffix}"
+            counter += 1
 
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            async with aiofiles.open(target_path, "wb") as f:
-                async for chunk in resp.aiter_bytes():
-                    if chunk:
-                        await f.write(chunk)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        async with aiofiles.open(target_path, "wb") as f:
+            async for chunk in resp.aiter_bytes():
+                if chunk:
+                    await f.write(chunk)
 
-            logger.info("Downloaded {} to {}", url, target_path)
-            return target_path
+        logger.info("Downloaded {} to {}", url, target_path)
+        return target_path
     except Exception as exc:
         # In test mode, allow a graceful fallback to a tiny stub file so that
         # offline URL acceptance tests can proceed without external network.
