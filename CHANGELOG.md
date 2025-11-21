@@ -10,7 +10,7 @@ and this project adheres to Some kind of Versioning
 ### Changed
 - Modularized `/api/v1/media` endpoints into `tldw_Server_API.app.api.v1.endpoints.media.*` while keeping response shapes and status codes backward compatible. The legacy monolith `_legacy_media.py` now acts as a compatibility shim that forwards to core helpers and modular routers.
 - Added `TLDW_DISABLE_LEGACY_MEDIA` flag to allow running the server in a legacy-free media mode where `/api/v1/media` behavior is owned entirely by the modular endpoints and core ingestion/persistence helpers.
- - NeuTTS TTS provider is now shipped disabled by default and must be explicitly re-enabled via `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` (`enabled: true`) and a service restart. Disabled providers are filtered by the provider manager via `is_provider_enabled()`, so legacy configs that reference NeuTTS will be ignored until you opt in again.
+- NeuTTS TTS provider is now shipped disabled by default and must be explicitly re-enabled via `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` (`enabled: true`) and a service restart. Disabled providers are filtered by the provider manager via `is_provider_enabled()`, so legacy configs that reference NeuTTS will be ignored until you opt in again.
 
 ### Removed
 - Deleted unused legacy-only helpers from `_legacy_media.py` (`parse_advanced_query`, `_claims_extraction_enabled`, `_resolve_claims_parameters`, `_prepare_claims_chunks`, `_single_pdf_worker`) after auditing that no modular endpoints, core ingestion helpers, or tests import them directly.
@@ -30,7 +30,7 @@ and this project adheres to Some kind of Versioning
 
 ### Notes for Operators
 - If clients still post bodies to the legacy endpoint, they will start receiving `422` after this change. Migrate clients to the successor endpoints above.
- - If you previously used NeuTTS, search your configuration (for example `config.txt`, environment variables, or overrides) for `neutts` / `neutts-air`, update references as needed, then set `enabled: true` for the NeuTTS entry in `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` and restart the server to restore NeuTTS behavior.
+- If you previously used NeuTTS, search your configuration (for example `config.txt`, environment variables, or overrides) for `neutts` / `neutts-air`, update references as needed, then set `enabled: true` for the NeuTTS entry in `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` and restart the server to restore NeuTTS behavior.
 
 
 ## [0.1.6] - 2025-11-14

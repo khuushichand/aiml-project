@@ -156,7 +156,7 @@ async def download_url_async(
                     if chunk:
                         await f.write(chunk)
 
-            logger.info("Downloaded %s to %s", url, target_path)
+            logger.info("Downloaded {} to {}", url, target_path)
             return target_path
     except Exception as exc:
         # In test mode, allow a graceful fallback to a tiny stub file so that

@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, status
 
-from tldw_Server_API.app.core.Ingestion_Media_Processing.transcription_models import (  # type: ignore  # noqa: E501
+from tldw_Server_API.app.core.Ingestion_Media_Processing.transcription_models import (  # type: ignore
     get_transcription_models_payload,
 )
 

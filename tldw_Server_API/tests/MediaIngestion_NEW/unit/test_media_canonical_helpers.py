@@ -33,6 +33,14 @@ async def test_document_like_shim_delegates_to_core(monkeypatch: pytest.MonkeyPa
         client_id: str,
         user_id: Any = None,
     ) -> Dict[str, Any]:
+        # Mark unused parameters as used to satisfy linters without altering behaviour.
+        _ = (
+            form_data,
+            chunk_options,
+            temp_dir,
+            loop,
+            user_id,
+        )
         called["args"] = {
             "item_input_ref": item_input_ref,
             "processing_source": processing_source,

@@ -65,11 +65,18 @@ async def ingest_web_content(
     # Shared usage logging, topic monitoring, and per-method scraping are
     # handled by the orchestration helper.
     raw_results: List[Dict[str, Any]] = []
-    helper_results = await ingest_web_content_orchestrate(
-        request=request,
-        db=db,
-        usage_log=usage_log,
-    )
+    try:
+        helper_results = await ingest_web_content_orchestrate(
+            request=request,
+            db=db,
+            usage_log=usage_log,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Web content ingestion failed: {}", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to ingest web content",
+        ) from None
     if helper_results:
         raw_results.extend(helper_results)
 

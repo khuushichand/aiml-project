@@ -143,7 +143,7 @@ class AdvancedVersionUpsertRequest(BaseModel):
     new_version: bool = Field(True, description="Create a new version (default). If false, only safe_metadata may be updated in place")
 
 # Define allowed media types using Literal for validation
-MediaType = Literal['video', 'audio', 'document', 'pdf', 'ebook', 'email']
+MediaType = Literal['video', 'audio', 'document', 'pdf', 'ebook', 'email', 'code']
 
 # Define allowed chunking methods (adjust as needed based on your library)
 ChunkMethod = Literal['semantic', 'tokens', 'paragraphs', 'sentences','words', 'ebook_chapters', 'json', 'propositions']

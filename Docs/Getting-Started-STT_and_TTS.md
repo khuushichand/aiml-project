@@ -155,7 +155,7 @@ Troubleshooting
 - Missing dependencies
   - kokoro_onnx: `pip install kokoro-onnx`
   - onnxruntime: `pip install onnxruntime` (or `onnxruntime-gpu`)
- - phonemizer / espeak-phonemizer: `pip install phonemizer espeak-phonemizer`
+- phonemizer / espeak-phonemizer: `pip install phonemizer espeak-phonemizer`
 - `voices assets not found` or `model not found`: fix `voices` directory or model path in YAML.
 - `eSpeak lib not found`: install `espeak-ng` and set `PHONEMIZER_ESPEAK_LIBRARY` to the library path.
 - Adapter previously failed and won’t retry: we enable retry by default (`performance.adapter_failure_retry_seconds: 300`). Or restart the server after fixing assets.

@@ -368,8 +368,7 @@ async def get_add_media_form(
                 "Internal server error during form processing: "
                 f"{type(exc).__name__}"
             ),
-        )
+        ) from exc
 
 
 __all__ = ["get_add_media_form"]
-

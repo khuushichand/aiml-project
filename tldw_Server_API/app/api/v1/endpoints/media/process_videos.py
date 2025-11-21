@@ -210,7 +210,7 @@ async def process_videos_endpoint(
         r.get("status") == "Warning" for r in batch_result.get("results", [])
     )
     # NOTE: `has_warnings` is currently unused but kept for parity/debugging.
-    _ = has_warnings
+    _ = has_warnings, final_success_count
 
     if total_items == 0:
         # Should not happen if validation passed, but handle defensively.

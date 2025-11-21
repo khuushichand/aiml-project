@@ -13,6 +13,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
     download_url_async as _download_url_async,
 )
+from tldw_Server_API.app.core.Utils.Utils import smart_download as _smart_download
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager as CoreTempDirManager,
     save_uploaded_files as core_save_uploaded_files,
@@ -146,6 +147,7 @@ class _DummyCache(dict):
 
 cache = _DummyCache()
 _legacy_media = None  # Backwards-compat attribute for tests expecting it.
+smart_download = _smart_download  # Backwards-compat for tests monkeypatching media.smart_download
 
 
 def cache_response(key: str, response: Dict) -> None:
