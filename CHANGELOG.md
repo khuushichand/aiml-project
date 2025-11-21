@@ -15,6 +15,7 @@ and this project adheres to Some kind of Versioning
 ### Removed
 - Deleted unused legacy-only helpers from `_legacy_media.py` (`parse_advanced_query`, `_claims_extraction_enabled`, `_resolve_claims_parameters`, `_prepare_claims_chunks`, `_single_pdf_worker`) after auditing that no modular endpoints, core ingestion helpers, or tests import them directly.
 - Retired legacy-only implementations `_legacy_media._process_batch_media` and `_legacy_media._add_media_impl`; these names now resolve to thin shims that delegate to core ingestion/persistence helpers and the modular `/api/v1/media` endpoints.
+- Removed the remaining `_process_batch_media` / `_add_media_impl` aliases from `_legacy_media.py`; callers must use core persistence helpers and modular endpoints.
 
 ### Deprecated
 - Character Chat legacy completion endpoint `POST /api/v1/chats/{chat_id}/complete` is deprecated.

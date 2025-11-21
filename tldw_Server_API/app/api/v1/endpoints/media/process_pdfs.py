@@ -19,6 +19,12 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
+    get_process_pdfs_form,
+)
+from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (
+    file_validator_instance,
+)
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
@@ -29,8 +35,16 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
     ProcessItem,
     run_batch_processor,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.result_normalization import (
+    normalise_pdf_result,
+)
 
-from tldw_Server_API.app.api.v1.endpoints import _legacy_media as legacy_media  # type: ignore
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    UsageEventLogger,
+    get_usage_event_logger,
+)
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessPDFsForm
 
 router = APIRouter()
 
@@ -46,7 +60,7 @@ ALLOWED_PDF_EXTENSIONS = [".pdf"]
 async def process_pdfs_endpoint(
     background_tasks: BackgroundTasks,  # Parity with legacy endpoint signature
     db: MediaDatabase = Depends(get_media_db_for_user),
-    form_data: legacy_media.ProcessPDFsForm = Depends(legacy_media.get_process_pdfs_form),
+    form_data: ProcessPDFsForm = Depends(get_process_pdfs_form),
     files: Optional[List[UploadFile]] = File(None, description="PDF uploads"),
     vlm_enable: bool = Form(False, description="Enable VLM detection (separate from OCR)"),
     vlm_backend: Optional[str] = Form(
@@ -61,9 +75,7 @@ async def process_pdfs_endpoint(
         None,
         description="Max pages to scan with VLM",
     ),
-    usage_log: legacy_media.UsageEventLogger = Depends(
-        legacy_media.get_usage_event_logger
-    ),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     Process PDFs without persisting to the Media DB.
@@ -87,7 +99,7 @@ async def process_pdfs_endpoint(
 
     # Reuse shared validation so that error messages and 400 semantics match
     # the legacy implementation (including "No valid media sources supplied").
-    legacy_media._validate_inputs("pdf", form_data.urls, files)  # type: ignore[arg-type]
+    media_mod._validate_inputs("pdf", form_data.urls, files)  # type: ignore[arg-type]
 
     batch: Dict[str, Any] = {"results": [], "errors": []}
     items: List[ProcessItem] = []
@@ -98,18 +110,11 @@ async def process_pdfs_endpoint(
         # Preserve test-time monkeypatching of `media.file_validator_instance`
         # by resolving the validator via the shim and propagating it back into
         # the legacy module.
-        validator: FileValidator
-        try:
-            from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-
-            validator = getattr(
-                media_mod,
-                "file_validator_instance",
-                legacy_media.file_validator_instance,
-            )
-            legacy_media.file_validator_instance = validator  # type: ignore[assignment]
-        except Exception:  # pragma: no cover - defensive fallback
-            validator = legacy_media.file_validator_instance
+        validator: FileValidator = getattr(
+            media_mod,
+            "file_validator_instance",
+            file_validator_instance,
+        )
 
         # ---- Handle uploads via shared input_sourcing helper ----
         if files:
@@ -125,7 +130,7 @@ async def process_pdfs_endpoint(
                     err_info.get("original_filename") or err_info.get("input") or "Unknown Upload"
                 )
                 error_detail = str(err_info.get("error") or "Upload error")
-                normalized_err = legacy_media.normalise_pdf_result(  # type: ignore[attr-defined]
+                normalized_err = normalise_pdf_result(
                     {
                         "status": "Error",
                         "error": f"Upload error: {error_detail}",
@@ -150,9 +155,9 @@ async def process_pdfs_endpoint(
 
         # ---- Handle URL inputs via shared downloader ----
         if form_data.urls:
-            async with httpx.AsyncClient(timeout=120) as client:
+            async with media_mod.httpx.AsyncClient(timeout=120) as client:
                 download_tasks = [
-                    legacy_media._download_url_async(  # type: ignore[attr-defined]
+                    media_mod._download_url_async(
                         client=client,
                         url=url,
                         target_dir=temp_dir_path,
@@ -178,7 +183,7 @@ async def process_pdfs_endpoint(
                     )
                 else:
                     error_detail = f"Download/preparation failed: {result}"
-                    normalized_err = legacy_media.normalise_pdf_result(  # type: ignore[attr-defined]
+                    normalized_err = normalise_pdf_result(
                         {
                             "status": "Error",
                             "error": error_detail,
@@ -230,7 +235,7 @@ async def process_pdfs_endpoint(
                         read_err,
                     )
                     error_detail = f"Failed to read prepared file: {read_err}"
-                    normalized_err = legacy_media.normalise_pdf_result(  # type: ignore[attr-defined]
+                    normalized_err = normalise_pdf_result(
                         {
                             "status": "Error",
                             "error": error_detail,
@@ -242,7 +247,7 @@ async def process_pdfs_endpoint(
                     continue
 
                 try:
-                    raw = await legacy_media.pdf_lib.process_pdf_task(  # type: ignore[attr-defined]
+                    raw = await media_mod.pdf_lib.process_pdf_task(
                         file_bytes=file_bytes,
                         filename=original_ref,
                         parser=str(form_data.pdf_parsing_engine or "pymupdf4llm"),
@@ -265,12 +270,12 @@ async def process_pdfs_endpoint(
                         vlm_max_pages=vlm_max_pages,
                     )
                     if isinstance(raw, dict):
-                        normalized_res = legacy_media.normalise_pdf_result(  # type: ignore[attr-defined]
+                        normalized_res = normalise_pdf_result(
                             raw,
                             original_ref=original_ref,
                         )
                     else:
-                        normalized_res = legacy_media.normalise_pdf_result(  # type: ignore[attr-defined]
+                        normalized_res = normalise_pdf_result(
                             {
                                 "status": "Error",
                                 "error": f"Unexpected return type: {type(raw).__name__}",
@@ -287,7 +292,7 @@ async def process_pdfs_endpoint(
                         exc_info=True,
                     )
                     error_detail = f"PDF processing failed: {exc}"
-                    normalized_err = legacy_media.normalise_pdf_result(  # type: ignore[attr-defined]
+                    normalized_err = normalise_pdf_result(
                         {
                             "status": "Error",
                             "error": error_detail,
@@ -329,4 +334,3 @@ async def process_pdfs_endpoint(
 
 
 __all__ = ["router"]
-

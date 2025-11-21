@@ -17,6 +17,11 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    UsageEventLogger,
+    get_usage_event_logger,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
     get_process_videos_form,
 )
@@ -31,7 +36,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.video_batch import (
     run_video_batch,
 )
 
-from tldw_Server_API.app.api.v1.endpoints import _legacy_media as legacy_media  # type: ignore
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 
 router = APIRouter()
 
@@ -49,12 +54,8 @@ async def process_videos_endpoint(
         None,
         description="Video file uploads",
     ),
-    current_user: legacy_media.User = Depends(  # type: ignore[attr-defined]
-        legacy_media.get_request_user  # type: ignore[attr-defined]
-    ),
-    usage_log: legacy_media.UsageEventLogger = Depends(  # type: ignore[attr-defined]
-        legacy_media.get_usage_event_logger  # type: ignore[attr-defined]
-    ),
+    current_user: User = Depends(get_request_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     Process videos without persisting to the Media DB.
@@ -86,7 +87,7 @@ async def process_videos_endpoint(
 
     # Reuse shared validation so that error messages and 400 semantics match
     # the legacy implementation (including "No valid media sources supplied").
-    legacy_media._validate_inputs("video", form_data.urls, files)  # type: ignore[arg-type]
+    media_mod._validate_inputs("video", form_data.urls, files)  # type: ignore[arg-type]
 
     batch_result: Dict[str, Any] = {
         "processed_count": 0,
@@ -107,17 +108,11 @@ async def process_videos_endpoint(
         # Preserve test-time monkeypatching of `media.file_validator_instance`
         # by resolving the validator via the shim and propagating it back into
         # the legacy module when available.
-        try:
-            from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-
-            validator = getattr(
-                media_mod,
-                "file_validator_instance",
-                file_validator_instance,
-            )
-            legacy_media.file_validator_instance = validator  # type: ignore[assignment]
-        except Exception:  # pragma: no cover - defensive fallback
-            validator = file_validator_instance
+        validator = getattr(
+            media_mod,
+            "file_validator_instance",
+            file_validator_instance,
+        )
 
         # --- Save Uploads ---
         saved_files_info, file_handling_errors_raw = await save_uploaded_files(

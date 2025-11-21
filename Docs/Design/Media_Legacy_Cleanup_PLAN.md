@@ -53,22 +53,16 @@ code imports these names directly.
 
 - `_process_batch_media` (formerly heavy implementation, `_legacy_media.py:1723`)
   - Live behavior: `core.Ingestion_Media_Processing.persistence.process_batch_media`.
-  - Alias: `_process_batch_media = _process_batch_media_shim` at the
-    bottom of `_legacy_media.py`.
   - Status:
-    - Heavy legacy body has been retired; only the shim helper and alias
-      remain so that any historical imports of `_process_batch_media`
-      continue to resolve.
+    - Heavy legacy body and alias have been removed; callers must use the
+      core `process_batch_media` helper.
 
 - `_add_media_impl` (formerly heavy legacy `/media/add` implementation, `_legacy_media.py:2124`)
   - Live behavior: `core.Ingestion_Media_Processing.persistence.add_media_orchestrate`
     via `add_media_persist` and `media/add.py`.
-  - Alias: `_add_media_impl = _add_media_impl_shim` at the bottom of
-    `_legacy_media.py`.
   - Status:
-    - Heavy legacy body has been retired; only the shim helper and alias
-      remain so that any historical imports of `_add_media_impl` continue
-      to resolve.
+    - Heavy legacy body and alias have been removed; callers must use the
+      modular `media/add.py` endpoint and core persistence helpers.
 
 ## Safety Checks Before Removal
 
@@ -92,11 +86,8 @@ Before deleting any of the above:
   `_single_pdf_worker`) have been removed from `_legacy_media.py`
   after auditing external usage and updating the changelog.
 - Group 2 helpers (`_process_batch_media`, `_add_media_impl`) have been
-  fully cleaned up:
-  - Their heavy legacy implementations have been removed.
-  - The exported names are bound only to shim functions
-    (`_process_batch_media_shim`, `_add_media_impl_shim`) that delegate
-    into core ingestion helpers in `Ingestion_Media_Processing.persistence`.
+  removed entirely (no aliases remain); the core persistence helpers are
+  the only supported entry points.
 - `_legacy_media.py` now serves as:
   - A thin compatibility layer exposing historical endpoint definitions
     that forward into modular `endpoints.media.*` implementations.

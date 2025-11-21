@@ -15,7 +15,9 @@ from starlette.responses import StreamingResponse
 from tldw_Server_API.app.api.v1.API_Deps.backpressure import (
     guard_backpressure_and_quota,
 )
-from tldw_Server_API.app.api.v1.endpoints import _legacy_media as legacy_media  # type: ignore  # noqa: E501
+from tldw_Server_API.app.api.v1.API_Deps.media_mediawiki_deps import (
+    get_mediawiki_form_data,
+)
 from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     ProcessedMediaWikiPage,
 )
@@ -38,7 +40,7 @@ router = APIRouter()
     dependencies=[Depends(guard_backpressure_and_quota)],
 )
 async def ingest_mediawiki_dump_endpoint(
-    form_data: Dict[str, Any] = Depends(legacy_media.get_mediawiki_form_data),  # type: ignore[attr-defined]
+    form_data: Dict[str, Any] = Depends(get_mediawiki_form_data),
     dump_file: UploadFile = File(
         ...,
         description="MediaWiki XML dump file (.xml, .xml.bz2, .xml.gz).",
@@ -127,7 +129,7 @@ async def ingest_mediawiki_dump_endpoint(
     tags=["MediaWiki Processing"],
 )
 async def process_mediawiki_dump_ephemeral_endpoint(
-    form_data: Dict[str, Any] = Depends(legacy_media.get_mediawiki_form_data),  # type: ignore[attr-defined]
+    form_data: Dict[str, Any] = Depends(get_mediawiki_form_data),
     dump_file: UploadFile = File(
         ...,
         description="MediaWiki XML dump file (.xml, .xml.bz2, .xml.gz).",

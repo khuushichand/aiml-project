@@ -16,6 +16,10 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    UsageEventLogger,
+    get_usage_event_logger,
+)
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
     get_process_audios_form,
 )
@@ -31,7 +35,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     save_uploaded_files,
 )
 
-from tldw_Server_API.app.api.v1.endpoints import _legacy_media as legacy_media  # type: ignore
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 
 router = APIRouter()
 
@@ -49,9 +53,7 @@ async def process_audios_endpoint(
         None,
         description="Audio file uploads",
     ),
-    usage_log: legacy_media.UsageEventLogger = Depends(  # type: ignore[attr-defined]
-        legacy_media.get_usage_event_logger  # type: ignore[attr-defined]
-    ),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     Process audio inputs (URLs and uploads) without persisting to the Media DB.
@@ -84,7 +86,7 @@ async def process_audios_endpoint(
     # Reuse shared validation so that error messages and 400 semantics match
     # the legacy implementation (including "No valid media sources supplied").
     try:
-        legacy_media._validate_inputs("audio", form_data.urls, files)  # type: ignore[arg-type]
+        media_mod._validate_inputs("audio", form_data.urls, files)  # type: ignore[arg-type]
     except HTTPException as exc:
         logger.warning("Input validation failed for /process-audios: {}", exc.detail)
         raise
@@ -109,17 +111,11 @@ async def process_audios_endpoint(
         # Preserve test-time monkeypatching of `media.file_validator_instance`
         # by resolving the validator via the shim and propagating it back into
         # the legacy module when available.
-        try:
-            from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-
-            validator = getattr(
-                media_mod,
-                "file_validator_instance",
-                file_validator_instance,
-            )
-            legacy_media.file_validator_instance = validator  # type: ignore[assignment]
-        except Exception:  # pragma: no cover - defensive fallback
-            validator = file_validator_instance
+        validator = getattr(
+            media_mod,
+            "file_validator_instance",
+            file_validator_instance,
+        )
 
         # Allowed audio file extensions (mirrors legacy implementation).
         allowed_audio_extensions = [

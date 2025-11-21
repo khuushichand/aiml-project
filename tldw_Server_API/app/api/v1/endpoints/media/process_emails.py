@@ -19,8 +19,14 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
     ProcessItem,
     run_batch_processor,
 )
+import tldw_Server_API.app.core.Ingestion_Media_Processing.Email.Email_Processing_Lib as email_lib  # type: ignore
 
-from tldw_Server_API.app.api.v1.endpoints import _legacy_media as legacy_media  # type: ignore
+from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
+    get_process_emails_form,
+)
+from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessEmailsForm
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+from fastapi import HTTPException
 
 router = APIRouter()
 
@@ -31,9 +37,7 @@ router = APIRouter()
     tags=["Media Processing (No DB)"],
 )
 async def process_emails_endpoint(
-    form_data: legacy_media.ProcessEmailsForm = Depends(
-        legacy_media.get_process_emails_form
-    ),
+    form_data: ProcessEmailsForm = Depends(get_process_emails_form),
     files: Optional[List[UploadFile]] = File(None),
 ):
     """
@@ -46,7 +50,7 @@ async def process_emails_endpoint(
 
     if not files:
         # Preserve legacy 400 behavior when no files are provided.
-        raise legacy_media.HTTPException(  # type: ignore[attr-defined]
+        raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one EML file must be uploaded.",
         )
@@ -61,18 +65,11 @@ async def process_emails_endpoint(
 
     # Resolve validator via the media shim so tests that monkeypatch
     # media.file_validator_instance continue to work.
-    validator: FileValidator
-    try:
-        from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-
-        validator = getattr(
-            media_mod,
-            "file_validator_instance",
-            legacy_media.file_validator_instance,
-        )
-        legacy_media.file_validator_instance = validator  # type: ignore[assignment]
-    except Exception:  # pragma: no cover - defensive fallback
-        validator = legacy_media.file_validator_instance
+    validator: FileValidator = getattr(
+        media_mod,
+        "file_validator_instance",
+        FileValidator(),
+    )
 
     # Determine allowed extensions based on form toggles.
     allowed_exts: List[str] = [".eml"]
@@ -141,7 +138,7 @@ async def process_emails_endpoint(
                 try:
                     path = Path(pf["path"]).resolve()
                     # Read bytes
-                    async with legacy_media.aiofiles.open(  # type: ignore[attr-defined]
+                    async with media_mod.aiofiles.open(
                         path, "rb"
                     ) as f:
                         file_bytes = await f.read()
@@ -161,7 +158,7 @@ async def process_emails_endpoint(
                     if name_lower.endswith(".zip") and form_data.accept_archives:
                         arch_name = pf.get("original_filename") or path.name
                         processor = functools.partial(
-                            legacy_media.email_lib.process_eml_archive_bytes,  # type: ignore[attr-defined]
+                            email_lib.process_eml_archive_bytes,
                             file_bytes=file_bytes,
                             archive_name=arch_name,
                             title_override=form_data.title,
@@ -200,7 +197,7 @@ async def process_emails_endpoint(
                     ):
                         mbox_name = pf.get("original_filename") or path.name
                         processor = functools.partial(
-                            legacy_media.email_lib.process_mbox_bytes,  # type: ignore[attr-defined]
+                            email_lib.process_mbox_bytes,
                             file_bytes=file_bytes,
                             mbox_name=mbox_name,
                             title_override=form_data.title,
@@ -237,7 +234,7 @@ async def process_emails_endpoint(
                     ) and getattr(form_data, "accept_pst", False):
                         pst_name = pf.get("original_filename") or path.name
                         processor = functools.partial(
-                            legacy_media.email_lib.process_pst_bytes,  # type: ignore[attr-defined]
+                            email_lib.process_pst_bytes,
                             file_bytes=file_bytes,
                             pst_name=pst_name,
                             title_override=form_data.title,
@@ -271,7 +268,7 @@ async def process_emails_endpoint(
                             results.append(r_item)
                     else:
                         processor = functools.partial(
-                            legacy_media.email_lib.process_email_task,  # type: ignore[attr-defined]
+                            email_lib.process_email_task,
                             file_bytes=file_bytes,
                             filename=pf.get("original_filename") or path.name,
                             title_override=form_data.title,
@@ -343,4 +340,3 @@ async def process_emails_endpoint(
 
 
 __all__ = ["router"]
-

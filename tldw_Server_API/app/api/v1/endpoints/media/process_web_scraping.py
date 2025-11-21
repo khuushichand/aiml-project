@@ -5,12 +5,17 @@ from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    UsageEventLogger,
+    get_usage_event_logger,
+)
+from tldw_Server_API.app.api.v1.schemas.media_request_models import WebScrapingRequest
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE, PermissionChecker
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.services.web_scraping_service import (
     process_web_scraping_task,
 )
-from tldw_Server_API.app.api.v1.endpoints import _legacy_media as legacy_media  # type: ignore
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 
 router = APIRouter()
 
@@ -23,11 +28,9 @@ router = APIRouter()
     ],
 )
 async def process_web_scraping_endpoint(
-    payload: legacy_media.WebScrapingRequest,  # type: ignore[attr-defined]
+    payload: WebScrapingRequest,
     db: MediaDatabase = Depends(get_media_db_for_user),
-    usage_log: legacy_media.UsageEventLogger = Depends(  # type: ignore[attr-defined]
-        legacy_media.get_usage_event_logger  # type: ignore[attr-defined]
-    ),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     Ingest / scrape data from websites or sitemaps, optionally summarize,
@@ -54,16 +57,11 @@ async def process_web_scraping_endpoint(
 
         # Resolve the scraping task via the media shim so tests that
         # monkeypatch `media.process_web_scraping_task` continue to work.
-        try:
-            from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-
-            task = getattr(
-                media_mod,
-                "process_web_scraping_task",
-                process_web_scraping_task,
-            )
-        except Exception:  # pragma: no cover - defensive fallback
-            task = process_web_scraping_task
+        task = getattr(
+            media_mod,
+            "process_web_scraping_task",
+            process_web_scraping_task,
+        )
 
         result = await task(
             scrape_method=payload.scrape_method,

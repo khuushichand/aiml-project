@@ -516,6 +516,62 @@ class ProcessAudiosForm(AddMediaForm):
     media_type: Literal["audio"] = "audio"
     keep_original_file: bool = Field(False)
 
+
+class ProcessPDFsForm(AddMediaForm):
+    """
+    Processing-only form for PDFs used by /process-pdfs (no DB writes).
+    """
+
+    media_type: Literal["pdf"] = "pdf"
+    keep_original_file: bool = Field(False)
+
+
+class ProcessEbooksForm(AddMediaForm):
+    """
+    Processing-only form for EPUBs used by /process-ebooks (no DB writes).
+    """
+
+    media_type: Literal["ebook"] = "ebook"
+    extraction_method: Literal["filtered", "markdown", "basic"] = Field(
+        "filtered",
+        description="EPUB text extraction method ('filtered', 'markdown', 'basic')",
+    )
+    keep_original_file: bool = Field(False)
+    api_key: Optional[str] = Field(
+        None, description="Optional API key forwarded to analysis for processing-only runs"
+    )
+
+
+class ProcessEmailsForm(AddMediaForm):
+    """
+    Processing-only form for emails used by /process-emails (no DB writes).
+    """
+
+    media_type: Literal["email"] = "email"
+    keep_original_file: bool = Field(False)
+    perform_chunking: bool = Field(True)
+    chunk_method: Optional[ChunkMethod] = Field(
+        "sentences", description="Default chunking method for emails"
+    )
+    chunk_size: int = Field(1000, gt=0, description="Target chunk size for emails")
+    chunk_overlap: int = Field(200, ge=0, description="Chunk overlap size for emails")
+    ingest_attachments: bool = Field(
+        False,
+        description="Parse and include nested .eml attachments as children",
+    )
+    max_depth: int = Field(
+        2, ge=1, le=5, description="Max depth for nested email parsing"
+    )
+    accept_archives: bool = Field(
+        False, description="Accept .zip archives of EMLs and expand members"
+    )
+    accept_mbox: bool = Field(
+        False, description="Accept .mbox mailboxes and expand/process messages"
+    )
+    accept_pst: bool = Field(
+        False, description="Accept .pst/.ost containers (feature-flag)"
+    )
+
 class AudioIngestRequest(BaseModel):
     mode: str = "persist"  # "ephemeral" or "persist"
 
@@ -557,6 +613,33 @@ class ScrapeMethod(str, Enum):
     SITEMAP = "sitemap"               # “Sitemap”
     URL_LEVEL = "url_level"           # “URL Level”
     RECURSIVE = "recursive_scraping"  # “Recursive Scraping”
+
+
+class WebScrapingRequest(BaseModel):
+    """
+    Request model for /process-web-scraping.
+    """
+
+    scrape_method: str  # "individual", "sitemap", "url_level", "recursive_scraping"
+    url_input: str
+    url_level: Optional[int] = None
+    max_pages: int = 10
+    max_depth: int = 3
+    summarize_checkbox: bool = False
+    custom_prompt: Optional[str] = None
+    api_name: Optional[str] = None
+    # api_key intentionally omitted for security
+    keywords: Optional[str] = "default,no_keyword_set"
+    custom_titles: Optional[str] = None
+    system_prompt: Optional[str] = None
+    temperature: float = 0.7
+    custom_cookies: Optional[List[Dict[str, Any]]] = None
+    mode: str = "persist"  # or "ephemeral"
+    user_agent: Optional[str] = None
+    custom_headers: Optional[Dict[str, str]] = None
+    crawl_strategy: Optional[str] = None
+    include_external: Optional[bool] = None
+    score_threshold: Optional[float] = None
 
 class IngestWebContentRequest(BaseModel):
     # Core fields

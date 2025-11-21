@@ -27,8 +27,10 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
     ProcessItem,
     run_batch_processor,
 )
-
-from tldw_Server_API.app.api.v1.endpoints import _legacy_media as legacy_media  # type: ignore
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
+    CODE_FILE_EXTENSIONS,
+)
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 
 router = APIRouter()
 
@@ -57,7 +59,7 @@ async def process_code_endpoint(
 
     # Reuse shared validation so that error messages and 400 semantics match
     # the legacy implementation (including URL/file presence checks).
-    legacy_media._validate_inputs("code", form_data.urls or [], files)  # type: ignore[arg-type]
+    media_mod._validate_inputs("code", form_data.urls or [], files)  # type: ignore[arg-type]
 
     urls = form_data.urls or []
     # Do not preemptively hard-fail entire batch on URL policy here.
@@ -73,20 +75,14 @@ async def process_code_endpoint(
         if files:
             # Preserve test-time monkeypatching of `_save_uploaded_files` and
             # `file_validator_instance` via the `media` shim.
-            try:
-                from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-
-                save_uploaded_files = getattr(media_mod, "_save_uploaded_files")
-                validator = getattr(media_mod, "file_validator_instance")
-            except Exception:  # pragma: no cover - defensive fallback
-                save_uploaded_files = legacy_media._save_uploaded_files  # type: ignore[attr-defined]
-                validator = legacy_media.file_validator_instance  # type: ignore[attr-defined]
+            save_uploaded_files = getattr(media_mod, "_save_uploaded_files")
+            validator = getattr(media_mod, "file_validator_instance")
 
             saved, upload_errors = await save_uploaded_files(
                 files,
                 temp_dir,
                 validator=validator,
-                allowed_extensions=sorted(legacy_media.CODE_ALLOWED_EXTENSIONS),  # type: ignore[attr-defined]
+                allowed_extensions=sorted(CODE_FILE_EXTENSIONS),
                 skip_archive_scanning=False,
                 expected_media_type_key="code",
             )
@@ -150,19 +146,14 @@ async def process_code_endpoint(
         if urls:
             # Use module-local httpx.AsyncClient so tests can monkeypatch it.
             async with httpx.AsyncClient() as client:
-                try:
-                    from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-
-                    download_url_async = getattr(media_mod, "_download_url_async")
-                except Exception:  # pragma: no cover - defensive fallback
-                    download_url_async = legacy_media._download_url_async  # type: ignore[attr-defined]
+                download_url_async = getattr(media_mod, "_download_url_async")
 
                 tasks = [
                     download_url_async(
                         client=client,
                         url=u,
                         target_dir=temp_dir,
-                        allowed_extensions=legacy_media.CODE_ALLOWED_EXTENSIONS,  # type: ignore[attr-defined]
+                        allowed_extensions=CODE_FILE_EXTENSIONS,
                         check_extension=True,
                     )
                     for u in urls

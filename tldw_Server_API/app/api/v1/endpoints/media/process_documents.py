@@ -29,7 +29,11 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
     run_batch_processor,
 )
 import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs
-from tldw_Server_API.app.api.v1.endpoints import _legacy_media as legacy_media  # type: ignore
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    UsageEventLogger,
+    get_usage_event_logger,
+)
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 
 router = APIRouter()
 
@@ -41,6 +45,7 @@ ALLOWED_DOC_EXTENSIONS = [
     ".rtf",
     ".html",
     ".htm",
+    ".xhtml",
     ".xml",
     ".json",
 ]
@@ -58,9 +63,7 @@ async def process_documents_endpoint(
         None,
         description="Document file uploads (.txt, .md, .docx, .rtf, .html, .xml)",
     ),
-    usage_log: legacy_media.UsageEventLogger = Depends(
-        legacy_media.get_usage_event_logger
-    ),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
     Process Documents (No Persistence).
@@ -84,7 +87,7 @@ async def process_documents_endpoint(
     logger.debug("Form data received for /process-documents: {}", form_data.model_dump())
 
     # Guardrails: restrict to a known set of document extensions for this endpoint.
-    legacy_media._validate_inputs("document", form_data.urls, files)  # type: ignore[arg-type]
+    media_mod._validate_inputs("document", form_data.urls, files)  # type: ignore[arg-type]
 
     # --- Prepare result structure ---
     batch_result: Dict[str, Any] = {
@@ -109,18 +112,12 @@ async def process_documents_endpoint(
         if files:
             # Preserve test-time monkeypatching of `media.file_validator_instance`
             # and `_save_uploaded_files` via the `media` shim.
-            try:
-                from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-
-                save_uploaded_files = getattr(media_mod, "_save_uploaded_files")
-                validator = getattr(
-                    media_mod,
-                    "file_validator_instance",
-                    file_validator_instance,
-                )
-            except Exception:  # pragma: no cover - defensive fallback
-                save_uploaded_files = legacy_media._save_uploaded_files  # type: ignore[attr-defined]
-                validator = file_validator_instance
+            save_uploaded_files = getattr(media_mod, "_save_uploaded_files")
+            validator = getattr(
+                media_mod,
+                "file_validator_instance",
+                file_validator_instance,
+            )
 
             saved_files, upload_errors = await save_uploaded_files(
                 files,
@@ -176,18 +173,13 @@ async def process_documents_endpoint(
             download_tasks: List[asyncio.Task[Path]] = []
             url_task_map: Dict[asyncio.Task[Path], str] = {}
 
-            # Use httpx.AsyncClient so tests can monkeypatch it if needed.
-            async with httpx.AsyncClient() as client:
+            # Use media_mod.httpx.AsyncClient so tests can monkeypatch via the media shim.
+            async with media_mod.httpx.AsyncClient() as client:
                 allowed_ext_set = set(ALLOWED_DOC_EXTENSIONS)
 
                 # Preserve test-time monkeypatching of `_download_url_async`
                 # via the media shim.
-                try:
-                    from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-
-                    download_url_async = getattr(media_mod, "_download_url_async")
-                except Exception:  # pragma: no cover - defensive fallback
-                    download_url_async = legacy_media._download_url_async  # type: ignore[attr-defined]
+                download_url_async = getattr(media_mod, "_download_url_async")
 
                 download_tasks = [
                     download_url_async(
@@ -295,11 +287,20 @@ async def process_documents_endpoint(
             logger.warning(
                 "No valid document sources found or prepared after handling uploads/URLs."
             )
-            status_code = (
-                status.HTTP_207_MULTI_STATUS
-                if batch_result["results"]
-                else status.HTTP_400_BAD_REQUEST
-            )
+            # When uploads/URLs were rejected, surface counts like other process-* endpoints.
+            if batch_result["results"]:
+                batch_result["errors_count"] = sum(
+                    1
+                    for r in batch_result["results"]
+                    if str(r.get("status", "")).lower() == "error"
+                )
+                batch_result["processed_count"] = 0
+                status_code = status.HTTP_207_MULTI_STATUS
+            else:
+                batch_result["errors_count"] = 0
+                batch_result["processed_count"] = 0
+                status_code = status.HTTP_400_BAD_REQUEST
+
             return JSONResponse(status_code=status_code, content=batch_result)
 
         logger.info(

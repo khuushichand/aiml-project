@@ -199,7 +199,8 @@ class EvaluationRunner:
                     eval_fn,
                     eval_spec,
                     eval_config,
-                    max_workers
+                    max_workers,
+                    start_index=i
                 )
 
                 # Update progress
@@ -1018,7 +1019,8 @@ class EvaluationRunner:
         eval_fn: Callable,
         eval_spec: Dict[str, Any],
         eval_config: Dict[str, Any],
-        max_workers: int
+        max_workers: int,
+        start_index: int = 0
     ) -> List[Dict[str, Any]]:
         """Process a batch of samples with proper concurrency control"""
 
@@ -1046,8 +1048,14 @@ class EvaluationRunner:
 
         # Create tasks with proper error handling
         tasks = []
+        sample_ids: List[str] = []
         for i, sample in enumerate(batch):
-            sample_id = f"sample_{i:04d}"
+            global_index = start_index + i
+            dataset_sample_id = sample.get("id") or sample.get("sample_id")
+            sample_id = f"sample_{global_index:06d}"
+            if dataset_sample_id:
+                sample_id = f"{sample_id}_{dataset_sample_id}"
+            sample_ids.append(sample_id)
             task = eval_with_timeout_and_semaphore(sample, sample_id)
             tasks.append(task)
 
@@ -1059,10 +1067,15 @@ class EvaluationRunner:
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 processed_results.append({
-                    "sample_id": f"sample_{i:04d}",
+                    "sample_id": sample_ids[i] if i < len(sample_ids) else f"sample_{start_index + i:06d}",
                     "error": str(result)
                 })
             else:
+                if isinstance(result, dict):
+                    # Preserve original dataset sample id when available
+                    ds_id = batch[i].get("id") or batch[i].get("sample_id")
+                    if ds_id and "dataset_sample_id" not in result:
+                        result["dataset_sample_id"] = ds_id
                 processed_results.append(result)
 
         return processed_results
