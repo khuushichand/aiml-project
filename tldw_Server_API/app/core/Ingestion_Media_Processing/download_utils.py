@@ -83,6 +83,13 @@ async def download_url_async(
                 resp.raise_for_status()
                 # Normalize content-type early
                 content_type = (resp.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+                if disallow_content_types and content_type in disallow_content_types:
+                    allowed_list = ", ".join(sorted(allowed_extensions or [])) or "*"
+                    raise ValueError(
+                        f"Downloaded file from {url} does not have an allowed extension "
+                        f"(allowed: {allowed_list}); content-type '{content_type}' unsupported "
+                        "for this endpoint"
+                    )
                 # Determine filename from Content-Disposition when present.
                 filename = seed_segment
                 cd = resp.headers.get("content-disposition") or ""
@@ -309,7 +316,7 @@ async def download_url_async(
                 payload = b"TEST"
             async with aiofiles.open(target_path, "wb") as f:
                 await f.write(payload)
-            logger.warning("Test-mode fallback download for %s -> %s due to %s", url, target_path, exc)
+            logger.warning("Test-mode fallback download for {} -> {} due to {}", url, target_path, exc)
             return target_path
         raise
     finally:

@@ -120,8 +120,6 @@ def _process_single_ebook(
     tags=["Media Processing (No DB)"],
 )
 async def process_ebooks_endpoint(
-    background_tasks: BackgroundTasks,  # Parity with legacy endpoint signature
-    db: MediaDatabase = Depends(get_media_db_for_user),
     form_data: ProcessEbooksForm = Depends(get_process_ebooks_form),
     files: Optional[List[UploadFile]] = File(
         None, description="EPUB file uploads (.epub)"

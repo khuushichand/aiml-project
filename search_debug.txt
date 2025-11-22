@@ -1,2 +1,0 @@
-STATUS 200
-{"items": [{"id": 199, "title": "Alpha Doc", "url": "/api/v1/media/199", "type": "document"}], "pagination": {"page": 1, "results_per_page": 5, "total_pages": 1, "total_items": 1}, "results": [{"id": 199, "title": "Alpha Doc", "url": "/api/v1/media/199", "type": "document"}]}
