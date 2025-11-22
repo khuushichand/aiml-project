@@ -84,16 +84,11 @@ async def ingest_web_content(
     scrape_method = request.scrape_method
     logger.info("Selected scrape method: {}", scrape_method)
 
-    if scrape_method not in (
-        ScrapeMethod.INDIVIDUAL,
-        ScrapeMethod.SITEMAP,
-        ScrapeMethod.URL_LEVEL,
-        ScrapeMethod.RECURSIVE,
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown scrape method: {scrape_method}",
-        )
+    # Scrape method validation / logging.
+    scrape_method = request.scrape_method
+    logger.info("Selected scrape method: {}", scrape_method)
+
+    if not raw_results:
 
     if not raw_results:
         return {
