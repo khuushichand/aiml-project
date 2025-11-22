@@ -89,8 +89,11 @@ async def ingest_web_content(
     logger.info("Selected scrape method: {}", scrape_method)
 
     if not raw_results:
-
-    if not raw_results:
+        return {
+            "status": "warning",
+            "message": "No articles were successfully scraped for this request.",
+            "results": [],
+        }
         return {
             "status": "warning",
             "message": "No articles were successfully scraped for this request.",
