@@ -53,6 +53,13 @@ async def download_url_async(
 
     test_mode_active = bool(is_test_mode()) or bool(__import__("os").getenv("PYTEST_CURRENT_TEST"))
 
+    # Fast-fail in tests for obviously invalid domains to avoid long DNS/connect timeouts.
+    if test_mode_active and (
+        ".invalid" in url.lower()
+        or "does.not.exist" in url.lower()
+    ):
+        raise ValueError(f"Invalid test URL: {url}")
+
     # Plain stream-only clients are only honored in test mode; otherwise we fall
     # back to the central HTTP client helpers.
     stream_only_client = None
