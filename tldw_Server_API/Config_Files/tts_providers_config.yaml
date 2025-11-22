@@ -21,15 +21,27 @@ providers:
     model: "tts-1"  # or "tts-1-hd" for higher quality
     timeout: 60
     max_retries: 3
+    # Optional: when true, perform a lightweight API-key verification
+    # call during adapter initialization. Disabled by default so that
+    # startup does not depend on external network availability.
+    verify_api_key_on_init: false
 
   # Kokoro TTS Configuration
   kokoro:
     enabled: true
-    use_onnx: true  # Use ONNX model (faster) vs PyTorch
-    # Recommended v1.0 ONNX layout
-    #   - model_path: models/kokoro/onnx/model.onnx (or another onnx variant)
-    #   - voices_json: models/kokoro/voices (directory with voice embeddings)
-    model_path: "models/kokoro/onnx/model.onnx"
+    use_onnx: false  # Default to PyTorch backend; set true to use ONNX
+    # Recommended layouts:
+    #   PyTorch:
+    #     - model_path: models/kokoro/pytorch/model.pth
+    #     - voices_json / voice_dir: models/kokoro/voices
+    #   ONNX (opt-in):
+    #     - model_path: models/kokoro/onnx/model.onnx (or another onnx variant)
+    #     - voices_json: models/kokoro/onnx/voices-v1.0.bin (voices bundle file)
+    # Default path for hexgrad/Kokoro-82M PyTorch checkpoint
+    model_path: "models/kokoro/kokoro-v1_0.pth"
+    # For kokoro-onnx>=0.3.x, voices_json must point to the voices bundle
+    # file (e.g., voices-v1.0.bin), not the directory of per-voice .bin files.
+    # When using ONNX, override this path accordingly.
     voices_json: "models/kokoro/voices"
     voice_dir: "models/kokoro/voices"  # For PyTorch variant (hexgrad/Kokoro-82M)
     device: "cpu"  # or "cuda" for GPU
@@ -122,7 +134,7 @@ providers:
 
   # NeuTTS Air (Neuphonic) Configuration
   neutts:
-    enabled: true  # Enabled per user request; ensure prerequisites are installed
+    enabled: false  # Disabled by default; explicitly enable only after completing NeuTTS setup
     # Backbone options:
     #  - "neuphonic/neutts-air" (HF transformers)
     #  - "neuphonic/neutts-air-q4-gguf" or "neuphonic/neutts-air-q8-gguf" (llama-cpp; enables streaming)

@@ -31,7 +31,9 @@ import zipfile
 # Local Imports
 # Adjust import paths based on your project structure if needed
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.endpoints.media import _process_document_like_item
+from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (  # type: ignore
+    process_document_like_item as _process_document_like_item,
+)
 from tldw_Server_API.tests.test_utils import temp_db
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.config import settings
@@ -837,15 +839,40 @@ def test_add_media_single_url_success(test_api_client, db_session, media_type, v
     """Test processing a single valid URL for each media type."""
     form_data = create_add_media_form_data(media_type=media_type, urls=[valid_url])
     response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, headers=dummy_headers)
-    # Expect 200 OK for success, or 207 if warnings occurred during processing
+    # Expect 200 OK for success, or 207 if warnings occurred during processing.
+    # In environments without external network/egress, audio URLs may fail to download;
+    # when that happens, skip rather than treating it as a regression.
+    if media_type == "audio" and response.status_code == status.HTTP_207_MULTI_STATUS:
+        try:
+            data = response.json()
+            results = data.get("results") or []
+            first = results[0] if results else {}
+            error_msg = (first.get("error") or "") if isinstance(first, dict) else ""
+            if "Download failed" in error_msg or "Host could not be resolved" in error_msg:
+                pytest.skip(
+                    f"Audio URL test skipped due to download/egress error for {valid_url}: {error_msg}"
+                )
+        except Exception:
+            # Fall through to normal assertions if we cannot interpret the error.
+            pass
+
     expected_code = status.HTTP_200_OK
-    if response.status_code != expected_code: # Log if not expected
-        logger.error(f"URL success test ({media_type}) failed. Status: {response.status_code}, Expected: {expected_code}, Text: {response.text}")
+    if response.status_code != expected_code:  # Log if not expected
+        logger.error(
+            f"URL success test ({media_type}) failed. "
+            f"Status: {response.status_code}, Expected: {expected_code}, Text: {response.text}"
+        )
 
     # Check for 200 or 207 (if warnings happened but core processing succeeded)
     assert response.status_code in [status.HTTP_200_OK, status.HTTP_207_MULTI_STATUS]
 
-    data = check_batch_response(response, response.status_code, expected_processed=1, expected_errors=0, check_results_len=1)
+    data = check_batch_response(
+        response,
+        response.status_code,
+        expected_processed=1,
+        expected_errors=0,
+        check_results_len=1,
+    )
     result = data["results"][0]
     # Allow Success or Warning
     assert result["status"] in ["Success", "Warning"]
@@ -1051,6 +1078,20 @@ def test_add_media_multiple_failures_and_success_pdf(
         )
 
     # --- Assertions ---
+    # In some environments without external network/egress, URL downloads may fail
+    # before batch processing and return a top-level 400 with a host resolution error.
+    # Treat that as an environment-specific issue rather than a regression.
+    if response.status_code == status.HTTP_400_BAD_REQUEST:
+        try:
+            body = response.json()
+            detail = body.get("detail") if isinstance(body, dict) else ""
+        except Exception:
+            detail = response.text or ""
+        if isinstance(detail, str) and "Host could not be resolved" in detail:
+            pytest.skip(
+                f"/media/add mixed PDF URL+file test skipped due to download/egress error: {detail}"
+            )
+
     expected_code = status.HTTP_207_MULTI_STATUS
     if response.status_code != expected_code:
         logger.error(f"Multiple Fail/Success test failed. Status: {response.status_code}, Expected: {expected_code}")

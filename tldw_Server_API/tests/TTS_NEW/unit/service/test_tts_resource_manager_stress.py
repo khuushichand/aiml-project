@@ -55,3 +55,33 @@ async def test_streaming_session_lifecycle_and_cleanup():
 
     # Shutdown manager
     await close_resource_manager()
+
+
+@pytest.mark.asyncio
+async def test_resource_manager_shutdown_stops_monitors_and_closes_clients():
+    """
+    Ensure that shutdown/close_resource_manager stop the memory monitor and
+    session cleanup tasks and close all HTTP clients.
+    """
+    mgr = await get_resource_manager({
+        "max_http_connections": 2,
+        "max_keepalive_connections": 1,
+        "keepalive_expiry": 5.0,
+        "connection_timeout": 1.0,
+        "memory_warning_threshold": 10,   # low thresholds for quick checks
+        "memory_critical_threshold": 20,
+    })
+
+    # Force the memory monitor to start and create a client
+    await mgr.memory_monitor.start_monitoring()
+    client = await mgr.get_http_client("openai", base_url="https://api.openai.com")
+    assert client is not None
+    assert len(mgr.connection_pool._clients) == 1
+    assert mgr.memory_monitor._monitoring is True
+
+    # Shutdown via close_resource_manager
+    await close_resource_manager()
+
+    # The original manager instance should have stopped monitoring and closed clients
+    assert mgr.memory_monitor._monitoring is False
+    assert not mgr.connection_pool._clients

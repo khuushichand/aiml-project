@@ -43,6 +43,7 @@ from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     UnifiedEvaluationService, get_unified_evaluation_service
 )
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
+from tldw_Server_API.app.core.Evaluations.eval_runner import EvaluationRunner
 
 # Use configuration from test_config
 DEFAULT_API_KEY = test_config.TEST_API_KEY
@@ -790,6 +791,36 @@ class TestUnifiedService:
                 assert evaluation["id"] == "eval_123"
                 assert evaluation["name"] == "test"
 
+    @pytest.mark.asyncio
+    async def test_history_and_count_use_created_by(self, unified_service):
+        """Ensure history and count respect creator field."""
+        eval_spec = {"metrics": ["exact_match"], "threshold": 0.5}
+        await unified_service.create_evaluation(
+            name="eval_user_a_1",
+            eval_type="exact_match",
+            eval_spec=eval_spec,
+            created_by="user_a"
+        )
+        await unified_service.create_evaluation(
+            name="eval_user_a_2",
+            eval_type="exact_match",
+            eval_spec=eval_spec,
+            created_by="user_a"
+        )
+        await unified_service.create_evaluation(
+            name="eval_user_b_1",
+            eval_type="exact_match",
+            eval_spec=eval_spec,
+            created_by="user_b"
+        )
+
+        history_a = await unified_service.get_evaluation_history(user_id="user_a", limit=10)
+        count_a = await unified_service.count_evaluations(user_id="user_a")
+
+        assert len(history_a) == 2
+        assert count_a == 2
+        assert all(item.get("created_by") == "user_a" for item in history_a)
+
 
 class TestErrorHandling:
     """Test error handling"""
@@ -845,6 +876,54 @@ class TestAuthentication:
         response = client.get("/api/v1/evaluations", headers=sk_auth_headers)
         # Should work if environment is set up correctly
         assert response.status_code in [200, 401]  # Depends on env setup
+
+
+class TestEvaluationRunnerBatching:
+    """Direct tests for EvaluationRunner behavior."""
+
+    @pytest.mark.asyncio
+    async def test_sample_ids_unique_across_batches(self, temp_db_path):
+        runner = EvaluationRunner(str(temp_db_path), max_concurrent_evals=2, eval_timeout=5)
+
+        samples = [
+            {"id": "s1", "input": {"output": "alpha"}, "expected": {"output": "alpha"}},
+            {"id": "s2", "input": {"output": "beta"}, "expected": {"output": "beta"}},
+            {"id": "s3", "input": {"output": "gamma"}, "expected": {"output": "gamma"}},
+        ]
+
+        dataset_id = runner.db.create_dataset(
+            name="ds",
+            samples=samples,
+            created_by="tester"
+        )
+        eval_spec = {"metrics": ["exact_match"], "threshold": 0.0}
+        eval_id = runner.db.create_evaluation(
+            name="exact",
+            eval_type="exact_match",
+            eval_spec=eval_spec,
+            dataset_id=dataset_id,
+            created_by="tester",
+        )
+        run_id = runner.db.create_run(
+            eval_id=eval_id,
+            target_model="unit",
+            config={"batch_size": 2},
+        )
+        eval_config = {
+            "eval_type": "exact_match",
+            "eval_spec": eval_spec,
+            "dataset_id": dataset_id,
+            "config": {"batch_size": 2},
+        }
+
+        results = await runner.run_evaluation(run_id, eval_id, eval_config, background=False)
+        sample_results = results["sample_results"]
+        sample_ids = [r["sample_id"] for r in sample_results]
+
+        assert len(sample_ids) == len(sample_results)
+        assert len(set(sample_ids)) == len(sample_ids)
+        # Ensure original dataset IDs are reflected
+        assert any("s1" in sid for sid in sample_ids)
 
 
 if __name__ == "__main__":

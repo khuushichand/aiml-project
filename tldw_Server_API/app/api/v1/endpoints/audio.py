@@ -29,12 +29,13 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
     OpenAITranslationRequest,
     TranscriptSegmentationRequest,
     TranscriptSegmentationResponse,
+    SpeechChatRequest,
+    SpeechChatResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.config import AUTH_BEARER_PREFIX
 from tldw_Server_API.app.core.config import load_comprehensive_config
 # Auth utils no longer used here; authentication is enforced via get_request_user dependency
-# from your_project.services.tts_service import TTSService, get_tts_service
 
 # For WebSocket streaming transcription
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
@@ -120,6 +121,13 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
+    get_chacha_db_for_user,
+)
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.Streaming.speech_chat_service import (
+    run_speech_chat_turn,
+)
 
 # Initialize rate limiter
 from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import (
@@ -236,6 +244,32 @@ def _get_failopen_cap_minutes() -> float:
     return 5.0
 
 
+def _infer_tts_provider_from_model(model: Optional[str]) -> Optional[str]:
+    """Best-effort mapping from model id to provider key for sanitization."""
+    if not model:
+        return None
+    m = str(model).strip().lower()
+    if m in {"tts-1", "tts-1-hd"}:
+        return "openai"
+    if m.startswith("kokoro"):
+        return "kokoro"
+    if m.startswith("higgs"):
+        return "higgs"
+    if m.startswith("dia"):
+        return "dia"
+    if m.startswith("chatterbox"):
+        return "chatterbox"
+    if m.startswith("vibevoice"):
+        return "vibevoice"
+    if m.startswith("neutts"):
+        return "neutts"
+    if m.startswith("eleven"):
+        return "elevenlabs"
+    if m.startswith("index_tts") or m.startswith("indextts"):
+        return "index_tts"
+    return None
+
+
 
 # V2 TTS Service handles all provider mapping internally
 # No need for manual model/voice mappings here
@@ -251,6 +285,7 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSQuotaExceededError,
 )
 from tldw_Server_API.app.core.TTS.tts_validation import TTSInputValidator
+from tldw_Server_API.app.core.TTS.tts_config import get_tts_config
 from uuid import uuid4
 
 async def get_tts_service() -> TTSServiceV2:
@@ -279,7 +314,15 @@ async def create_speech(
     Requires authentication via Bearer token in Authorization header.
     Rate limited to 10 requests per minute per IP address.
 
-    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md` (context on audio pipeline)
+    Input is sanitized by `TTSInputValidator`, which normalizes Unicode,
+    strips HTML, and removes or rejects potentially dangerous patterns
+    (e.g., obvious SQL/command/FS injection attempts). In strict mode
+    (the default), such patterns result in HTTP 400 errors; in relaxed
+    mode (`strict_validation` set to false via TTS config), dangerous
+    substrings are stripped and the request is processed if non-empty.
+
+    Docs: `Docs/Code_Documentation/Ingestion_Pipeline_Audio.md`,
+    `Docs/STT-TTS/TTS-SETUP-GUIDE.md` (sanitization and error semantics).
 
     Example (curl):
     ```bash
@@ -295,11 +338,13 @@ async def create_speech(
 
     # Input validation using the new validation system
     try:
-        # Create validator instance
-        validator = TTSInputValidator()
+        # Create validator instance; strictness can be configured via TTS config
+        tts_config = get_tts_config()
+        validator = TTSInputValidator({"strict_validation": tts_config.strict_validation})
 
         # Validate and sanitize input text
-        sanitized_text = validator.sanitize_text(request_data.input)
+        provider_hint = _infer_tts_provider_from_model(getattr(request_data, "model", None))
+        sanitized_text = validator.sanitize_text(request_data.input, provider=provider_hint)
 
         # Check for empty input after sanitization
         if not sanitized_text or len(sanitized_text.strip()) == 0:
@@ -430,9 +475,14 @@ async def create_speech(
         except Exception as exc:
             _raise_for_tts_error(exc)
 
-
     if request_data.stream:
         first_chunk = await _pull_first_chunk()
+        if not first_chunk:
+            logger.error("Streaming generation resulted in empty audio data.")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Audio generation failed to produce data.",
+            )
         return StreamingResponse(
             _stream_chunks(first_chunk),
             media_type=content_type,
@@ -986,6 +1036,72 @@ async def create_translation(
         timestamp_granularities="segment",
         current_user=current_user,
     )
+
+
+@router.post(
+    "/chat",
+    response_model=SpeechChatResponse,
+    summary="Non-streaming Speech-to-Speech chat (STT → LLM → TTS)",
+    dependencies=[
+        Depends(
+            require_token_scope(
+                "any",
+                require_if_present=False,
+                endpoint_id="audio.chat",
+                count_as="call",
+            )
+        )
+    ],
+)
+@limiter.limit("10/minute", key_func=_rate_limit_key)
+async def audio_chat_turn(
+    request_data: SpeechChatRequest,
+    request: Request,
+    tts_service: TTSServiceV2 = Depends(get_tts_service),
+    current_user: User = Depends(get_request_user),
+    chat_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    usage_log: UsageEventLogger = Depends(get_usage_event_logger),
+) -> SpeechChatResponse:
+    """
+    Execute a single non-streaming speech chat turn:
+
+      - Accept base64-encoded user audio.
+      - Run STT to obtain a transcript.
+      - Call the LLM with recent conversation history.
+      - Persist user/assistant messages into ChaChaNotes.
+      - Run TTS on the assistant reply and return base64-encoded audio.
+
+    This endpoint focuses on the v1 non-streaming path; streaming speech chat
+    is handled by a separate WebSocket endpoint in v2.
+    """
+    rid = ensure_request_id(request)
+    try:
+        usage_log.log_event(
+            "audio.chat",
+            tags=[str(getattr(current_user, "id", ""))],
+            metadata={
+                "session_id": request_data.session_id or "",
+                "input_audio_format": request_data.input_audio_format,
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"usage_log audio.chat failed: error={e}; request_id={rid}")
+
+    try:
+        return await run_speech_chat_turn(
+            request_data=request_data,
+            current_user=current_user,
+            chat_db=chat_db,
+            tts_service=tts_service,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Speech chat turn failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Speech chat pipeline failed",
+        ) from e
 
 
 # Add other OpenAI compatible endpoints like /models, /voices later

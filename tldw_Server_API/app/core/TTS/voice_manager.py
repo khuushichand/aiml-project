@@ -25,6 +25,7 @@ from .tts_exceptions import (
     TTSInvalidInputError,
     TTSResourceError
 )
+from .utils import parse_bool
 #
 #######################################################################################################################
 #
@@ -248,15 +249,29 @@ class VoiceManager:
         self.cleanup_interval = 3600  # 1 hour
         self.user_upload_counts: Dict[int, List[datetime]] = {}
         self._processing_tasks: Dict[str, asyncio.Task] = {}
+        self._warned_user_db_base_dir_fallback: bool = False
 
     def get_user_voices_path(self, user_id: int) -> Path:
-        """Get the voices directory path for a user"""
+        """Get the voices directory path for a user.
+
+        By default this is `<USER_DB_BASE_DIR>/<user_id>/voices`. When
+        `USER_DB_BASE_DIR` is not configured, it falls back to
+        `<repo_root>/Databases/user_databases/<user_id>/voices`, which is
+        suitable for local/dev but should be overridden in production.
+        """
         try:
             base_dir: Path = settings.get("USER_DB_BASE_DIR")
             base_path = base_dir / str(user_id) / "voices"
         except Exception:
             # Anchor to package root as last resort to avoid CWD effects
             base_path = Path(__file__).resolve().parents[4] / "Databases" / "user_databases" / str(user_id) / "voices"
+            if not self._warned_user_db_base_dir_fallback:
+                logger.warning(
+                    "VoiceManager: USER_DB_BASE_DIR is not configured; using fallback path "
+                    f"{base_path.parent}. For production deployments, configure USER_DB_BASE_DIR "
+                    "to point at a volume with sufficient capacity, backup, and appropriate ACLs."
+                )
+                self._warned_user_db_base_dir_fallback = True
         base_path.mkdir(parents=True, exist_ok=True)
 
         # Create subdirectories
@@ -354,6 +369,15 @@ class VoiceManager:
             elif duration > max_duration:
                 warnings.append(f"Audio duration {duration:.1f}s exceeds maximum {max_duration}s for {request.provider}")
 
+            # Optional strict enforcement for production deployments: when
+            # TTS_VOICE_STRICT_DURATION is truthy, reject uploads that fall
+            # outside the recommended duration range instead of only warning.
+            if warnings and parse_bool(os.getenv("TTS_VOICE_STRICT_DURATION"), default=False):
+                raise VoiceDurationError(
+                    f"Voice sample duration {duration:.1f}s is outside the recommended "
+                    f"range [{min_duration}, {max_duration}] seconds for provider '{request.provider}'"
+                )
+
             # Process for provider (convert format if needed)
             processed_path = await self._process_for_provider(
                 upload_path,
@@ -393,6 +417,13 @@ class VoiceManager:
                 info=f"Voice '{request.name}' uploaded successfully for {request.provider}"
             )
 
+        except VoiceProcessingError:
+            # Clean up on error but preserve the specific voice processing
+            # exception type (e.g., VoiceDurationError) so API layers can
+            # distinguish between validation and generic failures.
+            if upload_path.exists():
+                upload_path.unlink()
+            raise
         except Exception as e:
             # Clean up on error
             if upload_path.exists():
@@ -401,29 +432,46 @@ class VoiceManager:
             raise VoiceProcessingError(f"Failed to process voice upload: {str(e)}")
 
     async def _get_audio_duration(self, file_path: Path) -> float:
-        """Get audio file duration using ffprobe"""
+        """Get audio file duration using ffprobe (non-blocking)."""
+        cmd = [
+            'ffprobe', '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            str(file_path)
+        ]
         try:
-            import subprocess
-            result = subprocess.run(
-                [
-                    'ffprobe', '-v', 'error',
-                    '-show_entries', 'format=duration',
-                    '-of', 'default=noprint_wrappers=1:nokey=1',
-                    str(file_path)
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-
-            if result.returncode == 0 and result.stdout:
-                return float(result.stdout.strip())
-            else:
-                logger.warning(f"Could not determine audio duration for {file_path}")
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+            except asyncio.TimeoutError:
+                proc.kill()
+                try:
+                    await proc.communicate()
+                except Exception:
+                    pass
+                logger.error(f"ffprobe timed out for {file_path}")
                 return 0.0
 
-        except (subprocess.TimeoutExpired, FileNotFoundError, ValueError) as e:
-            logger.error(f"Error getting audio duration: {e}")
+            if proc.returncode == 0 and stdout:
+                try:
+                    return float(stdout.decode().strip())
+                except (UnicodeDecodeError, ValueError) as e:
+                    logger.error(f"Error parsing ffprobe output for {file_path}: {e}")
+                    return 0.0
+
+            err_msg = (stderr or b"").decode(errors="ignore") if stderr is not None else ""
+            logger.warning(f"Could not determine audio duration for {file_path}: {err_msg}")
+            return 0.0
+
+        except FileNotFoundError as e:
+            logger.error(f"ffprobe not found while getting audio duration: {e}")
+            return 0.0
+        except Exception as e:
+            logger.error(f"Error getting audio duration for {file_path}: {e}")
             return 0.0
 
     async def _process_for_provider(self, input_path: Path, output_path: Path, provider: str) -> Path:
@@ -439,8 +487,6 @@ class VoiceManager:
 
         # Convert using ffmpeg
         try:
-            import subprocess
-
             # Ensure output has correct extension
             output_path = output_path.with_suffix(f".{target_format}")
 
@@ -452,17 +498,32 @@ class VoiceManager:
                 str(output_path)
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            except asyncio.TimeoutError:
+                proc.kill()
+                try:
+                    await proc.communicate()
+                except Exception:
+                    pass
+                logger.error(f"FFmpeg conversion timed out for {input_path}")
+                shutil.copy2(input_path, output_path)
+                return output_path
 
-            if result.returncode != 0:
-                logger.error(f"FFmpeg conversion failed: {result.stderr}")
+            if proc.returncode != 0:
+                err_msg = (stderr or b"").decode(errors="ignore") if stderr is not None else ""
+                logger.error(f"FFmpeg conversion failed for {input_path}: {err_msg}")
                 # Fall back to copying original
                 shutil.copy2(input_path, output_path)
             else:
                 logger.info(f"Converted audio to {target_format} at {target_sr}Hz")
 
             return output_path
-
         except Exception as e:
             logger.error(f"Audio conversion failed: {e}")
             # Fall back to copying original
@@ -490,8 +551,18 @@ class VoiceManager:
             for voice_file in processed_path.glob("*"):
                 if voice_file.is_file() and voice_file.suffix in VoiceFileValidator.ALLOWED_EXTENSIONS:
                     try:
-                        # Extract voice ID from filename
-                        voice_id = voice_file.stem
+                        # Extract provider and voice ID from filename. By default, files are
+                        # named `<voice_id>.<ext>`. For future multi-provider layouts we
+                        # also support an optional `provider__voice_id.ext` pattern.
+                        stem = voice_file.stem
+                        provider_name = "vibevoice"
+                        voice_id = stem
+                        if "__" in stem:
+                            maybe_provider, maybe_id = stem.split("__", 1)
+                            if maybe_provider:
+                                provider_name = maybe_provider.lower()
+                            if maybe_id:
+                                voice_id = maybe_id
 
                         # Get file info
                         stat = voice_file.stat()
@@ -505,7 +576,7 @@ class VoiceManager:
                             format=voice_file.suffix[1:],
                             duration=duration,
                             size_bytes=stat.st_size,
-                            provider="vibevoice",  # Default provider
+                            provider=provider_name,
                             created_at=datetime.fromtimestamp(stat.st_ctime),
                             file_hash=""  # Would need to calculate
                         )

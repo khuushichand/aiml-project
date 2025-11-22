@@ -6,10 +6,10 @@ allow_remote_setup_access = false
 
 [Server]
 disable_cors = false
-allow_remote_webui_access = false
+allow_remote_webui_access = true
 # Optional: restrict which remote clients can access /webui
 # Provide CIDR ranges or individual IPs, comma-separated
-webui_ip_allowlist = 192.168.1.0/24, 10.0.0.5
+webui_ip_allowlist = 192.168.1.0/24, 192.168.5.0/24, 10.0.0.5
 
 [Processing]
 processing_choice = cuda
@@ -258,21 +258,72 @@ streams_unified = true
 # chat_stream_channel_maxsize = 100
 
 [HTTP]
-# Control outbound HTTP redirect behavior for the server's HTTP client
-# (env overrides: HTTP_ALLOW_REDIRECTS, HTTP_MAX_REDIRECTS,
-#                  HTTP_ALLOW_CROSS_HOST_REDIRECTS, HTTP_ALLOW_SCHEME_DOWNGRADE)
+# Centralized outbound HTTP client configuration
+# Env overrides: see [HTTP-Client] in Config_Files/README.md
 
-# Whether simple GET/HEAD helpers may follow redirects (default: true)
+# Core timeouts (seconds)
+connect_timeout = 5.0
+read_timeout = 30.0
+write_timeout = 30.0
+pool_timeout = 30.0
+
+# Retries & backoff
+retry_attempts = 3
+backoff_base_ms = 250
+backoff_cap_s = 30
+
+# Connection limits
+max_connections = 100
+max_keepalive_connections = 20
+
+# Redirect behavior for simple GET/HEAD helpers
 allow_redirects = true
-
-# Maximum number of redirects to follow before failing (default: 5)
 max_redirects = 5
 
-# Allow redirects to a different host (default: false for safety)
+# Redirect safety controls
 allow_cross_host_redirects = false
-
-# Allow scheme downgrade (https -> http) (default: false for safety)
 allow_scheme_downgrade = false
+
+# Trust system environment/proxies (HTTP_TRUST_ENV)
+trust_env = false
+
+# Optional override for the default User-Agent
+default_user_agent =
+
+# Optional maximum JSON payload size (bytes) for helpers that opt-in
+json_max_bytes =
+
+# Optional HTTP/3 toggle (currently a no-op; reserved for future use)
+http3_enabled = false
+
+# Proxy host allowlist (csv of hostnames/domains or URLs); deny-by-default when empty
+proxy_allowlist =
+
+# TLS minimum version enforcement
+enforce_tls_min_version = false
+tls_min_version = 1.2
+
+# Env-driven certificate pins (HTTP_CERT_PINS); format: host=pin1|pin2[,host2=pin3]
+cert_pins =
+
+[Egress]
+# Global egress allow/deny lists for outbound HTTP (including workflows and the HTTP client)
+# Comma-separated hostnames or domains; empty means "no constraint" in permissive profile.
+egress_allowlist =
+egress_denylist =
+
+# Workflows-specific allow/deny overrides (unioned with global lists)
+workflows_allowlist =
+workflows_denylist =
+
+# Allowed outbound ports (comma-separated integers; default: 80,443)
+allowed_ports = 80,443
+
+# Block private/reserved IP ranges by default (true/false)
+block_private = true
+
+# Egress profile: strict|permissive|custom (see Security/egress.py)
+profile =
 
 [Embeddings]
 embedding_provider = huggingface
@@ -582,6 +633,13 @@ custom_vocab_case_sensitive = False
 [external_providers]
 
 [TTS-Settings]
+# Base directory for per-user databases and voice assets.
+# Recommended for production: point this at a dedicated volume
+# with sufficient capacity, backups, and appropriate filesystem ACLs.
+# If unset, the server falls back to Databases/user_databases under
+# the project root.
+USER_DB_BASE_DIR = Databases/user_databases
+
 local_tts_device = cpu
 default_tts_provider = kokoro
 default_tts_voice = af_bella
@@ -613,6 +671,12 @@ default_alltalk_tts_output_format = mp3
 alltalk_api_ip = http://127.0.0.1:7851/v1/audio/speech
 kokoro_model_path = ./App_Function_Libraries/models/kokoro_models/
 default_kokoro_tts_speed = 1.0
+
+# When true, enforce strict duration requirements for uploaded voice
+# samples based on provider-specific ranges in VoiceManager. Out-of-range
+# samples will be rejected with a VoiceDurationError instead of only
+# emitting warnings. Default is false (advisory-only).
+TTS_VOICE_STRICT_DURATION = false
 
 # ---------------------------------------------
 # Optional: Audio streaming quota configuration

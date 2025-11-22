@@ -103,3 +103,65 @@ def test_invalidate_uses_scan_when_index_missing(monkeypatch):
 
     # Expect fallback removal of scanned/deletable key even when index missing
     assert "cache:/api/v1/media/456:ghi789" not in fake.kv
+
+
+@pytest.mark.unit
+def test_cache_index_added_and_invalidated_modular_mode(monkeypatch):
+    """
+    Ensure cache_response / invalidate_cache honour a monkeypatched
+    media.cache when legacy media is disabled (modular-only/_DummyCache mode).
+    """
+    from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+
+    fake = _FakeRedis()
+    # Force the non-legacy branch inside media.cache_response / invalidate_cache.
+    monkeypatch.setattr(media_mod, "_legacy_media", None, raising=False)
+    monkeypatch.setattr(media_mod, "cache", fake, raising=False)
+
+    key = "cache:/api/v1/media/789:abc789"
+    media_mod.cache_response(key, {"ok": True})
+
+    # KV set and index creation should go through the patched cache.
+    assert any(call[0] == "setex" and call[1] == key for call in fake.calls)
+    idx_key = "cacheidx:/api/v1/media/789"
+    assert idx_key in fake.sets
+    assert key in fake.sets[idx_key]
+
+    # Seed index with multiple items and ensure invalidate deletes them.
+    other_key = "cache:/api/v1/media/789:def789"
+    fake.kv[other_key] = "v"
+    fake.sets[idx_key].add(other_key)
+
+    media_mod.invalidate_cache(789)
+
+    assert key not in fake.kv
+    assert other_key not in fake.kv
+
+
+@pytest.mark.unit
+def test_invalidate_uses_scan_when_index_missing_modular_mode(monkeypatch):
+    """
+    Ensure scan-based invalidation path also uses the patched cache in
+    modular-only mode (no legacy media module).
+    """
+    from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+
+    class _ScanOnlyRedis(_FakeRedis):
+        def smembers(self, key):
+            # Simulate missing index set
+            return set()
+
+        def scan(self, cursor=0, match=None, count=None):
+            # Return one matching key via SCAN on first call, then finish
+            if cursor == 0:
+                self.kv["cache:/api/v1/media/999:ghi999"] = "v"
+                return 0, ["cache:/api/v1/media/999:ghi999"]
+            return 0, []
+
+    fake = _ScanOnlyRedis()
+    monkeypatch.setattr(media_mod, "_legacy_media", None, raising=False)
+    monkeypatch.setattr(media_mod, "cache", fake, raising=False)
+
+    media_mod.invalidate_cache(999)
+
+    assert "cache:/api/v1/media/999:ghi999" not in fake.kv

@@ -845,6 +845,30 @@ jobs:
           if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
           exit $status
 
+      - name: Run tests (Media, legacy-free) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="Media-legacy-free"; set +e
+          TLDW_DISABLE_LEGACY_MEDIA=1 pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Media \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Media_legacy_free.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (MediaIngestion_NEW, legacy-free) [Linux ${{ matrix.python }}]
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-linux-${{ matrix.python }}"; MOD="MediaIngestion_NEW-legacy-free"; set +e
+          TLDW_DISABLE_LEGACY_MEDIA=1 pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/MediaIngestion_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/MediaIngestion_NEW_legacy_free.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
       - name: Run tests (Media_Ingestion_Modification) [Linux ${{ matrix.python }}]
         continue-on-error: true
         shell: bash
@@ -2047,6 +2071,30 @@ jobs:
             tldw_Server_API/tests/MediaIngestion_NEW \
             --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
             --junit-xml="$RESULTS_DIR/MediaIngestion_NEW.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (Media, legacy-free)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="Media-legacy-free"; set +e
+          TLDW_DISABLE_LEGACY_MEDIA=1 pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/Media \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/Media_legacy_free.xml"; status=$?
+          if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
+          exit $status
+
+      - name: Run tests (MediaIngestion_NEW, legacy-free)
+        continue-on-error: true
+        shell: bash
+        run: |
+          RESULTS_DIR="test-results-${{ matrix.os }}-3.12"; MOD="MediaIngestion_NEW-legacy-free"; set +e
+          TLDW_DISABLE_LEGACY_MEDIA=1 pytest -q --maxfail=1 --disable-warnings -p pytest_cov -p pytest_asyncio.plugin -m "not jobs and not e2e" \
+            tldw_Server_API/tests/MediaIngestion_NEW \
+            --cov=tldw_Server_API --cov-report=xml --cov-report=term-missing --cov-append \
+            --junit-xml="$RESULTS_DIR/MediaIngestion_NEW_legacy_free.xml"; status=$?
           if [ $status -ne 0 ]; then echo "$MOD" >> "$RESULTS_DIR/failures.txt"; fi
           exit $status
 

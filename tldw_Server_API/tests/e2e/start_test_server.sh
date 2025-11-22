@@ -1,6 +1,10 @@
 #!/bin/bash
 # Script to start the test server with proper environment variables
 
+# Always resolve paths relative to this script, not the caller's CWD
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
 echo "Starting test server with TEST_MODE enabled..."
 
 # Check if server is already running
@@ -15,7 +19,19 @@ fi
 # Set test environment variables
 export TEST_MODE=true
 export TESTING=true
-export SINGLE_USER_API_KEY=test-api-key-for-e2e-testing-12345
+# Use a canonical deterministic test key that matches AuthNZ defaults and test expectations
+export SINGLE_USER_TEST_API_KEY="${SINGLE_USER_TEST_API_KEY:-test-api-key-12345}"
+# Ensure the single-user API key used by the server matches the test key
+export SINGLE_USER_API_KEY="${SINGLE_USER_API_KEY:-$SINGLE_USER_TEST_API_KEY}"
+# Expose the effective test API key via /api/v1/health for E2E fixtures
+export HEALTH_EXPOSE_TEST_API_KEY=true
+
+# Use an isolated per-run USER_DB_BASE_DIR so E2E tests exercise on-disk
+# persistence/locking without mutating the developer's local databases.
+# This directory is cleaned up in the trap on exit.
+TMP_USER_DB_BASE="$(mktemp -d "${REPO_ROOT}/Databases/user_databases_e2e_XXXXXX")"
+export USER_DB_BASE_DIR="${TMP_USER_DB_BASE}"
+echo "E2E USER_DB_BASE_DIR: ${USER_DB_BASE_DIR}"
 
 # Function to cleanup on exit
 cleanup() {
@@ -26,6 +42,11 @@ cleanup() {
         # Also kill any child processes
         pkill -P $SERVER_PID 2>/dev/null
     fi
+    # Remove the temporary per-run USER_DB_BASE_DIR to avoid polluting the repo
+    if [ -n "$TMP_USER_DB_BASE" ] && [ -d "$TMP_USER_DB_BASE" ]; then
+        echo "Cleaning up E2E USER_DB_BASE_DIR: $TMP_USER_DB_BASE"
+        rm -rf "$TMP_USER_DB_BASE"
+    fi
     exit 0
 }
 
@@ -34,7 +55,7 @@ trap cleanup INT TERM EXIT
 
 # Start the server
 echo "Starting server with API key: $SINGLE_USER_API_KEY"
-cd ../..
+cd "${REPO_ROOT}" || { echo "Failed to cd to repo root: ${REPO_ROOT}" >&2; exit 1; }
 
 # Start server and capture both stdout and stderr (use full module path)
 python -m uvicorn tldw_Server_API.app.main:app --reload --port 8000 2>&1 &

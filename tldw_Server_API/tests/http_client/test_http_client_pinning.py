@@ -19,6 +19,7 @@ requires_httpx = pytest.mark.skipif(not _has_httpx(), reason="httpx not installe
 
 @requires_httpx
 def test_tls_pinning_success(monkeypatch):
+    from tldw_Server_API.app.core import http_client as hc
     from tldw_Server_API.app.core.http_client import _check_cert_pinning
 
     fake_der = b"fakecert"
@@ -62,6 +63,8 @@ def test_tls_pinning_success(monkeypatch):
 
     monkeypatch.setattr(_ssl, "create_default_context", fake_create_default_context)
     monkeypatch.setattr(_socket, "create_connection", fake_create_connection)
+    # Avoid invoking the real egress policy (which may perform DNS lookups) in this unit test
+    monkeypatch.setattr(hc, "_validate_egress_or_raise", lambda url: None)
 
     # Should not raise
     _check_cert_pinning("example.com", 443, {pin}, "1.2")
@@ -69,6 +72,7 @@ def test_tls_pinning_success(monkeypatch):
 
 @requires_httpx
 def test_tls_pinning_mismatch(monkeypatch):
+    from tldw_Server_API.app.core import http_client as hc
     from tldw_Server_API.app.core.http_client import _check_cert_pinning
     from tldw_Server_API.app.core.exceptions import EgressPolicyError
 
@@ -112,6 +116,8 @@ def test_tls_pinning_mismatch(monkeypatch):
 
     monkeypatch.setattr(_ssl, "create_default_context", fake_create_default_context)
     monkeypatch.setattr(_socket, "create_connection", fake_create_connection)
+    # Avoid invoking the real egress policy in this unit test; we only care about pin mismatch behavior
+    monkeypatch.setattr(hc, "_validate_egress_or_raise", lambda url: None)
 
     with pytest.raises(EgressPolicyError):
         _check_cert_pinning("example.com", 443, {"deadbeef"}, "1.2")

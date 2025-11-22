@@ -478,66 +478,14 @@ async def get_request_user(
             elif token:
                 api_key = token
             else:
-                # In explicit test contexts, we previously synthesized an API key when
-                # headers were missing. That behavior interferes with auth-required tests
-                # for sensitive routes (e.g., /api/v1/audio/*, /api/v1/chat/*). Restrict
-                # synthesis to non-sensitive routes to preserve security semantics in tests.
-                try:
-                    import os as _os, sys as _sys
-                    in_test = (
-                        _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-                        or _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
-                        or _os.getenv("PYTEST_CURRENT_TEST") is not None
-                        or ("pytest" in getattr(_sys, "modules", {}))
-                    )
-                except Exception:
-                    in_test = False
-                # Path-based guard: do NOT synthesize for sensitive endpoints
-                path = ""
-                try:
-                    path = getattr(getattr(request, "url", None), "path", "") or getattr(request, "scope", {}).get("path", "")
-                except Exception:
-                    path = ""
-                # Disallow synthesis for sensitive endpoints
-                _path_str = str(path)
-                # Historically, synthesis was allowed for chat to ease some adapter tests,
-                # but this caused unauthorized access to pass. Block synthesis for both
-                # audio and chat to ensure 401 on missing credentials.
-                _synth_disallowed_prefixes = ("/api/v1/audio/", "/api/v1/chat/")
-                synth_allowed = in_test and not any(_path_str.startswith(p) for p in _synth_disallowed_prefixes)
-                if synth_allowed:
-                    try:
-                        api_key = (
-                            get_settings().SINGLE_USER_API_KEY
-                            or _os.getenv("SINGLE_USER_API_KEY")
-                            or _os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
-                        )
-                    except Exception:
-                        api_key = None
-                if not api_key:
-                    logger.warning("Single-User Mode: Missing X-API-KEY and Authorization Bearer; cannot authenticate.")
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Missing API credentials"
-                    )
-        # In explicit test contexts, normalize/accept bearer-style API keys to the configured single-user key
-        try:
-            import os as _os
-            if (
-                _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-                or _os.getenv("PYTEST_CURRENT_TEST") is not None
-            ):
-                # If settings key doesn't match env (early-init race), coerce api_key to the effective configured key
-                effective_key = (
-                    get_settings().SINGLE_USER_API_KEY
-                    or _os.getenv("SINGLE_USER_API_KEY")
-                    or app_settings.get("SINGLE_USER_API_KEY")
+                # Missing credentials must result in an auth failure, even in tests.
+                # This ensures negative E2E scenarios (e.g., missing API key) see 401/403
+                # instead of being silently granted access.
+                logger.warning("Single-User Mode: Missing X-API-KEY and Authorization Bearer; cannot authenticate.")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Missing API credentials"
                 )
-                if isinstance(api_key, str) and effective_key:
-                    # Coerce to match to avoid spurious 401s in tests
-                    api_key = effective_key
-        except Exception:
-            pass
         # In pytest or TEST_MODE, normalize common placeholders to the configured test key
         try:
             import os as _os

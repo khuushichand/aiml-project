@@ -50,6 +50,38 @@ class TestTTSGenerateEndpoint:
         assert response.headers.get("content-type") == "audio/mpeg"
         assert len(response.content) > 0
 
+    @pytest.mark.streaming
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.httpx.AsyncClient.post')
+    async def test_generate_basic_audio_streaming(self, mock_post, test_client, auth_headers):
+        """Test basic TTS generation endpoint in streaming mode (OpenAI)."""
+
+        async def mock_iter_bytes(chunk_size=1024):
+            for chunk in [b"chunk1", b"chunk2"]:
+                yield chunk
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.aiter_bytes = mock_iter_bytes
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        response = test_client.post(
+            "/api/v1/audio/speech",
+            json={
+                "input": "Hello, this is a streaming test.",
+                "voice": "alloy",
+                "model": "tts-1",
+                "response_format": "mp3",
+                "stream": True,
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.headers.get("content-type") == "audio/mpeg"
+        chunks = list(response.iter_bytes())
+        assert len(chunks) > 0
+
     async def test_generate_without_provider(self, test_client, auth_headers):
         """Test generation using default provider."""
         async def mock_stream(*args, **kwargs):

@@ -336,6 +336,11 @@ Response body:
 }
 ```
 
+Semantics:
+- `strict=false` (default) returns a report with `errors` and `warnings` but does not cause the API call itself to fail; callers decide how to handle issues.
+- `strict=true` is intended for server-side workflows (e.g., Chatbooks import) where certain error classes (schema, regex safety/timeouts, template parse/forbidden constructs, output/size limits) should be treated as fatal.
+- Unknown or unsupported `schema_version` values still return HTTP 200 with a `schema_invalid` error code in the response payload; HTTP 400 is reserved for malformed request bodies that do not match `ValidateDictionaryRequest`.
+
 ---
 
 Planned additions (not yet implemented): Clone dictionary, toggle active status, bulk add/update entries, search entries across dictionaries.
@@ -696,6 +701,13 @@ GET `/api/v1/chat/documents/statistics`
 
 Export/import collections of chat-related content with job management and secure downloads.
 
+### Interplay with Chatbook Tools (Dictionaries & Templates)
+
+Chatbooks can include chat dictionaries and other template-aware content whose behavior is defined in the Chatbook Tools PRD and related APIs:
+- Embedded dictionaries are validated during `POST /api/v1/chatbooks/import` using the same validator exposed at `POST /api/v1/chat/dictionaries/validate`. Validation findings (schema/regex/template issues) appear as per-item warnings/errors in Chatbook import job results.
+- The `strict` flag in `/chat/dictionaries/validate` is not forwarded directly from Chatbooks; instead, import always calls the validator with `strict=false` and uses the `CHATBOOKS_IMPORT_DICT_STRICT` environment flag to decide whether dictionaries with fatal errors are skipped or imported with warnings.
+- Template-related manifest metadata (for example, `metadata.template_mode`, `metadata.template_defaults`, `metadata.template_timezone`, `metadata.template_locale`) is carried through in Chatbook exports/imports but evaluated according to the template renderer and flags documented in `Docs/Product/Chatbook-Tools-PRD.md`. Chatbooks themselves do not execute templates at import time unless explicitly configured via those tools-level settings.
+
 ### Base URL
 `/api/v1/chatbooks`
 
@@ -968,3 +980,7 @@ Response body:
   ]
 }
 ```
+
+Notes:
+- The `commands` list is filtered per-user based on AuthNZ/RBAC and deployment configuration. Commands whose backing providers are not configured (e.g., `weather` without a weather provider/API key) may be omitted entirely or returned but respond with a configurable “unavailable” message when invoked.
+- Clients should treat `GET /api/v1/chat/commands` as the per-session source of truth and avoid caching the list long-term, since RBAC or configuration changes can add or remove commands at any time.

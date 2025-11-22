@@ -19,6 +19,7 @@ except Exception:
 # Local Imports
 from .adapters.base import AudioFormat
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from .utils import parse_bool
 #
 #######################################################################################################################
 #
@@ -41,6 +42,10 @@ class ProviderConfig(BaseModel):
     batch_size: int = 1
     # Allow providers (esp. local ones) to declare auto-download behavior
     auto_download: bool = True
+    # Optional: for HTTP/API providers like OpenAI, perform a lightweight
+    # API-key verification call during adapter.initialize(). This is disabled
+    # by default so startup does not depend on external network availability.
+    verify_api_key_on_init: bool = False
     extra_params: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator('api_key', mode='before')
@@ -65,9 +70,10 @@ class PerformanceConfig(BaseModel):
     cache_enabled: bool = False
     cache_ttl_seconds: int = 3600
     stream_chunk_size: int = 1024
-    # Compatibility flag: when true, embed error messages as audio bytes in streams
-    # Recommended to set false in production to use HTTP errors instead
-    stream_errors_as_audio: bool = True
+    # Compatibility flag: when true, embed error messages as audio bytes in streams.
+    # Default is False so APIs surface structured HTTP errors instead of "ERROR: ..." audio.
+    # Set to true only if you explicitly rely on error-as-audio semantics.
+    stream_errors_as_audio: bool = False
     memory_warning_threshold: int = 80
     memory_critical_threshold: int = 90
     max_connections_per_provider: int = 5
@@ -102,6 +108,9 @@ class TTSConfig(BaseModel):
     performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
     fallback: FallbackConfig = Field(default_factory=FallbackConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    # Global input validation behavior; controls strict sanitization in TTSInputValidator.
+    # When true (default), dangerous patterns raise errors; when false, they are stripped.
+    strict_validation: bool = True
 
     # Settings from config.txt
     default_provider: Optional[str] = None
@@ -137,6 +146,9 @@ class TTSConfigManager:
     def _find_yaml_config(self) -> Optional[Path]:
         """Find YAML configuration file"""
         search_paths = [
+            # Preferred project location: tldw_Server_API/Config_Files/tts_providers_config.yaml
+            Path(__file__).parent.parent.parent.parent / "Config_Files" / "tts_providers_config.yaml",
+            # Legacy/default locations kept for compatibility
             Path(__file__).parent / "tts_providers_config.yaml",
             Path.cwd() / "tts_providers_config.yaml",
             Path.home() / ".config" / "tldw" / "tts_providers_config.yaml"
@@ -270,6 +282,11 @@ class TTSConfigManager:
                             config_dict['providers'] = {}
                         config_dict['providers'].setdefault(prov, {})['auto_download'] = bv
 
+                # Optional: global strict_validation toggle
+                sv = _bool_from_section('strict_validation')
+                if sv is not None:
+                    config_dict['strict_validation'] = sv
+
             # Check for API keys in main section
             for key in config:
                 if key != 'TTS-Settings':
@@ -324,6 +341,13 @@ class TTSConfigManager:
 
         if os.getenv('TTS_DEVICE'):
             config_dict['local_device'] = os.getenv('TTS_DEVICE')
+
+        # Global strict validation toggle for TTS input sanitization
+        if os.getenv('TTS_STRICT_VALIDATION') is not None:
+            config_dict['strict_validation'] = parse_bool(
+                os.getenv('TTS_STRICT_VALIDATION'),
+                default=True,
+            )
 
         return config_dict
 

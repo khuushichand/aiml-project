@@ -37,14 +37,16 @@ Notes:
 
 ## Enable Provider
 
-NeuTTS has been added to the TTS config and enabled by default in:
+NeuTTS is present in the TTS config but **disabled by default**. It requires explicit opt-in *after* you complete the setup steps above. This is to avoid unexpectedly enabling a resource-intensive / experimental TTS provider on upgrade and to ensure admins have reviewed privacy and hardware implications before use.
+
+NeuTTS configuration lives in:
 `tldw_Server_API/app/core/TTS/tts_providers_config.yaml`
 
-Key settings:
+Default settings:
 ```
 providers:
   neutts:
-    enabled: true
+    enabled: false
     backbone_repo: "neuphonic/neutts-air"           # or GGUF: neuphonic/neutts-air-q8-gguf
     backbone_device: "cpu"                           # "gpu" if llama-cpp with GPU
     codec_repo: "neuphonic/neucodec"                 # or neucodec-onnx-decoder
@@ -52,7 +54,20 @@ providers:
     sample_rate: 24000
 ```
 
-Provider priority includes `neutts` after `kokoro` by default.
+### Re-enabling NeuTTS after setup (opt-in)
+
+1. Open `tldw_Server_API/app/core/TTS/tts_providers_config.yaml`.
+2. Locate the `providers.neutts` section and change:
+   - `enabled: false` → `enabled: true`
+3. Restart the tldw_server API service (e.g., restart your `uvicorn` / process manager).
+
+Once enabled, provider priority includes `neutts` after `kokoro` by default.
+
+### Migration / breaking-change notes
+
+The TTS provider manager filters out disabled providers via `is_provider_enabled()`. As a result:
+- Older configs or requests that reference NeuTTS models (for example `neutts-air`, `neutts-air-q8-gguf`) will be ignored until you explicitly re-enable NeuTTS as described above.
+- Admins should search for existing references to `neutts` / `neutts-air` in configuration files (e.g., `config.txt`, environment variables, overrides) and update them as needed so they match your intended NeuTTS usage once re-enabled.
 
 ## Using the API
 

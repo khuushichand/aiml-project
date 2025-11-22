@@ -285,6 +285,12 @@ async def tts_service(mock_adapter_factory):
     """Create a TTS service instance with mocked adapters."""
     # Pass mock factory into constructor to match current TTSServiceV2 API
     service = TTSServiceV2(factory=mock_adapter_factory)
+    # For unit tests that consume generate_speech() and expect errors to be
+    # surfaced as "ERROR:" chunks instead of exceptions, enable the
+    # stream_errors_as_audio mode explicitly on the fixture instance. Tests
+    # that need strict HTTP-style error propagation construct their own
+    # TTSServiceV2 instances with the appropriate config.
+    service._stream_errors_as_audio = True
     # Keep backward-compat for tests that reference _factory explicitly
     service._factory = mock_adapter_factory
     yield service

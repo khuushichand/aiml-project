@@ -16,6 +16,7 @@ Voice cloning, also known as voice synthesis or voice mimicry, allows the TTS sy
 - [Security & Ethics](#security--ethics)
 - [Troubleshooting](#troubleshooting)
 - [Future Enhancements](#future-enhancements)
+ - [Storage & Configuration Notes](#storage--configuration-notes)
 
 ## Supported Providers
 
@@ -350,6 +351,17 @@ def validate_voice_sample(audio_path):
 
     return True, "Audio validated successfully"
 ```
+
+## Storage & Configuration Notes
+
+- Voice uploads and processed samples are stored under the per-user data root:
+  - Default (when `USER_DB_BASE_DIR` is not configured):
+    - `Databases/user_databases/<user_id>/voices/`
+  - Recommended for production:
+    - Set `USER_DB_BASE_DIR` (in `Config_Files/config.txt` or environment) to a dedicated volume with sufficient capacity, backups, and appropriate filesystem ACLs.
+- Optional strict duration enforcement:
+  - Environment variable `TTS_VOICE_STRICT_DURATION=true` causes uploads whose duration falls outside the provider’s recommended range (see `PROVIDER_REQUIREMENTS` in `voice_manager.py`) to be rejected with a `VoiceDurationError` instead of only emitting warnings.
+  - By default this is disabled; durations outside the recommended range only generate warnings but are still accepted.
 
 ## Usage Examples
 

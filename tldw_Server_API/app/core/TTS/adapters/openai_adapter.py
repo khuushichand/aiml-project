@@ -5,11 +5,13 @@
 import os
 from typing import Optional, Dict, Any, AsyncGenerator, Set
 #
+from loguru import logger
 # Third-party Imports
 import httpx
-from loguru import logger
 #
 # Local Imports
+from tldw_Server_API.app.core.http_client import apost
+from tldw_Server_API.app.core.exceptions import NetworkError as CoreNetworkError, RetryExhaustedError
 from .base import (
     TTSAdapter,
     TTSCapabilities,
@@ -112,6 +114,9 @@ class OpenAIAdapter(TTSAdapter):
             or "tts-1"
         )  # e.g., "tts-1" or "tts-1-hd"
         self.client: Optional[httpx.AsyncClient] = None
+        # Optional: perform a lightweight API-key verification call during
+        # initialize() when enabled via configuration.
+        self._verify_api_key_on_init: bool = bool(self.config.get("verify_api_key_on_init"))
 
         if not self.api_key:
             logger.warning(f"{self.provider_name}: API key not configured")
@@ -126,20 +131,66 @@ class OpenAIAdapter(TTSAdapter):
                 self._status = ProviderStatus.NOT_CONFIGURED
                 raise TTSProviderNotConfiguredError(error_msg, provider=self.provider_name)
 
-            # Get HTTP client from resource manager
+            # Get HTTP client from resource manager. By default we avoid
+            # making a network call here so that initialization does not
+            # depend on external API availability. When explicitly enabled
+            # via configuration, a lightweight API-key verification call
+            # can be performed below.
             resource_manager = await get_resource_manager()
             self.client = await resource_manager.get_http_client(
                 provider=self.provider_name.lower(),
                 base_url=self.base_url
             )
 
-            # Test the API key with a minimal request
+            # Prepare auth headers for subsequent requests (and optional verify).
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             }
 
-            # Quick validation - we'll do a proper test in production
+            # Optional: best-effort API key verification on init.
+            # This is disabled by default to keep startup fast and resilient
+            # to transient network issues. When enabled, only clear auth
+            # failures are treated as fatal; other errors are logged and
+            # deferred to the first real request.
+            if self._verify_api_key_on_init and self.client is not None:
+                try:
+                    payload = {
+                        "model": self.model,
+                        "input": "test",
+                        "voice": "alloy",
+                        "response_format": "mp3",
+                        "speed": 1.0,
+                    }
+                    # Reuse the same error-mapping logic as normal requests.
+                    try:
+                        await self._generate_complete(headers, payload)
+                    except httpx.HTTPStatusError as e:
+                        # Map HTTP errors to TTS exceptions so that clear
+                        # auth failures are treated as fatal below while
+                        # other conditions remain non-fatal.
+                        await self._handle_http_status_error(e)
+                    logger.info(f"{self.provider_name}: API key verified during initialization")
+                except TTSAuthenticationError as auth_exc:
+                    logger.error(f"{self.provider_name}: API key verification failed during initialization: {auth_exc}")
+                    self._status = ProviderStatus.ERROR
+                    raise TTSProviderInitializationError(
+                        f"Failed to initialize {self.provider_name}: authentication failed",
+                        provider=self.provider_name,
+                        details={"error": str(auth_exc), "error_type": type(auth_exc).__name__},
+                    ) from auth_exc
+                except (TTSRateLimitError, TTSNetworkError, TTSTimeoutError, TTSProviderError) as non_fatal:
+                    logger.warning(
+                        f"{self.provider_name}: API key verification during initialization did not succeed "
+                        f"({type(non_fatal).__name__}: {non_fatal}). Continuing initialization; "
+                        "the first real request will surface any persistent issues."
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"{self.provider_name}: Unexpected error during API key verification on init: {exc}. "
+                        "Continuing initialization."
+                    )
+
             # Mark initialized and cache capabilities for direct initialize() calls
             self._capabilities = await self.get_capabilities()
             self._initialized = True
@@ -249,41 +300,15 @@ class OpenAIAdapter(TTSAdapter):
                 )
 
         except httpx.HTTPStatusError as e:
-            error_content = await e.response.aread()
-            error_msg = error_content.decode()
-            logger.error(f"{self.provider_name} API error: {e.response.status_code} - {error_msg}")
+            await self._handle_http_status_error(e)
 
-            if e.response.status_code == 401:
-                # Standardize message and provider fields
-                raise auth_error(self.provider_name, "Invalid API key")
-            elif e.response.status_code == 429:
-                # Try to extract retry-after header
-                retry_after = e.response.headers.get('retry-after')
-                raise rate_limit_error(
-                    self.provider_name,
-                    retry_after=int(retry_after) if retry_after else None
-                )
-            elif e.response.status_code == 400:
-                raise TTSProviderError(
-                    f"Invalid request to OpenAI: {error_msg}",
-                    provider=self.provider_name,
-                    error_code="BAD_REQUEST"
-                )
-            else:
-                raise TTSProviderError(
-                    f"OpenAI API error: {error_msg}",
-                    provider=self.provider_name,
-                    error_code=str(e.response.status_code)
-                )
-
-        except httpx.TimeoutException as e:
-            logger.error(f"{self.provider_name} timeout error: {e}")
-            # Use correct kwarg name to avoid TypeError
-            raise timeout_error(self.provider_name, timeout_seconds=60.0)
-
-        except httpx.NetworkError as e:
-            logger.error(f"{self.provider_name} network error: {e}")
-            # Preserve original exception context and correct argument order
+        except (httpx.TimeoutException, httpx.NetworkError, CoreNetworkError, RetryExhaustedError) as e:
+            logger.error(f"{self.provider_name} network/timeout error: {e}")
+            reason = str(e) or e.__class__.__name__
+            if isinstance(e, httpx.TimeoutException) or "timeout" in reason.lower():
+                # Map any timeout-like condition (including wrapped ones) to TTSTimeoutError
+                raise timeout_error(self.provider_name, timeout_seconds=60.0)
+            # All other transport failures are treated as network errors
             raise network_error(self.provider_name, e)
 
         except Exception as e:
@@ -296,25 +321,64 @@ class OpenAIAdapter(TTSAdapter):
                 )
             raise
 
+    async def _handle_http_status_error(self, e: httpx.HTTPStatusError) -> None:
+        """Normalize HTTP status errors into TTS-specific exceptions."""
+        error_content = await e.response.aread()
+        error_msg = error_content.decode()
+        logger.error(f"{self.provider_name} API error: {e.response.status_code} - {error_msg}")
+
+        if e.response.status_code == 401:
+            # Standardize message and provider fields
+            raise auth_error(self.provider_name, "Invalid API key")
+        elif e.response.status_code == 429:
+            # Try to extract retry-after header
+            retry_after = e.response.headers.get("retry-after")
+            raise rate_limit_error(
+                self.provider_name,
+                retry_after=int(retry_after) if retry_after else None,
+            )
+        elif e.response.status_code == 400:
+            raise TTSProviderError(
+                f"Invalid request to OpenAI: {error_msg}",
+                provider=self.provider_name,
+                error_code="BAD_REQUEST",
+            )
+        else:
+            raise TTSProviderError(
+                f"OpenAI API error: {error_msg}",
+                provider=self.provider_name,
+                error_code=str(e.response.status_code),
+            )
+
     async def _stream_audio(
         self,
         headers: Dict[str, str],
         payload: Dict[str, Any]
     ) -> AsyncGenerator[bytes, None]:
-        """Stream audio from OpenAI API"""
+        """Stream audio from OpenAI API with egress policy enforcement."""
         try:
-            # Use POST returning a response object that supports aiter_bytes.
-            # This aligns with unit tests that patch AsyncClient.post and attach
-            # aiter_bytes directly on the mocked response.
-            response = await self.client.post(self.base_url, headers=headers, json=payload)
+            logger.debug(f"{self.provider_name}: _stream_audio calling apost url={self.base_url}")
+            response = await apost(
+                url=self.base_url,
+                client=self.client,
+                headers=headers,
+                json=payload,
+            )
             response.raise_for_status()
             total_bytes = 0
-            async for chunk in response.aiter_bytes(chunk_size=1024):
-                if not chunk:
-                    continue
-                total_bytes += len(chunk)
-                yield chunk
-            logger.debug(f"{self.provider_name}: Streamed {total_bytes} bytes")
+            try:
+                async for chunk in response.aiter_bytes(chunk_size=1024):
+                    if not chunk:
+                        continue
+                    total_bytes += len(chunk)
+                    yield chunk
+                logger.debug(f"{self.provider_name}: Streamed {total_bytes} bytes")
+            finally:
+                try:
+                    if hasattr(response, "aclose"):
+                        await response.aclose()  # type: ignore[func-returns-value]
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"{self.provider_name} streaming error: {e}")
             raise
@@ -325,7 +389,14 @@ class OpenAIAdapter(TTSAdapter):
         payload: Dict[str, Any]
     ) -> bytes:
         """Generate complete audio from OpenAI API"""
-        response = await self.client.post(self.base_url, headers=headers, json=payload)
+        logger.debug(f"{self.provider_name}: _generate_complete calling apost url={self.base_url}")
+        response = await apost(
+            url=self.base_url,
+            client=self.client,
+            headers=headers,
+            json=payload,
+        )
+        logger.debug(f"{self.provider_name}: _generate_complete received response status={getattr(response, 'status_code', 'n/a')}")
         response.raise_for_status()
         return response.content
 

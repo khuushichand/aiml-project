@@ -391,10 +391,10 @@ class ChatterboxAdapter(TTSAdapter):
         try:
             import tempfile
             from pathlib import Path
-            from tldw_Server_API.app.core.TTS.audio_utils import process_voice_reference
+            from tldw_Server_API.app.core.TTS.audio_utils import process_voice_reference_async
 
             # Process voice reference for Chatterbox requirements
-            processed_audio, error = process_voice_reference(
+            processed_audio, error = await process_voice_reference_async(
                 voice_reference,
                 provider='chatterbox',
                 validate=True,

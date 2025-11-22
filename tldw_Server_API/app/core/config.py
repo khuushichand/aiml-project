@@ -1406,10 +1406,10 @@ def load_comprehensive_config():
     except Exception as _stream_env_err:
         _log_debug(f"Streaming env propagation skipped: {_stream_env_err}")
 
-    # Propagate HTTP client redirect settings from config.txt into env (if unset)
+    # Propagate HTTP client settings from config.txt into env (if unset)
     try:
         if hasattr(config_parser, 'has_section') and config_parser.has_section('HTTP'):
-            def _env_default_bool(name: str, opt: str):
+            def _env_default_http(name: str, opt: str):
                 try:
                     v = config_parser.get('HTTP', opt, fallback=None)
                 except Exception:
@@ -1417,8 +1417,39 @@ def load_comprehensive_config():
                 if v is not None and os.getenv(name) is None:
                     os.environ[name] = str(v)
 
+            # Core timeouts
+            _env_default_http('HTTP_CONNECT_TIMEOUT', 'connect_timeout')
+            _env_default_http('HTTP_READ_TIMEOUT', 'read_timeout')
+            _env_default_http('HTTP_WRITE_TIMEOUT', 'write_timeout')
+            _env_default_http('HTTP_POOL_TIMEOUT', 'pool_timeout')
+
+            # Retries & backoff
+            _env_default_http('HTTP_RETRY_ATTEMPTS', 'retry_attempts')
+            _env_default_http('HTTP_BACKOFF_BASE_MS', 'backoff_base_ms')
+            _env_default_http('HTTP_BACKOFF_CAP_S', 'backoff_cap_s')
+
+            # Connection limits
+            _env_default_http('HTTP_MAX_CONNECTIONS', 'max_connections')
+            _env_default_http('HTTP_MAX_KEEPALIVE_CONNECTIONS', 'max_keepalive_connections')
+
+            # trust_env and default UA
+            _env_default_http('HTTP_TRUST_ENV', 'trust_env')
+            _env_default_http('HTTP_DEFAULT_USER_AGENT', 'default_user_agent')
+
+            # Optional JSON and transport flags
+            _env_default_http('HTTP_JSON_MAX_BYTES', 'json_max_bytes')
+            _env_default_http('HTTP3_ENABLED', 'http3_enabled')
+
+            # Proxy allowlist
+            _env_default_http('PROXY_ALLOWLIST', 'proxy_allowlist')
+
+            # TLS enforcement and pins
+            _env_default_http('HTTP_ENFORCE_TLS_MIN', 'enforce_tls_min_version')
+            _env_default_http('HTTP_TLS_MIN_VERSION', 'tls_min_version')
+            _env_default_http('HTTP_CERT_PINS', 'cert_pins')
+
             # Allow or disable following redirects globally for simple GET/HEAD fetches
-            _env_default_bool('HTTP_ALLOW_REDIRECTS', 'allow_redirects')
+            _env_default_http('HTTP_ALLOW_REDIRECTS', 'allow_redirects')
             # Maximum redirect hops before erroring (default inherited in http_client)
             try:
                 v = config_parser.get('HTTP', 'max_redirects', fallback=None)
@@ -1427,11 +1458,41 @@ def load_comprehensive_config():
             if v is not None and os.getenv('HTTP_MAX_REDIRECTS') is None:
                 os.environ['HTTP_MAX_REDIRECTS'] = str(v)
             # Cross-host redirects (default: disabled)
-            _env_default_bool('HTTP_ALLOW_CROSS_HOST_REDIRECTS', 'allow_cross_host_redirects')
+            _env_default_http('HTTP_ALLOW_CROSS_HOST_REDIRECTS', 'allow_cross_host_redirects')
             # Scheme downgrade (https -> http) (default: disabled)
-            _env_default_bool('HTTP_ALLOW_SCHEME_DOWNGRADE', 'allow_scheme_downgrade')
+            _env_default_http('HTTP_ALLOW_SCHEME_DOWNGRADE', 'allow_scheme_downgrade')
     except Exception as _http_env_err:
         _log_debug(f"HTTP env propagation skipped: {_http_env_err}")
+
+    # Propagate egress policy settings from config.txt into env (if unset)
+    if hasattr(config_parser, 'has_section') and config_parser.has_section('Egress'):
+        def _env_default_egress(name: str, opt: str):
+            try:
+                v = config_parser.get('Egress', opt, fallback=None)
+            except Exception:
+                v = None
+            if v is None:
+                return
+            v_str = str(v).strip()
+            if not v_str:
+                return
+            if os.getenv(name) is None:
+                os.environ[name] = v_str
+
+        # Global allow/deny lists
+        _env_default_egress('EGRESS_ALLOWLIST', 'egress_allowlist')
+        _env_default_egress('EGRESS_DENYLIST', 'egress_denylist')
+
+        # Workflows-specific allow/deny overrides
+        _env_default_egress('WORKFLOWS_EGRESS_ALLOWLIST', 'workflows_allowlist')
+        _env_default_egress('WORKFLOWS_EGRESS_DENYLIST', 'workflows_denylist')
+
+        # Port and profile controls
+        _env_default_egress('WORKFLOWS_EGRESS_ALLOWED_PORTS', 'allowed_ports')
+        _env_default_egress('WORKFLOWS_EGRESS_PROFILE', 'profile')
+
+        # Private IP blocking toggle
+        _env_default_egress('WORKFLOWS_EGRESS_BLOCK_PRIVATE', 'block_private')
 
     return config_parser
 

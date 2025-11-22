@@ -603,6 +603,36 @@ Metrics:
 - `rag_reranker_llm_*` counters: timeouts, exceptions, budget, docs scored
 - `rag_generation_gated_total` counter, label `strategy="two_tier"`
 
+### Learned Fusion on Cross-Encoder / Hybrid
+
+You can enable a lightweight learned-fusion calibrator even when you are not using the full Two-Tier strategy. When `enable_learned_fusion=true`:
+
+- For `reranking_strategy="two_tier"`, the full calibrator uses original score + CE score + LLM score with a sentinel “irrelevant” passage.
+- For `reranking_strategy="cross_encoder"` or `"hybrid"`, a simpler calibrator maps the top rerank score through a logistic function to produce a fused probability.
+- In both cases:
+  - `metadata.reranking_calibration.fused_score` holds the fused relevance probability.
+  - `metadata.reranking_calibration.gated` indicates whether generation was gated by low relevance.
+  - When gating occurs, `abstention_policy` controls whether to continue, ask for clarification, or decline.
+
+Example:
+
+```python
+res = await unified_rag_pipeline(
+    query="Explain RAG for compliance workflows",
+    sources=["media_db"],
+    enable_reranking=True,
+    reranking_strategy="cross_encoder",
+    enable_learned_fusion=True,
+    abstention_policy="ask",  # continue | ask | decline
+    enable_generation=True,
+)
+
+print(res.metadata.get("reranking_calibration"))
+# { strategy: "cross_encoder", fused_score: 0.xx, threshold: 0.yy, gated: bool, decision: "ask", ... }
+print(res.metadata.get("generation_gate"))
+# { reason: "low_relevance_probability", at: ... } when gating occurs
+```
+
 ## Indexing & Chunking
 
 ### Adaptive Chunking (Semantic + Structural)
@@ -877,6 +907,86 @@ Instead of pre-built pipelines, the unified architecture provides direct paramet
     # Feedback
     collect_feedback=True
     )
+```
+
+### PRF & Multi-Vector Usage (Metadata)
+
+To enable pseudo-relevance feedback (PRF) and multi-vector span scoring on long documents:
+
+```python
+result = await unified_rag_pipeline(
+    query="impact of Transformer models in 2024",
+    sources=["media_db"],
+    top_k=10,
+    # PRF: mine salient terms from initial hits and optionally run a small second-pass retrieval
+    enable_prf=True,
+    prf_terms=8,
+    prf_top_n=5,
+    # Multi-vector spans: ColBERT-style max-span scoring; prefer precomputed spans when available
+    enable_multi_vector_passages=True,
+    mv_flatten_to_spans=True,
+    enable_precomputed_spans=True,
+    enable_cache=False,          # often disabled when debugging retrieval
+    enable_reranking=False,
+    enable_generation=False,
+)
+
+prf_meta = (result.metadata or {}).get("prf") or {}
+mv_meta = (result.metadata or {}).get("multi_vector") or {}
+```
+
+- `metadata.prf` (when `enable_prf=True`):
+  - `enabled`: whether PRF found additional terms.
+  - `base_query`: original user query.
+  - `expanded_query`: query string with mined terms appended.
+  - `terms_used`: list of terms extracted from top documents.
+  - `doc_seed_count`: number of seed documents used for PRF.
+  - `second_pass_performed`: whether a second retrieval was run.
+  - `second_pass_added`: how many new documents were added (deduped, capped to `top_k`).
+
+- `metadata.multi_vector` (when `enable_multi_vector_passages=True`):
+  - `enabled`: whether on-the-fly multi-vector scoring ran.
+  - `span_chars`, `stride`, `max_spans_per_doc`: parameters used for span windows.
+  - `flattened`: whether results were flattened to best spans per document.
+  - `precomputed_spans`: `True` if a precomputed span index was consulted (future), `False` otherwise.
+
+### Query Decomposition (Unified Pipeline)
+
+For complex, multi-part questions (for example, “Explain residual connections and dropout” or “Why did X happen and then Y?”), you can ask the unified pipeline to perform a small, guided query decomposition and retrieve additional evidence per sub-query.
+
+- Enable via:
+  - `enable_query_decomposition=True`
+  - `max_subqueries` to cap sub-queries (including the primary query).
+  - `subquery_time_budget_sec` to bound wall time spent on decomposition + extra retrievals.
+  - `subquery_doc_budget` to cap extra documents added across all sub-queries.
+- When `QueryAnalyzer` and agentic helpers are available, the pipeline:
+  - Prefers agentic-style decomposition for complex comparative/causal/analytical/temporal queries.
+  - Falls back to a simple heuristic split on conjunctions (`and/then`, commas, etc.) otherwise.
+- Metadata:
+  - `metadata.decomposition = {`
+  - `  enabled: true,`
+  - `  intent?: "comparative" | "causal" | "analytical" | "temporal" | ...,`
+  - `  complexity?: "simple" | "moderate" | "complex",`
+  - `  subqueries: [ { query, added_doc_ids } ],`
+  - `  total_added, elapsed_sec, time_budget_sec?, doc_budget?`
+  - `}`
+
+Example:
+
+```python
+res = await unified_rag_pipeline(
+    query="Explain residual connections and dropout",
+    sources=["media_db"],
+    enable_query_decomposition=True,
+    max_subqueries=3,
+    subquery_time_budget_sec=2.0,
+    subquery_doc_budget=8,
+    enable_reranking=False,
+    enable_generation=False,
+)
+
+print(res.metadata.get("decomposition"))
+# { enabled: true, intent: "comparative"?, complexity: "complex"?, subqueries: [...], total_added: N, ... }
 ```
 
 ### Feature Combinations

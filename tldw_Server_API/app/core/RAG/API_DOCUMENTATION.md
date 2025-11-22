@@ -41,6 +41,13 @@ The main RAG endpoint with complete feature access.
   "expansion_strategies": ["acronym", "synonym", "domain", "entity"],
   "spell_check": false,
 
+  // ========== PSEUDO-RELEVANCE FEEDBACK (PRF) ==========
+  "enable_prf": false,                // Enable a second retrieval pass using terms mined from initial hits
+  "prf_terms": 10,                    // Max number of terms/entities/numbers to boost
+  "prf_sources": ["keywords", "entities", "numbers"], // Signal types used for PRF term mining
+  "prf_alpha": 0.3,                   // Strength of PRF term boost vs original query
+  "prf_top_n": 8,                     // Number of top documents used as PRF seeds
+
   // ========== FILTERING ==========
   "keyword_filter": ["term1", "term2"],  // Must contain these keywords
 
@@ -56,9 +63,11 @@ The main RAG endpoint with complete feature access.
   "rerank_min_relevance_prob": 0.50,  // minimum calibrated prob to allow generation
   "rerank_sentinel_margin": 0.15,     // minimum (top_prob - sentinel_prob) margin
   // Corpus namespace (enables corpus-specific synonyms for query rewrites)
-  "index_namespace": "my_corpus"
+  "index_namespace": "my_corpus",
   // Advanced retrieval
   "enable_multi_vector_passages": false, // ColBERT-style max-span scoring on retrieved docs
+  "mv_flatten_to_spans": false,          // When true, generation uses best spans per doc instead of full chunks
+  "enable_precomputed_spans": false,     // Prefer precomputed span embeddings (when available) over on-the-fly spans
   "enable_numeric_table_boost": false,   // Slight boost for table/number-dense chunks on numeric queries
   "enable_table_processing": false,
   "enable_parent_expansion": false,
@@ -95,6 +104,17 @@ The main RAG endpoint with complete feature access.
   "synthesis_draft_tokens": 300,
   "synthesis_refine_tokens": 500,
 
+  // ========== LEARNED FUSION & CALIBRATION ==========
+  "enable_learned_fusion": false,     // Use a lightweight learned calibrator over retrieval/rerank features
+  "calibrator_version": "default",    // Optional calibrator version tag
+  "abstention_policy": "continue",    // Policy when calibrator deems evidence low: continue | ask | decline
+
+  // ========== QUERY DECOMPOSITION & MULTI-HOP ==========
+  "enable_query_decomposition": false,      // Enable guided sub-query decomposition for complex questions
+  "max_subqueries": 4,                      // Max number of sub-queries to generate
+  "subquery_time_budget_sec": 4.0,          // Soft time budget for decomposition + per-subquery retrieval
+  "subquery_doc_budget": 8,                 // Max docs per sub-query passed to synthesis
+
   // ========== POST-VERIFICATION (ADAPTIVE) ==========
   "enable_post_verification": false,
   "adaptive_max_retries": 1,
@@ -110,6 +130,12 @@ The main RAG endpoint with complete feature access.
   "adaptive_rerun_bypass_cache": false,           // Force enable_cache=false for the rerun to avoid stale cache hits
   "adaptive_rerun_time_budget_sec": 5.0,          // Optional soft cap; emits rag_phase_budget_exhausted_total{phase="adaptive_rerun"} on breach
   "adaptive_rerun_doc_budget": 8,                 // Optional: cap docs fed into quick verification during adoption check
+
+  // ========== GRAPH-AUGMENTED RETRIEVAL (OPTIONAL) ==========
+  "enable_graph_retrieval": false,        // Enable graph neighborhood retrieval when a graph is available
+  "graph_version": "default",             // Graph index version identifier
+  "graph_neighbors_k": 16,                // Number of neighbors/communities to consider
+  "graph_alpha": 0.4,                     // Blend weight between graph and standard retrieval
 
   // ========== SECURITY & PRIVACY ==========
   "enable_security_filter": false,
@@ -561,6 +587,11 @@ Check health status of all RAG components.
 | `expand_query` | boolean | false | Enable query expansion |
 | `expansion_strategies` | array | ["acronym"] | Expansion strategies |
 | `spell_check` | boolean | false | Correct query spelling |
+| `enable_prf` | boolean | false | Enable pseudo-relevance feedback second-pass retrieval |
+| `prf_terms` | integer | 10 | Max terms/entities/numbers to mine from top documents |
+| `prf_sources` | array | ["keywords","entities","numbers"] | Sources used for PRF term extraction |
+| `prf_alpha` | float | 0.3 | Strength of PRF term weighting vs original query |
+| `prf_top_n` | integer | 8 | Number of top documents to use as PRF seeds |
 
 ### Filtering
 
@@ -584,6 +615,9 @@ Check health status of all RAG components.
 | `enable_reranking` | boolean | true | Enable document reranking |
 | `reranking_strategy` | string | "hybrid" | Reranking algorithm |
 | `rerank_top_k` | integer | null | Candidates to rerank (defaults to top_k) |
+| `enable_multi_vector_passages` | boolean | false | Enable ColBERT-style max-span scoring over retrieved docs |
+| `mv_flatten_to_spans` | boolean | false | Return best spans per doc as pseudo-documents for generation |
+| `enable_precomputed_spans` | boolean | false | Prefer precomputed span embeddings over on-the-fly spans when available |
 | `enable_table_processing` | boolean | false | Process table content |
 | `enable_parent_expansion` | boolean | false | Include parent context |
 | `include_sibling_chunks` | boolean | false | Include adjacent chunk context |
@@ -607,6 +641,47 @@ Check health status of all RAG components.
 | `generation_model` | string | null | LLM model name |
 | `generation_prompt` | string | null | Custom prompt template |
 | `max_generation_tokens` | integer | 500 | Max tokens for generated answer |
+| `enable_abstention` | boolean | false | Allow abstention when evidence is insufficient |
+| `abstention_behavior` | string | "continue" | Behavior when abstaining: continue | ask | decline |
+| `enable_multi_turn_synthesis` | boolean | false | Enable draft→critique→refine multi-step synthesis |
+| `synthesis_time_budget_sec` | float | 5.0 | Soft time budget for multi-turn synthesis |
+| `synthesis_draft_tokens` | integer | 300 | Max tokens for draft pass |
+| `synthesis_refine_tokens` | integer | 500 | Max tokens for refinement pass |
+
+### Learned Fusion & Calibration
+
+Learned fusion uses a lightweight calibrator over retrieval/rerank scores to produce a fused relevance probability and drive abstention when evidence is thin.
+
+- With `reranking_strategy="two_tier"`, the calibrator combines original retrieval score, cross-encoder score, and LLM score with a logistic map and a sentinel “irrelevant” passage.
+- With `reranking_strategy` in `["cross_encoder","hybrid"]` and `enable_learned_fusion=true`, a simpler calibrator maps the top rerank score through a logistic to obtain a fused probability (no sentinel).
+- In both cases:
+  - `metadata.reranking_calibration.fused_score` holds the fused probability.
+  - `metadata.reranking_calibration.gated` indicates whether generation was gated.
+  - When generation is gated, `abstention_policy` decides whether to continue, ask a clarifying question, or decline.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enable_learned_fusion` | boolean | false | Use learned fusion over retrieval and rerank scores (Two-Tier and simpler cross-encoder/hybrid). |
+| `calibrator_version` | string | "default" | Calibrator configuration/version identifier (informational tag in metadata). |
+| `abstention_policy` | string | "continue" | Action when fused score is low and learned fusion is enabled: continue \| ask \| decline. |
+
+### Query Decomposition & Multi-hop
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enable_query_decomposition` | boolean | false | Enable guided decomposition into sub-queries for complex questions |
+| `max_subqueries` | integer | 4 | Maximum number of generated sub-queries |
+| `subquery_time_budget_sec` | float | 4.0 | Soft time budget for decomposition and per-subquery retrieval |
+| `subquery_doc_budget` | integer | 8 | Maximum docs per sub-query sent to synthesis |
+
+### Graph-Augmented Retrieval
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enable_graph_retrieval` | boolean | false | Enable graph neighborhood retrieval when a graph index is available |
+| `graph_version` | string | "default" | Graph index version identifier |
+| `graph_neighbors_k` | integer | 16 | Number of graph neighbors/communities considered |
+| `graph_alpha` | float | 0.4 | Blend weight between graph and standard retrieval |
 
 ### Post-Verification (Adaptive)
 

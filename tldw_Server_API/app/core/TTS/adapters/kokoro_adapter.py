@@ -120,8 +120,8 @@ class KokoroAdapter(TTSAdapter):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
 
-        # Determine backend type (ONNX or PyTorch)
-        self.use_onnx = self.config.get("kokoro_use_onnx", True)
+        # Determine backend type (ONNX or PyTorch). Default to PyTorch; ONNX is opt-in.
+        self.use_onnx = self.config.get("kokoro_use_onnx", False)
         # Device selection with fallback
         preferred = self.config.get("kokoro_device")
         try:
@@ -145,11 +145,23 @@ class KokoroAdapter(TTSAdapter):
             self.device = "cuda" if cuda_avail else "cpu"
 
         # Model paths
-        self.model_path = self.config.get("kokoro_model_path", "models/kokoro/onnx/model.onnx")
-        # Maintain both attribute names for compatibility with tests and internal code
-        self.voices_json_path = self.config.get("kokoro_voices_json", "models/kokoro/voices")
+        # Default to hexgrad/Kokoro-82M PyTorch layout; ONNX users should override via config.
+        default_pt_model = "models/kokoro/kokoro-v1_0.pth"
+        default_onnx_model = "models/kokoro/onnx/model.onnx"
+        self.model_path = self.config.get(
+            "kokoro_model_path",
+            default_onnx_model if self.use_onnx else default_pt_model,
+        )
+        # Default voices bundle for kokoro-onnx v1.0 lives alongside the ONNX model.
+        default_voices_bin = os.path.join(os.path.dirname(default_onnx_model), "voices-v1.0.bin")
+        # Maintain both attribute names for compatibility with tests and internal code.
+        # If no explicit path is configured, prefer the bundled voices-v1.0.bin file for ONNX.
+        self.voices_json_path = self.config.get("kokoro_voices_json") or (
+            default_voices_bin if self.use_onnx else "models/kokoro/voices"
+        )
         self.voices_json = self.voices_json_path
-        self.voice_dir = self.config.get("kokoro_voice_dir", "voices")
+        # PyTorch voices directory (for KModel / KPipeline and dynamic voices)
+        self.voice_dir = self.config.get("kokoro_voice_dir", "models/kokoro/voices")
 
         # Auto-download toggle (Kokoro does not auto-download; provided for consistency)
         cfg_auto = self.config.get("kokoro_auto_download")
@@ -225,7 +237,7 @@ class KokoroAdapter(TTSAdapter):
         try:
             from kokoro_onnx import Kokoro, EspeakConfig
 
-            # Check model files exist
+            # Check model file exists
             if not os.path.exists(self.model_path):
                 raise TTSModelNotFoundError(
                     f"Kokoro ONNX model not found at {self.model_path}",
@@ -233,19 +245,28 @@ class KokoroAdapter(TTSAdapter):
                     details={"model_path": self.model_path}
                 )
 
+            # Resolve voices bundle path (required by kokoro-onnx)
             voices_json_arg: Optional[str]
             if self.voices_json_path and os.path.isfile(self.voices_json_path):
                 voices_json_arg = self.voices_json_path
-            elif self.voices_json_path and self.voices_json_path.endswith('.json') and not os.path.exists(self.voices_json_path):
-                # Explicit JSON file configured but not found
-                raise TTSModelNotFoundError(
-                    f"Kokoro voices.json not found at {self.voices_json_path}",
-                    provider=self.provider_name,
-                    details={"voices_json": self.voices_json_path}
-                )
             else:
-                # Directory or unspecified: rely on built-in/default voices; dynamic voices loaded separately
-                voices_json_arg = None
+                # If an explicit file path was configured but does not exist, surface a clear error
+                if self.voices_json_path and not os.path.isdir(self.voices_json_path):
+                    raise TTSModelNotFoundError(
+                        f"Kokoro voices bundle not found at {self.voices_json_path}",
+                        provider=self.provider_name,
+                        details={"voices_json": self.voices_json_path}
+                    )
+                # Fallback: derive standard voices-v1.0.bin next to the model
+                fallback_bin = os.path.join(os.path.dirname(self.model_path), "voices-v1.0.bin")
+                if os.path.isfile(fallback_bin):
+                    voices_json_arg = fallback_bin
+                else:
+                    raise TTSModelNotFoundError(
+                        "Kokoro voices bundle not found (expected voices-v1.0.bin next to model)",
+                        provider=self.provider_name,
+                        details={"voices_json": self.voices_json_path, "fallback": fallback_bin}
+                    )
 
             # Configure eSpeak (auto-detect to avoid requiring an env var)
             def _discover_espeak_library() -> Optional[str]:
@@ -325,6 +346,67 @@ class KokoroAdapter(TTSAdapter):
                         "",
                         espeak_config=espeak_config
                     )
+
+            # Work around a kokoro-onnx 0.4.x bug where the ONNX graph
+            # expects a float `speed` input but the library feeds int32
+            # for newer exports (input_ids path), causing:
+            #   INVALID_ARGUMENT : Unexpected input data type.
+            #   Actual: tensor(int32), expected: tensor(float)
+            # Patch Kokoro._create_audio locally to always pass speed as float.
+            try:
+                import numpy as _np  # type: ignore
+                import kokoro_onnx as _konnx  # type: ignore
+
+                orig_create_audio = getattr(_konnx.Kokoro, "_create_audio", None)
+
+                if callable(orig_create_audio) and not getattr(_konnx.Kokoro, "_tldw_speed_patch", False):
+                    def _patched_create_audio(self_k, phonemes, voice, speed):
+                        from kokoro_onnx.config import SAMPLE_RATE, MAX_PHONEME_LENGTH  # type: ignore
+                        from kokoro_onnx.log import log as _log  # type: ignore
+
+                        _log.debug(f"Phonemes: {phonemes}")
+                        if len(phonemes) > MAX_PHONEME_LENGTH:
+                            _log.warning(
+                                f"Phonemes are too long, truncating to {MAX_PHONEME_LENGTH} phonemes"
+                            )
+                        phonemes = phonemes[:MAX_PHONEME_LENGTH]
+                        import time as _time
+                        start_t = _time.time()
+                        tokens = _np.array(self_k.tokenizer.tokenize(phonemes), dtype=_np.int64)
+                        assert len(tokens) <= MAX_PHONEME_LENGTH, (
+                            f"Context length is {MAX_PHONEME_LENGTH}, but leave room for the pad token 0 at the start & end"
+                        )
+
+                        voice_vec = voice[len(tokens)]
+                        tokens = [[0, *tokens, 0]]
+                        input_names = [i.name for i in self_k.sess.get_inputs()]
+                        if "input_ids" in input_names:
+                            # Newer export versions: speed as float32 to avoid type mismatch
+                            inputs = {
+                                "input_ids": tokens,
+                                "style": _np.array(voice_vec, dtype=_np.float32),
+                                "speed": _np.array([float(speed)], dtype=_np.float32),
+                            }
+                        else:
+                            inputs = {
+                                "tokens": tokens,
+                                "style": voice_vec,
+                                "speed": _np.ones(1, dtype=_np.float32) * float(speed),
+                            }
+
+                        audio = self_k.sess.run(None, inputs)[0]
+                        audio_duration = len(audio) / SAMPLE_RATE
+                        create_duration = _time.time() - start_t
+                        rtf = create_duration / audio_duration
+                        _log.debug(
+                            f"Created audio in length of {audio_duration:.2f}s for {len(phonemes)} phonemes in {create_duration:.2f}s (RTF: {rtf:.2f}"
+                        )
+                        return audio, SAMPLE_RATE
+
+                    _konnx.Kokoro._create_audio = _patched_create_audio  # type: ignore[assignment]
+                    _konnx.Kokoro._tldw_speed_patch = True  # type: ignore[attr-defined]
+            except Exception as _patch_exc:  # pragma: no cover - best-effort patch
+                logger.debug(f"{self.provider_name}: speed dtype patch skipped: {_patch_exc}")
 
             logger.info(f"{self.provider_name}: ONNX model loaded successfully")
             return True
@@ -478,8 +560,41 @@ class KokoroAdapter(TTSAdapter):
         )
 
         try:
+            # For ONNX backend, always use the complete path (with de-dup)
+            # and optionally wrap the result as a stream to keep the API
+            # contract while avoiding duplicated phrases.
+            if self.use_onnx:
+                audio_bytes = await self._generate_complete_kokoro(text, voice, lang, request)
+
+                if request.stream:
+                    chunk_size = 8192
+
+                    async def _byte_stream():
+                        for i in range(0, len(audio_bytes), chunk_size):
+                            chunk = audio_bytes[i:i + chunk_size]
+                            if chunk:
+                                yield chunk
+
+                    return TTSResponse(
+                        audio_stream=_byte_stream(),
+                        format=request.format,
+                        sample_rate=self.sample_rate,
+                        channels=1,
+                        voice_used=voice,
+                        provider=self.provider_name
+                    )
+
+                return TTSResponse(
+                    audio_data=audio_bytes,
+                    format=request.format,
+                    sample_rate=self.sample_rate,
+                    channels=1,
+                    voice_used=voice,
+                    provider=self.provider_name
+                )
+
+            # PyTorch backend: preserve true streaming semantics
             if request.stream:
-                # Return streaming response
                 return TTSResponse(
                     audio_stream=self._stream_audio_kokoro(text, voice, lang, request),
                     format=request.format,
@@ -488,17 +603,16 @@ class KokoroAdapter(TTSAdapter):
                     voice_used=voice,
                     provider=self.provider_name
                 )
-            else:
-                # Generate complete audio
-                audio_data = await self._generate_complete_kokoro(text, voice, lang, request)
-                return TTSResponse(
-                    audio_data=audio_data,
-                    format=request.format,
-                    sample_rate=self.sample_rate,
-                    channels=1,
-                    voice_used=voice,
-                    provider=self.provider_name
-                )
+
+            audio_data = await self._generate_complete_kokoro(text, voice, lang, request)
+            return TTSResponse(
+                audio_data=audio_data,
+                format=request.format,
+                sample_rate=self.sample_rate,
+                channels=1,
+                voice_used=voice,
+                provider=self.provider_name
+            )
 
         except Exception as e:
             logger.error(f"{self.provider_name} generation error: {e}")
@@ -558,6 +672,9 @@ class KokoroAdapter(TTSAdapter):
                         provider=self.provider_name,
                         details={"suggestion": "pip install kokoro-tts or Kokoro PyTorch package"}
                     )
+                # Capture the logical voice id before resolving file path
+                voice_id = voice
+
                 # Determine voice path if a voice file exists
                 voice_path = voice
                 try:
@@ -568,8 +685,8 @@ class KokoroAdapter(TTSAdapter):
                             voice_path = candidate
                 except Exception:
                     pass
-                # Pick pipeline by language code (use primary tag like 'en')
-                lang_code = lang.split('-')[0] if lang else 'en'
+                # Pick pipeline by Kokoro language code (e.g., 'a' for American, 'b' for British)
+                lang_code = self._get_kpipeline_lang_code(voice_id if isinstance(voice_id, str) else "", lang)
                 key = lang_code
                 if key not in self.kokoro_pt_pipelines:
                     self.kokoro_pt_pipelines[key] = KPipeline(
@@ -590,8 +707,14 @@ class KokoroAdapter(TTSAdapter):
 
                 stream_iter = _async_iter()
 
-            async for samples_chunk, sr_chunk in stream_iter:
+            async for item in stream_iter:
+                samples_chunk, sr_chunk = self._unpack_stream_item(item)
                 if samples_chunk is not None and len(samples_chunk) > 0:
+                    # Heuristic de-duplication for providers that may repeat phrases
+                    try:
+                        samples_chunk = self._dedupe_repeated_audio(samples_chunk)
+                    except Exception:
+                        pass
                     chunk_count += 1
 
                     # Create writer on first chunk so we can pass the true SR
@@ -645,7 +768,50 @@ class KokoroAdapter(TTSAdapter):
         request: TTSRequest
     ) -> bytes:
         """Generate complete audio from Kokoro"""
-        # Collect all streamed chunks
+        if self.use_onnx:
+            # Use synchronous Kokoro.create in a worker thread and post-process
+            import asyncio as _asyncio
+            loop = _asyncio.get_event_loop()
+            samples, sr = await loop.run_in_executor(
+                None,
+                self.kokoro_instance.create,  # type: ignore[arg-type]
+                text,
+                voice,
+                float(request.speed),
+                lang,
+            )
+
+            try:
+                original_len = len(samples)
+                deduped = self._dedupe_repeated_audio(samples)
+                if hasattr(deduped, "__len__") and len(deduped) != original_len:
+                    logger.info(
+                        f"{self.provider_name}: de-duplicated waveform from {original_len} to {len(deduped)} samples"
+                    )
+                else:
+                    logger.debug(f"{self.provider_name}: de-duplication not applied (len={original_len})")
+                samples = deduped
+            except Exception as _dedupe_exc:
+                logger.debug(f"{self.provider_name}: de-duplication skipped: {_dedupe_exc}")
+
+            from tldw_Server_API.app.core.TTS.streaming_audio_writer import StreamingAudioWriter
+
+            writer = StreamingAudioWriter(
+                format=request.format.value,
+                sample_rate=int(sr) if sr else self.sample_rate,
+                channels=1,
+            )
+            try:
+                normalized = self.audio_normalizer.normalize(samples, target_dtype=np.int16)  # type: ignore[arg-type]
+                first = writer.write_chunk(normalized) or b""
+                final = writer.write_chunk(finalize=True) or b""
+                if request.format == AudioFormat.PCM:
+                    return first
+                return first + final
+            finally:
+                writer.close()
+
+        # Fallback: collect encoded bytes from streaming path (PyTorch backend)
         all_audio = b""
         async for chunk in self._stream_audio_kokoro(text, voice, lang, request):
             all_audio += chunk
@@ -675,6 +841,47 @@ class KokoroAdapter(TTSAdapter):
         voice = self.map_voice(voice)
 
         return voice
+
+    def _dedupe_repeated_audio(self, samples: np.ndarray) -> np.ndarray:
+        """Heuristically trim duplicated phrases when the waveform is repeated twice."""
+        try:
+            if samples.ndim != 1:
+                return samples
+            n = len(samples)
+            if n < 8000:
+                return samples
+
+            arr = samples.astype(np.float32, copy=False)
+
+            best_diff: Optional[float] = None
+            best_offset: Optional[int] = None
+
+            start = n // 3
+            end = (2 * n) // 3
+            step = max(256, n // 100)
+
+            for offset in range(start, end, step):
+                a = arr[: n - offset]
+                b = arr[offset:]
+                m = min(len(a), len(b))
+                if m < 4000:
+                    continue
+                a_seg = a[:m].copy()
+                b_seg = b[:m].copy()
+                max_a = float(np.max(np.abs(a_seg))) or 1.0
+                max_b = float(np.max(np.abs(b_seg))) or 1.0
+                a_seg /= max_a
+                b_seg /= max_b
+                diff = float(np.mean(np.abs(a_seg - b_seg)))
+                if best_diff is None or diff < best_diff:
+                    best_diff = diff
+                    best_offset = offset
+
+            if best_diff is not None and best_offset is not None and best_diff < 0.08:
+                return samples[:best_offset]
+            return samples
+        except Exception:
+            return samples
 
     def _load_dynamic_voices(self) -> None:
         """Load voices from voices.json and merge with static voices.
@@ -766,6 +973,82 @@ class KokoroAdapter(TTSAdapter):
             return "en-gb"  # British
         else:
             return "en-us"  # Default to American
+
+    def _get_kpipeline_lang_code(self, voice: str, lang: Optional[str]) -> str:
+        """Map voice/lang to Kokoro PyTorch KPipeline lang_code (e.g., 'a', 'b')."""
+        base = voice or ""
+        try:
+            # If a file path was passed, strip directory and extension
+            base = os.path.basename(base)
+            if "." in base:
+                base = base.split(".", 1)[0]
+        except Exception:
+            base = voice or ""
+        base = base.strip()
+
+        # Heuristic mapping for known English voices
+        if base.startswith("af_") or base.startswith("am_"):
+            return "a"  # American English
+        if base.startswith("bf_") or base.startswith("bm_"):
+            return "b"  # British English
+
+        # Fallback based on language string
+        if lang:
+            l = str(lang).lower()
+            if l.startswith("en"):
+                return "a"
+
+        # Default to American English code
+        return "a"
+
+    def _unpack_stream_item(self, item: Any) -> Tuple[Optional[np.ndarray], Optional[int]]:
+        """
+        Normalize stream items from both ONNX and PyTorch backends into (samples, sample_rate).
+
+        Supported shapes:
+          - (samples, sr)
+          - (samples, sr, *rest)
+          - samples (np.ndarray or list), using adapter sample_rate
+        """
+        if item is None:
+            return None, None
+
+        # Hexgrad Kokoro PyTorch pipeline returns a Result with an `audio` tensor
+        try:
+            if hasattr(item, "audio"):
+                audio = item.audio
+                try:
+                    import torch  # type: ignore
+
+                    if isinstance(audio, torch.Tensor):
+                        audio = audio.detach().cpu().numpy()
+                except Exception:
+                    # Fallback: try NumPy conversion directly
+                    try:
+                        audio = np.asarray(audio)
+                    except Exception:
+                        return None, None
+                return audio, self.sample_rate
+        except Exception:
+            pass
+
+        # Tuple/list variants
+        if isinstance(item, (tuple, list)):
+            if len(item) == 0:
+                return None, None
+            if len(item) == 1:
+                return item[0], self.sample_rate
+            # Use the first two elements as (audio, sample_rate); ignore the rest
+            samples = item[0]
+            sr = item[1]
+            try:
+                sr_int = int(sr) if sr is not None else self.sample_rate
+            except Exception:
+                sr_int = self.sample_rate
+            return samples, sr_int
+
+        # Single array-like item: treat as audio with default sample_rate
+        return item, self.sample_rate
 
     def map_voice(self, voice_id: str) -> str:
         """Map generic voice ID to Kokoro voice"""

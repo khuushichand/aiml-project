@@ -83,9 +83,20 @@ class BaseRetriever(ABC):
             raise ValueError("db_path is required when no database adapter is provided.")
 
     def _validate_path(self, path: Optional[str]) -> Optional[str]:
-        """Validate and normalise database paths while guarding against traversal."""
+        """Validate and normalise database paths while guarding against traversal.
+
+        Accepts strings or pathlib.Path instances for convenience.
+        """
         if path is None:
             return None
+        # Normalise non-string inputs (e.g., pathlib.Path) early
+        try:
+            if not isinstance(path, str):
+                path = str(path)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Path normalization error for '{path}': {exc}")
+            raise ValueError(f"Invalid database path: {exc}")
+
         if '://' in path:
             return path
         try:

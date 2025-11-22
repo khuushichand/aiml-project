@@ -171,7 +171,9 @@ class TTSInputValidator:
     # Compiled regex patterns for performance
     DANGEROUS_REGEX = [re.compile(pattern, re.IGNORECASE | re.DOTALL) for pattern in DANGEROUS_PATTERNS]
 
-    # Maximum text length per provider (characters)
+    # Maximum text length per provider (characters).
+    # For unknown providers, default to a more permissive 5000 characters to
+    # avoid surprising rejections when the underlying engine can handle more.
     MAX_TEXT_LENGTHS = {
         "openai": 4096,
         "elevenlabs": 5000,
@@ -181,7 +183,7 @@ class TTSInputValidator:
         "chatterbox": 10000,
         "vibevoice": 15000,
         "index_tts": 4000,
-        "default": 1000
+        "default": 5000,
     }
 
     # Supported languages by provider
@@ -425,7 +427,26 @@ class TTSInputValidator:
 
     def _validate_voice(self, voice: str, provider: Optional[str] = None):
         """Validate voice selection"""
-        # Basic voice name validation
+        normalized_provider = (provider or "").lower()
+
+        # For unknown/third-party providers, avoid over-constraining opaque
+        # voice identifiers. Adapters are expected to perform any provider-
+        # specific validation. Here we only enforce non-emptiness and a
+        # generous upper bound on length.
+        if normalized_provider and normalized_provider not in self.SUPPORTED_LANGUAGES and normalized_provider not in self.SUPPORTED_FORMATS:
+            if not voice or not str(voice).strip():
+                raise TTSVoiceNotFoundError(
+                    "Voice name cannot be empty",
+                    provider=provider,
+                )
+            if len(voice) > 200:
+                raise TTSVoiceNotFoundError(
+                    "Voice name too long",
+                    provider=provider,
+                )
+            return
+
+        # Basic voice name validation for providers we know about
         if not re.match(r'^[a-zA-Z0-9_-]+$', voice):
             raise TTSVoiceNotFoundError(
                 f"Invalid voice name format: {voice}",
@@ -442,11 +463,15 @@ class TTSInputValidator:
     def _validate_parameters(self, request: TTSRequest, provider: Optional[str] = None):
         """Validate TTS parameters"""
         raw_speed = getattr(request, "_original_speed", request.speed)
-        # Provider-aware speed validation
+        # Provider-aware speed validation; fall back to generic defaults when
+        # no provider hint is available.
         try:
-            limits = ProviderLimits.get_limits(provider or "default")
-            min_speed = float(limits.get("min_speed", 0.1))
-            max_speed = float(limits.get("max_speed", 3.0))
+            if provider:
+                limits = ProviderLimits.get_limits(provider)
+                min_speed = float(limits.get("min_speed", 0.1))
+                max_speed = float(limits.get("max_speed", 3.0))
+            else:
+                min_speed, max_speed = 0.1, 3.0
         except Exception:
             min_speed, max_speed = 0.1, 3.0
         if raw_speed < min_speed or raw_speed > max_speed:

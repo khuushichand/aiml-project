@@ -116,3 +116,53 @@ def test_friendly_ingest_url_level_flags_forwarding(client_with_token, monkeypat
     assert captured.get("crawl_strategy") == "best_first"
     assert captured.get("include_external") is False
     assert captured.get("score_threshold") == 0.0
+
+
+def test_ingest_web_content_invalid_cookie_json_returns_400(client_with_token):
+    payload = {
+        "urls": ["https://example.com/"],
+        "scrape_method": "url_level",
+        "url_level": 2,
+        "use_cookies": True,
+        # Invalid JSON string (triggers json.JSONDecodeError)
+        "cookies": "{not-valid-json",
+    }
+    r = client_with_token.post("/api/v1/media/ingest-web-content", json=payload)
+    assert r.status_code == 400
+    data = r.json()
+    assert data.get("detail") == "Invalid JSON format for cookies"
+
+
+def test_ingest_web_content_invalid_cookie_type_returns_400(client_with_token):
+    payload = {
+        "urls": ["https://example.com/"],
+        "scrape_method": "url_level",
+        "url_level": 2,
+        "use_cookies": True,
+        # Valid JSON, but not a dict or list
+        "cookies": "123",
+    }
+    r = client_with_token.post("/api/v1/media/ingest-web-content", json=payload)
+    assert r.status_code == 400
+    data = r.json()
+    assert data.get("detail") == "Invalid cookies format"
+
+
+def test_ingest_web_content_invalid_cookie_list_element_returns_400(client_with_token):
+    payload = {
+        "urls": ["https://example.com/"],
+        "scrape_method": "url_level",
+        "url_level": 2,
+        "use_cookies": True,
+        # Valid JSON list, but contains a non-dict element
+        "cookies": json.dumps(
+            [
+                {"name": "session", "value": "abc"},
+                "not-a-dict",
+            ]
+        ),
+    }
+    r = client_with_token.post("/api/v1/media/ingest-web-content", json=payload)
+    assert r.status_code == 400
+    data = r.json()
+    assert data.get("detail") == "Invalid cookies format"

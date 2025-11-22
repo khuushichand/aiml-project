@@ -830,6 +830,10 @@ class TestLoadPatterns:
 
     def test_mixed_workload(self, authenticated_client, data_tracker):
         """Test mixed workload with reads and writes."""
+        # Temporarily reduce HTTP client timeouts so this test cannot hang
+        original_timeout = authenticated_client.client.timeout
+        authenticated_client.client.timeout = httpx.Timeout(5.0)
+
         # Prepare test data
         test_files = []
         for i in range(5):
@@ -884,55 +888,60 @@ class TestLoadPatterns:
                     response = authenticated_client.get_media_list(limit=10)
                     return ('list', 'success')
 
-            except Exception as e:
+            except Exception:
                 return (operation, 'failed')
 
-        # Run mixed workload for 20 seconds
+        # Run mixed workload for ~5 seconds to keep the test bounded
         start_time = time.time()
         operation_counts = {}
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = []
+        try:
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = []
 
-            while time.time() - start_time < 20:
-                future = executor.submit(mixed_operation)
-                futures.append(future)
-                _maybe_sleep(0.1)  # Space out submissions
+                while time.time() - start_time < 5:
+                    future = executor.submit(mixed_operation)
+                    futures.append(future)
+                    # Always sleep a tiny amount to avoid unbounded queue growth
+                    time.sleep(0.01)
 
-            # Collect results
-            for future in as_completed(futures):
-                try:
-                    operation, status = future.result(timeout=5)
-                    key = f"{operation}_{status}"
-                    operation_counts[key] = operation_counts.get(key, 0) + 1
-                except:
-                    pass
+                # Collect results
+                for future in as_completed(futures):
+                    try:
+                        operation, status = future.result(timeout=5)
+                        key = f"{operation}_{status}"
+                        operation_counts[key] = operation_counts.get(key, 0) + 1
+                    except Exception:
+                        pass
 
-        # Track created resources for cleanup
-        for media_id in created_media_ids:
-            data_tracker.add_media(media_id)
-        for note_id in created_note_ids:
-            data_tracker.add_note(note_id)
+            # Track created resources for cleanup
+            for media_id in created_media_ids:
+                data_tracker.add_media(media_id)
+            for note_id in created_note_ids:
+                data_tracker.add_note(note_id)
 
-        # Clean up test files
-        for file_path in test_files:
-            cleanup_test_file(file_path)
+            # Clean up test files
+            for file_path in test_files:
+                cleanup_test_file(file_path)
 
-        # Print results
-        print("Mixed workload results:")
-        for key, count in operation_counts.items():
-            print(f"  {key}: {count}")
+            # Print results
+            print("Mixed workload results:")
+            for key, count in operation_counts.items():
+                print(f"  {key}: {count}")
 
-        # Should handle mixed workload
-        total_operations = sum(operation_counts.values())
-        successful_operations = sum(
-            count for key, count in operation_counts.items()
-            if 'success' in key
-        )
+            # Should handle mixed workload
+            total_operations = sum(operation_counts.values())
+            successful_operations = sum(
+                count for key, count in operation_counts.items()
+                if 'success' in key
+            )
 
-        assert successful_operations > 0, "Should complete some operations successfully"
-        success_rate = successful_operations / total_operations if total_operations > 0 else 0
-        print(f"Overall success rate: {success_rate:.2%}")
+            assert successful_operations > 0, "Should complete some operations successfully"
+            success_rate = successful_operations / total_operations if total_operations > 0 else 0
+            print(f"Overall success rate: {success_rate:.2%}")
+        finally:
+            # Restore original timeout for other tests
+            authenticated_client.client.timeout = original_timeout
 
     @pytest.mark.timeout(60)  # Set explicit timeout
     def test_gradual_ramp_up(self, authenticated_client):

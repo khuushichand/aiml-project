@@ -108,7 +108,8 @@ for item in res.get("results", []):
 
 ## Endpoint Integration
 
-- `POST /api/v1/media/process-audios` (media.py) adapts form data, saves validated uploads, and calls `process_audio_files`.
+- `POST /api/v1/media/process-audios` (modular endpoint in `endpoints/media/process_audios.py`) adapts form data, saves validated uploads, and calls `audio_batch.run_audio_batch(...)`, which in turn uses `process_audio_files`.
+- Persistent audio ingestion via `POST /api/v1/media/add` uses the shared `process_batch_media(...)` helper in `core.Ingestion_Media_Processing.persistence`, which wraps `process_audio_files` and calls `persist_primary_av_item(...)` to write results to the Media DB.
 
 ### Endpoint Examples
 

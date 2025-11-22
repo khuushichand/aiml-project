@@ -14,6 +14,7 @@ from fastapi import status # Use status codes from fastapi
 # Local Imports
 # --- Use Main App Instance ---
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.main import app as fastapi_app_instance, app
     # Import specific DB functions used directly in tests/fixtures
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
@@ -94,6 +95,9 @@ def client_module(db_instance_session):
     """
     Creates a TestClient for the module, overriding the DB dependency to use the session-scoped test DB.
     """
+    async def _override_user():
+        return User(id=1, username="tester", email=None, is_active=True)
+
     def override_get_media_db_for_user():
         # Return a stable instance instead of yielding a generator
         # This avoids generator lifecycle/cleanup mismatches across requests
@@ -105,6 +109,7 @@ def client_module(db_instance_session):
     # Store original overrides
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[get_media_db_for_user] = override_get_media_db_for_user
+    app.dependency_overrides[get_request_user] = _override_user
 
     with TestClient(fastapi_app_instance) as client:
         yield client

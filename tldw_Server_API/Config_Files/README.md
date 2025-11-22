@@ -311,7 +311,7 @@ VibeVoice:
 
 ## [HTTP-Client]
 - Centralized outbound HTTP client configuration (applies to helpers in `tldw_Server_API.app.core.http_client`).
-- Defaults are secure-by-default and can be overridden via environment variables.
+- Defaults are secure-by-default and can be overridden via environment variables or the `[HTTP]` section in `Config_Files/config.txt` (which is mapped into the corresponding `HTTP_*` env vars at startup when unset).
 
 - Timeouts
   - `HTTP_CONNECT_TIMEOUT` (float, default `5.0` seconds)
@@ -346,6 +346,30 @@ VibeVoice:
 
 - Proxies & Egress
   - `PROXY_ALLOWLIST` (csv of proxy hostnames or URLs; deny-by-default when empty)
+
+`config.txt` mapping for `[HTTP]`
+- Keys in `[HTTP]` are convenience aliases that populate the process environment if the corresponding env var is not already set:
+  - `connect_timeout` → `HTTP_CONNECT_TIMEOUT`
+  - `read_timeout` → `HTTP_READ_TIMEOUT`
+  - `write_timeout` → `HTTP_WRITE_TIMEOUT`
+  - `pool_timeout` → `HTTP_POOL_TIMEOUT`
+  - `retry_attempts` → `HTTP_RETRY_ATTEMPTS`
+  - `backoff_base_ms` → `HTTP_BACKOFF_BASE_MS`
+  - `backoff_cap_s` → `HTTP_BACKOFF_CAP_S`
+  - `max_connections` → `HTTP_MAX_CONNECTIONS`
+  - `max_keepalive_connections` → `HTTP_MAX_KEEPALIVE_CONNECTIONS`
+  - `trust_env` → `HTTP_TRUST_ENV`
+  - `default_user_agent` → `HTTP_DEFAULT_USER_AGENT`
+  - `json_max_bytes` → `HTTP_JSON_MAX_BYTES`
+  - `http3_enabled` → `HTTP3_ENABLED`
+  - `proxy_allowlist` → `PROXY_ALLOWLIST`
+  - `enforce_tls_min_version` → `HTTP_ENFORCE_TLS_MIN`
+  - `tls_min_version` → `HTTP_TLS_MIN_VERSION`
+  - `cert_pins` → `HTTP_CERT_PINS`
+  - `allow_redirects` → `HTTP_ALLOW_REDIRECTS`
+  - `max_redirects` → `HTTP_MAX_REDIRECTS`
+  - `allow_cross_host_redirects` → `HTTP_ALLOW_CROSS_HOST_REDIRECTS`
+  - `allow_scheme_downgrade` → `HTTP_ALLOW_SCHEME_DOWNGRADE`
 
 TLS and certificate pinning
 
@@ -465,6 +489,27 @@ await adownload(url="https://host/file.bin", dest="/tmp/file.bin", retry=RetryPo
 async for evt in astream_sse(method="GET", url="https://host/stream"):
     print(evt.event, evt.data)
 ```
+
+## [Egress]
+- Centralized outbound egress policy configuration for HTTP clients and workflows (backed by `app/core/Security/egress.py`).
+- Values here are mapped into `EGRESS_*` / `WORKFLOWS_EGRESS_*` env vars when unset.
+
+- Global allow/deny lists
+  - `egress_allowlist` → `EGRESS_ALLOWLIST` (csv of hostnames/domains)
+  - `egress_denylist` → `EGRESS_DENYLIST`
+
+- Workflows-specific allow/deny overrides
+  - `workflows_allowlist` → `WORKFLOWS_EGRESS_ALLOWLIST`
+  - `workflows_denylist` → `WORKFLOWS_EGRESS_DENYLIST`
+
+- Ports, profile, private IPs
+  - `allowed_ports` → `WORKFLOWS_EGRESS_ALLOWED_PORTS` (csv of ints; default `80,443`)
+  - `block_private` → `WORKFLOWS_EGRESS_BLOCK_PRIVATE` (bool; default `true`)
+  - `profile` → `WORKFLOWS_EGRESS_PROFILE` (`strict|permissive|custom`)
+
+Notes
+- The egress policy denies unsupported schemes, disallowed ports, denylisted hosts, and private/reserved IP ranges by default (when `block_private=true`).
+- HTTP helpers in `http_client.py` and workflows/webhook components consult this policy before network I/O and on each redirect hop.
 
 ## [Moderation]
 - `enabled` (bool)

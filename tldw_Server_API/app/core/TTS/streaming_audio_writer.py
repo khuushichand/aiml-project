@@ -106,12 +106,20 @@ class StreamingAudioWriter:
                 # Close the container to write final data
                 self.container.close()
 
-                # Get the final bytes from the buffer
-                self.output_buffer.seek(0)
-                data = self.output_buffer.read()
+                # Return only the new bytes written since the last chunk,
+                # to avoid duplicating audio when concatenating chunks.
+                current_pos = self.output_buffer.tell()
+                self.output_buffer.seek(self.bytes_written)
+                data = self.output_buffer.read(current_pos - self.bytes_written)
+                self.bytes_written = current_pos
+                logger.debug(
+                    f"StreamingAudioWriter finalize: format={self.format}, new_bytes={len(data)}, "
+                    f"total_bytes={self.bytes_written}"
+                )
                 self.output_buffer.close()
                 return data
             else:
+                logger.debug("StreamingAudioWriter finalize: PCM format, no trailer bytes")
                 return b""
 
         if audio_data is None or len(audio_data) == 0:
@@ -119,7 +127,11 @@ class StreamingAudioWriter:
 
         if self.format == "pcm":
             # For PCM, just return raw bytes
-            return audio_data.tobytes()
+            data = audio_data.tobytes()
+            logger.debug(
+                f"StreamingAudioWriter chunk: format=pcm, samples={len(audio_data)}, bytes={len(data)}"
+            )
+            return data
         else:
             # Create audio frame from numpy array
             frame = av.AudioFrame.from_ndarray(
@@ -142,14 +154,18 @@ class StreamingAudioWriter:
             self.output_buffer.seek(self.bytes_written)
             data = self.output_buffer.read(current_pos - self.bytes_written)
             self.bytes_written = current_pos
+            logger.debug(
+                f"StreamingAudioWriter chunk: format={self.format}, samples={len(audio_data)}, "
+                f"new_bytes={len(data)}, total_bytes={self.bytes_written}"
+            )
             return data
 
     def close(self):
         """Clean up resources."""
         if hasattr(self, "container"):
             try:
-                if not self.container.closed:
-                    self.container.close()
+                # Some container implementations do not expose .closed; best-effort close.
+                self.container.close()
             except Exception as e:
                 logger.error(f"Error closing container: {e}")
 

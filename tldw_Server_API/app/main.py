@@ -454,6 +454,9 @@ else:
     # Media Endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
+        from tldw_Server_API.app.api.v1.endpoints.web_scraping import (
+            router as web_scraping_router,
+        )
         _HAS_MEDIA = True
     except Exception as _media_import_err:  # noqa: BLE001
         logger.warning(f"Media endpoints unavailable; skipping import: {_media_import_err}")
@@ -1995,6 +1998,14 @@ async def lifespan(app: FastAPI):
         logger.info("App Shutdown: TTS service shutdown complete")
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down TTS service: {e}")
+
+    # Shutdown TTS Resource Manager (memory monitor, sessions, HTTP clients)
+    try:
+        from tldw_Server_API.app.core.TTS.tts_resource_manager import close_resource_manager as _close_tts_resource_manager
+        await _close_tts_resource_manager()
+        logger.info("App Shutdown: TTS resource manager shutdown complete")
+    except Exception as e:
+        logger.error(f"App Shutdown: Error shutting down TTS resource manager: {e}")
 
     # Shutdown Chat Module Components
     logger.info("App Shutdown: Cleaning up Chat module components...")

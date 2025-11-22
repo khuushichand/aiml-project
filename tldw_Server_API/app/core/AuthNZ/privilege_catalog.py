@@ -9,6 +9,7 @@ AuthNZ and privilege-mapping subsystems.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
@@ -19,7 +20,39 @@ from pydantic import AnyUrl, BaseModel, Field, ValidationError, model_validator,
 import yaml
 
 
-CATALOG_PATH = Path("tldw_Server_API/Config_Files/privilege_catalog.yaml")
+def _default_catalog_path() -> Path:
+    """
+    Resolve the default privilege catalog path.
+
+    Precedence:
+      1. PRIVILEGE_CATALOG_FILE environment variable (if set)
+      2. Repository-relative default: tldw_Server_API/Config_Files/privilege_catalog.yaml
+
+    Relative paths are anchored to the project root to avoid dependence on the
+    current working directory.
+    """
+    # Allow explicit override via environment variable
+    raw = os.getenv("PRIVILEGE_CATALOG_FILE") or "tldw_Server_API/Config_Files/privilege_catalog.yaml"
+    # Expand ~ and $VARS for convenience
+    raw_expanded = os.path.expanduser(os.path.expandvars(str(raw)))
+    candidate = Path(raw_expanded)
+
+    if candidate.is_absolute():
+        return candidate
+
+    # Anchor relative paths to the detected project root
+    try:
+        from tldw_Server_API.app.core.Utils.Utils import get_project_root
+
+        project_root = Path(get_project_root())
+    except (ImportError, ModuleNotFoundError, AttributeError):
+        # Conservative fallback: walk up from this file if Utils is unavailable
+        project_root = Path(__file__).resolve().parents[4]
+
+    return (project_root / candidate).resolve()
+
+
+CATALOG_PATH = _default_catalog_path()
 
 
 class OwnershipPredicateEntry(BaseModel):

@@ -124,6 +124,20 @@ except ImportError:
     apply_multi_vector_passages = None  # type: ignore
     MultiVectorConfig = None  # type: ignore
 
+# Pseudo-relevance feedback (PRF)
+try:
+    from .prf import PRFConfig, apply_prf
+except ImportError:
+    PRFConfig = None  # type: ignore
+    apply_prf = None  # type: ignore
+
+# Precomputed span index (multi-vector helper)
+try:
+    from .precomputed_spans import PrecomputedSpanConfig, apply_precomputed_spans
+except ImportError:
+    PrecomputedSpanConfig = None  # type: ignore
+    apply_precomputed_spans = None  # type: ignore
+
 try:
     from .rewrite_cache import RewriteCache
 except ImportError:
@@ -258,11 +272,17 @@ async def unified_rag_pipeline(
     auto_temporal_filters: bool = False,
     top_k: int = 10,
     min_score: float = 0.0,
-
     # ========== QUERY EXPANSION ==========
     expand_query: bool = False,
     expansion_strategies: List[str] = None,  # ["acronym", "synonym", "domain", "entity"]
     spell_check: bool = False,
+
+    # ========== PSEUDO-RELEVANCE FEEDBACK (PRF) ==========
+    enable_prf: bool = False,
+    prf_terms: int = 10,
+    prf_sources: List[str] = None,  # ["keywords", "entities", "numbers"]
+    prf_alpha: float = 0.3,
+    prf_top_n: int = 8,
 
     # ========== HYDE ==========
     enable_hyde: bool = False,
@@ -317,6 +337,7 @@ async def unified_rag_pipeline(
     mv_stride: int = 150,
     mv_max_spans: int = 8,
     mv_flatten_to_spans: bool = False,
+    enable_precomputed_spans: bool = False,
     enable_numeric_table_boost: bool = False,
 
     # ========== RERANKING ==========
@@ -327,6 +348,11 @@ async def unified_rag_pipeline(
     # Two-tier specific: request-level gating overrides (optional)
     rerank_min_relevance_prob: Optional[float] = None,
     rerank_sentinel_margin: Optional[float] = None,
+
+    # ========== LEARNED FUSION & CALIBRATION ==========
+    enable_learned_fusion: bool = False,
+    calibrator_version: Optional[str] = None,
+    abstention_policy: Literal["continue", "ask", "decline"] = "continue",
 
     # ========== CITATIONS ==========
     enable_citations: bool = False,
@@ -362,6 +388,16 @@ async def unified_rag_pipeline(
     adaptive_rerun_bypass_cache: bool = False,
     adaptive_rerun_time_budget_sec: Optional[float] = None,
     adaptive_rerun_doc_budget: Optional[int] = None,
+    # ========== QUERY DECOMPOSITION & MULTI-HOP ==========
+    enable_query_decomposition: bool = False,
+    max_subqueries: int = 4,
+    subquery_time_budget_sec: Optional[float] = None,
+    subquery_doc_budget: Optional[int] = None,
+    # ========== GRAPH-AUGMENTED RETRIEVAL ==========
+    enable_graph_retrieval: bool = False,
+    graph_version: Optional[str] = None,
+    graph_neighbors_k: int = 16,
+    graph_alpha: float = 0.4,
     # Internal guard to prevent nested rerun loops
     _adaptive_rerun: bool = False,
 
@@ -592,6 +628,33 @@ async def unified_rag_pipeline(
             gate["threshold"] = threshold
 
     try:
+        # ========== LEARNED FUSION / CALIBRATION HELPERS ==========
+        def _decorate_calibration_metadata() -> None:
+            """
+            Attach learned-fusion specific fields (if present) to reranking calibration.
+
+            This keeps Two-Tier calibration behavior intact while making the new
+            enable_learned_fusion / calibrator_version flags observable.
+            """
+            if not isinstance(result.metadata, dict):
+                return
+            cal = result.metadata.get("reranking_calibration")
+            if not isinstance(cal, dict):
+                return
+            # Fused score is the calibrated probability of the top document
+            if "fused_score" not in cal and "top_doc_prob" in cal:
+                try:
+                    cal["fused_score"] = float(cal.get("top_doc_prob") or 0.0)
+                except Exception:
+                    pass
+            # Mark whether learned fusion was explicitly requested
+            if enable_learned_fusion:
+                cal["enabled"] = True
+            # Version tag is purely informational for now
+            if calibrator_version:
+                cal.setdefault("version", calibrator_version)
+            result.metadata["reranking_calibration"] = cal
+
         # ========== SPELL CHECK ==========
         if spell_check:
             if spell_check_query:
@@ -1061,6 +1124,39 @@ async def unified_rag_pipeline(
                             allowed_note_ids=include_note_ids,
                         )
 
+                    # Fallback: if no documents were retrieved via MultiDatabaseRetriever,
+                    # perform a direct Media DB FTS-only search. This guards against
+                    # configuration or adapter issues that can cause hybrid retrieval
+                    # to silently return an empty set even when media is present.
+                    if (not documents) and media_db_path and search_mode in ("fts", "hybrid"):
+                        try:
+                            from .database_retrievers import MediaDBRetriever as _MDBR, RetrievalConfig as _RCfg
+                            fb_cfg = _RCfg(
+                                max_results=top_k,
+                                min_score=min_score,
+                                use_fts=True,
+                                use_vector=False,
+                                include_metadata=True,
+                                fts_level=fts_level,
+                            )
+                            fb_retriever = _MDBR(
+                                db_path=media_db_path,
+                                config=fb_cfg,
+                                user_id=str(user_id or "0"),
+                            )
+                            fallback_docs = await fb_retriever.retrieve(
+                                query=query,
+                                media_type=None,
+                                allowed_media_ids=include_media_ids,
+                            )
+                            if fallback_docs:
+                                documents = fallback_docs
+                                if isinstance(result.metadata, dict):
+                                    result.metadata.setdefault("fallbacks", {})
+                                    result.metadata["fallbacks"]["media_db_fts"] = True
+                        except Exception as _fb_err:
+                            result.errors.append(f"Media DB fallback retrieval failed: {str(_fb_err)}")
+
                     # Optionally run HyDE-enhanced media retrieval and merge
                     if enable_hyde and hyde_vector and search_mode == "hybrid":
                         try:
@@ -1083,6 +1179,201 @@ async def unified_rag_pipeline(
                             result.errors.append(f"HyDE retrieval merge failed: {e}")
 
                     result.documents = documents
+                    # Optional PRF second-pass retrieval to fill remaining slots
+                    if (
+                        enable_prf
+                        and apply_prf
+                        and PRFConfig
+                        and result.documents
+                        and len(result.documents) < top_k
+                    ):
+                        try:
+                            prf_cfg = PRFConfig(
+                                max_terms=int(prf_terms or 0),
+                                sources=prf_sources or ["keywords", "entities", "numbers"],
+                                alpha=float(prf_alpha or 0.0),
+                                top_n=int(prf_top_n or 0),
+                            )
+                            prf_query, prf_meta = await apply_prf(query, result.documents, prf_cfg)
+                            result.metadata.setdefault("prf", {})
+                            result.metadata["prf"].update(prf_meta)
+
+                            # Only perform a second pass when PRF is enabled and query changed
+                            if prf_meta.get("enabled") and prf_query and prf_query != query:
+                                remaining = max(0, top_k - len(result.documents))
+                                if remaining > 0:
+                                    # Use the same retrieval path as the primary call
+                                    if search_mode == "hybrid" and hybrid_supported and rh is not None:
+                                        prf_docs = await _resilient_call(
+                                            "retrieval_prf",
+                                            rh,
+                                            query=prf_query,
+                                            alpha=hybrid_alpha,
+                                            index_namespace=index_namespace,
+                                            allowed_media_ids=include_media_ids,
+                                        )
+                                    else:
+                                        prf_docs = await _resilient_call(
+                                            "retrieval_prf",
+                                            retriever.retrieve,
+                                            query=prf_query,
+                                            sources=data_sources,
+                                            config=config,
+                                            index_namespace=index_namespace,
+                                            allowed_media_ids=include_media_ids,
+                                            allowed_note_ids=include_note_ids,
+                                        )
+                                    prf_docs = prf_docs or []
+                                    existing_ids = {d.id for d in result.documents}
+                                    added = 0
+                                    for d in prf_docs:
+                                        if d.id not in existing_ids:
+                                            result.documents.append(d)
+                                            existing_ids.add(d.id)
+                                            added += 1
+                                            if len(result.documents) >= top_k:
+                                                break
+                                    result.metadata["prf"]["second_pass_performed"] = True
+                                    result.metadata["prf"]["second_pass_added"] = int(added)
+                                else:
+                                    result.metadata["prf"]["second_pass_performed"] = False
+                                    result.metadata["prf"]["second_pass_added"] = 0
+                        except Exception as _prf_err:
+                            result.errors.append(f"PRF second-pass retrieval failed: {str(_prf_err)}")
+
+                    # Optional: guided query decomposition to broaden recall for multi-part queries
+                    if enable_query_decomposition and result.documents:
+                        decomp_start = time.time()
+                        try:
+                            # Prefer agentic planner-style decomposition when available and
+                            # the query appears complex/compound; otherwise fall back to a
+                            # lightweight heuristic split.
+                            q_norm = (query or "").strip()
+                            subqueries: List[str] = []
+                            used_agentic = False
+
+                            # Use QueryAnalyzer (if available) to detect complex queries that
+                            # benefit from decomposition (comparative/causal/temporal/analytical).
+                            intent_label = None
+                            complexity_label = None
+                            if QueryAnalyzer and q_norm:
+                                try:
+                                    qa = QueryAnalyzer()
+                                    analysis = qa.analyze_query(q_norm)
+                                    intent_label = getattr(analysis, "intent", None)
+                                    complexity_label = getattr(analysis, "complexity", None)
+                                    intent_val = getattr(intent_label, "value", str(intent_label) if intent_label else None)
+                                    comp_val = getattr(complexity_label, "value", str(complexity_label) if complexity_label else None)
+                                    # Try delegating to agentic-style decomposition when the query
+                                    # is complex and of a multi-part intent.
+                                    multi_intents = {"comparative", "causal", "analytical", "temporal"}
+                                    if intent_val in multi_intents and comp_val == "complex":
+                                        try:
+                                            from .agentic_chunker import AgenticConfig as _ACfg, _decompose_query as _agentic_decompose  # type: ignore
+                                            acfg = _ACfg(enable_query_decomposition=True, subgoal_max=max_subqueries or None)
+                                            subqueries = _agentic_decompose(q_norm, acfg) or []
+                                            used_agentic = True
+                                        except Exception:
+                                            used_agentic = False
+                                except Exception:
+                                    intent_label = None
+                                    complexity_label = None
+
+                            if not used_agentic:
+                                # Lightweight heuristic decomposition: split on common coordinators/punctuation.
+                                if q_norm:
+                                    parts = re.split(r"\b(?:and then|then|and|,|;|\?)\b", q_norm, flags=re.IGNORECASE)
+                                    subqueries = [p.strip() for p in parts if p and len(p.strip()) >= 3]
+                                if not subqueries:
+                                    subqueries = [q_norm] if q_norm else []
+
+                            # Apply max_subqueries cap if provided (includes primary query implicitly)
+                            try:
+                                max_sub = int(max_subqueries or 0)
+                            except Exception:
+                                max_sub = 0
+                            if max_sub and len(subqueries) > max_sub:
+                                subqueries = subqueries[: max_sub]
+
+                            meta_decomp: Dict[str, Any] = {
+                                "enabled": True,
+                                "subqueries": [],
+                            }
+                            if intent_label is not None:
+                                try:
+                                    meta_decomp["intent"] = getattr(intent_label, "value", str(intent_label))
+                                except Exception:
+                                    pass
+                            if complexity_label is not None:
+                                try:
+                                    meta_decomp["complexity"] = getattr(complexity_label, "value", str(complexity_label))
+                                except Exception:
+                                    pass
+                            time_budget = float(subquery_time_budget_sec) if subquery_time_budget_sec else None
+                            try:
+                                doc_budget = int(subquery_doc_budget) if subquery_doc_budget is not None else None
+                            except Exception:
+                                doc_budget = None
+
+                            base_ids = {d.id for d in result.documents}
+                            total_added = 0
+
+                            # Only run additional retrievals for secondary subqueries
+                            if len(subqueries) > 1:
+                                for sq in subqueries[1:]:
+                                    if time_budget is not None and (time.time() - decomp_start) >= time_budget:
+                                        break
+                                    if doc_budget is not None and total_added >= doc_budget:
+                                        break
+                                    try:
+                                        sq_docs = await retriever.retrieve(
+                                            query=sq,
+                                            sources=data_sources,
+                                            config=config,
+                                            index_namespace=index_namespace,
+                                            allowed_media_ids=include_media_ids,
+                                            allowed_note_ids=include_note_ids,
+                                        )
+                                        sq_docs = sq_docs or []
+                                    except Exception as _sq_err:
+                                        result.errors.append(f"Decomposition subquery retrieval failed: {sq}: {_sq_err}")
+                                        continue
+
+                                    added_ids: List[str] = []
+                                    for d in sq_docs:
+                                        if d.id not in base_ids:
+                                            result.documents.append(d)
+                                            base_ids.add(d.id)
+                                            added_ids.append(d.id)
+                                            total_added += 1
+                                            if doc_budget is not None and total_added >= doc_budget:
+                                                break
+                                    meta_decomp["subqueries"].append({
+                                        "query": sq,
+                                        "added_doc_ids": added_ids,
+                                    })
+                                    if doc_budget is not None and total_added >= doc_budget:
+                                        break
+
+                                # Re-sort docs by score and cap to top_k
+                                try:
+                                    result.documents = sorted(
+                                        result.documents,
+                                        key=lambda d: getattr(d, "score", 0.0),
+                                        reverse=True,
+                                    )[: top_k]
+                                except Exception:
+                                    # Fallback: leave documents in current order
+                                    pass
+
+                            meta_decomp["total_added"] = int(total_added)
+                            meta_decomp["elapsed_sec"] = round(time.time() - decomp_start, 6)
+                            meta_decomp["time_budget_sec"] = float(time_budget) if time_budget is not None else None
+                            meta_decomp["doc_budget"] = int(doc_budget) if doc_budget is not None else None
+                            result.metadata["decomposition"] = meta_decomp
+                        except Exception as _dec_err:
+                            result.errors.append(f"Query decomposition failed: {str(_dec_err)}")
+
                     # Attach retrieval guidance prompt in metadata for downstream awareness/debugging
                     try:
                         _rg = load_prompt("rag", "retrieval_guidance")
@@ -1137,6 +1428,39 @@ async def unified_rag_pipeline(
                     )
                 except Exception:
                     pass
+
+                # On retrieval failure, attempt a best-effort Media DB FTS fallback.
+                # This is especially important in local/test environments where
+                # vector stores or adapters may be misconfigured but the Media DB
+                # itself contains the uploaded content.
+                if (not result.documents) and media_db_path and search_mode in ("fts", "hybrid"):
+                    try:
+                        from .database_retrievers import MediaDBRetriever as _MDBR, RetrievalConfig as _RCfg
+                        fb_cfg = _RCfg(
+                            max_results=top_k,
+                            min_score=min_score,
+                            use_fts=True,
+                            use_vector=False,
+                            include_metadata=True,
+                            fts_level=fts_level,
+                        )
+                        fb_retriever = _MDBR(
+                            db_path=media_db_path,
+                            config=fb_cfg,
+                            user_id=str(user_id or "0"),
+                        )
+                        fallback_docs = await fb_retriever.retrieve(
+                            query=query,
+                            media_type=None,
+                            allowed_media_ids=include_media_ids,
+                        )
+                        if fallback_docs:
+                            result.documents = fallback_docs
+                            if isinstance(result.metadata, dict):
+                                result.metadata.setdefault("fallbacks", {})
+                                result.metadata["fallbacks"]["media_db_fts_on_error"] = True
+                    except Exception as _fb_err:
+                        result.errors.append(f"Media DB fallback retrieval on error failed: {str(_fb_err)}")
             finally:
                 # Ensure OTEL span is closed
                 if _otel_cm is not None:
@@ -1149,6 +1473,29 @@ async def unified_rag_pipeline(
         if enable_multi_vector_passages and result.documents:
             mv_start = time.time()
             try:
+                used_precomputed = False
+                if enable_precomputed_spans and apply_precomputed_spans and PrecomputedSpanConfig:
+                    try:
+                        pcfg = PrecomputedSpanConfig()
+                        pre_docs = await apply_precomputed_spans(
+                            query=query,
+                            documents=result.documents,
+                            config=pcfg,
+                            user_id=user_id,
+                        )
+                        result.metadata.setdefault("multi_vector", {})
+                        # When implementation is available, pre_docs can override documents
+                        if pre_docs:
+                            result.documents = pre_docs[: top_k]
+                            result.metadata["multi_vector"]["precomputed_spans"] = True
+                            used_precomputed = True
+                        else:
+                            result.metadata["multi_vector"]["precomputed_spans"] = False
+                    except Exception:
+                        # If precomputed path fails, fall back silently to on-the-fly spans
+                        result.metadata.setdefault("multi_vector", {})
+                        result.metadata["multi_vector"]["precomputed_spans"] = False
+
                 if apply_multi_vector_passages and MultiVectorConfig:
                     cfg = MultiVectorConfig(
                         span_chars=int(mv_span_chars or 300),
@@ -1705,8 +2052,62 @@ async def unified_rag_pipeline(
                         if hasattr(reranker, 'last_metadata') and isinstance(getattr(reranker, 'last_metadata'), dict):
                             result.metadata.setdefault("reranking_calibration", {})
                             result.metadata["reranking_calibration"].update(getattr(reranker, 'last_metadata'))
+                            # Attach learned-fusion specific decoration when applicable
+                            _decorate_calibration_metadata()
                     except Exception:
                         pass
+
+                    # For non Two-Tier strategies, if learned fusion is requested but no
+                    # calibrator metadata exists, compute a simple fused probability from
+                    # the top document score so that downstream gating can still use a
+                    # calibrated signal.
+                    if enable_learned_fusion:
+                        try:
+                            if isinstance(result.metadata, dict) and "reranking_calibration" not in result.metadata:
+                                try:
+                                    top_doc = (result.documents or [None])[0]
+                                except Exception:
+                                    top_doc = None
+                                if top_doc is not None:
+                                    import os as _os_lf
+                                    import math as _math_lf
+                                    # Use shared env weights to stay consistent with Two-Tier,
+                                    # but only CE-style weight is applied since we only have
+                                    # a single rerank score available here.
+                                    try:
+                                        bias = float(_os_lf.getenv("RAG_RERANK_CALIB_BIAS", "-1.5"))
+                                    except Exception:
+                                        bias = -1.5
+                                    try:
+                                        w_ce = float(_os_lf.getenv("RAG_RERANK_CALIB_W_CE", "2.5"))
+                                    except Exception:
+                                        w_ce = 2.5
+                                    try:
+                                        raw = float(getattr(top_doc, "score", 0.0) or 0.0)
+                                    except Exception:
+                                        raw = 0.0
+                                    logit = bias + (w_ce * raw)
+                                    try:
+                                        fused_prob = 1.0 / (1.0 + _math_lf.exp(-logit))
+                                    except Exception:
+                                        fused_prob = 0.5
+                                    # Threshold from env (same as Two-Tier gating default)
+                                    try:
+                                        thr = float(_os_lf.getenv("RAG_MIN_RELEVANCE_PROB", "0.35"))
+                                    except Exception:
+                                        thr = 0.35
+                                    gated_flag = fused_prob < thr
+                                    result.metadata["reranking_calibration"] = {
+                                        "strategy": str(reranking_strategy),
+                                        "top_doc_score": raw,
+                                        "fused_score": fused_prob,
+                                        "threshold": thr,
+                                        "gated": gated_flag,
+                                    }
+                                    # Ensure learned-fusion metadata decoration is applied
+                                    _decorate_calibration_metadata()
+                        except Exception:
+                            pass
 
                 else:
                     result.errors.append("Reranking module not available")
@@ -1901,6 +2302,20 @@ async def unified_rag_pipeline(
         try:
             _cal = result.metadata.get("reranking_calibration") if isinstance(result.metadata, dict) else None
             gated_generation = bool(_cal.get("gated")) if isinstance(_cal, dict) else False
+            # When calibration metadata is present, ensure fused_score/version/decision
+            # are wired for observability.
+            if isinstance(_cal, dict):
+                if "fused_score" not in _cal and "top_doc_prob" in _cal:
+                    try:
+                        _cal["fused_score"] = float(_cal.get("top_doc_prob") or 0.0)
+                    except Exception:
+                        pass
+                if enable_learned_fusion:
+                    _cal["enabled"] = True
+                if calibrator_version:
+                    _cal.setdefault("version", calibrator_version)
+                # Decision will be finalized in the gated branch below
+                result.metadata["reranking_calibration"] = _cal
         except Exception:
             gated_generation = False
 
@@ -2108,11 +2523,33 @@ async def unified_rag_pipeline(
                 )
             except Exception:
                 pass
-            # Abstention / clarifying question path
-            if enable_abstention:
+
+            # Decide abstention policy for calibration-based gating.
+            # Priority:
+            #   1) enable_learned_fusion + abstention_policy
+            #   2) enable_abstention + abstention_behavior
+            #   3) default "continue" (no replacement answer)
+            effective_policy: str = "continue"
+            if enable_learned_fusion:
+                effective_policy = abstention_policy or "continue"
+            elif enable_abstention:
+                effective_policy = abstention_behavior or "continue"
+
+            # Record the decision in reranking calibration metadata when present
+            try:
+                if isinstance(result.metadata, dict):
+                    cal = result.metadata.get("reranking_calibration")
+                    if isinstance(cal, dict):
+                        cal["decision"] = effective_policy
+                        result.metadata["reranking_calibration"] = cal
+            except Exception:
+                pass
+
+            # Abstention / clarifying question path based on effective policy
+            if effective_policy in {"ask", "decline"}:
                 try:
-                    clar_q = None
-                    if abstention_behavior == "ask":
+                    if effective_policy == "ask":
+                        clar_q = None
                         # Form a concise clarifying question using query analysis if available
                         if QueryAnalyzer:
                             try:
@@ -2125,9 +2562,8 @@ async def unified_rag_pipeline(
                         if not clar_q:
                             clar_q = f"Could you clarify which specific details about '{query}' you need?"
                         result.generated_answer = clar_q
-                    elif abstention_behavior == "decline":
+                    elif effective_policy == "decline":
                         result.generated_answer = "I don’t have sufficient grounded evidence to answer confidently. Please clarify your question or provide more context."
-                    # 'continue' leaves generated_answer unset but records gate metadata
                 except Exception:
                     pass
 

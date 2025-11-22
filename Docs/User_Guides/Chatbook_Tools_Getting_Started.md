@@ -12,8 +12,9 @@ This guide shows how to use the new Chatbook Tools features: templated chat dict
 
 Templating is expression-only Jinja2 with a strict sandbox (no loops/macros/imports).
 
-Enable templating:
-- Env: `CHAT_DICT_TEMPLATES_ENABLED=1`
+Enable templating (precedence):
+- Global: `CHAT_DICT_TEMPLATES_ENABLED=1` (env) or `enable_templates = true` (config) turns dictionary templating on; `0/false` disables templating entirely, regardless of per-dictionary settings.
+- Per-dictionary: when global templating is enabled, a dictionary-level `enable_templates=false` forces pass-through behavior for that dictionary; `enable_templates=true` forces rendering for that dictionary (subject to sandbox/validation).
 - Or config.txt:
   ```ini
   [Chat-Templating]
@@ -44,6 +45,7 @@ Limits and safety:
 - Output cap: `MAX_TEMPLATE_OUTPUT_CHARS` (default: 2000).
 - Render timeout: `TEMPLATE_RENDER_TIMEOUT_MS` (default: 250 ms). Note: soft timeout — rendering is not interrupted; only metrics are recorded.
 - Random helpers are disabled by default; enable with `CHAT_DICT_TEMPLATES_ALLOW_RANDOM=1`.
+- Templates are compiled and cached per replacement string using a small LRU cache keyed by the literal template text, to avoid reparsing on every match.
 
 Optional defaults in config.txt:
 ```ini
@@ -54,7 +56,7 @@ max_output_chars = 2000
 render_timeout_ms = 250
 default_timezone = UTC
 
-Tip: For deterministic tests when random helpers are enabled, set `TEMPLATES_RANDOM_SEED`.
+Tip: For deterministic tests when random helpers are enabled, set `TEMPLATES_RANDOM_SEED`. A request-scoped seed (when provided by tests) overrides the global seed; the global seed is mainly for test harnesses or controlled environments.
 ```
 
 ## 2) Slash Commands
@@ -88,7 +90,7 @@ Replace-mode example:
 
 Discovery endpoint:
 - `GET /api/v1/chat/commands` → list of commands with `name`, `description`, and `required_permission` (RBAC filtered if enabled).
-  - When commands are disabled (`commands_enabled=false`), this endpoint returns an empty list.
+  - When commands are disabled (`commands_enabled=false`), this endpoint returns an empty list. Clients should fetch this endpoint on each session or page load rather than caching the list long-term, since RBAC and configuration may change which commands are available (e.g., enabling/disabling `/weather`).
 
 Moderation ordering:
 - Injected system parts bypass user-input moderation but are logged and audited with provenance metadata.
@@ -136,13 +138,15 @@ Response:
 Notes:
 - `probability` in the validator payload is a float in the range `[0.0, 1.0]`.
 - Unknown template functions are flagged as warnings by the validator; external calls (e.g., `weather()`) are disabled by default and will be reported accordingly.
+ - `strict=false` (API default) means the validator never rejects based solely on warnings; clients receive `errors` and `warnings` and decide how to handle them. `strict=true` is intended for server-side workflows (e.g., imports) where certain error codes (schema/regex/template/output/size) should be treated as fatal.
+ - Unknown or unsupported `schema_version` values result in a normal 200 response with a `schema_invalid` error in the payload; 400 is reserved for requests that do not match the `ValidateDictionaryRequest` schema at all.
 
 ## 4) Chatbooks Import: Validator Warnings
 
-When importing Chatbooks synchronously via `/api/v1/chatbooks/import`, validator findings for embedded dictionaries are surfaced in the `warnings` array of the response. In strict mode (`CHATBOOKS_IMPORT_DICT_STRICT=1`), dictionaries with errors are skipped.
+When importing Chatbooks synchronously via `/api/v1/chatbooks/import`, validator findings for embedded dictionaries are surfaced in the `warnings` array of the response. In strict mode (`CHATBOOKS_IMPORT_DICT_STRICT=1`), dictionaries with errors are skipped entirely; imports still complete best-effort, with warnings describing which dictionaries were rejected and why.
 
 ## 5) Troubleshooting
 
 - Templating not applied: ensure `CHAT_DICT_TEMPLATES_ENABLED=1` (or config `[Chat-Templating].enable_templates=true`).
 - `/weather` says unavailable: set provider keys and `DEFAULT_LOCATION`, or pass a city in the command.
-- Validate timeouts: lower dictionary size or disable risky regexes; use the validator to pinpoint issues.
+- Validate timeouts: lower dictionary size or disable risky regexes; use the validator to pinpoint issues. The validator enforces an overall time budget and may emit `regex_timeout` for particularly expensive patterns, skipping further checks for those entries while still returning a best-effort report.

@@ -6,7 +6,9 @@
 # Imports
 import asyncio
 import json
-from typing import Optional, List, Dict, Any
+import logging
+from datetime import datetime
+from typing import Optional, List, Dict, Any, Awaitable, Callable
 #
 # Third-party Libraries
 from fastapi import HTTPException
@@ -19,15 +21,18 @@ from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 # Import the enhanced service
 from tldw_Server_API.app.services.enhanced_web_scraping_service import (
-    get_web_scraping_service, shutdown_web_scraping_service
+    get_web_scraping_service,
+    shutdown_web_scraping_service,
 )
 # Keep legacy imports for fallback
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
     scrape_and_summarize_multiple,
+    scrape_article,
     scrape_from_sitemap,
     scrape_by_url_level,
-    recursive_scrape
+    recursive_scrape,
 )
+from tldw_Server_API.app.api.v1.schemas.media_request_models import ScrapeMethod
 #
 ########################################################################################################################
 #
@@ -51,7 +56,11 @@ async def process_web_scraping_task(
     mode: str = "persist",
     user_id: Optional[int] = None,
     user_agent: Optional[str] = None,
-    custom_headers: Optional[Dict[str, str]] = None
+    custom_headers: Optional[Dict[str, str]] = None,
+    # Crawl overrides from UI / WebScrapingRequest
+    crawl_strategy: Optional[str] = None,
+    include_external: Optional[bool] = None,
+    score_threshold: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Enhanced web scraping with production features:
@@ -64,7 +73,54 @@ async def process_web_scraping_task(
 
     This function delegates to the enhanced service while maintaining
     backward compatibility with the existing API.
+
+    Parameters:
+    - crawl_strategy: Optional crawl strategy override for enhanced crawling.
+      Normalized to lowercase and validated against: "best_first", "best-first", "bestfirst".
+    - include_external: Optional flag to allow following external links during crawl.
+      Forwarded as-is to the enhanced service when provided.
+    - score_threshold: Optional relevance threshold in [0.0, 1.0] for URL scoring.
+      Coerced to float and validated to be within the closed interval [0.0, 1.0].
+    - custom_headers: Optional HTTP headers to use for outbound scraping requests.
+      Forwarded as-is to the enhanced service and used for session keying.
+
+    Fallback behaviour:
+    - When the enhanced service is unavailable, a legacy implementation is used.
+    - For the "Recursive Scraping" method, advanced crawl options
+      (`custom_headers`, `crawl_strategy`, `include_external`, `score_threshold`)
+      are not supported by the legacy path; if any of these are provided when
+      the fallback is active, the request is rejected with an explicit error
+      instead of silently ignoring them.
     """
+    # Normalize and validate crawl overrides before dispatch
+    normalized_crawl_strategy: Optional[str] = None
+    if crawl_strategy is not None:
+        normalized_crawl_strategy = crawl_strategy.strip().lower()
+        allowed_strategies = {"best_first", "best-first", "bestfirst"}
+        if normalized_crawl_strategy not in allowed_strategies:
+            raise ValueError(
+                f"Invalid crawl_strategy '{crawl_strategy}'. "
+                "Valid options are: 'best_first', 'best-first', 'bestfirst'."
+            )
+
+    normalized_score_threshold: Optional[float] = None
+    if score_threshold is not None:
+        try:
+            normalized_score_threshold = float(score_threshold)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"score_threshold must be a float between 0.0 and 1.0; got {score_threshold!r}."
+            )
+        if not 0.0 <= normalized_score_threshold <= 1.0:
+            raise ValueError(
+                f"score_threshold must be between 0.0 and 1.0 inclusive; got {normalized_score_threshold}."
+            )
+
+    if normalized_crawl_strategy is not None:
+        crawl_strategy = normalized_crawl_strategy
+    if normalized_score_threshold is not None:
+        score_threshold = normalized_score_threshold
+
     # Try to use enhanced service
     try:
         service = get_web_scraping_service()
@@ -98,7 +154,10 @@ async def process_web_scraping_task(
             priority=priority,
             user_id=user_id,
             user_agent=user_agent,
-            custom_headers=custom_headers
+            custom_headers=custom_headers,
+            crawl_strategy=crawl_strategy,
+            include_external=include_external,
+            score_threshold=score_threshold,
         )
 
         return result
@@ -136,17 +195,45 @@ async def process_web_scraping_task(
                     raise ValueError("`url_level` must be provided when scraping method is 'URL Level'")
                 result_list = await asyncio.to_thread(scrape_by_url_level, url_input, url_level)
             elif scrape_method == "Recursive Scraping":
-                # Call your existing "recursive_scrape(...)"
-                # That returns a list of dict { url, title, content, extraction_successful, ... }
-                # Then optionally summarize if requested
-                result_list = await recursive_scrape(
-                    base_url=url_input,
-                    max_pages=max_pages,
-                    max_depth=max_depth,
-                    progress_callback=lambda x: None,  # no-op
-                    delay=1.0,
-                    custom_cookies=custom_cookies
-                )
+                # Legacy recursive scraping cannot honor advanced crawl flags that
+                # are supported only by the enhanced service. Make this explicit.
+                advanced_flags = {
+                    "custom_headers": custom_headers if custom_headers else None,
+                    "crawl_strategy": (crawl_strategy or "").strip() or None,
+                    "include_external": include_external
+                    if include_external is not None
+                    else None,
+                    "score_threshold": score_threshold
+                    if score_threshold is not None
+                    else None,
+                }
+                unsupported = [name for name, value in advanced_flags.items() if value is not None]
+                if unsupported:
+                    detail = (
+                        "Enhanced web scraping options are only available when the enhanced "
+                        "scraping service is running. The legacy fallback for 'Recursive "
+                        "Scraping' does not support the following parameters: "
+                        f"{', '.join(sorted(unsupported))}."
+                    )
+                    raise HTTPException(status_code=400, detail=detail)
+
+                # Call the existing async recursive_scrape implementation.
+                # It returns a list of dicts:
+                # { url, title, content, extraction_successful, ... }
+                recursive_kwargs: Dict[str, Any] = {
+                    "base_url": url_input,
+                    "max_pages": max_pages,
+                    "max_depth": max_depth,
+                    "progress_callback": (lambda x: None),  # no-op
+                    "delay": 1.0,
+                    "custom_cookies": custom_cookies,
+                }
+                # Only override user-agent if explicitly provided, otherwise keep
+                # the legacy default inside recursive_scrape.
+                if user_agent:
+                    recursive_kwargs["user_agent"] = user_agent
+
+                result_list = await recursive_scrape(**recursive_kwargs)
             else:
                 raise ValueError(f"Unknown scrape method: {scrape_method}")
 
@@ -284,3 +371,341 @@ async def process_web_scraping_task(
 
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
+
+
+async def ingest_web_content_orchestrate(
+    request: Any,
+    db: Any,
+    usage_log: Any,
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Shared helper for `/media/ingest-web-content` side effects and, for
+    selected scrape methods, the scraping + summarization:
+      - ScrapeMethod.INDIVIDUAL: per-URL scrape + summary
+      - ScrapeMethod.SITEMAP: sitemap scrape + summary
+    """
+
+    # Log usage for web scraping ingest
+    try:
+        usage_log.log_event(
+            "webscrape.ingest",
+            tags=[str(getattr(request, "scrape_method", "") or "")],
+            metadata={
+                "url_count": len(getattr(request, "urls", []) or []),
+                "perform_analysis": bool(
+                    getattr(request, "perform_analysis", False)
+                ),
+            },
+        )
+    except Exception:
+        pass
+
+    # Topic monitoring (non-blocking): URLs and provided titles
+    try:
+        from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import (
+            get_topic_monitoring_service,
+        )
+
+        mon = get_topic_monitoring_service()
+        uid = getattr(db, "client_id", None) if hasattr(db, "client_id") else None
+        for u in (getattr(request, "urls", []) or [])[:10]:
+            if u:
+                mon.evaluate_and_alert(
+                    user_id=str(uid) if uid else None,
+                    text=str(u),
+                    source="ingestion.web",
+                    scope_type="user",
+                    scope_id=str(uid) if uid else None,
+                )
+        for t in (getattr(request, "titles", []) or [])[:10]:
+            if t:
+                mon.evaluate_and_alert(
+                    user_id=str(uid) if uid else None,
+                    text=str(t),
+                    source="ingestion.web",
+                    scope_type="user",
+                    scope_id=str(uid) if uid else None,
+                )
+    except Exception:
+        # Do not let monitoring failures break ingestion.
+        pass
+
+    scrape_method = getattr(request, "scrape_method", None)
+
+    async def maybe_summarize_one(article: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Shared summarization helper for sitemap/individual scraping.
+        Mirrors the legacy `_legacy_media.ingest_web_content` behaviour.
+        """
+        if not getattr(request, "perform_analysis", False):
+            article["analysis"] = None
+            return article
+
+        content = article.get("content", "")
+        if not content:
+            article["analysis"] = "No content to analyze."
+            return article
+
+        analysis_results = analyze(
+            input_data=content,
+            custom_prompt_arg=getattr(request, "custom_prompt", None)
+            or "Summarize this article.",
+            api_name=getattr(request, "api_name", None),
+            temp=0.7,
+            system_message=getattr(request, "system_prompt", None)
+            or "Act as a professional summarizer.",
+        )
+        article["analysis"] = analysis_results
+
+        if getattr(request, "perform_rolling_summarization", False):
+            logging.info("Performing rolling summarization (placeholder).")
+        if getattr(request, "perform_confabulation_check_of_analysis", False):
+            logging.info("Performing confabulation check of analysis (placeholder).")
+
+        return article
+
+    def parse_cookies() -> Optional[List[Dict[str, Any]]]:
+        """
+        Parse cookies from the request when `use_cookies` is enabled.
+        Mirrors the legacy JSON parsing + 400 semantics, but ensures that
+        malformed or incorrectly-typed cookie payloads yield a 400 instead
+        of bubbling up as a 500 error.
+        """
+        custom_cookies_list: Optional[List[Dict[str, Any]]] = None
+        if getattr(request, "use_cookies", False) and getattr(
+            request, "cookies", None
+        ):
+            raw_cookies = getattr(request, "cookies")
+            try:
+                parsed = json.loads(raw_cookies)
+            except json.JSONDecodeError:
+                raise HTTPException(
+                    status_code=400, detail="Invalid JSON format for cookies"
+                )
+
+            if isinstance(parsed, dict):
+                custom_cookies_list = [parsed]
+            elif isinstance(parsed, list):
+                if not all(isinstance(item, dict) for item in parsed):
+                    raise HTTPException(
+                        status_code=400, detail="Invalid cookies format"
+                    )
+                custom_cookies_list = parsed
+            else:
+                raise HTTPException(
+                    status_code=400, detail="Invalid cookies format"
+                )
+
+        return custom_cookies_list
+
+    # INDIVIDUAL URLs: per-URL scrape + summarization
+    if scrape_method == ScrapeMethod.INDIVIDUAL:
+        urls = getattr(request, "urls", []) or []
+        if not urls:
+            return []
+
+        titles = getattr(request, "titles", None) or []
+        authors = getattr(request, "authors", None) or []
+        keywords = getattr(request, "keywords", None) or []
+        num_urls = len(urls)
+
+        if len(titles) < num_urls:
+            titles += ["Untitled"] * (num_urls - len(titles))
+        if len(authors) < num_urls:
+            authors += ["Unknown"] * (num_urls - len(authors))
+        if len(keywords) < num_urls:
+            keywords += ["no_keyword_set"] * (num_urls - len(keywords))
+
+        custom_cookies_list = parse_cookies()
+
+        results: List[Dict[str, Any]] = []
+        for i, url in enumerate(urls):
+            title_ = titles[i]
+            author_ = authors[i]
+            kw_ = keywords[i]
+
+            article_data = await scrape_article(url, custom_cookies=custom_cookies_list)
+            if not article_data or not article_data.get("extraction_successful"):
+                logging.warning(f"Failed to scrape: {url}")
+                continue
+
+            article_data["title"] = title_ or article_data.get("title")
+            article_data["author"] = author_ or article_data.get("author")
+            article_data["keywords"] = kw_
+
+            article_data = await maybe_summarize_one(article_data)
+            results.append(article_data)
+
+        return results
+
+    # SITEMAP: scrape sitemap URL, then summarize each article
+    if scrape_method == ScrapeMethod.SITEMAP:
+        urls = getattr(request, "urls", []) or []
+        if not urls:
+            return []
+
+        sitemap_url = urls[0]
+
+        def scrape_in_thread() -> List[Dict[str, Any]]:
+            return scrape_from_sitemap(sitemap_url)
+
+        loop = asyncio.get_running_loop()
+        results = await loop.run_in_executor(None, scrape_in_thread)
+
+        if not results:
+            logging.warning("No articles returned from sitemap scraping.")
+            return []
+
+        summarized: List[Dict[str, Any]] = []
+        for r in results:
+            # Legacy path expects dict-like articles; skip anything else defensively.
+            if not isinstance(r, dict):
+                continue
+            summarized_article = await maybe_summarize_one(r)
+            summarized.append(summarized_article)
+
+        return summarized
+
+    # URL LEVEL: route to enhanced service (friendly ingest)
+    if scrape_method == ScrapeMethod.URL_LEVEL:
+        urls = getattr(request, "urls", []) or []
+        if not urls:
+            return []
+
+        base_url = urls[0]
+        level = getattr(request, "url_level", None) or 2
+
+        custom_cookies_list = parse_cookies()
+
+        try:
+            from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+
+            scrape_task = getattr(
+                media_mod, "process_web_scraping_task", process_web_scraping_task
+            )
+        except Exception:  # pragma: no cover - defensive fallback
+            scrape_task = process_web_scraping_task
+
+        try:
+            service_result = await scrape_task(
+                scrape_method="URL Level",
+                url_input=base_url,
+                url_level=level,
+                max_pages=getattr(request, "max_pages", None) or 10,
+                max_depth=level,
+                summarize_checkbox=bool(
+                    getattr(request, "perform_analysis", False)
+                ),
+                custom_prompt=getattr(request, "custom_prompt", None),
+                api_name=getattr(request, "api_name", None),
+                api_key=None,
+                keywords=",".join(request.keywords or [])
+                if isinstance(getattr(request, "keywords", None), list)
+                else (getattr(request, "keywords", None) or ""),
+                custom_titles=None,
+                system_prompt=getattr(request, "system_prompt", None),
+                temperature=0.7,
+                custom_cookies=custom_cookies_list,
+                mode="ephemeral",
+                user_agent=getattr(request, "user_agent", None)
+                if hasattr(request, "user_agent")
+                else None,
+                custom_headers=None,
+                crawl_strategy=getattr(request, "crawl_strategy", None),
+                include_external=getattr(request, "include_external", None),
+                score_threshold=getattr(request, "score_threshold", None),
+            )
+            articles: List[Dict[str, Any]] = []
+            if isinstance(service_result, dict):
+                if service_result.get("articles"):
+                    articles = service_result["articles"]
+                elif service_result.get("results"):
+                    articles = service_result["results"]
+
+            for r in articles:
+                if (
+                    isinstance(r, dict)
+                    and "summary" in r
+                    and "analysis" not in r
+                ):
+                    r["analysis"] = r.get("summary")
+
+            return articles
+        except Exception as exc:  # pragma: no cover - propagate for legacy handler
+            logging.error(f"Enhanced URL Level crawl failed: {exc}")
+            raise
+
+    # RECURSIVE SCRAPING: route to enhanced service (friendly ingest)
+    if scrape_method == ScrapeMethod.RECURSIVE:
+        urls = getattr(request, "urls", []) or []
+        if not urls:
+            return []
+
+        base_url = urls[0]
+        max_pages = getattr(request, "max_pages", None) or 10
+        max_depth = getattr(request, "max_depth", None) or 3
+
+        custom_cookies_list = parse_cookies()
+
+        try:
+            from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+
+            scrape_task = getattr(
+                media_mod, "process_web_scraping_task", process_web_scraping_task
+            )
+        except Exception:  # pragma: no cover - defensive fallback
+            scrape_task = process_web_scraping_task
+
+        try:
+            service_result = await scrape_task(
+                scrape_method="Recursive Scraping",
+                url_input=base_url,
+                url_level=None,
+                max_pages=max_pages,
+                max_depth=max_depth,
+                summarize_checkbox=bool(
+                    getattr(request, "perform_analysis", False)
+                ),
+                custom_prompt=getattr(request, "custom_prompt", None),
+                api_name=getattr(request, "api_name", None),
+                api_key=None,
+                keywords=",".join(request.keywords or [])
+                if isinstance(getattr(request, "keywords", None), list)
+                else (getattr(request, "keywords", None) or ""),
+                custom_titles=None,
+                system_prompt=getattr(request, "system_prompt", None),
+                temperature=0.7,
+                custom_cookies=custom_cookies_list,
+                mode="ephemeral",
+                user_agent=getattr(request, "user_agent", None)
+                if hasattr(request, "user_agent")
+                else None,
+                custom_headers=None,
+                crawl_strategy=getattr(request, "crawl_strategy", None),
+                include_external=getattr(request, "include_external", None),
+                score_threshold=getattr(request, "score_threshold", None),
+            )
+            articles: List[Dict[str, Any]] = []
+            if isinstance(service_result, list):
+                articles = service_result
+            elif isinstance(service_result, dict):
+                if service_result.get("articles"):
+                    articles = service_result.get("articles") or []
+                elif service_result.get("results"):
+                    articles = service_result.get("results") or []
+
+            for r in articles:
+                if (
+                    isinstance(r, dict)
+                    and "summary" in r
+                    and "analysis" not in r
+                ):
+                    r["analysis"] = r.get("summary")
+
+            return articles
+        except Exception as exc:  # pragma: no cover - propagate for legacy handler
+            logging.error(f"Enhanced recursive crawl failed: {exc}")
+            raise
+
+    # Other methods (or unrecognized) still handled in `_legacy_media`.
+    return None

@@ -57,6 +57,62 @@ Provider support snapshot (indicative): OpenAI (cloud), ElevenLabs (cloud, cloni
 - Metrics:
   - Registered counters/histograms (e.g., `tts_requests_total`, `tts_request_duration_seconds`, `tts_fallback_attempts`, text length/audio size metrics) via Metrics registry.
 
+## 2.1 Egress and Error Behavior (Ops Overview)
+
+- Outbound HTTP for TTS providers (OpenAI, ElevenLabs, Index-style engines) is centralized in `http_client.py`:
+  - All adapter POSTs either use the `apost`/`afetch` helpers or the shared `AsyncClient` from `tts_resource_manager`, which calls `_validate_egress_or_raise(url)` before sending.
+  - Egress policy is configured via `EGRESS_ALLOWLIST` / `EGRESS_DENYLIST` / `WORKFLOWS_EGRESS_*` and enforces:
+    - Allowed schemes (`http/https`) and ports.
+    - Host allow/deny lists.
+    - Private/reserved IP blocking (SSRF protection), except for selected test-only relaxations.
+  - Denials raise `EgressPolicyError` and increment `http_client_egress_denials_total` with a reason (e.g., `Host could not be resolved`, `URL resolves to a private or reserved address`).
+
+- Provider-specific HTTP behavior:
+  - **OpenAI**
+    - Uses `apost` for `/v1/audio/speech` POSTs (non-stream and streaming), so:
+      - Egress is always enforced, but the underlying `httpx.HTTPStatusError` is preserved for mapping.
+      - `401` → `TTSAuthenticationError`, `429` → `TTSRateLimitError` (with `retry_after`), other 4xx/5xx → `TTSProviderError` with details.
+      - Transport failures (`ConnectError`, DNS/TLS issues, retry exhaustion) surface as `TTSNetworkError` or `TTSTimeoutError` and are treated as retryable at the service layer.
+  - **ElevenLabs**
+    - Non-streaming generation uses `afetch` for `POST /text-to-speech/{voice_id}`.
+    - Streaming uses `AsyncClient.stream("POST", ...)` with `_validate_egress_or_raise(url)` preflight.
+    - Error mapping in `_raise_mapped_http_error`:
+      - `401/403` → `TTSAuthenticationError`.
+      - `429` with `status=rate_limit_exceeded` → `TTSRateLimitError` (with `retry_after` if present).
+      - `429` with `status=quota_exceeded` → `TTSQuotaExceededError`.
+      - `400` with `status=invalid_voice_id` → `TTSValidationError` (“Invalid voice id” / provider message).
+  - **Kokoro**
+    - Purely local; no HTTP egress.
+    - Errors are dominated by model/file issues (`TTSModelNotFoundError`, `TTSModelLoadError`) and resource problems (`TTSResourceError`, `TTSInsufficientMemoryError`).
+
+- Service-level behavior (`TTSServiceV2.generate_speech`):
+  - Wraps adapter errors into the unified TTS exception taxonomy and records metrics:
+    - `tts_requests_total{provider,model,voice,format,status}` for success/failure.
+    - `tts_request_duration_seconds`, `tts_text_length_characters`, and `tts_audio_size_bytes` (on success).
+  - Fallback:
+    - For retryable errors (`TTSNetworkError`, `TTSTimeoutError`, `TTSRateLimitError`, selected `TTSProviderError`), the service can attempt a fallback provider and increments `tts_fallback_attempts{from_provider,to_provider,success}`.
+    - For non-retryable errors (validation, auth, configuration), no fallback is attempted by default.
+  - Streaming vs. HTTP errors:
+    - Default: `_stream_errors_as_audio == False` → errors propagate as structured HTTP responses / raised exceptions; streaming generators raise on failure.
+    - Legacy/compat mode (`TTS_STREAM_ERRORS_AS_AUDIO=1` or `performance.stream_errors_as_audio=true`): streaming paths emit `"ERROR: ..."` chunks instead of raising, which is useful when mirroring OpenAI’s error-as-audio behavior.
+    - `/api/v1/audio/speech` enforces that at least one non-empty audio chunk is produced:
+      - If streaming yields no data, the endpoint logs and returns HTTP 500 “Audio generation failed to produce data.”
+      - Non-streaming mode accumulates all chunks and similarly errors on empty output.
+
+**Operational tips**
+
+- When debugging TTS failures:
+  - Check logs for `TTSServiceV2` messages (“Error generating speech with …”) and provider adapter logs; note the provider, model, and endpoint.
+  - Inspect `tts_requests_total` / `tts_fallback_attempts` and HTTP client metrics to distinguish provider errors from egress/transport issues.
+  - For OpenAI/ElevenLabs:
+    - `TTSAuthenticationError` → misconfigured API key.
+    - `TTSRateLimitError` (429) with non-zero `retry_after` → back off or adjust quotas.
+    - `TTSQuotaExceededError` → account-level quota; requires provider-side changes.
+    - `TTSNetworkError` / `TTSTimeoutError` → network connectivity, DNS, or upstream instability.
+  - For Kokoro/local engines:
+    - `TTSModelNotFoundError` / `TTSModelLoadError` → verify local model paths and dependencies.
+    - `TTSInsufficientMemoryError` / `TTSResourceError` → adjust concurrency, model size, or host resources.
+
 ## 3. Developer-Related/Relevant Information for Contributors
 
 - Folder Structure:
@@ -81,7 +137,8 @@ Provider support snapshot (indicative): OpenAI (cloud), ElevenLabs (cloud, cloni
   - Missing or misconfigured adapters are skipped after failure; optional retry window controlled by `adapter_failure_retry_seconds`.
   - Quotas/rate limits may short-circuit requests; check Usage/Audio quota logs when debugging.
 - Roadmap/TODOs:
-  - AllTalk adapter; adaptive chunk shaping; provider health probes and proactive warmups; richer voice metadata unification.
+  - AllTalk adapter (enum/config placeholder only; requests currently return "provider not configured").
+  - Adaptive chunk shaping; provider health probes and proactive warmups; richer voice metadata unification.
 
 Example: programmatic usage
 

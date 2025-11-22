@@ -5,7 +5,7 @@
 import re
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Any, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal
 #
 # 3rd-party imports
 from fastapi import HTTPException
@@ -90,6 +90,33 @@ class SearchRequest(BaseModel):
     sort_by: Optional[str] = "relevance"
     boost_fields: Optional[Dict[str, float]] = None
 
+
+class ProcessCodeForm(BaseModel):
+    """
+    Form-style payload for the /media/process-code endpoint.
+
+    This model is populated from multipart/form-data via a FastAPI
+    dependency so tests can exercise validation directly.
+    """
+
+    urls: Optional[List[str]] = None
+    perform_chunking: bool = True
+    # Supports 'code' (structure-aware) and 'lines' (simple line windowing)
+    chunk_method: Optional[str] = Field(
+        default="code",
+        description="Chunk method for code: 'code' or 'lines'",
+    )
+    # For 'code' method, interpreted as max characters per chunk; for 'lines', interpreted as lines per chunk
+    chunk_size: int = Field(
+        default=4000,
+        description="Chunk size: chars for 'code', lines for 'lines'",
+    )
+    # Overlap is in characters for 'code' and in lines for 'lines'
+    chunk_overlap: int = Field(
+        default=200,
+        description="Overlap: chars for 'code', lines for 'lines'",
+    )
+
 class MetadataFilter(BaseModel):
     field: str = Field(..., description="Metadata key to search (e.g., doi, pmid, journal, license)")
     op: Literal['eq','contains','icontains','startswith','endswith'] = Field('icontains', description="Match operator")
@@ -116,7 +143,7 @@ class AdvancedVersionUpsertRequest(BaseModel):
     new_version: bool = Field(True, description="Create a new version (default). If false, only safe_metadata may be updated in place")
 
 # Define allowed media types using Literal for validation
-MediaType = Literal['video', 'audio', 'document', 'pdf', 'ebook', 'email']
+MediaType = Literal['video', 'audio', 'document', 'pdf', 'ebook', 'email', 'code']
 
 # Define allowed chunking methods (adjust as needed based on your library)
 ChunkMethod = Literal['semantic', 'tokens', 'paragraphs', 'sentences','words', 'ebook_chapters', 'json', 'propositions']
@@ -408,17 +435,34 @@ class MediaItemProcessResponse(BaseModel):
         extra="forbid"  # Disallow extra fields not defined in the model
     )
 
-######################## Video Ingestion Model ###################################
+######################## Processing-only Forms ###################################
 #
-# This is a schema for video ingestion and analysis.
+# These forms share the same surface as AddMediaForm but lock media_type for
+# specific processing-only endpoints (no DB writes).
+
+
+class ProcessDocumentsForm(AddMediaForm):
+    """
+    Processing-only form for document-like content.
+
+    Mirrors AddMediaForm while forcing media_type to "document" and ensuring
+    keep_original_file defaults to False so temporary files are cleaned up by
+    default for /process-documents.
+    """
+
+    media_type: Literal["document"] = "document"
+    keep_original_file: bool = Field(False)
+
 
 class ProcessVideosForm(AddMediaForm):
     """
+    Processing-only form for video content used by /process-videos.
+
     Same field-surface as AddMediaForm, but:
-      • media_type forced to `"video"` (so client does not need to send it)
-      • keep_original_file defaults to False (tmp dir always wiped)
-      • perform_analysis stays default=True (caller may disable)
+      • media_type forced to "video" (clients need not send it)
+      • keep_original_file defaults to False (temporary files are wiped)
     """
+
     media_type: Literal["video"] = "video"
     keep_original_file: bool = Field(False)
 
@@ -461,14 +505,68 @@ class VideoIngestRequest(BaseModel):
 ####################################################################################
 
 
-######################## Audio Ingestion Model ###################################
-#
-# This is a schema for audio ingestion and analysis.
-
 class ProcessAudiosForm(AddMediaForm):
-    """Identical surface to AddMediaForm but restricted to 'audio'."""
+    """
+    Processing-only form for audio content used by /process-audios.
+
+    Identical surface to AddMediaForm but restricted to "audio" and with
+    keep_original_file defaulting to False for temporary uploads.
+    """
+
     media_type: Literal["audio"] = "audio"
     keep_original_file: bool = Field(False)
+
+
+class ProcessPDFsForm(AddMediaForm):
+    """
+    Processing-only form for PDFs used by /process-pdfs (no DB writes).
+    """
+
+    media_type: Literal["pdf"] = "pdf"
+    keep_original_file: bool = Field(False)
+
+
+class ProcessEbooksForm(AddMediaForm):
+    """
+    Processing-only form for EPUBs used by /process-ebooks (no DB writes).
+    """
+
+    media_type: Literal["ebook"] = "ebook"
+    extraction_method: Literal["filtered", "markdown", "basic"] = Field(
+        "filtered",
+        description="EPUB text extraction method ('filtered', 'markdown', 'basic')",
+    )
+    keep_original_file: bool = Field(False)
+
+class ProcessEmailsForm(AddMediaForm):
+    """
+    Processing-only form for emails used by /process-emails (no DB writes).
+    """
+
+    media_type: Literal["email"] = "email"
+    keep_original_file: bool = Field(False)
+    perform_chunking: bool = Field(True)
+    chunk_method: Optional[ChunkMethod] = Field(
+        "sentences", description="Default chunking method for emails"
+    )
+    chunk_size: int = Field(1000, gt=0, description="Target chunk size for emails")
+    chunk_overlap: int = Field(200, ge=0, description="Chunk overlap size for emails")
+    ingest_attachments: bool = Field(
+        False,
+        description="Parse and include nested .eml attachments as children",
+    )
+    max_depth: int = Field(
+        2, ge=1, le=5, description="Max depth for nested email parsing"
+    )
+    accept_archives: bool = Field(
+        False, description="Accept .zip archives of EMLs and expand members"
+    )
+    accept_mbox: bool = Field(
+        False, description="Accept .mbox mailboxes and expand/process messages"
+    )
+    accept_pst: bool = Field(
+        False, description="Accept .pst/.ost containers (feature-flag)"
+    )
 
 class AudioIngestRequest(BaseModel):
     mode: str = "persist"  # "ephemeral" or "persist"
@@ -511,6 +609,33 @@ class ScrapeMethod(str, Enum):
     SITEMAP = "sitemap"               # “Sitemap”
     URL_LEVEL = "url_level"           # “URL Level”
     RECURSIVE = "recursive_scraping"  # “Recursive Scraping”
+
+
+class WebScrapingRequest(BaseModel):
+    """
+    Request model for /process-web-scraping.
+    """
+
+    scrape_method: str  # "individual", "sitemap", "url_level", "recursive_scraping"
+    url_input: str
+    url_level: Optional[int] = None
+    max_pages: int = 10
+    max_depth: int = 3
+    summarize_checkbox: bool = False
+    custom_prompt: Optional[str] = None
+    api_name: Optional[str] = None
+    # api_key intentionally omitted for security
+    keywords: Optional[str] = "default,no_keyword_set"
+    custom_titles: Optional[str] = None
+    system_prompt: Optional[str] = None
+    temperature: float = 0.7
+    custom_cookies: Optional[List[Dict[str, Any]]] = None
+    mode: str = "persist"  # or "ephemeral"
+    user_agent: Optional[str] = None
+    custom_headers: Optional[Dict[str, str]] = None
+    crawl_strategy: Optional[str] = None
+    include_external: Optional[bool] = None
+    score_threshold: Optional[float] = None
 
 class IngestWebContentRequest(BaseModel):
     # Core fields

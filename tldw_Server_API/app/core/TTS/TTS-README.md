@@ -355,9 +355,10 @@ print(response.json()["text"])
 ### Provider Configuration (tts_providers_config.yaml)
 
 Location resolution:
-- `tldw_Server_API/app/core/TTS/tts_providers_config.yaml`
+- `tldw_Server_API/Config_Files/tts_providers_config.yaml` (project-level override)
+- `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` (in-repo default)
 - `./tts_providers_config.yaml` (working directory)
-- `~/.config/tldw/tts_providers_config.yaml`
+- `~/.config/tldw/tts_providers_config.yaml` (user config)
 
 Notes:
 - Local providers will not download models unless `auto_download: true` (or `TTS_AUTO_DOWNLOAD=1`).
@@ -472,8 +473,8 @@ The service (`TTSServiceV2`) reads `performance.max_concurrent_generations` and 
 #### Error Streaming Policy
 
 Set `performance.stream_errors_as_audio` to control failure behavior during streaming:
-- `true` (default for compatibility): embed `ERROR: ...` text chunks in the audio stream and return HTTP 200. Suitable for clients/tests that expect bytes regardless of outcome.
-- `false` (recommended for production): raise provider/service errors instead. The API endpoint maps these to appropriate HTTP status codes (e.g., 400/402/429/5xx).
+- `false` (default and recommended for production): raise provider/service errors instead. The API endpoint maps these to appropriate HTTP status codes (e.g., 400/402/429/5xx).
+- `true` (compatibility mode): embed `ERROR: ...` text chunks in the audio stream and return HTTP 200. Suitable only for clients/tests that explicitly expect bytes regardless of outcome.
 
 ### Voice Cloning Requirements
 

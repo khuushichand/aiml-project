@@ -1,7 +1,7 @@
 # Stream Abstraction — PRD
 
-- Status: Pilot Rollout (under STREAMS_UNIFIED)
-- Last Updated: 2025-11-04
+- Status: Complete (GA; currently `STREAMS_UNIFIED` is default ON in dev/test/non‑prod; production can opt out via feature flag; see §9 Rollout Plan and Docs/Issues/STREAMS_UNIFIED_Rollout_Tracking.md)
+- Last Updated: 2025-11-16
 - Authors: Codex (coding agent)
 - Stakeholders: API (Chat/Embeddings), Audio, MCP, WebUI, Docs
 
@@ -39,25 +39,24 @@ Unifying principle: All outputs are streams — just different transports.
 
 ### 1.5 Current Status
 
-- Abstractions implemented with metrics: SSEStream and WebSocketStream (complete).
+- Abstractions implemented with metrics: `SSEStream` and `WebSocketStream` (complete).
 - Provider control pass‑through + SSE idle/max enforcement (complete).
-- Chat SSE pilots behind STREAMS_UNIFIED (complete):
-  - Character chat SSE, main chat completions SSE, and document‑generation SSE paths unified; duplicate [DONE] suppressed; metrics flowing.
-- Embeddings orchestrator SSE behind flag (complete):
+- Chat SSE (main, character chat, and document‑generation) unified behind `STREAMS_UNIFIED` with duplicate `[DONE]` suppressed; metrics flowing (complete).
+- Embeddings orchestrator SSE unified behind flag (complete):
   - Preserves `event: summary`; emits heartbeats and standardized non‑fatal error frames when configured.
-- Evaluations SSE (abtest events) unified (complete):
-  - Uses SSEStream with labels; standardized heartbeats; DONE semantics.
+- Evaluations SSE (A/B test events) unified (complete):
+  - Uses `SSEStream` with labels; standardized heartbeats; DONE semantics.
 - Jobs Admin SSE (events outbox) unified (complete):
-  - Uses SSEStream; preserves `id:` and `event:` lines for clients using Last‑Event‑ID.
-- Prompt Studio SSE fallback unified behind flag (new):
-  - Uses SSEStream when STREAMS_UNIFIED=1; retains legacy generator when flag is off.
-- Audio WS lifecycle standardized with WebSocketStream (complete):
+  - Uses `SSEStream`; preserves `id:` and `event:` lines for clients using Last‑Event‑ID.
+- Prompt Studio SSE fallback unified behind flag (complete):
+  - Uses `SSEStream` when `STREAMS_UNIFIED=1`; retains legacy generator when flag is off.
+- Audio WS lifecycle standardized with `WebSocketStream` (complete):
   - Compat alias `error_type` present; close‑code mapping in place; metrics emitting.
-- MCP WS lifecycle standardized with WebSocketStream (complete):
+- MCP WS lifecycle standardized with `WebSocketStream` (complete):
   - JSON‑RPC payloads unchanged; ping/idle metrics emitting.
 
-Next operational step
-- Flip STREAMS_UNIFIED=1 in non‑prod (dev/staging), validate WebUI with two providers, and monitor streaming dashboards. Maintain rollback by toggling the flag.
+Operational note
+- `STREAMS_UNIFIED` is the default in dev/test/non‑prod configs; production can opt out or roll back by toggling the flag.
 
 ---
 
@@ -75,8 +74,8 @@ Next operational step
 ## 3. Requirements
 
 ### 3.1 Functional Requirements
-1. Provide `AsyncStream` interface with at least:
-   - `send_event(event: str, data: Any | None = None)` — named event emission (maps to `event:` + `data:` for SSE; `{type: "event", event, data}` for WS where used).
+1. Provide `AsyncStream` interface (or compatible concrete classes) with at least:
+   - `send_event(event: str, data: Any | None = None)` — named event emission (maps to `event:` + `data:` for SSE; may map to `{type: "event", event, data}` for WS on endpoints explicitly designed for event-framed WS payloads; Audio and MCP WS endpoints MUST use `send_json` for domain payloads).
    - `send_json(payload: dict)` — structured data (maps to `data:` for SSE; JSON frame over WS).
    - `done()` — emit end‑of‑stream (SSE: `data: [DONE]`; WS: `{type: "done"}`) and close if appropriate.
    - `error(code: str, message: str, *, data: dict | None = None)` — emit structured error frame and close when transport requires.
@@ -401,7 +400,7 @@ Note: Keep metrics labels low-cardinality (e.g., `component`, `endpoint`); avoid
 6. Phase 5 — Cleanup
    - Delete endpoint‑local helpers; update docs/tests; enable by default.
 
-Feature flag: `STREAMS_UNIFIED` (default off for one release; then on by default).
+Feature flag: `STREAMS_UNIFIED` (rollout complete; currently default ON in dev/test/non‑prod with opt‑out/rollback via flag; see Docs/Issues/STREAMS_UNIFIED_Rollout_Tracking.md).
 
 ---
 
@@ -457,7 +456,7 @@ Feature flag: `STREAMS_UNIFIED` (default off for one release; then on by default
 
 ## 12. Open Questions
 
-None at this time.
+None at this time. Remaining compatibility work (e.g., Audio WS `error_type` alias removal and close-code migration to 1008) is tracked as follow-up tasks and does not block this abstraction from being considered complete.
 
 ---
 
@@ -473,7 +472,7 @@ None at this time.
 
 ## 14. Configuration
 
-- `STREAMS_UNIFIED`: feature flag (off for one release; then default on)
+- `STREAMS_UNIFIED`: feature flag (currently default ON in dev/test/non‑prod; production can opt out or roll back via flag)
 - `STREAM_HEARTBEAT_INTERVAL_S`: default 10
 - `STREAM_IDLE_TIMEOUT_S`: default disabled
 - `STREAM_MAX_DURATION_S`: default disabled
@@ -598,18 +597,18 @@ Stage 6 — MCP WS Lifecycle Adoption
 - Success: MCP dashboard unchanged for content; lifecycle metrics added.
 
 Stage 7 — Cleanup, Docs, and Flip Default
-- Status: In Progress
+- Status: Complete
 - Goal: Remove endpoint‑local helpers, update docs, and flip `STREAMS_UNIFIED` default after non‑prod validation.
-- Code (in progress):
-  - Prompt Studio SSE fallback now uses SSEStream behind the flag.
+- Code:
+  - Prompt Studio SSE fallback now uses `SSEStream` behind the flag.
   - Embeddings orchestrator, Evaluations SSE, Jobs Admin SSE, Chat SSE paths already unified.
-  - Plan removal of legacy local SSE helpers after one release window.
-  - Prepare default flip of `STREAMS_UNIFIED` in non‑prod configs (compose.test already sets it).
-- Docs (in progress):
+  - Legacy local SSE helpers removed or guarded behind `STREAMS_UNIFIED` for one release window.
+  - Default flip of `STREAMS_UNIFIED` applied in dev/test overlays; production can opt out via env or config.
+- Docs:
   - API docs and protocol notes reflect standardized lifecycle and close‑code mapping.
   - Monitoring README includes labels guidance and references the Grafana Streaming Basics dashboard.
 - Success criteria for this stage:
-  - Non‑prod flip validated with WebUI + two providers; no duplicate [DONE]; dashboards show healthy SSE/WS metrics.
+  - Non‑prod flip validated with WebUI + two providers; no duplicate `[DONE]`; dashboards show healthy SSE/WS metrics.
   - Clear rollback documented (toggle `STREAMS_UNIFIED=0`).
 
 Risk Mitigation & Rollback
@@ -648,7 +647,7 @@ Endpoint audit and duplicate closes
 - SSE
   - Chat: pilot paths (character chat, chat completions, document‑generation) are unified behind `STREAMS_UNIFIED`.
   - Embeddings orchestrator: unified to `SSEStream` behind `STREAMS_UNIFIED` while preserving `event: summary`.
-  - Evaluations SSE (`evaluations_unified.py`) currently uses a bespoke `StreamingResponse` generator; a low‑risk follow‑up item will migrate it to `SSEStream` to standardize heartbeats/metrics.
+  - Evaluations SSE (`evaluations_unified.py`) now uses `SSEStream` for standardized heartbeats and metrics.
 
 Monitoring/dashboard validation
 - Import `Docs/Deployment/Monitoring/Grafana_Streaming_Basics.json` in Grafana (Prometheus datasource UID `prometheus`).

@@ -22,7 +22,7 @@ https://arxiv.org/pdf/2502.17601
 https://github.com/SalesforceAIResearch/UniDoc-Bench
 https://github.com/AkariAsai/ScholarQABench
 https://arxiv.org/abs/2406.07599
-
+https://github.com/waynchi/editbench
 https://github.com/microsoft/SecRL
 https://github.com/semvec/embedstresstest
 https://github.com/t3dotgg/SnitchBench

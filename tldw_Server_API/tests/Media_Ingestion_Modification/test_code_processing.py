@@ -3,12 +3,7 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 import pytest
-from fastapi.testclient import TestClient
 from fastapi import status
-
-from tldw_Server_API.app.main import app as fastapi_app_instance, app
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, _single_user_instance
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 
 
 def check_batch_response(response, expected_status, expected_processed=None, expected_errors=None, check_results_len=None):
@@ -26,26 +21,15 @@ def check_batch_response(response, expected_status, expected_processed=None, exp
     return data
 
 
-@pytest.fixture(scope="module")
-def client():
-    def _override_get_request_user_proc_test():
-        _single_user_instance.id = 1
-        return _single_user_instance
+@pytest.fixture()
+def client(client_user_only):
+    """
+    Use the shared single-user TestClient fixture from the main test suite.
 
-    async def _fake_get_media_db_for_user():
-        class _FakeDB:
-            def close_all_connections(self):
-                return None
-        yield _FakeDB()
-
-    original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[get_request_user] = _override_get_request_user_proc_test
-    app.dependency_overrides[get_media_db_for_user] = _fake_get_media_db_for_user
-
-    with TestClient(fastapi_app_instance) as c:
-        yield c
-
-    app.dependency_overrides = original_overrides
+    This ensures auth wiring is consistent with other media tests and avoids
+    duplicating overrides for get_request_user or DB dependencies here.
+    """
+    return client_user_only
 
 
 @pytest.fixture

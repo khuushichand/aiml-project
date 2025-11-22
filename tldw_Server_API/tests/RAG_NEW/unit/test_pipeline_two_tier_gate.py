@@ -124,3 +124,11 @@ async def test_unified_pipeline_two_tier_request_overrides_gate(monkeypatch):
             gate = res.metadata.get("generation_gate")
             assert isinstance(gate, dict)
             assert gate.get("reason") == "low_relevance_probability"
+
+
+        def _fake_create(strategy, cfg, llm_client=None):
+            if strategy == ar.RerankingStrategy.TWO_TIER:
+                ce_map = {"d1": 0.20, "d2": 0.10, "sentinel:irrelevant": 0.02}
+                llm_map = {"d1": 0.40, "d2": 0.30, "sentinel:irrelevant": 0.05}
+                return ar.TwoTierReranker(cfg, cross_reranker=_FakeCross(cfg, ce_map), llm_reranker=_FakeLLM(cfg, llm_map))
+            return ar.create_reranker(strategy, cfg, llm_client=llm_client)

@@ -482,6 +482,10 @@ class UnifiedEvaluationService:
         created_by: str
     ):
         """Run evaluation asynchronously"""
+        current_task = asyncio.current_task()
+        if current_task:
+            # Register the running task so cancel_run can stop it
+            self.runner.running_tasks[run_id] = current_task
         try:
             # Run evaluation with circuit breaker protection
             await self.circuit_breaker.call(
@@ -506,6 +510,18 @@ class UnifiedEvaluationService:
                     }
                 )
 
+        except asyncio.CancelledError:
+            # Cancellation path: persist cancelled status and notify listeners
+            self.db.update_run_status(run_id, "cancelled")
+            if eval_config.get("webhook_url") and self.enable_webhooks and getattr(self, "webhook_manager", None):
+                await self.webhook_manager.send_webhook(
+                    user_id=created_by,
+                    event=WebhookEvent.EVALUATION_CANCELLED,
+                    evaluation_id=run_id,
+                    data={"run_id": run_id}
+                )
+            raise
+
         except Exception as e:
             logger.error(f"Evaluation run {run_id} failed: {e}")
 
@@ -520,6 +536,9 @@ class UnifiedEvaluationService:
                     evaluation_id=run_id,
                     data={"error": str(e)}
                 )
+        finally:
+            # Ensure the task registry is cleaned up
+            self.runner.running_tasks.pop(run_id, None)
 
     async def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
         """Get run by ID"""
@@ -954,6 +973,7 @@ class UnifiedEvaluationService:
         Otherwise expects 'prediction' on each item.
         """
         allowed = [l.upper() for l in (allowed_labels or ["SUPPORTED","REFUTED","NEI"])]
+        qa3_timeout = 30.0
 
         def norm_label(x: Optional[str]) -> Optional[str]:
             if x is None:
@@ -1007,6 +1027,16 @@ class UnifiedEvaluationService:
                 logger.error(f"LLM call failed in QA3: {e}")
                 return ""
 
+        async def call_llm_async(prompt: str) -> str:
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(call_llm, prompt),
+                    timeout=qa3_timeout
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"LLM call timed out in QA3 after {qa3_timeout}s")
+                return ""
+
         # Compute predictions
         results = []
         for it in items:
@@ -1015,7 +1045,7 @@ class UnifiedEvaluationService:
             pred = norm_label(it.get("prediction"))
             if generate_predictions or not pred:
                 prompt = build_prompt(q, ", ".join(allowed), it.get("context"))
-                raw = call_llm(prompt)
+                raw = await call_llm_async(prompt)
                 parsed = parse_prediction(raw) or "NEI"
                 pred = parsed
                 results.append({"id": it.get("id"), "question": q, "gold": gold, "pred": pred, "raw": raw})
@@ -1245,8 +1275,9 @@ class UnifiedEvaluationService:
             # Manual filtering for user_id and date ranges since DB method doesn't support these
             filtered_evaluations = []
             for eval in evaluations:
-                # Filter by user_id if present in the record
-                if user_id and eval.get("user_id") != user_id:
+                # Filter by creator/user if present in the record
+                owner = eval.get("created_by") or eval.get("user_id")
+                if user_id and owner != user_id:
                     continue
 
                 # Filter by date range if specified
@@ -1316,8 +1347,9 @@ class UnifiedEvaluationService:
             # Manual filtering and counting
             count = 0
             for eval in evaluations:
-                # Filter by user_id if present in the record
-                if user_id and eval.get("user_id") != user_id:
+                # Filter by creator/user if present in the record
+                owner = eval.get("created_by") or eval.get("user_id")
+                if user_id and owner != user_id:
                     continue
 
                 # Filter by date range if specified
@@ -1389,9 +1421,12 @@ class UnifiedEvaluationService:
                 config={}
             )
 
-            # Update run with results
-            self.db.update_run_status(run_id, "completed")
-            self.db.update_run_progress(run_id, {"results": results})
+            # Update run with results (atomically sets status and completed_at)
+            self.db.store_run_results(
+                run_id,
+                results if isinstance(results, dict) else {"result": results},
+                usage=metadata.get("usage"),
+            )
 
             return eval_id
 

@@ -41,6 +41,8 @@ Non-goals (v1):
 - Replacing durable ledgers where they make sense (e.g., daily minutes table for audio).
 - Removing SlowAPI entirely; it can remain as an ingress façade backed by the governor.
 
+For scope management, v1.0 focuses on delivering the core governor, policy layer, and initial high-impact integrations (MCP, Chat, Embeddings, Audio, SlowAPI). The admin API, DB-backed policy editing flows, generic daily ledger, and cross-category budget modeling are explicitly planned as v1.1+ follow-ups (see “Implementation Plan (v1 Roadmap)” and “Post v1.0 (Planned v1.1)”).
+
 ## Personas & Entities
 
 - Persona: API user (API key/JWT user id), service client (MCP client id), conversation id (Chat), IP address (ingress fallback), system services.
@@ -53,8 +55,8 @@ Non-goals (v1):
 ## Functional Requirements
 
 - Core interface:
-  - check(spec) → decision: Returns allow/deny with retry_after and metadata.
-  - reserve(spec, op_id) → handle: Reserves resources atomically across categories (best-effort rollback on partial failures). `op_id` is an idempotency key.
+  - check(spec) → decision: Read-only evaluation that returns allow/deny with retry_after and metadata without mutating counters. Intended for diagnostics, UI, and tests; enforcement paths use `reserve`.
+  - reserve(spec, op_id) → handle: Reserves resources atomically across categories (best-effort rollback on partial failures). `op_id` is an idempotency key and is required on all mutating calls.
   - commit(handle, actual_usage, op_id) → None: Finalizes reservation and records usage (e.g., minutes consumed, tokens used). Idempotent per `op_id`.
   - refund(handle or delta, op_id) → None: Returns unused capacity (e.g., estimated vs actual tokens; failure paths). Idempotent per `op_id`.
   - renew(handle, ttl_s) → None: Renews concurrency leases (streams/jobs) heartbeat before TTL expiry.
@@ -74,6 +76,15 @@ Non-goals (v1):
   - `tokens`: token-bucket by default. Units are model tokens when available; otherwise generic estimated tokens as a stand-in.
   - `streams/jobs`: bounded counters with per-lease TTL; requires `renew` heartbeat to keep leases alive.
   - `minutes`: durable daily cap; see Minutes Ledger Semantics.
+
+### Canonical flows
+
+- Non-streaming HTTP request (e.g., chat completion):
+  - `reserve` for the relevant `requests` (and optionally `tokens`) categories → call handler → `commit(actual_usage)` on success or `refund` on failure/short-circuit.
+- Streaming call (e.g., audio or long-running chat stream):
+  - `reserve` for `streams` plus any estimated `tokens`/`minutes` → start stream → periodically `renew` leases while active → `commit(actual_usage)` and `release` on completion; `refund` unused estimates on early termination.
+- Background job / async worker:
+  - `reserve` for `jobs` (and any other relevant categories) when enqueuing or dequeuing based on module needs → process work → `commit` or `refund` and `release` when the job completes or is abandoned.
 
 ## Time Sources
 
@@ -180,10 +191,8 @@ class ResourceGovernor:
   - `ReservationHandle` includes `expires_at` and `op_id`. Background sweeper reclaims expired handles across backends.
   - All state transitions (reserve, commit, refund, renew, release, expire) include a `reason` for audit and metrics.
 
-- Policy composition semantics (strictest wins):
-  - For each category, compute remaining headroom per applicable scope (global, tenant, user, conversation, etc.). Effective headroom is the minimum across scopes (strictest constraint).
-  - Allow if the effective headroom ≥ requested units; otherwise deny for that category.
-  - Compute per-scope `retry_after`; the category’s `retry_after` is the maximum across denying scopes. Overall `retry_after` is the maximum across denied categories.
+- Policy composition semantics:
+  - Strictest-wins semantics and `retry_after` aggregation are defined in “Policy Composition & Retry‑After”; implementations must follow that behavior for all categories.
 
 ## Configuration
 
@@ -192,7 +201,11 @@ class ResourceGovernor:
   - `RG_REDIS_URL`: Redis URL
   - `REDIS_URL`: Redis URL (alias; used across infrastructure helpers)
   - `RG_TEST_BYPASS`: `true|false` (defaults to honoring `TEST_MODE`)
-  - `RG_REDIS_FAIL_MODE`: `fail_closed` | `fail_open` | `fallback_memory` (defaults to `fallback_memory`). Controls behavior on Redis outages.
+  - `RG_REDIS_FAIL_MODE`: `fail_closed` | `fail_open` | `fallback_memory` (defaults to `fallback_memory`). Controls behavior on Redis outages:
+    - `fail_closed`: on Redis errors, deny requests and emit metrics/logs indicating `backend=redis_error`.
+    - `fail_open`: on Redis errors, allow without mutating usage while emitting `backend=fail_open` metrics.
+    - `fallback_memory`: on Redis errors, route operations to the in-process memory backend; if the memory path also fails, treat it as `fail_open`.
+    - Per-policy `fail_mode` in policy payloads overrides `RG_REDIS_FAIL_MODE` for that policy/category.
     - Default `fallback_memory` favors availability for non-critical categories; consider `fail_closed` for strict write paths or global-coordination categories.
   - `RG_CLIENT_IP_HEADER`: Header to trust for client IP when behind trusted proxies (e.g., `X-Forwarded-For`, `CF-Connecting-IP`).
   - `RG_TRUSTED_PROXIES`: Comma-separated CIDRs for trusted reverse proxies; when unset, IP scope uses the direct remote address only.
@@ -201,6 +214,12 @@ class ResourceGovernor:
   - Test‑harness flags (diagnostics only):
     - `RG_TEST_FORCE_STUB_RATE`: `true|false` forces in‑process sliding‑window logic for requests/tokens in Redis backend. Useful to make burst/steady tests deterministic when real Redis timing or clock skew affects retry_after near window boundaries.
     - `RG_TEST_PURGE_LEASES_BEFORE_RESERVE`: `true|false` best‑effort purge of expired leases before reserve in tests to reduce flakiness.
+
+### Flag overview (operator-facing)
+
+- Day-to-day configuration focuses on: `RG_ENABLED`, `RG_BACKEND`, `RG_REDIS_URL`, `RG_REDIS_FAIL_MODE`, and `RG_POLICY_STORE`.
+- Test/CI flows primarily use: `TLDW_TEST_MODE` and (optionally) `RG_TEST_BYPASS`; advanced diagnostics flags such as `RG_TEST_FORCE_STUB_RATE`, `RG_TEST_PURGE_LEASES_BEFORE_RESERVE`, and `RG_REAL_REDIS_URL` should be confined to test harnesses.
+- Module-level flags (`RG_ENABLE_*`) govern which integrations are wired to the governor; see “Per-Module Feature Flags”. Middleware-specific flags are no-ops when a module’s integration is disabled.
 
 ### Acceptance‑Window Fallback (Requests)
 
@@ -215,6 +234,7 @@ Real Redis can occasionally report window counts near boundaries that admit a re
 - Composition (strictest wins): for each category, compute headroom per applicable scope (global, tenant, user, conversation); the effective headroom is the minimum across scopes.
 - Deny when effective headroom < requested units.
 - Retry‑After aggregation: per category, compute the maximum retry_after across denying scopes; the overall decision retry_after is the maximum across denied categories. This prevents premature retries when multiple scopes deny with different windows.
+- For concurrency categories (`streams`, `jobs`), `retry_after` is best-effort and may be derived from lease TTLs or a conservative backoff; implementations may omit or cap `Retry-After` when no reliable estimate is available.
 
 ### Metrics Labels & Cardinality
 
@@ -231,6 +251,7 @@ Real Redis can occasionally report window counts near boundaries that admit a re
 - `RG_ENABLE_SIMPLE_MIDDLEWARE`: enable minimal pre-check middleware (requests category) using `route_map` resolution.
 - `RG_MIDDLEWARE_ENFORCE_TOKENS`: when true, include `tokens` in middleware reserve/deny path and expose precise success headers + per-minute deny headers.
 - `RG_MIDDLEWARE_ENFORCE_STREAMS`: when true, include `streams` in middleware reserve/deny path; on deny, return 429 with `Retry-After`.
+- Middleware options apply only when the corresponding module integration (for example, `RG_ENABLE_SLOWAPI`) is enabled and `RG_ENABLED=true`; otherwise they are inert.
 
 ### Testing (integration)
 
@@ -243,7 +264,7 @@ Real Redis can occasionally report window counts near boundaries that admit a re
     - `RG_MINUTES_DAILY_CAP_DEFAULT` (still enforced via durable ledger)
 
 - Back-compat mapping examples:
-  - `MCP_RATE_LIMIT_*` → RequestsLimiter rules for service `mcp`.
+  - `MCP_RATE_LIMIT_*` → requests-category policy rules for service `mcp`.
   - Chat `TEST_CHAT_*` → test-mode overrides for chat-specific rules.
   - Audio quotas envs (`AUDIO_*`) remain for `minutes` and concurrency defaults.
 
@@ -297,6 +318,7 @@ policies:
 - Behavior:
   - When `RG_POLICY_STORE=db`, successful writes trigger best-effort PolicyLoader refresh; file store remains read-only.
   - All responses include `{status: ok|error}` and details on errors; avoid logging PII.
+  - When a client supplies `version` on `PUT`, updates should enforce optimistic concurrency (update only when the stored version matches); conflicting updates return 409 with an error payload.
 
 ## Integration Plan (Phased Migration)
 
@@ -597,20 +619,20 @@ Notes:
 - Provide an ASGI middleware adapter (e.g., `RGSlowAPIMiddleware`) that:
   - Extracts `policy_id` from route tags/decorators.
   - Derives the effective entity (auth scopes preferred; IP fallback with trusted-proxy rules).
-  - Calls RG `check/reserve` before handler; on deny, returns 429 with headers; on allow, sets `X-RateLimit-*` headers and proceeds.
+  - Calls the governor’s `reserve` API before handler for enforcement; on deny, returns 429 with headers; on allow, sets `X-RateLimit-*` headers and proceeds. `check` is used only for diagnostics and shadow-mode comparisons.
   - On completion, performs `commit/refund` as applicable; handles streaming by renewing/releasing leases.
   - When `RG_ENABLE_SLOWAPI=false`, middleware is disabled and legacy SlowAPI behavior remains.
 
 ## Risks & Mitigations
 
 - Partial failures across categories → perform deterministic order, rollback on failure, log anomalies.
-- Redis outages → auto-fallback to in-memory with warning; emit `backend=fallback` metric tag.
+- Redis outages → respect `RG_REDIS_FAIL_MODE` semantics (default `fallback_memory`); emit metrics indicating the active fail mode and any `backend=fallback` behavior.
 - Behavior drift from legacy implementations → shadow mode comparisons and golden tests.
 - Test flakiness with time windows → use monotonic time and deterministic burst in `TLDW_TEST_MODE`.
 - Metrics cardinality → exclude `entity` from metric labels by default; optionally include hashed entity via `RG_METRICS_ENTITY_LABEL`; sample per-entity logs for diagnostics.
 - Concurrency lease management → provide explicit `renew` and `release`; use per-lease IDs and TTLs; GC expired leases.
 - IP scoping behind proxies → require `RG_TRUSTED_PROXIES` and `RG_CLIENT_IP_HEADER` to trust forwarded addresses; prefer auth scopes over IP when available.
-- Policy composition ambiguity → define strictest-wins semantics (min headroom across applicable scopes) per category; compute `retry_after` as max across denying scopes and categories.
+- Policy composition ambiguity → adhere to the strictest-wins semantics and `retry_after` aggregation defined in “Policy Composition & Retry‑After”; cover these rules explicitly in tests.
 - Fallback-to-memory over-admission → make behavior configurable via `RG_REDIS_FAIL_MODE` (default `fallback_memory`); emit metrics on failover; consider per-category overrides.
 - Idempotency on retries → require `op_id` for reserve/commit/refund; operations are idempotent per `op_id` and handle.
 - Minutes ledger edge cases → split usage across UTC day boundaries; define rounding rules; restrict retroactive commits or require `occurred_at`.
@@ -667,7 +689,7 @@ Notes:
 Stage 0 — Spec Alignment & Stubs
 - Goal: Lock semantics and prepare scaffolding for incremental delivery.
 - Deliverables:
-  - Clarify policy composition (strictest-wins per category; retry_after = max across denying scopes/categories) and default algorithms (token bucket first, sliding window where appropriate).
+  - Align implementation with the “Policy Composition & Retry‑After” rules (strictest-wins per category; retry_after = max across denying scopes/categories) and default algorithms (token bucket first, sliding window where appropriate).
   - Guard metrics cardinality: exclude `entity` by default; gate hashed entity behind `RG_METRICS_ENTITY_LABEL=true`.
   - Add stub policy YAML at `tldw_Server_API/Config_Files/resource_governor_policies.yaml` with examples from “Policy DSL & Route Mapping”.
   - Finalize envs: `RG_POLICY_STORE`, `RG_REDIS_FAIL_MODE`, `RG_METRICS_ENTITY_LABEL`, `RG_CLIENT_IP_HEADER`, `RG_TRUSTED_PROXIES`.
@@ -718,7 +740,7 @@ Stage 4 — Ingress Middleware & Header Compatibility
 - Goal: Replace ingress counting with a thin governor façade.
 - Deliverables:
   - ASGI middleware (SlowAPI façade) reading route tags/decorators to resolve `policy_id` and derive entity (auth scopes preferred; IP fallback with trusted-proxy rules).
-  - Enforce via `check/reserve` pre-handler; `commit/refund` post-handler; support streaming renew/release.
+  - Enforce via `reserve` pre-handler; `commit/refund` post-handler; support streaming renew/release. Use `check` only for diagnostics and shadow-mode comparisons.
   - Standard headers mapping: `Retry-After`, `X-RateLimit-*` for `requests` where applicable.
   - Logging: mask/HMAC sensitive fields; include `handle_id`, `op_id`, `policy_id`, `denial_reason`.
 - Success Criteria:
@@ -756,3 +778,158 @@ Post v1.0 (Planned v1.1)
 - Generic `DailyLedger` for tokens-per-day and future categories; migration of audio minutes to generic ledger.
 - Cross-category “cost unit” modeling for analytics and optional budgets (no enforcement changes).
 - Additional providers/integrations as needed.
+
+## Engineering Implementation Plan (Concrete Steps)
+
+This section turns the v1 roadmap into concrete, repo-level steps that can be tackled in small, reviewable PRs. It assumes work happens under feature flags (`RG_ENABLED`, `RG_ENABLE_*`) and keeps existing behavior as the default until each integration is stable.
+
+### Milestone 1 — Core Library & Memory Backend
+
+**Goal:** Land the core `ResourceGovernor` and in-memory backend with full tests, but no external integrations.
+
+- Scaffolding
+  - Add a new module directory `tldw_Server_API/app/core/Resource_Governance/`.
+  - Create initial Python modules:
+    - `__init__.py` (exporting public types and a factory).
+    - `resource_governor.py` (facade and high-level API).
+    - `backends/memory_backend.py` (in-memory implementation).
+    - `categories/requests.py`, `categories/tokens.py`, `categories/concurrency.py`, `categories/minutes.py` (category managers).
+    - `time_source.py` (monotonic `TimeSource` abstraction).
+    - `schemas.py` (Pydantic-style dataclasses for `LimitSpec`, `EntityKey`, `ReservationHandle`, decision objects).
+- Implementation
+  - Implement `ResourceGovernor` with `check/reserve/commit/refund/renew/release/peek/reset` and `op_id` idempotency.
+  - Implement token-bucket + optional sliding-window logic for `requests` and `tokens` in the memory backend.
+  - Implement `ConcurrencyLimiter` for `streams`/`jobs` using per-entity counters with TTL and `renew`/`release`.
+  - Implement a thin `MinutesLedger` adapter that wraps the existing audio minutes DB implementation (no schema changes).
+  - Implement configuration wiring (without integrations) in a new settings module (for example, `tldw_Server_API/app/core/Resource_Governance/settings.py`) that reads `RG_*` env vars and `TLDW_TEST_MODE`.
+- Tests
+  - Add unit tests under `tldw_Server_API/tests/Resource_Governance/` for:
+    - Token bucket and sliding-window semantics using a fake `TimeSource`.
+    - Composite reservations across multiple categories with rollback on failure.
+    - Idempotent `commit` and `refund` keyed by `op_id`.
+    - Concurrency leases in memory (`streams`/`jobs`) including TTL expiry and `renew`.
+    - Minutes ledger adapter calling through to the existing audio minutes DAL.
+  - Ensure tests pass in `TLDW_TEST_MODE` with deterministic burst behavior.
+
+### Milestone 2 — Redis Backend & Failover
+
+**Goal:** Implement the Redis backend, lease semantics, and `RG_REDIS_FAIL_MODE` behavior.
+
+- Implementation
+  - Add `backends/redis_backend.py` implementing:
+    - Lua or MULTI/EXEC operations for `requests`/`tokens` windows and multi-category reservations.
+    - ZSET-based semaphore leases for `streams`/`jobs` with acquire/renew/release and TTL.
+  - Implement failover behavior based on `RG_REDIS_FAIL_MODE` and per-policy `fail_mode` as defined in the PRD.
+  - Wire Redis backend selection into the governor factory, controlled by `RG_BACKEND` and `RG_REDIS_URL`.
+- Tests
+  - Add unit/integration tests for the Redis backend, guarded by `RG_REAL_REDIS_URL` or equivalent test fixture envs.
+  - Cover:
+    - Sliding-window and token-bucket correctness in Redis vs memory backend.
+    - Concurrency leases with TTL and GC.
+    - Failover semantics for `fail_closed`, `fail_open`, and `fallback_memory` (including metrics tags).
+  - Add chaos-style tests that simulate Redis outages and clock skew (skipped when Redis is unavailable).
+
+### Milestone 3 — Policy Loader, YAML Stub & Health
+
+**Goal:** Introduce the policy store/loader layer and a health endpoint, still without wiring any public endpoints to the governor.
+
+- Implementation
+  - Add `policy_loader.py` with:
+    - File-backed loader reading `tldw_Server_API/Config_Files/resource_governor_policies.yaml`.
+    - DB-backed loader using the `rg_policies` table in AuthNZ DB.
+    - In-process caching with `RG_POLICY_DB_CACHE_TTL_SEC`.
+  - Create the YAML stub at `tldw_Server_API/Config_Files/resource_governor_policies.yaml` with examples from “Policy DSL & Route Mapping”.
+  - Implement a small DAL in the AuthNZ subsystem for `rg_policies` (Postgres and SQLite paths) using the schema in this PRD.
+  - Implement optimistic concurrency on policy updates (using `version`), returning a 409 on conflict.
+  - Add a health endpoint:
+    - `GET /api/v1/resource-governor/health` in a new FastAPI router (for example, `tldw_Server_API/app/api/v1/endpoints/resource_governor.py`), returning `{store, snapshot_version, policy_count, updated_at}`.
+- Tests
+  - Add unit tests for file-based policy parsing and validation.
+  - Add SQLite unit tests for the `AuthNZPolicyStore`.
+  - Add Postgres-backed tests using the existing AuthNZ fixtures where available.
+  - Add an integration test for the `/health` endpoint to ensure it reflects live policy snapshot data.
+
+### Milestone 4 — Ingress Middleware & SlowAPI Façade
+
+**Goal:** Replace ingress counting with a governor-backed façade while preserving existing public behavior and headers.
+
+- Implementation
+  - Add an ASGI middleware adapter (for example, `RGSlowAPIMiddleware` under `tldw_Server_API/app/core/Resource_Governance/middleware.py`) that:
+    - Extracts `policy_id` from FastAPI route tags/decorators.
+    - Derives the entity key using auth scopes or IP (per “Ingress Scoping & IP Derivation”).
+    - Calls `reserve` before invoking handlers; on deny, returns 429 with `Retry-After` and `X-RateLimit-*` headers.
+    - On completion, invokes `commit` / `refund` as appropriate and handles streaming renew/release.
+  - Update `tldw_Server_API/app/api/v1/API_Deps/rate_limiting.py` to:
+    - Keep SlowAPI decorators as config carriers only.
+    - Map decorator strings / tags to `policy_id`s used by the middleware.
+    - Respect `RG_ENABLE_SLOWAPI` and `RG_ENABLED` flags.
+- Tests
+  - Add integration tests for representative routes verifying:
+    - Allow/deny behavior and `Retry-After`/`X-RateLimit-*` headers.
+    - IP scoping behavior with and without `RG_TRUSTED_PROXIES` / `RG_CLIENT_IP_HEADER`.
+    - Backward compatibility for SlowAPI-decorated routes when RG is disabled.
+
+### Milestone 5 — Module Integrations (MCP, Chat, Embeddings, Audio)
+
+**Goal:** Wire the highest-impact modules to the governor behind feature flags and validate parity with legacy behavior.
+
+- MCP
+  - In `tldw_Server_API/app/core/MCP_unified/auth/rate_limiter.py`:
+    - Replace internal logic with a thin façade to the governor `requests` category and `category=ingestion|read` tags.
+    - Preserve the public API (`get_rate_limiter`, `RateLimitExceeded`), reading limits from policies/envs via the policy loader.
+  - Add integration tests exercising MCP ingress paths with `RG_ENABLE_MCP` on/off.
+- Chat
+  - In `tldw_Server_API/app/core/Chat/rate_limiter.py`:
+    - Replace `ConversationRateLimiter` internals with governor-backed `requests` + `tokens`.
+    - Implement the reserve→commit(actuals)→refund(delta) flow using token estimates and actual provider usage.
+    - Preserve `initialize_rate_limiter` signature and any public types.
+  - Add tests that compare legacy vs RG behavior under shadow mode when both are enabled.
+- Embeddings
+  - In `tldw_Server_API/app/core/Embeddings/rate_limiter.py`:
+    - Replace the current sliding-window limiter with a governor-backed `requests` category.
+    - Ensure env-based configuration is mapped to `RG_*` and/or policy rules.
+  - Add property tests checking that steady-load behavior matches the prior implementation within a tolerance.
+- Audio
+  - In `tldw_Server_API/app/core/Usage/audio_quota.py`:
+    - Replace in-process/Redis counters for `streams`/`jobs` with the governor’s `streams`/`jobs` categories.
+    - Keep the existing daily minutes ledger, wired through the `MinutesLedger` adapter.
+  - Add tests that verify:
+    - Concurrency limits for streams/jobs.
+    - Unchanged daily minutes charging behavior.
+- Flags & rollout
+  - Gate each integration behind the appropriate `RG_ENABLE_*` flag.
+  - Default these flags to `False` for production until parity is validated.
+
+### Milestone 6 — Admin API, Shadow Mode & Cutover
+
+**Goal:** Add admin policy management, observability, and a safe rollout path with shadow mode and deprecation warnings.
+
+- Admin API
+  - Implement the admin endpoints described in the PRD under a new router (for example, `tldw_Server_API/app/api/v1/endpoints/resource_governor_admin.py`):
+    - `GET /api/v1/resource-governor/policies`
+    - `GET /api/v1/resource-governor/policy/{policy_id}`
+    - `PUT /api/v1/resource-governor/policy/{policy_id}` with optimistic concurrency on `version`.
+    - `DELETE /api/v1/resource-governor/policy/{policy_id}`
+  - Wire these endpoints through AuthNZ to require an `admin` role (single-user mode treated as admin).
+- Shadow mode & metrics
+  - Add a shadow-mode path in the major modules (MCP, Chat, Embeddings, SlowAPI ingress) that:
+    - Evaluates both the legacy limiter and the governor.
+    - Emits `rg_shadow_decision_mismatch_total` when decisions differ.
+  - Build basic dashboards/alerts around `rg_*` metrics for drift and failover visibility.
+- Deprecation & cutover
+  - Implement legacy→RG env mappings and once-per-process deprecation warnings as described in “Compat Map”.
+  - Plan a staged enablement:
+    - Enable RG for MCP and Chat first in shadow mode, then full enforcement.
+    - Move Embeddings and SlowAPI ingress next.
+    - Finally enable Audio concurrency once validated.
+  - Update documentation and examples to reference `RG_*` envs and policies as the canonical configuration surface.
+
+### Milestone 7 — Cleanup
+
+**Goal:** Remove obsolete limiters once parity is proven and RG is stable.
+
+- Remove or slim down legacy modules listed under “Deletions / Consolidation Targets”, leaving only minimal façade shims that import ResourceGovernor and raise deprecation warnings when used.
+- Remove any legacy env parsing that duplicates policy/env behavior once migrations are complete.
+- Simplify test suites by:
+  - Removing legacy limiter-specific tests where RG covers the same behavior.
+  - Keeping a small number of golden tests to guard against regressions in migration shims.

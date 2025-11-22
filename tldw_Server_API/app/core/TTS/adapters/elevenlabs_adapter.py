@@ -10,6 +10,7 @@ import httpx
 from loguru import logger
 #
 # Local Imports
+from tldw_Server_API.app.core.http_client import afetch, _validate_egress_or_raise
 from .base import (
     TTSAdapter,
     TTSCapabilities,
@@ -401,6 +402,7 @@ class ElevenLabsAdapter(TTSAdapter):
         }
 
         try:
+            _validate_egress_or_raise(url)
             async with self.client.stream("POST", url, headers=headers, json=payload) as response:
                 try:
                     response.raise_for_status()
@@ -478,7 +480,13 @@ class ElevenLabsAdapter(TTSAdapter):
             "voice_settings": voice_settings
         }
         try:
-            response = await self.client.post(url, headers=headers, json=payload)
+            response = await afetch(
+                method="POST",
+                url=url,
+                client=self.client,
+                headers=headers,
+                json=payload,
+            )
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:

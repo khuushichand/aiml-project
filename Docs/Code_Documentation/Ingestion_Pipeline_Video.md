@@ -69,7 +69,8 @@ print(out["processed_count"], out["errors"])  # batch summary
 
 ## Endpoint Integration
 
-- `POST /api/v1/media/process-videos` prepares uploads and URLs, calls `process_videos`, and normalizes results.
+- `POST /api/v1/media/process-videos` (modular endpoint in `endpoints/media/process_videos.py`) prepares uploads and URLs, then calls `video_batch.run_video_batch(...)`, which uses `process_videos` for the core work.
+- Persistent video ingestion via `POST /api/v1/media/add` uses the shared `process_batch_media(...)` helper in `core.Ingestion_Media_Processing.persistence`, which wraps `process_videos` and calls `persist_primary_av_item(...)` to write results to the Media DB.
 
 Endpoint specifics:
 - Uses a managed temporary directory (`TempDirManager`) and passes its path to `process_videos`.

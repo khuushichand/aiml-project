@@ -443,6 +443,53 @@ ffmpeg -i input.mp3 -ar 22050 -ac 1 output.wav
 ffmpeg -i input.wav -ss 0 -t 10 -ar 24000 output_10s.wav
 ```
 
+### Error Semantics and Client Responsibilities
+
+The `/api/v1/audio/speech` endpoint returns **structured HTTP errors by default**:
+
+- Validation errors → HTTP 400 with a JSON `{"detail": "..."}`
+- Model/provider configuration issues → HTTP 4xx/5xx with JSON `{"detail": "..."}`
+- Provider/auth failures (e.g., invalid API key) → HTTP 5xx with JSON error detail
+
+Clients **must not** assume a 200 response or treat all responses as audio bytes:
+
+- Always check the HTTP status code (e.g., `response.raise_for_status()` in Python).
+- Only treat the body as audio when the status is 200.
+- On non-200 responses, parse the JSON body and surface the `detail` field to users/logging.
+
+An opt-in legacy mode exists (`performance.stream_errors_as_audio: true` or `TTS_STREAM_ERRORS_AS_AUDIO=1`)
+that embeds `ERROR: ...` bytes in the stream, but this mode is not recommended for production APIs.
+
+### Text Sanitization and Strict Validation
+
+Incoming TTS text is passed through a sanitizer (`TTSInputValidator`) that:
+
+- Normalizes Unicode and removes HTML tags/entities.
+- Strips or rejects potentially dangerous patterns (e.g., obvious SQL/command injections such as `whoami`, `curl evil`, `rm -rf /`, `../../etc/passwd`).
+- Enforces provider-aware text length limits and basic repetition checks.
+
+By default, **strict validation is enabled**:
+
+- `strict_validation: true` in `tts_providers_config.yaml` (or omitted, since the default is true), or
+- `TTS_STRICT_VALIDATION=1`
+
+In strict mode, dangerous patterns cause a 400 error rather than being silently stripped. This is recommended for multi-tenant or untrusted deployments.
+
+For trusted/local deployments, you can relax this behavior by setting:
+
+```yaml
+# tldw_Server_API/Config_Files/tts_providers_config.yaml
+strict_validation: false
+```
+
+or via environment:
+
+```bash
+export TTS_STRICT_VALIDATION=0
+```
+
+In non-strict mode, dangerous substrings are removed, but the request is still processed. Clients should be aware that meta-text like “the `whoami` command” may be altered or rejected depending on the chosen validation mode.
+
 3. **Validate Audio Quality**:
 ```python
 import librosa
@@ -488,7 +535,10 @@ response = requests.post(
     }
 )
 
-# Save the generated audio
+# Check for HTTP errors before treating the body as audio
+response.raise_for_status()
+
+# Save the generated audio on success
 with open("cloned_output.mp3", "wb") as f:
     f.write(response.content)
 ```
@@ -511,6 +561,7 @@ response = requests.post(
         }
     }
 )
+response.raise_for_status()
 
 # VibeVoice with vibe control
 response = requests.post(
@@ -527,6 +578,7 @@ response = requests.post(
         }
     }
 )
+response.raise_for_status()
 ```
 
 ### Voice Cloning via cURL
@@ -552,6 +604,10 @@ curl -X POST http://localhost:8000/api/v1/audio/speech \
   -H "Authorization: Bearer your-token" \
   -d @request.json \
   --output cloned.mp3
+  
+# Important: check the HTTP status code. On non-2xx, the response body will be
+# a JSON error (not audio), so handle that in scripts by inspecting the status
+# and printing/parsing the body instead of assuming audio.
 ```
 
 ### Voice Cloning Best Practices
