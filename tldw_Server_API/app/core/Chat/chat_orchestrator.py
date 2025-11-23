@@ -11,6 +11,7 @@ from loguru import logger as logging
 import os
 import time
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Union, Callable
 #
 # 3rd-party Libraries
@@ -401,10 +402,112 @@ async def chat_api_call_async(
     except requests.exceptions.RequestException as e:
         raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504)
     except Exception as e:
-        if isinstance(e, (ChatAPIError, ChatProviderError, ChatBadRequestError, ChatAuthenticationError, ChatRateLimitError, ChatConfigurationError)):
+        if isinstance(
+            e,
+            (
+                ChatAPIError,
+                ChatProviderError,
+                ChatBadRequestError,
+                ChatAuthenticationError,
+                ChatRateLimitError,
+                ChatConfigurationError,
+            ),
+        ):
             raise
         # Surface as provider error for unexpected conditions
         raise ChatProviderError(provider=endpoint_lower, message=f"Unexpected error: {e}")
+
+
+def _run_achat_sync(
+    message: str,
+    history: List[Dict[str, Any]],
+    media_content: Optional[Dict[str, str]],
+    selected_parts: List[str],
+    api_endpoint: str,
+    api_key: Optional[str],
+    custom_prompt: Optional[str],
+    temperature: float,
+    system_message: Optional[str] = None,
+    streaming: bool = False,
+    minp: Optional[float] = None,
+    maxp: Optional[float] = None,
+    model: Optional[str] = None,
+    topp: Optional[float] = None,
+    topk: Optional[int] = None,
+    chatdict_entries: Optional[List[Any]] = None,
+    max_tokens: int = 500,
+    strategy: str = "sorted_evenly",
+    current_image_input: Optional[Dict[str, str]] = None,
+    image_history_mode: str = "tag_past",
+    llm_max_tokens: Optional[int] = None,
+    llm_seed: Optional[int] = None,
+    llm_stop: Optional[Union[str, List[str]]] = None,
+    llm_response_format: Optional[ResponseFormat] = None,
+    llm_n: Optional[int] = None,
+    llm_user_identifier: Optional[str] = None,
+    llm_logprobs: Optional[bool] = None,
+    llm_top_logprobs: Optional[int] = None,
+    llm_logit_bias: Optional[Dict[str, float]] = None,
+    llm_presence_penalty: Optional[float] = None,
+    llm_frequency_penalty: Optional[float] = None,
+    llm_tools: Optional[List[Dict[str, Any]]] = None,
+    llm_tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+) -> Union[str, Any]:
+    """Run the async achat() orchestrator from synchronous code.
+
+    This helper is safe to call when no event loop is running on the current
+    thread (uses asyncio.run), and will offload to a worker thread when a loop
+    is already running to avoid nested event loops or deadlocks.
+    """
+
+    async def _runner() -> Union[str, Any]:
+        return await achat(
+            message=message,
+            history=history,
+            media_content=media_content,
+            selected_parts=selected_parts,
+            api_endpoint=api_endpoint,
+            api_key=api_key,
+            custom_prompt=custom_prompt,
+            temperature=temperature,
+            system_message=system_message,
+            streaming=streaming,
+            minp=minp,
+            maxp=maxp,
+            model=model,
+            topp=topp,
+            topk=topk,
+            chatdict_entries=chatdict_entries,
+            max_tokens=max_tokens,
+            strategy=strategy,
+            current_image_input=current_image_input,
+            image_history_mode=image_history_mode,
+            llm_max_tokens=llm_max_tokens,
+            llm_seed=llm_seed,
+            llm_stop=llm_stop,
+            llm_response_format=llm_response_format,
+            llm_n=llm_n,
+            llm_user_identifier=llm_user_identifier,
+            llm_logprobs=llm_logprobs,
+            llm_top_logprobs=llm_top_logprobs,
+            llm_logit_bias=llm_logit_bias,
+            llm_presence_penalty=llm_presence_penalty,
+            llm_frequency_penalty=llm_frequency_penalty,
+            llm_tools=llm_tools,
+            llm_tool_choice=llm_tool_choice,
+        )
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop in this thread: safe to use asyncio.run directly.
+        return asyncio.run(_runner())
+
+    # Running inside an event loop on this thread: offload to a worker thread
+    # that owns its own event loop.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(lambda: asyncio.run(_runner()))
+        return future.result()
 
 #
 ####################################################################################################
@@ -426,7 +529,7 @@ async def chat_api_call_async(
 #     _prepare_llm_messages(request_data, historical_messages, character_card, template_name)
 #
 #     _handle_llm_call_and_response(loop, llm_call_func, request_data, chat_db, final_conversation_id, character_card)
-def chat(
+def _chat_sync_impl(
     message: str,
     history: List[Dict[str, Any]],
     media_content: Optional[Dict[str, str]],
@@ -460,66 +563,13 @@ def chat(
     llm_frequency_penalty: Optional[float] = None,
     llm_tools: Optional[List[Dict[str, Any]]] = None,
     llm_tool_choice: Optional[Union[str, Dict[str, Any]]] = None
-) -> Union[str, Any]: # Any for streaming generator
+) -> Union[str, Any]:  # Any for streaming generator
     """
-    Orchestrates a chat interaction with an LLM, handling message processing,
-    RAG, multimodal content, and chat dictionary features.
+    Internal synchronous implementation of the chat orchestration logic.
 
-    This function prepares the `messages_payload` in OpenAI format, including
-    history, current user message (with optional RAG and image), and then
-    calls `chat_api_call` to get the LLM's response.
-
-    Args:
-        message: The current text message from the user.
-        history: A list of previous messages in OpenAI format
-                 (e.g., `[{'role': 'user', 'content': '...'}, {'role': 'assistant', 'content': '...'}]`).
-                 Content can be simple text or a list of multimodal parts.
-        media_content: A dictionary containing RAG content (e.g., `{'summary': '...', 'transcript': '...'}`).
-        selected_parts: A list of keys from `media_content` to include as RAG.
-        api_endpoint: Identifier for the target LLM provider.
-        api_key: API key for the provider.
-        custom_prompt: An additional prompt/instruction to prepend to the user's current message.
-        temperature: LLM sampling temperature.
-        system_message: A system-level instruction for the LLM. Passed to `chat_api_call`.
-        streaming: Whether to stream the LLM response.
-        minp: Min-P sampling parameter for the LLM.
-        maxp: Max-P (often Top-P) sampling parameter for the LLM.
-        model: The specific LLM model to use.
-        topp: Top-P (nucleus) sampling parameter for the LLM.
-        topk: Top-K sampling parameter for the LLM.
-        chatdict_entries: A list of `ChatDictionary` objects for keyword replacement/expansion.
-        max_tokens: Max tokens for chat dictionary content processing (not LLM response).
-        strategy: Strategy for applying chat dictionary entries (e.g., "sorted_evenly").
-        current_image_input: An optional dictionary for the current image being sent by the user,
-                             in the format `{'base64_data': '...', 'mime_type': 'image/png'}`.
-        image_history_mode: How to handle images from past messages:
-                            "send_all": Send all past images.
-                            "send_last_user_image": Send only the last image sent by a user.
-                            "tag_past": Replace past images with a textual tag (e.g., "<image: prior_history.png>").
-                            "ignore_past": Do not include any past images.
-        llm_max_tokens: Max tokens for the LLM to generate in its response.
-        llm_seed: Seed for LLM generation.
-        llm_stop: Stop sequence(s) for LLM generation.
-        llm_response_format: Desired response format from LLM (e.g., JSON object).
-                             Pydantic `ResponseFormat` model instance.
-        llm_n: Number of LLM completion choices to generate.
-        llm_user_identifier: User identifier for LLM API call.
-        llm_logprobs: Whether LLM should return log probabilities.
-        llm_top_logprobs: Number of top log probabilities for LLM to return.
-        llm_logit_bias: Logit bias for LLM token generation.
-        llm_presence_penalty: Presence penalty for LLM generation.
-        llm_frequency_penalty: Frequency penalty for LLM generation.
-        llm_tools: Tools for LLM function calling.
-        llm_tool_choice: Tool choice for LLM function calling.
-
-    Returns:
-        The LLM's response, either as a string (non-streaming) or a generator
-        (streaming). In case of an error during chat processing, a string
-        containing an error message is returned.
-
-    Raises:
-        Catches internal exceptions and returns an error message string.
-        Exceptions from `chat_api_call` might propagate if not handled by its own try-except blocks.
+    This contains the original synchronous behavior used prior to the
+    async-first refactor and is retained for legacy streaming callers and as
+    a reference while the async `achat` path becomes canonical.
     """
     log_counter("chat_attempt_multimodal", labels={"api_endpoint": api_endpoint, "image_mode": image_history_mode})
     start_time = time.time()
@@ -792,6 +842,126 @@ def chat(
         return f"An error occurred in the chat function: {str(e)}"
 
 
+def chat(
+    message: str,
+    history: List[Dict[str, Any]],
+    media_content: Optional[Dict[str, str]],
+    selected_parts: List[str],
+    api_endpoint: str,
+    api_key: Optional[str],
+    custom_prompt: Optional[str],
+    temperature: float,
+    system_message: Optional[str] = None,
+    streaming: bool = False,
+    minp: Optional[float] = None,
+    maxp: Optional[float] = None,
+    model: Optional[str] = None,
+    topp: Optional[float] = None,
+    topk: Optional[int] = None,
+    chatdict_entries: Optional[List[Any]] = None,  # Should be List[ChatDictionary]
+    max_tokens: int = 500,
+    strategy: str = "sorted_evenly",
+    current_image_input: Optional[Dict[str, str]] = None,
+    image_history_mode: str = "tag_past",
+    llm_max_tokens: Optional[int] = None,
+    llm_seed: Optional[int] = None,
+    llm_stop: Optional[Union[str, List[str]]] = None,
+    llm_response_format: Optional[ResponseFormat] = None,
+    llm_n: Optional[int] = None,
+    llm_user_identifier: Optional[str] = None,
+    llm_logprobs: Optional[bool] = None,
+    llm_top_logprobs: Optional[int] = None,
+    llm_logit_bias: Optional[Dict[str, float]] = None,
+    llm_presence_penalty: Optional[float] = None,
+    llm_frequency_penalty: Optional[float] = None,
+    llm_tools: Optional[List[Dict[str, Any]]] = None,
+    llm_tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+) -> Union[str, Any]:
+    """
+    Public synchronous chat entrypoint.
+
+    For non-streaming calls, this function acts as a robust sync wrapper around
+    the async `achat` orchestrator, ensuring consistent async behavior while
+    remaining safe to call from threads with or without an active event loop.
+
+    For streaming calls, it delegates to the legacy synchronous implementation
+    preserved in `_chat_sync_impl` to maintain existing generator semantics for
+    legacy consumers.
+    """
+    if streaming:
+        return _chat_sync_impl(
+            message=message,
+            history=history,
+            media_content=media_content,
+            selected_parts=selected_parts,
+            api_endpoint=api_endpoint,
+            api_key=api_key,
+            custom_prompt=custom_prompt,
+            temperature=temperature,
+            system_message=system_message,
+            streaming=streaming,
+            minp=minp,
+            maxp=maxp,
+            model=model,
+            topp=topp,
+            topk=topk,
+            chatdict_entries=chatdict_entries,
+            max_tokens=max_tokens,
+            strategy=strategy,
+            current_image_input=current_image_input,
+            image_history_mode=image_history_mode,
+            llm_max_tokens=llm_max_tokens,
+            llm_seed=llm_seed,
+            llm_stop=llm_stop,
+            llm_response_format=llm_response_format,
+            llm_n=llm_n,
+            llm_user_identifier=llm_user_identifier,
+            llm_logprobs=llm_logprobs,
+            llm_top_logprobs=llm_top_logprobs,
+            llm_logit_bias=llm_logit_bias,
+            llm_presence_penalty=llm_presence_penalty,
+            llm_frequency_penalty=llm_frequency_penalty,
+            llm_tools=llm_tools,
+            llm_tool_choice=llm_tool_choice,
+        )
+
+    return _run_achat_sync(
+        message=message,
+        history=history,
+        media_content=media_content,
+        selected_parts=selected_parts,
+        api_endpoint=api_endpoint,
+        api_key=api_key,
+        custom_prompt=custom_prompt,
+        temperature=temperature,
+        system_message=system_message,
+        streaming=streaming,
+        minp=minp,
+        maxp=maxp,
+        model=model,
+        topp=topp,
+        topk=topk,
+        chatdict_entries=chatdict_entries,
+        max_tokens=max_tokens,
+        strategy=strategy,
+        current_image_input=current_image_input,
+        image_history_mode=image_history_mode,
+        llm_max_tokens=llm_max_tokens,
+        llm_seed=llm_seed,
+        llm_stop=llm_stop,
+        llm_response_format=llm_response_format,
+        llm_n=llm_n,
+        llm_user_identifier=llm_user_identifier,
+        llm_logprobs=llm_logprobs,
+        llm_top_logprobs=llm_top_logprobs,
+        llm_logit_bias=llm_logit_bias,
+        llm_presence_penalty=llm_presence_penalty,
+        llm_frequency_penalty=llm_frequency_penalty,
+        llm_tools=llm_tools,
+        llm_tool_choice=llm_tool_choice,
+    )
+
+
 async def achat(
     message: str,
     history: List[Dict[str, Any]],
@@ -879,32 +1049,85 @@ async def achat(
 
         llm_messages_payload: List[Dict[str, Any]] = []
 
+        # 2. Process History (now expecting list of OpenAI message dicts)
         last_user_image_url_from_history: Optional[str] = None
         for hist_msg_obj in history:
             role = hist_msg_obj.get("role")
             original_content = hist_msg_obj.get("content")
-            processed_hist_content_parts = []
+            processed_hist_content_parts: List[Dict[str, Any]] = []
+
             if isinstance(original_content, str):
                 processed_hist_content_parts.append({"type": "text", "text": original_content})
             elif isinstance(original_content, list):
                 for part in original_content:
                     if part.get("type") == "text":
-                        processed_hist_content_parts.append({"type": "text", "text": part.get("text", "")})
-                    elif part.get("type") == "image_url":
                         processed_hist_content_parts.append(part)
+                    elif part.get("type") == "image_url":
+                        image_url_data = part.get("image_url", {}).get("url", "")
+                        if image_history_mode == "send_all":
+                            processed_hist_content_parts.append(part)
+                            if role == "user":
+                                last_user_image_url_from_history = image_url_data
+                        elif image_history_mode == "send_last_user_image" and role == "user":
+                            # Track only; append later to the last user message
+                            last_user_image_url_from_history = image_url_data
+                        elif image_history_mode == "tag_past":
+                            mime_type_part = "image"
+                            if image_url_data.startswith("data:image/") and ";base64," in image_url_data:
+                                try:
+                                    mime_type_part = image_url_data.split(";base64,")[0].split("/")[-1]
+                                except Exception as e:
+                                    logging.debug(f"Failed to extract MIME type from data URI: {e}")
+                                    mime_type_part = "image"
+                            processed_hist_content_parts.append(
+                                {"type": "text", "text": f"<image: prior_history.{mime_type_part}>"}
+                            )
+                        # "ignore_past": do nothing, image part is skipped
+
             if processed_hist_content_parts:
                 llm_messages_payload.append({"role": role, "content": processed_hist_content_parts})
 
+        # Handle "send_last_user_image" - append it to the last user message in payload if applicable
+        if image_history_mode == "send_last_user_image" and last_user_image_url_from_history:
+            appended_to_last = False
+            for i in range(len(llm_messages_payload) - 1, -1, -1):
+                if llm_messages_payload[i]["role"] == "user":
+                    if not isinstance(llm_messages_payload[i]["content"], list):
+                        llm_messages_payload[i]["content"] = [
+                            {"type": "text", "text": str(llm_messages_payload[i]["content"])}
+                        ]
+                    is_duplicate = any(
+                        p.get("type") == "image_url"
+                        and p.get("image_url", {}).get("url") == last_user_image_url_from_history
+                        for p in llm_messages_payload[i]["content"]
+                    )
+                    if not is_duplicate:
+                        llm_messages_payload[i]["content"].append(
+                            {"type": "image_url", "image_url": {"url": last_user_image_url_from_history}}
+                        )
+                    appended_to_last = True
+                    break
+            if not appended_to_last:
+                logging.debug(
+                    "Could not append last_user_image_from_history, no suitable prior user message or already present. "
+                    f"Image: {last_user_image_url_from_history[:60]}..."
+                )
+
+        # 3. Add RAG Content (prepended to current user's text)
         rag_text_prefix = ""
-        try:
-            if media_content and selected_parts:
-                rag_text_prefix = ("\n\n".join(
-                    f"{part}:\n{media_content.get(part)}" for part in selected_parts if media_content.get(part)
-                )).strip()
+        if media_content and selected_parts:
+            try:
+                rag_text_prefix = "\n\n".join(
+                    [
+                        f"{part.capitalize()}: {media_content.get(part, '')}"
+                        for part in selected_parts
+                        if media_content.get(part)
+                    ]
+                ).strip()
                 if rag_text_prefix:
                     rag_text_prefix += "\n\n---\n\n"
-        except Exception:
-            pass
+            except Exception:
+                rag_text_prefix = ""
 
         current_user_content_parts: List[Dict[str, Any]] = []
         final_text_for_current_message = processed_text_message

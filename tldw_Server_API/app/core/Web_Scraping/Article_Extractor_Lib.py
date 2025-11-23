@@ -31,8 +31,9 @@ from urllib.parse import (
     urljoin,
     urlparse
 )
-from xml.dom import minidom
-import xml.etree.ElementTree as xET
+from defusedxml import minidom
+from defusedxml import ElementTree as xET
+from defusedxml.common import DefusedXmlException
 
 import requests
 #
@@ -773,7 +774,7 @@ def scrape_from_filtered_sitemap(sitemap_file: str, filter_function) -> list:
                     articles.append(article_data)
 
         return articles
-    except xET.ParseError as e:
+    except (xET.ParseError, DefusedXmlException) as e:
         logging.error(f"Error parsing sitemap: {e}")
         return []
 
@@ -954,7 +955,11 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
 
         if int(status or 0) >= 400 or not text:
             return []
-        root = xET.fromstring(text)
+        try:
+            root = xET.fromstring(text)
+        except (xET.ParseError, DefusedXmlException) as parse_err:
+            logging.error(f"Failed to parse sitemap XML from {sitemap_url}: {parse_err}")
+            return []
 
         results = []
         for url in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc'):

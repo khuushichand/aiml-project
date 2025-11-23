@@ -2,7 +2,7 @@
 
 - Author: Core Chat Backend
 - Date: 2025-11-11
-- Status: Draft → Tracking
+- Status: Tracking (Phase 0–1 complete)
 
 ## Summary
 
@@ -89,7 +89,7 @@ Merged references:
 - `tldw_Server_API/app/api/v1/endpoints/chat.py:1119`
 - `tldw_Server_API/app/core/Chat/chat_orchestrator.py` (new `achat` function)
 
-### Phase 1: Async-first orchestration
+### Phase 1: Async-first orchestration (Completed)
 - Implement a robust sync wrapper for `chat` that internally runs `achat` safely using stdlib-only primitives (no new runtime deps):
   - If not in an event loop, run with `asyncio.run(achat(...))`.
   - If in a running loop on the current thread, do not call `asyncio.run` or `loop.run_until_complete` (would error/deadlock). Offload to a worker thread that runs a private loop via `asyncio.run` and block for result.
@@ -99,6 +99,21 @@ Merged references:
 #### Phase 1 Implementation Details
 
 Decision: Do not add `anyio` as a runtime dependency for the wrapper. Prefer stdlib-only (`asyncio`, `threading`/`concurrent.futures`). `pytest-asyncio` remains for tests; `anyio` may be used in tests only if already present, but is not required.
+
+Current implementation (2025-11-23):
+- `achat(...)` is the canonical async orchestrator in `chat_orchestrator.py` and mirrors `chat(...)` behavior, including:
+  - Slash-command handling via `async_dispatch_command`.
+  - Image-history modes (`tag_past`, `send_all`, `send_last_user_image`) and RAG prefix construction aligned with the legacy sync path.
+- `chat(...)` is now a sync wrapper with two code paths:
+  - Non-streaming: routes through `_run_achat_sync(...)`, which calls `achat(...)` using:
+    - `asyncio.run` when no event loop is running on the calling thread.
+    - A `ThreadPoolExecutor` worker that owns its own event loop when a loop is already running.
+  - Streaming: delegates to a preserved sync implementation `_chat_sync_impl(...)` so existing generator-based streaming behavior remains unchanged for legacy callers.
+- `Chat_Functions.chat` remains a compatibility shim but internally calls `chat_orchestrator.chat`; it temporarily patches `chat_orchestrator.chat_api_call`, `chat_api_call_async`, and `load_and_log_configs` so tests that monkeypatch `Chat_Functions.chat_api_call` continue to work.
+- `Workflows.py` imports `chat` from `chat_orchestrator`; sync workflows now transitively use `achat(...)` for non-streaming calls via the wrapper.
+- New unit tests cover:
+  - Sync-context invocation of `chat(...)` delegating to `achat(...)`.
+  - Safe use of `chat(...)` from within a running event loop via `asyncio.to_thread(chat, ...)`.
 
 Reference implementation (pseudocode):
 
@@ -196,10 +211,13 @@ Python version constraint:
 
 - Use async dispatcher in endpoints (DONE): `tldw_Server_API/app/api/v1/endpoints/chat.py:1119`.
 - Orchestrator async path (DONE): `achat` in `tldw_Server_API/app/core/Chat/chat_orchestrator.py`.
-- Remaining sync call sites to evaluate:
-  - `tldw_Server_API/app/core/Chat/chat_orchestrator.py:550` (sync path uses legacy `dispatch_command`).
-  - `tldw_Server_API/app/core/Chat/Workflows.py` (sync caller of `chat`).
-  - `Chat_Functions.chat` shim (sync) → update to call async via safe wrapper.
+- Sync wrapper over async orchestrator (DONE):
+  - `chat(...)` in `chat_orchestrator.py` acts as a sync wrapper over `achat(...)` for non-streaming calls via `_run_achat_sync(...)`.
+  - Streaming sync behavior is preserved via `_chat_sync_impl(...)` for legacy generator-based consumers.
+- Current remaining sync/legacy surfaces:
+  - `_chat_sync_impl(...)` in `chat_orchestrator.py` still uses `dispatch_command` for slash-commands on the streaming path.
+  - `tldw_Server_API/app/core/Chat/command_router.dispatch_command` still mutates `TokenBucket` fields directly (to be addressed in Phases 2–3).
+  - Async-capable call sites that still use `dispatch_command` (outside orchestrator streaming) must migrate to `async_dispatch_command` in Phase 2.
 
 ## Testing Strategy
 

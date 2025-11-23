@@ -3241,7 +3241,7 @@ def load_and_log_configs():
 
         return return_dict
     except Exception as e:
-        logging.error(f"Error loading config: {str(e)}")
+        logger.error(f"Error loading config: {str(e)}")
         return None
 
 

@@ -18,7 +18,15 @@ def test_system_injection_for_time(monkeypatch):
         captured_payload = messages_payload
         return "ok"
 
+    async def fake_call_async(api_endpoint: str, messages_payload: List[Dict[str, Any]], **kwargs):
+        nonlocal captured_payload
+        captured_payload = messages_payload
+        return "ok"
+
+    # Patch both sync and async dispatcher variants so the orchestrator wrapper
+    # (which now routes through achat) uses the stubbed implementation.
     monkeypatch.setattr(chat_orchestrator, "chat_api_call", fake_call)
+    monkeypatch.setattr(chat_orchestrator, "chat_api_call_async", fake_call_async)
 
     # Minimal chat invocation with a slash command
     resp = chat_orchestrator.chat(
@@ -70,7 +78,13 @@ def test_weather_injection_with_args(monkeypatch):
         captured_payload = messages_payload
         return "ok"
 
+    async def fake_call_async(api_endpoint: str, messages_payload: List[Dict[str, Any]], **kwargs):
+        nonlocal captured_payload
+        captured_payload = messages_payload
+        return "ok"
+
     monkeypatch.setattr(chat_orchestrator, "chat_api_call", fake_call)
+    monkeypatch.setattr(chat_orchestrator, "chat_api_call_async", fake_call_async)
 
     resp = chat_orchestrator.chat(
         message="/weather Boston bring an umbrella?",
@@ -91,4 +105,3 @@ def test_weather_injection_with_args(monkeypatch):
     assert any(m.get("role") == "system" and any(
         (p.get("type") == "text" and "/weather" in p.get("text", "") and "Boston" in p.get("text", "")) for p in (m.get("content") or [])
     ) for m in captured_payload)
-

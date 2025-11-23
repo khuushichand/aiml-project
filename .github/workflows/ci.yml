@@ -322,7 +322,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: models/embeddings
-          key: ${{ runner.os }}-embeddings-${{ hashFiles('Helper_Scripts/download_embedding_models.py') }}-v1
+          key: ${{ runner.os }}-embeddings-static-v1
           restore-keys: |
             ${{ runner.os }}-embeddings-
 
@@ -1548,7 +1548,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: models/embeddings
-          key: ${{ runner.os }}-embeddings-${{ hashFiles('Helper_Scripts/download_embedding_models.py') }}-v1
+          key: ${{ runner.os }}-embeddings-static-v1
           restore-keys: |
             ${{ runner.os }}-embeddings-
 

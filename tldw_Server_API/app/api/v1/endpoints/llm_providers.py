@@ -1,8 +1,7 @@
 # llm_providers.py
-# Description: API endpoints for managing LLM providers and models
-#
-# Imports
+import asyncio
 import time
+from functools import partial
 from typing import Dict, List, Any, Optional, Tuple
 from urllib.parse import urlparse, urljoin
 import requests
@@ -1057,6 +1056,15 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
         }
 
 
+async def get_configured_providers_async(include_deprecated: bool = False) -> Dict[str, Any]:
+    """Run provider discovery in a worker thread to avoid blocking the event loop."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        partial(get_configured_providers, include_deprecated=include_deprecated),
+    )
+
+
 def get_all_available_models() -> List[str]:
     """
     Get a flat list of all available models across all configured providers.
@@ -1093,7 +1101,7 @@ async def get_llm_providers(include_deprecated: bool = False):
         - total_configured: Number of configured providers
     """
     try:
-        result = get_configured_providers(include_deprecated=include_deprecated)
+        result = await get_configured_providers_async(include_deprecated=include_deprecated)
 
         # Inject Diagnostics UI interval bounds from server config if available
         try:
@@ -1148,7 +1156,7 @@ async def get_llm_providers(include_deprecated: bool = False):
     response_model=Dict[str, Any])
 async def get_models_metadata(include_deprecated: bool = False):
     try:
-        result = get_configured_providers(include_deprecated=include_deprecated)
+        result = await get_configured_providers_async(include_deprecated=include_deprecated)
         flattened: List[Dict[str, Any]] = []
         for provider in result.get('providers', []):
             for mi in provider.get('models_info', []):
@@ -1182,7 +1190,7 @@ async def get_provider_details(provider_name: str, include_deprecated: bool = Fa
         Provider details including models and configuration
     """
     try:
-        result = get_configured_providers(include_deprecated=include_deprecated)
+        result = await get_configured_providers_async(include_deprecated=include_deprecated)
 
         # Find the specific provider
         for provider in result['providers']:
@@ -1217,7 +1225,7 @@ async def get_all_models(include_deprecated: bool = False):
         List of model names with provider prefix
     """
     try:
-        result = get_configured_providers(include_deprecated=include_deprecated)
+        result = await get_configured_providers_async(include_deprecated=include_deprecated)
         models: List[str] = []
         for provider in result.get('providers', []):
             for model in provider.get('models', []):

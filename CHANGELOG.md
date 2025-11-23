@@ -24,6 +24,13 @@ and this project adheres to Some kind of Versioning
 
 ## [0.1.8] - 2025-11-22
 
+### Added
+- Auto-streaming for large audit exports exceeding configured threshold
+- CSV streaming support for audit exports
+- Model discovery for local LLM endpoints
+- Audit event replay mechanism for failed exports
+- Enhanced HTTP error handling for DNS resolution failures
+
 ### Changed
 - Refactored parakeet to not be independent.
 
@@ -34,6 +41,9 @@ and this project adheres to Some kind of Versioning
 - Efficiency.
 
 ### Fixed
+- Improved WebSocket disconnect handling
+- Consistent error handling in session cleanup and web ingestion
+- Better network error resilience with graceful fallbacks
 - My life.
 
 

@@ -2779,7 +2779,7 @@ if WEBUI_DIR.exists():
     async def get_webui_config():
         """Dynamically generate WebUI configuration with API key in single user mode."""
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
-        from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers
+        from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers_async
         from fastapi.responses import JSONResponse
         from tldw_Server_API.app.core.config import load_comprehensive_config
 
@@ -2821,7 +2821,7 @@ if WEBUI_DIR.exists():
 
         # Add LLM providers information
         try:
-            providers_info = get_configured_providers()
+            providers_info = await get_configured_providers_async()
             config["llm_providers"] = providers_info
         except Exception as e:
             logger.warning(f"Failed to get LLM providers for config: {e}")

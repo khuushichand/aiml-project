@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
+from loguru import logger
 
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     UnifiedAuditService,
@@ -19,12 +20,23 @@ from tldw_Server_API.app.core.config import settings
 router = APIRouter()
 
 _DEFAULT_STREAM_AUTO_THRESHOLD = 5000
+raw_stream_auto = None
 try:
-    STREAM_AUTO_MAX_ROWS_THRESHOLD = int(
-        settings.get("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS", _DEFAULT_STREAM_AUTO_THRESHOLD)
-        or _DEFAULT_STREAM_AUTO_THRESHOLD
-    )
+    raw_stream_auto = settings.get("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS", None)
+    if raw_stream_auto is None:
+        STREAM_AUTO_MAX_ROWS_THRESHOLD = _DEFAULT_STREAM_AUTO_THRESHOLD
+    else:
+        raw_str = str(raw_stream_auto).strip()
+        if raw_str == "":
+            STREAM_AUTO_MAX_ROWS_THRESHOLD = _DEFAULT_STREAM_AUTO_THRESHOLD
+        else:
+            STREAM_AUTO_MAX_ROWS_THRESHOLD = int(raw_str)
 except Exception:
+    logger.warning(
+        "Invalid AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS value {}; using default {}",
+        raw_stream_auto,
+        _DEFAULT_STREAM_AUTO_THRESHOLD,
+    )
     STREAM_AUTO_MAX_ROWS_THRESHOLD = _DEFAULT_STREAM_AUTO_THRESHOLD
 
 
