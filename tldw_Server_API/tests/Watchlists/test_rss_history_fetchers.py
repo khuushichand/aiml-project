@@ -1,5 +1,4 @@
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
@@ -14,23 +13,6 @@ class _FakeResp:
         self.status_code = status_code
         self.text = text
         self.headers = headers or {}
-
-
-class _FakeAsyncClient:
-    def __init__(self, mapping):
-        self._mapping = mapping
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-    async def get(self, url, headers=None):
-        entry = self._mapping.get(url)
-        if entry is None:
-            return _FakeResp(404, "", {})
-        return _FakeResp(entry.get("status", 200), entry.get("text", ""), entry.get("headers", {}))
 
 
 def _atom_feed(page: int, prev_href: str | None = None) -> str:
@@ -51,7 +33,7 @@ def _atom_feed(page: int, prev_href: str | None = None) -> str:
 
 @pytest.mark.asyncio
 async def test_atom_links_extraction_and_follow(monkeypatch):
-    base = "https://feed.example.com/atom"
+    base = "https://rss.arxiv.org/atom/cs"
     p2 = "https://feed.example.com/atom?page=2"
 
     mapping = {
@@ -59,7 +41,24 @@ async def test_atom_links_extraction_and_follow(monkeypatch):
         p2: {"status": 200, "text": _atom_feed(2, prev_href=None), "headers": {}},
     }
 
-    monkeypatch.setattr(F, "httpx", SimpleNamespace(AsyncClient=lambda timeout, follow_redirects: _FakeAsyncClient(mapping)))
+    class _FakeHTTPClient:
+        def __init__(self, mp):
+            self._mapping = mp
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def _fake_afetch(method, url, client=None, headers=None, timeout=None, **kwargs):
+        entry = mapping.get(url)
+        if entry is None:
+            return _FakeResp(404, "", {})
+        return _FakeResp(entry.get("status", 200), entry.get("text", ""), entry.get("headers", {}))
+
+    monkeypatch.setattr("tldw_Server_API.app.core.http_client.create_async_client", lambda timeout: _FakeHTTPClient(mapping))
+    monkeypatch.setattr("tldw_Server_API.app.core.http_client.afetch", _fake_afetch)
     # Allow outgoing URL by bypassing egress policy in test
     monkeypatch.setattr(F, "is_url_allowed_for_tenant", lambda url, tenant_id: True)
     monkeypatch.setattr(F, "is_url_allowed", lambda url: True)

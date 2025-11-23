@@ -11,6 +11,10 @@ allow_remote_webui_access = true
 # Provide CIDR ranges or individual IPs, comma-separated
 webui_ip_allowlist = 192.168.1.0/24, 192.168.5.0/24, 10.0.0.5
 
+[Audit]
+# Auto-switch audit exports to streaming when max_rows exceeds this threshold to avoid large in-memory buffers.
+export_stream_auto_max_rows = 5000
+
 [Processing]
 processing_choice = cuda
 

@@ -71,6 +71,11 @@ async def ingest_web_content(
             db=db,
             usage_log=usage_log,
         )
+    except HTTPException:
+        # Preserve explicit HTTP errors from downstream helpers (e.g., cookie
+        # parsing / validation) so client-facing 4xx semantics are not
+        # converted into generic 500s.
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.error("Web content ingestion failed: {}", exc, exc_info=True)
         raise HTTPException(

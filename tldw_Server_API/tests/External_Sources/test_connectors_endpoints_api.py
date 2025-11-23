@@ -11,18 +11,23 @@ def connectors_client() -> Tuple[TestClient, dict]:
 
     We enable the experimental 'connectors' route via ROUTES_ENABLE before importing the app.
     """
-    # Ensure single-user auth and enable connectors router
+    # Ensure single-user auth and enable connectors router before importing the app
+    # so the route gating logic sees the toggles during app construction.
+    os.environ.setdefault("TEST_MODE", "true")
+    os.environ.setdefault("ROUTES_STABLE_ONLY", "false")
+    # Explicitly allow connectors (experimental) in case stable_only is true
+    os.environ["ROUTES_ENABLE"] = "connectors"
     os.environ.setdefault("AUTH_MODE", "single_user")
     os.environ.setdefault("TESTING", "true")
-    # Append 'connectors' to ROUTES_ENABLE in a stable way
-    cur = os.getenv("ROUTES_ENABLE", "")
-    parts = [p.strip().lower() for p in cur.replace(" ", ",").split(",") if p.strip()]
-    if "connectors" not in parts:
-        parts.append("connectors")
-    os.environ["ROUTES_ENABLE"] = ",".join(parts)
 
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     from tldw_Server_API.app.main import app
+    from tldw_Server_API.app.api.v1.endpoints import connectors as connectors_router
+
+    # Ensure connectors router is mounted even if a prior import cached the app without it.
+    paths = {route.path for route in app.routes}
+    if "/api/v1/connectors/sources" not in paths:
+        app.include_router(connectors_router.router, prefix="/api/v1", tags=["connectors"])
 
     api_key = get_settings().SINGLE_USER_API_KEY
     headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
@@ -142,4 +147,3 @@ def test_patch_source_forbid_extra_fields(connectors_client):
         headers=headers,
     )
     assert r.status_code == 422
-

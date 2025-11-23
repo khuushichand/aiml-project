@@ -125,9 +125,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
 )
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.Streaming.speech_chat_service import (
-    run_speech_chat_turn,
-)
+from tldw_Server_API.app.core.Streaming import speech_chat_service
 
 # Initialize rate limiter
 from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import (
@@ -1088,7 +1086,7 @@ async def audio_chat_turn(
         logger.debug(f"usage_log audio.chat failed: error={e}; request_id={rid}")
 
     try:
-        return await run_speech_chat_turn(
+        return await speech_chat_service.run_speech_chat_turn(
             request_data=request_data,
             current_user=current_user,
             chat_db=chat_db,

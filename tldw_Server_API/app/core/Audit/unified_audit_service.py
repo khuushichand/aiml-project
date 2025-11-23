@@ -1771,6 +1771,48 @@ class UnifiedAuditService:
                     offset += chunk_size
             return rows_written
 
+        # Streaming CSV directly to the caller (no prefetch) when requested
+        if fmt == "csv" and file_path is None and stream:
+            async def _csv_streamer():
+                yield ",".join(CSV_HEADERS) + "\n"
+                offset = 0
+                written = 0
+                while True:
+                    rows = await self.query_events(
+                        start_time=start_time,
+                        end_time=end_time,
+                        event_types=event_types,
+                        categories=categories,
+                        user_id=user_id,
+                        request_id=request_id,
+                        correlation_id=correlation_id,
+                        ip_address=ip_address,
+                        session_id=session_id,
+                        endpoint=endpoint,
+                        method=method,
+                        min_risk_score=min_risk_score,
+                        limit=chunk_size,
+                        offset=offset,
+                    )
+                    if not rows:
+                        break
+                    from io import StringIO
+                    buf = StringIO()
+                    writer = csv.DictWriter(buf, fieldnames=CSV_HEADERS, extrasaction="ignore")
+                    for r in rows:
+                        if max_rows is not None and written >= max_rows:
+                            break
+                        writer.writerow(r)
+                        written += 1
+                    chunk_str = buf.getvalue()
+                    if chunk_str:
+                        yield chunk_str
+                    if len(rows) < chunk_size or (max_rows is not None and written >= max_rows):
+                        break
+                    offset += chunk_size
+                    await asyncio.sleep(0)
+            return _csv_streamer()
+
         # Streaming JSON/JSONL response to the caller when requested (no prefetch)
         if fmt in {"json", "jsonl"} and file_path is None and stream:
             async def _json_streamer():

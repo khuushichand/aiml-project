@@ -14,8 +14,18 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+from tldw_Server_API.app.core.config import settings
 
 router = APIRouter()
+
+_DEFAULT_STREAM_AUTO_THRESHOLD = 5000
+try:
+    STREAM_AUTO_MAX_ROWS_THRESHOLD = int(
+        settings.get("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS", _DEFAULT_STREAM_AUTO_THRESHOLD)
+        or _DEFAULT_STREAM_AUTO_THRESHOLD
+    )
+except Exception:
+    STREAM_AUTO_MAX_ROWS_THRESHOLD = _DEFAULT_STREAM_AUTO_THRESHOLD
 
 
 def _parse_dt(val: Optional[str]) -> Optional[datetime]:
@@ -121,7 +131,7 @@ async def export_audit_events(
     method: Optional[str] = Query(None, description="Filter by HTTP method"),
     max_rows: Optional[int] = Query(None, description="Hard maximum rows to export"),
     filename: Optional[str] = Query(None),
-    stream: bool = Query(True, description="Stream JSON/JSONL output incrementally (format=json or jsonl)"),
+    stream: bool = Query(False, description="Stream JSON/JSONL/CSV output incrementally"),
     audit_service: UnifiedAuditService = Depends(get_audit_service_for_user),
     _: dict = Depends(require_admin),
 ):
@@ -137,22 +147,21 @@ async def export_audit_events(
 
     Output control:
     - format: json (default), jsonl (NDJSON), csv
-    - stream: true enables streaming for JSON/JSONL
+    - stream: true enables streaming for JSON/JSONL/CSV
     - filename: suggested download name (sanitized; extension normalized)
     """
     fmt = format.lower()
     if fmt not in {"json", "csv", "jsonl"}:
         raise HTTPException(status_code=400, detail="format must be 'json', 'csv', or 'jsonl'")
-    if fmt == "csv" and stream:
-        raise HTTPException(status_code=400, detail="Streaming is only supported for JSON format")
 
     st = _parse_dt(start_time)
     et = _parse_dt(end_time)
     ets = _map_event_types(event_type)
     cats = _map_categories(category)
 
-    # Streaming applies to JSON and JSONL
-    do_stream = bool(stream and fmt in {"json", "jsonl"})
+    streamable = {"json", "jsonl", "csv"}
+    force_stream = bool(max_rows is not None and max_rows > STREAM_AUTO_MAX_ROWS_THRESHOLD)
+    do_stream = bool((stream or force_stream) and fmt in streamable)
     content = await audit_service.export_events(
         start_time=st,
         end_time=et,

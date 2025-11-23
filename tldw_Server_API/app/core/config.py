@@ -494,6 +494,17 @@ def load_settings():
             return default
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
+    def _safe_int(value: object, default: int) -> int:
+        try:
+            if value is None:
+                return default
+            s = str(value).strip()
+            if not s:
+                return default
+            return int(s)
+        except Exception:
+            return default
+
     # Load from comprehensive config first, allowing env overrides
     redis_host = os.getenv("REDIS_HOST") or _redis_section_get('redis_host', 'localhost') or 'localhost'
     redis_port_raw = os.getenv("REDIS_PORT") or _redis_section_get('redis_port', '6379') or '6379'
@@ -551,6 +562,18 @@ def load_settings():
 
     users_db_configured = os.getenv("USERS_DB_ENABLED", "false").lower() == "true"
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+
+    # Audit export streaming threshold (env overrides config.txt [Audit])
+    _audit_cfg = comprehensive_config.get("audit") if isinstance(comprehensive_config, dict) else None
+    if not isinstance(_audit_cfg, dict):
+        _audit_cfg = comprehensive_config.get("Audit") if isinstance(comprehensive_config, dict) else None
+    if not isinstance(_audit_cfg, dict):
+        _audit_cfg = {}
+    audit_stream_auto_max_rows = _safe_int(
+        os.getenv("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS")
+        or _audit_cfg.get("export_stream_auto_max_rows"),
+        5000,
+    )
 
     # Load comprehensive configurations (API keys, embedding settings, etc.)
     # If SINGLE_USER_API_KEY wasn't present before, try reading again now that configs/.env may be loaded
@@ -873,6 +896,8 @@ def load_settings():
         "OPENAI_API_KEY": comprehensive_config.get("openai_api", {}).get("api_key", os.getenv("OPENAI_API_KEY")),
         # You can continue to merge other specific keys or whole sections
         "COMPREHENSIVE_CONFIG_RAW": comprehensive_config, # Store the raw one if needed elsewhere
+        # Audit export streaming threshold (opt-in via env/config.txt)
+        "AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS": audit_stream_auto_max_rows,
 
         # Ephemeral cleanup worker (evals/rag pipeline ephemeral collections)
         "EPHEMERAL_CLEANUP_ENABLED": os.getenv("EPHEMERAL_CLEANUP_ENABLED", "false").lower() == "true",
@@ -1862,6 +1887,7 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             "scheduler",
             "mcp-unified",
             "mcp-catalogs",
+            "tools",
             "jobs",
             "personalization",
             "evaluations",

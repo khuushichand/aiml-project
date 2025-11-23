@@ -39,6 +39,11 @@ from fastapi import Depends  # pragma: no cover
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user  # pragma: no cover
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger  # pragma: no cover
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase  # pragma: no cover
+try:
+    # Optional shim so tests can monkeypatch media.process_web_scraping_task
+    from tldw_Server_API.app.services.web_scraping_service import process_web_scraping_task  # pragma: no cover
+except Exception:  # pragma: no cover - keep import failures isolated during minimal start
+    process_web_scraping_task = None  # type: ignore[assignment]
 
 
 # Router wiring (modular endpoints only) - import modules explicitly to avoid
@@ -258,6 +263,7 @@ __all__ = [
     "process_epub",
     "process_videos",
     "process_audio_files",
+    "process_web_scraping_task",
     "TemplateClassifier",
     "aiofiles",
 ]

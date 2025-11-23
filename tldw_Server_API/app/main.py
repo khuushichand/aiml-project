@@ -3188,6 +3188,18 @@ if _MINIMAL_TEST_APP:
         app.include_router(rag_unified_router, tags=["rag-unified"])
     except Exception as _rag_min_err:
         logger.debug(f"Skipping rag_unified router in minimal test app: {_rag_min_err}")
+    # Vision-language backends listing (lightweight; needed for smoke tests)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.vlm import router as vlm_router
+        app.include_router(vlm_router, prefix=f"{API_V1_PREFIX}", tags=["vlm"])
+    except Exception as _vlm_min_err:
+        logger.debug(f"Skipping vlm router in minimal test app: {_vlm_min_err}")
+    # RAG health endpoints (lightweight; required by RAG integration tests)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.rag_health import router as rag_health_router
+        app.include_router(rag_health_router, tags=["rag-health"])
+    except Exception as _rag_health_min_err:
+        logger.debug(f"Skipping rag_health router in minimal test app: {_rag_health_min_err}")
     # Collections endpoints (treated as lightweight; always included in minimal app)
     try:
         from tldw_Server_API.app.api.v1.endpoints.outputs_templates import router as outputs_templates_router
@@ -3215,6 +3227,24 @@ if _MINIMAL_TEST_APP:
         app.include_router(chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
     except Exception as _chatbooks_min_err:
         logger.debug(f"Skipping chatbooks router in minimal test app: {_chatbooks_min_err}")
+    # Personalization scaffold endpoints (opt-in/profile/memories) needed for unit tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.personalization import router as personalization_router
+        app.include_router(personalization_router, prefix=f"{API_V1_PREFIX}/personalization", tags=["personalization"])
+    except Exception as _pers_min_err:
+        logger.debug(f"Skipping personalization router in minimal test app: {_pers_min_err}")
+    # Persona scaffold endpoints (catalog/session/WS) used by unit tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.persona import router as persona_router
+        app.include_router(persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"])
+    except Exception as _persona_min_err:
+        logger.debug(f"Skipping persona router in minimal test app: {_persona_min_err}")
+    # Notes endpoints (health + CRUD)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
+        app.include_router(notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
+    except Exception as _notes_min_err:
+        logger.debug(f"Skipping notes router in minimal test app: {_notes_min_err}")
     # Auth endpoints (login/register/refresh/logout/me)
     try:
         app.include_router(auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
@@ -3301,6 +3331,12 @@ if _MINIMAL_TEST_APP:
             logger.debug(f"Skipping privileges router in minimal test app: {_priv_min_err}")
     except Exception as _mcp_min_err:  # noqa: BLE001
         logger.debug(f"Skipping MCP unified router in minimal test app: {_mcp_min_err}")
+    # Tools endpoints (MCP-backed) needed for permission enforcement tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.tools import router as tools_router
+        app.include_router(tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"])
+    except Exception as _tools_min_err:
+        logger.debug(f"Skipping tools router in minimal test app: {_tools_min_err}")
     # Include admin router in minimal mode if available (ensure not gated by MCP import)
     try:
         if 'admin_router' not in locals():

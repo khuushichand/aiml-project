@@ -47,6 +47,8 @@ class StreamingAudioWriter:
 
         # Format-specific setup
         if self.format in ["wav", "flac", "mp3", "pcm", "aac", "opus"]:
+            # WAV headers are only finalized on close; defer emitting bytes until finalize
+            self._defer_until_finalize = self.format == "wav"
             if self.format != "pcm":
                 self.output_buffer = BytesIO()
                 container_options = {}
@@ -151,6 +153,13 @@ class StreamingAudioWriter:
             # For streaming, we need to read what's been written so far
             # This is not ideal for all formats but works for streaming
             current_pos = self.output_buffer.tell()
+            if getattr(self, "_defer_until_finalize", False):
+                # WAV headers are rewritten on close; avoid returning provisional bytes
+                logger.debug(
+                    f"StreamingAudioWriter chunk: format={self.format}, samples={len(audio_data)}, "
+                    f"new_bytes=0, total_bytes={current_pos} (deferred until finalize)"
+                )
+                return b""
             self.output_buffer.seek(self.bytes_written)
             data = self.output_buffer.read(current_pos - self.bytes_written)
             self.bytes_written = current_pos

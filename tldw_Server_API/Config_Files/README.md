@@ -45,6 +45,9 @@ How to apply changes
    - If the socket peer is in this list, the server uses the leftmost X-Forwarded-For IP as the client.
    - Env override: `TLDW_TRUSTED_PROXIES="10.0.0.0/8,192.168.0.0/16,127.0.0.1"`
 
+## [Audit]
+- `export_stream_auto_max_rows` (int): Auto-switch audit exports to streaming when `max_rows` is above this value (env: `AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS`). Keeps large CSV/JSON/JSONL exports from buffering entirely in memory.
+
 ## [Processing]
 - `processing_choice` (str): Hardware backend, e.g., `cuda|cpu` for ML pipelines.
 

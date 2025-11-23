@@ -21,7 +21,8 @@ from tldw_Server_API.app.core.TTS.adapters.base import (
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSModelNotFoundError,
     TTSModelLoadError,
-    TTSGenerationError
+    TTSGenerationError,
+    TTSProviderNotConfiguredError
 )
 #
 #######################################################################################################################
@@ -260,7 +261,7 @@ class TestKokoroAdapterMock:
 
     async def test_generation_without_initialization(self):
         """Test generation fails without initialization"""
-        adapter = KokoroAdapter({})
+        adapter = KokoroAdapter({"kokoro_model_path": "/nonexistent/model.pth"})
 
         request = TTSRequest(
             text="Test",
@@ -268,7 +269,7 @@ class TestKokoroAdapterMock:
             format=AudioFormat.WAV
         )
 
-        with pytest.raises(Exception):  # Should raise provider not configured
+        with pytest.raises(TTSProviderNotConfiguredError):
             await adapter.generate(request)
 
     async def test_text_length_validation(self):
