@@ -538,6 +538,13 @@ if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
         from tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint import router as mcp_unified_router
     except Exception as _mcp_imp_err:  # noqa: BLE001
         logger.debug(f"Skipping MCP unified import in minimal test app: {_mcp_imp_err}")
+    # LlamaCpp endpoints for reranking tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.llamacpp import router as llamacpp_router, public_router as llamacpp_public_router
+    except Exception as _llama_imp_err:  # noqa: BLE001
+        logger.debug(f"Skipping llamacpp import in minimal test app: {_llama_imp_err}")
+        llamacpp_router = None  # type: ignore[assignment]
+        llamacpp_public_router = None  # type: ignore[assignment]
 else:
     # Research Endpoint
     from tldw_Server_API.app.api.v1.endpoints.research import router as research_router
@@ -3307,6 +3314,21 @@ if _MINIMAL_TEST_APP:
         app.include_router(resource_governor_router, prefix=f"{API_V1_PREFIX}", tags=["resource-governor"])
     except Exception as _rg_min_err:  # noqa: BLE001
         logger.debug(f"Skipping resource_governor router in minimal test app: {_rg_min_err}")
+    # LlamaCpp endpoints for reranking tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.llamacpp import router as llamacpp_router, public_router as llamacpp_public_router
+        app.include_router(llamacpp_router, prefix=f"{API_V1_PREFIX}", tags=["llamacpp"])
+        app.include_router(llamacpp_public_router, prefix="", tags=["llamacpp"])
+    except Exception as _llama_min_err:  # noqa: BLE001
+        logger.debug(f"Skipping llamacpp router in minimal test app: {_llama_min_err}")
+    # Evaluations endpoints for abtest tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as _evaluations_router
+        app.include_router(_evaluations_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
+        from tldw_Server_API.app.api.v1.endpoints.evaluations_embeddings_abtest import abtest_router as _abtest_router
+        app.include_router(_abtest_router, prefix=f"{API_V1_PREFIX}/evaluations", tags=["evaluations"])
+    except Exception as _evals_min_err:  # noqa: BLE001
+        logger.debug(f"Skipping evaluations routers in minimal test app: {_evals_min_err}")
 else:
     # Small helper to guard route inclusion via config.txt and ENV
     def _include_if_enabled(route_key: str, router, *, prefix: str = "", tags: list | None = None, default_stable: bool = True) -> None:
@@ -3461,6 +3483,8 @@ else:
         if route_enabled("evaluations"):
             from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as _evaluations_router
             app.include_router(_evaluations_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
+            from tldw_Server_API.app.api.v1.endpoints.evaluations_embeddings_abtest import abtest_router as _abtest_router
+            app.include_router(_abtest_router, prefix=f"{API_V1_PREFIX}/evaluations", tags=["evaluations"])
         else:
             logger.info("Route disabled by policy: evaluations")
     except Exception as _evals_rt_err:  # noqa: BLE001

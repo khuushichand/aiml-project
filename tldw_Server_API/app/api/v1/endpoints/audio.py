@@ -2193,15 +2193,16 @@ async def test_streaming():
             - "message": Error message describing the failure
     """
     try:
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
-            ParakeetStreamingTranscriber,
-            StreamingConfig
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+            UnifiedStreamingTranscriber,
+            UnifiedStreamingConfig
         )
         import base64
 
         # Try to initialize transcriber
-        config = StreamingConfig(model_variant='mlx')
-        transcriber = ParakeetStreamingTranscriber(config)
+        config = UnifiedStreamingConfig(model='parakeet', model_variant='mlx')
+        transcriber = UnifiedStreamingTranscriber(config)
+        transcriber.initialize()
 
         # Generate test audio
         sample_rate = 16000
@@ -2211,7 +2212,7 @@ async def test_streaming():
         encoded = base64.b64encode(audio.tobytes()).decode('utf-8')
 
         # Try processing
-        result = await transcriber.process_audio_chunk(encoded)
+        result = await transcriber.process_audio_chunk(base64.b64decode(encoded))
 
         return JSONResponse({
             "status": "success",

@@ -1698,6 +1698,9 @@ async def handle_unified_websocket(
                     pass
                 return
             except Exception as e:
+                if isinstance(e, WebSocketDisconnect):
+                    # Let disconnect bubble to the outer handler for graceful shutdown
+                    raise
                 logger.error(f"Error processing message: {e}")
                 await stream.error("internal_error", f"Processing error: {str(e)}")
 

@@ -336,7 +336,7 @@ class AuthNZScheduler:
         try:
             session_manager = await get_session_manager()
             count = await session_manager.cleanup_expired_sessions()
-            if count > 0:
+            if count and count > 0:
                 logger.info(f"Cleaned up {count} expired sessions")
         except Exception as e:
             logger.error(f"Failed to cleanup expired sessions: {e}")

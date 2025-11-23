@@ -521,9 +521,13 @@ custom_openai2_api_api_retry_delay = 1
 default_api = openai
 default_api_for_tasks = anthropic
 
+# Local-API: OpenAI-compatible servers expect a 'model' in requests (per OpenAI spec + server docs).
+# If your server does not expose a default, add a placeholder model name here so the UI/clients can send one.
 [Local-API]
 kobold_api_IP = http://127.0.0.1:5001/api/v1/generate
 kobold_openai_api_IP = http://127.0.0.1:5001/v1/chat/completions
+# Koboldcpp OpenAI endpoint follows OpenAI spec and expects a model id (README "OpenAI API" section).
+# kobold_model = <model_name_for_openai_endpoint>
 kobold_streaming = False
 kobold_temperature = 0.7
 kobold_top_p = 0.9
@@ -534,6 +538,8 @@ kobold_api_timeout = 90
 kobold_api_retry = 3
 kobold_api_retry_delay = 1
 llama_api_IP = http://127.0.0.1:8080/completion
+# llama.cpp (llama-server) is OpenAI-compatible and expects model (OpenAI Chat API spec; llama-server docs).
+# llama_model = <model_name_for_openai_endpoint>
 llama_streaming = True
 llama_temperature = 0.7
 llama_top_p = 0.9
@@ -544,6 +550,9 @@ llama_api_timeout = 90
 llama_api_retry = 3
 llama_api_retry_delay = 1
 ooba_api_IP = http://192.168.2.235:5000/v1/chat/completions
+# text-generation-webui OpenAI routes accept the OpenAI payload; include model to be explicit
+# (docs/12 - OpenAI API.md; server will fall back to the loaded model if omitted).
+# ooba_model = <model_name_for_openai_endpoint>
 ooba_streaming = False
 ooba_temperature = 0.7
 ooba_top_p = 0.9
@@ -554,6 +563,8 @@ ooba_api_timeout = 90
 ooba_api_retry = 3
 ooba_api_retry_delay = 1
 tabby_api_IP = http://127.0.0.1:5000/v1/chat/completions
+# TabbyAPI is OpenAI-compatible; send a model string per the OpenAI spec.
+# tabby_model = <model_name_for_openai_endpoint>
 tabby_streaming = False
 tabby_temperature = 0.7
 tabby_top_k = 100
@@ -562,6 +573,7 @@ tabby_api_timeout = 90
 tabby_api_retry = 3
 tabby_api_retry_delay = 1
 vllm_api_IP = http://127.0.0.1:8000/v1/chat/completions
+# vLLM OpenAI server examples include model (docs: OpenAI-Compatible Server -> chat.completions).
 vllm_model =
 vllm_streaming = False
 vllm_temperature = 0.7
@@ -572,6 +584,7 @@ vllm_max_tokens = 4096
 vllm_api_timeout = 90
 vllm_api_retry = 3
 vllm_api_retry_delay = 1
+# Ollama API requires model (docs/api.md: POST /api/generate -> model required).
 ollama_api_IP =  http://192.168.2.216:11434/v1
 ollama_model = gemma3:1b
 ollama_streaming = False
@@ -582,11 +595,12 @@ ollama_api_timeout = 9009
 ollama_api_retry = 3
 ollama_api_retry_delay = 1
 aphrodite_api_IP = http://127.0.0.1:8080/completion
+# Aphrodite Engine exposes an OpenAI-compatible server; include model (README run examples).
+aphrodite_model =
 aphrodite_streaming = False
 aphrodite_temperature = 0.7
 aphrodite_top_p = 0.9
 aphrodite_min_p = 0.05
-aphrodite_model =
 aprhodite_max_tokens = 4096
 aphrodite_api_timeout = 90
 aphrodite_api_retry = 3

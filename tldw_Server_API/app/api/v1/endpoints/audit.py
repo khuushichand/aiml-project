@@ -121,7 +121,7 @@ async def export_audit_events(
     method: Optional[str] = Query(None, description="Filter by HTTP method"),
     max_rows: Optional[int] = Query(None, description="Hard maximum rows to export"),
     filename: Optional[str] = Query(None),
-    stream: bool = Query(False, description="Stream JSON/JSONL output incrementally (format=json or jsonl)"),
+    stream: bool = Query(True, description="Stream JSON/JSONL output incrementally (format=json or jsonl)"),
     audit_service: UnifiedAuditService = Depends(get_audit_service_for_user),
     _: dict = Depends(require_admin),
 ):
