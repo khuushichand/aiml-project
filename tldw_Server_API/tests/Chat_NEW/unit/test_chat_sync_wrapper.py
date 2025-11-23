@@ -6,6 +6,23 @@ import pytest
 from tldw_Server_API.app.core.Chat import chat_orchestrator
 
 
+@pytest.mark.asyncio
+async def test_run_coro_sync_inside_running_loop():
+    """_run_coro_sync should execute the given coroutine even when a loop is running."""
+
+    called: Dict[str, Any] = {"count": 0}
+
+    async def fake_coro() -> str:
+        called["count"] += 1
+        return "coro-result"
+
+    # Call the sync helper from a background thread while this test's loop is running.
+    result = await asyncio.to_thread(chat_orchestrator._run_coro_sync, fake_coro())
+
+    assert result == "coro-result"
+    assert called["count"] == 1
+
+
 def test_chat_wrapper_invokes_achat_in_sync_context(monkeypatch):
     """chat() should delegate to achat() when called from a plain sync context."""
 
@@ -66,4 +83,3 @@ async def test_chat_wrapper_safe_under_running_loop(monkeypatch):
 
     assert resp == "ok-async"
     assert called["count"] == 1
-

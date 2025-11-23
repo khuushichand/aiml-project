@@ -2,7 +2,7 @@
 
 - Author: Core Chat Backend
 - Date: 2025-11-11
-- Status: Tracking (Phase 0–1 complete)
+- Status: Tracking (Phase 0–4 complete)
 
 ## Summary
 
@@ -175,6 +175,17 @@ Notes and variations:
   - Python 3.9+: `result = await asyncio.to_thread(chat, req)`
   - Python 3.8: `loop = asyncio.get_running_loop(); result = await loop.run_in_executor(None, chat, req)`
 
+  A small helper for external callers:
+
+  ```python
+  # Async code that needs to use the sync `chat(...)` wrapper without blocking the event loop.
+  from tldw_Server_API.app.core.Chat import chat_orchestrator
+
+  async def call_chat_from_async(req: ChatRequest) -> ChatResponse:
+      # Prefer this pattern over calling chat(...) directly from async code.
+      return await asyncio.to_thread(chat_orchestrator.chat, req.message, req.history, ...)
+  ```
+
 Test validation patterns (add under Testing Strategy):
 - No-loop context: plain pytest test calls `chat(...)`; assert response; ensure no loop-related errors.
 - Running-loop context: `pytest.mark.asyncio` test calls both:
@@ -194,18 +205,137 @@ Python version constraint:
   - `asyncio.run_coroutine_threadsafe` is available across these versions and should only be used from threads other than the loop’s thread.
 
 ### Phase 2: Call-site migration
-- Replace remaining sync `dispatch_command` in async-capable contexts with `await async_dispatch_command`.
-- Identify orchestrator consumers:
-  - `Workflows.py` (sync): continue to use the sync wrapper or add an async variant if workflows are made async.
-  - `Chat_Functions.chat`: keep shim; internally route to `achat` via the safe wrapper.
+- Status: Complete (streaming + non-streaming slash-commands now async-rate-limited)
+- Changes:
+  - Introduced `_run_coro_sync(coro)` helper in `chat_orchestrator.py` to run async coroutines from sync code in a loop-safe manner (uses `asyncio.run` when no loop is running; otherwise offloads to a worker thread with its own loop).
+  - Refactored `_run_achat_sync(...)` to delegate to `_run_coro_sync(achat(...))`, removing duplicate loop-detection logic.
+  - Updated `_chat_sync_impl(...)` (streaming path) to replace `command_router.dispatch_command(...)` with:
+    - `_run_coro_sync(command_router.async_dispatch_command(ctx, cmd_name, cmd_args))`
+    - This keeps the public streaming API and generator semantics unchanged while ensuring slash-commands go through the async, lock-safe dispatcher.
+  - Verified that:
+    - FastAPI `/chat/completions` endpoint already uses `async_dispatch_command`.
+    - Non-streaming sync `chat(...)` calls route through `_run_achat_sync(...)` → `achat(...)` → `async_dispatch_command`.
+    - Streaming sync `chat(..., streaming=True, ...)` now uses `async_dispatch_command` via `_chat_sync_impl(...)` + `_run_coro_sync(...)`.
+  - Added tests in `tests/Chat_NEW/unit`:
+    - `test_run_coro_sync_inside_running_loop` exercises `_run_coro_sync` while a loop is active, via `asyncio.to_thread`.
+    - `test_streaming_path_uses_async_dispatcher` patches both `command_router.async_dispatch_command` and `command_router.dispatch_command`, invokes `chat(..., streaming=True, message='/time', ...)`, exhausts the generator, and asserts that only the async dispatcher is called.
+- Remaining sync surfaces:
+  - `command_router.dispatch_command` remains for direct/legacy usage and is still responsible for its own internal rate-limiting behavior. It is no longer used by chat orchestration paths.
+  - Deprecation and eventual removal of `dispatch_command` is tracked under Phase 3–4.
 
 ### Phase 3: Deprecation + Hardening
-- Mark `dispatch_command` deprecated; optionally call into async dispatcher internally (best effort) or emit a one-time deprecation warning.
-- Documentation: migration guidance to prefer `achat` and async dispatcher.
+
+- Status: Complete (deprecation + core hardening applied prior to Phase 4 removal)
+
+**Deprecation semantics for `dispatch_command`**
+
+- `command_router.dispatch_command` now emits a `DeprecationWarning` the first time it is invoked in a process:
+  - Implemented via a simple module-level guard `_DISPATCH_DEPRECATED_EMITTED` and `warnings.warn(..., DeprecationWarning, stacklevel=2)`.
+  - The warning message notes that chat orchestration no longer uses `dispatch_command` and directs callers to `async_dispatch_command(...)` or the chat orchestrator (`achat` / its sync wrapper).
+  - Function signature and behavior remain unchanged for legacy/internal callers.
+
+**Rate-limiter hardening & TokenBucket usage**
+
+- Removed direct `TokenBucket.tokens` / `last_refill` mutation from `dispatch_command` (prior to its removal in Phase 4):
+  - Per-user, per-command rate limiting was moved behind TokenBucket methods so that all field mutations occur inside `TokenBucket` itself (via `consume` / related helpers), not in the router.
+
+**Concurrency & deprecation-focused tests**
+
+- Extended tests around command routing and rate limiting:
+  - Deprecation behavior:
+    - `tests/Chat_NEW/unit/test_command_router.py::test_dispatch_command_emits_deprecation_warning`:
+      - Resets `_DISPATCH_DEPRECATED_EMITTED`, calls `dispatch_command`, and asserts a `DeprecationWarning` is captured with a “deprecated” message.
+  - Async rate limiting robustness:
+    - `tests/Chat_NEW/unit/test_command_router.py::test_async_dispatch_command_concurrent_respects_rate_limit`:
+      - Sets `CHAT_COMMANDS_RATE_LIMIT=5`, issues 10 concurrent `async_dispatch_command` calls for `/time` with the same user id, and asserts exactly 5 succeed and 5 are rate-limited.
+  - TokenBucket concurrency:
+    - `tests/Chat_NEW/unit/test_rate_limiter.py::test_token_bucket_concurrent_consume_does_not_over_consume`:
+      - Creates a `TokenBucket` with `capacity=5`, launches 10 concurrent `consume(1)` calls via `asyncio.gather`, and asserts that at most `capacity` calls succeed.
+
+**Documentation & migration notes**
+
+- With Phase 0–3 changes:
+  - All chat orchestration paths (`achat`, sync `chat`, `/chat/completions`) now rely exclusively on `async_dispatch_command` for slash-commands and never call `dispatch_command`.
+  - `dispatch_command` was temporarily preserved for direct/legacy usage and emitted a deprecation warning on first use in the vX.Y prerelease branch; it was removed entirely when Phase 4 shipped.
+- Migration guidance (to be reflected in release notes):
+  - New and existing async code should call `async_dispatch_command(...)` directly.
+  - Chat-related integrations should prefer `achat` (async) or the sync `chat` wrapper instead of invoking the command router manually.
+  - Callers still using `dispatch_command` should plan to migrate before the Phase 4 removal.
 
 ### Phase 4: Removal (Major Version)
-- Remove sync-only token mutation logic and the deprecated `dispatch_command`.
-- Require async-based orchestration across the stack.
+
+- Status: Complete (legacy sync router removed; async dispatcher is the only supported entrypoint)
+
+**Goal**
+
+Eliminate the legacy sync command router path and any sync-only token mutation, making `async_dispatch_command` the only supported slash-command entrypoint.
+
+**Success Criteria**
+
+- No production code imports or calls `command_router.dispatch_command`.
+- `dispatch_command` is removed (or stubbed to raise a clear runtime error) in a major release.
+- All tests use `async_dispatch_command` or chat orchestrator (`achat` / `chat`) for slash-commands.
+- TokenBucket usage outside rate-limiter internals is limited to well-defined helpers (including `try_consume_nowait`), with no stray field mutations.
+
+**Stage 1: Final call-site audit and gating**
+
+- Run a final repository-wide search for `dispatch_command(`:
+  - Confirm remaining usages exist only in tests that explicitly cover deprecation/removal behavior.
+- If any non-test call sites remain:
+  - Migrate them to `async_dispatch_command` (async contexts) or to the chat orchestrator (`achat` / sync `chat`) as appropriate.
+- Optional feature flag for early adopters:
+  - Example: `CHAT_COMMANDS_SYNC_ROUTER_DISABLED=1` turns `dispatch_command` into a hard failure (e.g., raises `RuntimeError("dispatch_command removed; use async_dispatch_command")`).
+  - Default off until the major release.
+
+**Stage 2: Remove `dispatch_command` and sync router path**
+
+- In `command_router.py`:
+  - For the major release:
+    - Either:
+      - Remove `dispatch_command` entirely, or
+      - Replace it with a small stub that raises a `RuntimeError` with a clear migration message.
+  - Remove `_DISPATCH_DEPRECATED_EMITTED` and related warning logic once removal is active.
+- Clean up tests:
+  - Update `tests/Chat_NEW/unit/test_command_router.py`:
+    - Replace tests that directly call `dispatch_command` with equivalents against `async_dispatch_command` where behavior is still relevant (time/weather/RBAC/rate-limit).
+    - Keep a small test that asserts the removal behavior (e.g., calling `dispatch_command` raises).
+  - Remove or adjust any tests that specifically assumed `dispatch_command` as a supported surface.
+
+**Stage 3: TokenBucket API consolidation**
+
+- Review `TokenBucket` usage:
+  - Ensure all callers use:
+    - `consume`, `wait_for_tokens`, or `refund` in async contexts.
+    - `try_consume_nowait` only where sync, best-effort behavior is explicitly acceptable (if any such callers remain).
+- If `try_consume_nowait` becomes unused:
+  - Consider deprecating or removing it in a follow-up minor/major step.
+- Confirm via code search:
+  - No direct writes to `tokens` / `last_refill` outside `TokenBucket` methods.
+
+**Stage 4: Test and migration verification**
+
+- Unit:
+  - Ensure all `command_router` unit tests pass using `async_dispatch_command` only.
+  - If `dispatch_command` now raises, add a small unit test verifying the error message and type.
+- Integration:
+  - Re-run Chat and Chat_NEW suites with `CHAT_COMMANDS_ENABLED=1` to confirm:
+    - Slash-commands behave as before through the orchestrator.
+    - No deprecation warnings; only the async path is exercised.
+- Optional (if using a feature flag):
+  - With flag disabled: `dispatch_command` import still fails/raises as documented.
+  - With flag enabled (prior to removal): `dispatch_command` raises immediately, but other paths remain functional.
+
+**Stage 5: Documentation & versioning**
+
+- PRD (`Async-Chat-Tools-Fix.md`):
+  - Update Phase 4 section status to “Complete” once done.
+  - Note the version where `dispatch_command` was removed/stubbed.
+- Public docs / changelog:
+  - Add a breaking change note:
+    - “`command_router.dispatch_command` has been removed. Use `async_dispatch_command` or the chat orchestrator (`achat` / `chat`) instead.”
+  - Provide a short migration snippet for legacy code that previously called `dispatch_command` directly.
+- Versioning:
+  - Tie the removal to a major version bump (or clearly marked breaking release) to respect semver expectations.
 
 ## Migration Impact (Code Map)
 

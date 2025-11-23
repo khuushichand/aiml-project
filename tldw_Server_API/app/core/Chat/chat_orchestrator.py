@@ -12,7 +12,7 @@ import os
 import time
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Union, Callable
+from typing import Any, Awaitable, Dict, List, Optional, TypeVar, Union, Callable
 #
 # 3rd-party Libraries
 import requests
@@ -42,6 +42,11 @@ from tldw_Server_API.app.core.Chat.chat_dictionary import (
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Chat import command_router
 from tldw_Server_API.app.core.config import load_and_log_configs
+#
+####################################################################################################
+#
+# Type variables
+_T = TypeVar("_T")
 #
 ####################################################################################################
 #
@@ -418,6 +423,27 @@ async def chat_api_call_async(
         raise ChatProviderError(provider=endpoint_lower, message=f"Unexpected error: {e}")
 
 
+def _run_coro_sync(coro: Awaitable[_T]) -> _T:
+    """
+    Run an async coroutine from synchronous code in a loop-safe way.
+
+    If no event loop is running on the current thread, this uses asyncio.run
+    directly. When a loop is already running, it offloads execution to a worker
+    thread that owns its own event loop to avoid nested-loop errors.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop in this thread: safe to use asyncio.run directly.
+        return asyncio.run(coro)
+
+    # Running inside an event loop on this thread: offload to a worker thread
+    # that owns its own event loop.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(lambda: asyncio.run(coro))
+        return future.result()
+
+
 def _run_achat_sync(
     message: str,
     history: List[Dict[str, Any]],
@@ -460,8 +486,8 @@ def _run_achat_sync(
     is already running to avoid nested event loops or deadlocks.
     """
 
-    async def _runner() -> Union[str, Any]:
-        return await achat(
+    return _run_coro_sync(
+        achat(
             message=message,
             history=history,
             media_content=media_content,
@@ -496,18 +522,7 @@ def _run_achat_sync(
             llm_tools=llm_tools,
             llm_tool_choice=llm_tool_choice,
         )
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        # No running loop in this thread: safe to use asyncio.run directly.
-        return asyncio.run(_runner())
-
-    # Running inside an event loop on this thread: offload to a worker thread
-    # that owns its own event loop.
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(lambda: asyncio.run(_runner()))
-        return future.result()
+    )
 
 #
 ####################################################################################################
@@ -597,7 +612,9 @@ def _chat_sync_impl(
                 except Exception:
                     auth_user_int = None
                 ctx = command_router.CommandContext(user_id=llm_user_identifier or "anonymous", auth_user_id=auth_user_int)
-                cmd_res = command_router.dispatch_command(ctx, cmd_name, cmd_args)
+                cmd_res = _run_coro_sync(
+                    command_router.async_dispatch_command(ctx, cmd_name, cmd_args)
+                )
                 if cmd_res.ok:
                     injection_mode = command_router.get_injection_mode()
                     # Start with the args-only message (command token removed)
@@ -880,14 +897,25 @@ def chat(
     """
     Public synchronous chat entrypoint.
 
-    For non-streaming calls, this function acts as a robust sync wrapper around
-    the async `achat` orchestrator, ensuring consistent async behavior while
-    remaining safe to call from threads with or without an active event loop.
+    For non-streaming calls, this function acts as a sync wrapper around the
+    async `achat` orchestrator. It is intended for use from non-async contexts
+    only; calling it from within an active event loop is an error.
 
     For streaming calls, it delegates to the legacy synchronous implementation
     preserved in `_chat_sync_impl` to maintain existing generator semantics for
     legacy consumers.
     """
+    try:
+        # If this succeeds, we're on a thread with an active event loop.
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop on this thread: safe to proceed.
+        pass
+    else:
+        raise RuntimeError(
+            "chat() cannot be called from an active event loop. "
+            "Use await achat(...) or await asyncio.to_thread(chat, ...) instead."
+        )
     if streaming:
         return _chat_sync_impl(
             message=message,
