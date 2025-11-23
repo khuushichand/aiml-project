@@ -2,26 +2,32 @@
 # Description: Handles streaming audio format conversions for TTS
 # Based on Kokoro-FastAPI implementation
 #
-# Imports
+import os
 import struct
+import tempfile
+import wave
 from io import BytesIO
 from typing import Optional
-#
-# Third-party Imports
+
 import av
 import numpy as np
 from loguru import logger
-#
-# Local Imports
-#
-#######################################################################################################################
-#
-# Functions:
 
 class StreamingAudioWriter:
-    """Handles streaming audio format conversions for TTS output"""
+    """Handles streaming audio format conversions for TTS output.
 
-    def __init__(self, format: str, sample_rate: int, channels: int = 1):
+    WAV output defers emission until finalize so headers can be rewritten.
+    When WAV data exceeds `max_in_memory_bytes`, raw PCM is spooled to a temp
+    file to avoid unbounded RAM use; prefer mp3/opus for long/real-time streams.
+    """
+
+    def __init__(
+        self,
+        format: str,
+        sample_rate: int,
+        channels: int = 1,
+        max_in_memory_bytes: int = 8 * 1024 * 1024,
+    ):
         """
         Initialize the streaming audio writer.
 
@@ -29,12 +35,16 @@ class StreamingAudioWriter:
             format: Target audio format (wav, mp3, opus, flac, aac, pcm)
             sample_rate: Sample rate in Hz
             channels: Number of audio channels (1 for mono, 2 for stereo)
+            max_in_memory_bytes: Soft limit before WAV buffering spills to a temp file
         """
         self.format = format.lower()
         self.sample_rate = sample_rate
         self.channels = channels
         self.bytes_written = 0
         self.pts = 0  # Presentation timestamp for audio frames
+        self.max_in_memory_bytes = max(1024, int(max_in_memory_bytes or 0))
+        self._wav_file_path: Optional[str] = None
+        self._wav_chunk_size = 64 * 1024
 
         # Map formats to codecs
         codec_map = {
@@ -47,15 +57,18 @@ class StreamingAudioWriter:
 
         # Format-specific setup
         if self.format in ["wav", "flac", "mp3", "pcm", "aac", "opus"]:
-            # WAV headers are only finalized on close; defer emitting bytes until finalize
+            # WAV is handled via raw PCM buffering (with optional disk spill) so we
+            # can rewrite the header on finalize without holding unbounded memory.
             self._defer_until_finalize = self.format == "wav"
-            if self.format != "pcm":
+            if self.format == "wav":
+                self.output_buffer = BytesIO()
+            elif self.format != "pcm":
                 self.output_buffer = BytesIO()
                 container_options = {}
 
                 # Disable Xing VBR header for MP3 to fix iOS timeline reading issues
-                if self.format == 'mp3':
-                    container_options = {'write_xing': '0'}
+                if self.format == "mp3":
+                    container_options = {"write_xing": "0"}
                     logger.debug("Disabling Xing VBR header for MP3 encoding.")
 
                 # Open the container for writing
@@ -63,7 +76,7 @@ class StreamingAudioWriter:
                     self.output_buffer,
                     mode="w",
                     format=self.format if self.format != "aac" else "adts",
-                    options=container_options
+                    options=container_options,
                 )
 
                 # Add audio stream with appropriate codec
@@ -74,14 +87,14 @@ class StreamingAudioWriter:
                 )
 
                 # Set bit rate for applicable codecs
-                if self.format in ['mp3', 'aac', 'opus']:
+                if self.format in ["mp3", "aac", "opus"]:
                     # Use reasonable default bitrates
-                    if self.format == 'mp3':
+                    if self.format == "mp3":
                         self.stream.bit_rate = 128000  # 128 kbps
-                    elif self.format == 'aac':
-                        self.stream.bit_rate = 96000   # 96 kbps
-                    elif self.format == 'opus':
-                        self.stream.bit_rate = 64000   # 64 kbps
+                    elif self.format == "aac":
+                        self.stream.bit_rate = 96000  # 96 kbps
+                    elif self.format == "opus":
+                        self.stream.bit_rate = 64000  # 64 kbps
         else:
             raise ValueError(f"Unsupported audio format: {self.format}")
 
@@ -98,6 +111,9 @@ class StreamingAudioWriter:
         Returns:
             Bytes of encoded audio in the target format
         """
+        if self.format == "wav":
+            return self._write_chunk_wav(audio_data=audio_data, finalize=finalize)
+
         if finalize:
             if self.format != "pcm":
                 # Flush stream encoder
@@ -183,6 +199,126 @@ class StreamingAudioWriter:
                 self.output_buffer.close()
             except Exception as e:
                 logger.error(f"Error closing output buffer: {e}")
+
+        if getattr(self, "_wav_file_path", None):
+            try:
+                os.remove(self._wav_file_path)  # type: ignore[arg-type]
+            except Exception:
+                pass
+
+    #
+    # WAV-specific helpers
+    #
+    def _write_chunk_wav(
+        self, audio_data: Optional[np.ndarray] = None, finalize: bool = False
+    ) -> bytes:
+        """Specialized handling for WAV to allow header rewrite and disk spill."""
+        if finalize:
+            return self._finalize_wav()
+
+        if audio_data is None or len(audio_data) == 0:
+            return b""
+
+        data = audio_data.tobytes()
+        self.bytes_written += len(data)
+
+        if self._wav_file_path:
+            with open(self._wav_file_path, "ab") as f:
+                f.write(data)
+        else:
+            self.output_buffer.write(data)
+            current_size = self.output_buffer.tell()
+            if current_size > self.max_in_memory_bytes:
+                self._spill_wav_buffer_to_file()
+
+        logger.debug(
+            f"StreamingAudioWriter chunk: format=wav, samples={len(audio_data)}, "
+            f"new_bytes=0, total_bytes={self.bytes_written} (deferred until finalize)"
+        )
+        return b""
+
+    def _spill_wav_buffer_to_file(self) -> None:
+        """Persist the current in-memory PCM buffer to a temp file and continue writing there."""
+        try:
+            fd, path = tempfile.mkstemp(prefix="tts_wav_pcm_", suffix=".pcm")
+            with os.fdopen(fd, "wb") as tmp:
+                self.output_buffer.seek(0)
+                tmp.write(self.output_buffer.read())
+            self.output_buffer.close()
+            self.output_buffer = None  # type: ignore[assignment]
+            self._wav_file_path = path
+            logger.warning(
+                f"StreamingAudioWriter WAV buffer spilled to disk at {path} "
+                f"after exceeding {self.max_in_memory_bytes} bytes"
+            )
+        except Exception as exc:
+            logger.error(f"Failed to spill WAV buffer to temp file: {exc}")
+            raise
+
+    def _finalize_wav(self) -> bytes:
+        """Finalize WAV output, writing headers and returning bytes."""
+        if self._wav_file_path:
+            return self._finalize_wav_from_file()
+
+        if not hasattr(self, "output_buffer"):
+            logger.warning("StreamingAudioWriter finalize called with no WAV buffer present.")
+            return b""
+
+        self.output_buffer.seek(0)
+        pcm_bytes = self.output_buffer.read()
+        out = BytesIO()
+        with wave.open(out, "wb") as wav_file:
+            wav_file.setnchannels(self.channels)
+            wav_file.setsampwidth(2)  # int16
+            wav_file.setframerate(self.sample_rate)
+            wav_file.writeframes(pcm_bytes)
+        out.seek(0)
+        data = out.read()
+        logger.debug(
+            f"StreamingAudioWriter finalize: format=wav (in-memory), "
+            f"wav_bytes={len(data)}, pcm_bytes={len(pcm_bytes)}"
+        )
+        self.output_buffer.close()
+        return data
+
+    def _finalize_wav_from_file(self) -> bytes:
+        """Finalize WAV output when PCM has been spooled to disk."""
+        pcm_path = self._wav_file_path
+        if not pcm_path:
+            return b""
+
+        temp_wav_path = None
+        try:
+            with tempfile.NamedTemporaryFile(prefix="tts_wav_final_", suffix=".wav", delete=False) as temp_wav:
+                temp_wav_path = temp_wav.name
+
+            with wave.open(temp_wav_path, "wb") as wav_file:
+                wav_file.setnchannels(self.channels)
+                wav_file.setsampwidth(2)  # int16
+                wav_file.setframerate(self.sample_rate)
+                with open(pcm_path, "rb") as pcm_file:
+                    while True:
+                        chunk = pcm_file.read(self._wav_chunk_size)
+                        if not chunk:
+                            break
+                        wav_file.writeframes(chunk)
+
+            with open(temp_wav_path, "rb") as final_file:
+                data = final_file.read()
+
+            logger.debug(
+                f"StreamingAudioWriter finalize: format=wav (file-backed), "
+                f"wav_bytes={len(data)}, pcm_path={pcm_path}"
+            )
+            return data
+        finally:
+            for path in (pcm_path, temp_wav_path):
+                if path:
+                    try:
+                        os.remove(path)
+                    except Exception:
+                        pass
+            self._wav_file_path = None
 
 
 class AudioNormalizer:

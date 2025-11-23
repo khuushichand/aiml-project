@@ -69,7 +69,6 @@ class TestStreamingAudioWriter:
         final = writer.write_chunk(finalize=True)
         assert final == b""
 
-    @pytest.mark.skipif(not AV_AVAILABLE, reason="av not installed")
     def test_wav_output(self):
         """Test WAV format output"""
         writer = StreamingAudioWriter(format="wav", sample_rate=24000)
@@ -89,6 +88,23 @@ class TestStreamingAudioWriter:
         # WAV files start with "RIFF"
         if final:
             assert final[:4] == b"RIFF" or output[:4] == b"RIFF"
+
+    def test_wav_spills_to_disk_when_threshold_exceeded(self, tmp_path):
+        """WAV should spill to disk once the in-memory threshold is exceeded."""
+        # Threshold ~1KB to force spill on a single chunk (len * 2 bytes per sample)
+        writer = StreamingAudioWriter(format="wav", sample_rate=24000, max_in_memory_bytes=1024)
+        big_chunk = np.zeros(2000, dtype=np.int16)  # ~4KB
+
+        writer.write_chunk(big_chunk)
+        spill_path = getattr(writer, "_wav_file_path", None)
+        assert spill_path, "Expected WAV buffer to spill to disk"
+        assert os.path.exists(spill_path)
+
+        final = writer.write_chunk(finalize=True)
+        assert final.startswith(b"RIFF")
+        # Temp file should be cleaned up after finalize
+        assert not getattr(writer, "_wav_file_path", None)
+        assert not os.path.exists(spill_path)
 
 
 class TestAudioNormalizer:

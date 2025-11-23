@@ -281,7 +281,7 @@ async def test_mixed_host_redirect_egress_denied(monkeypatch):
 
 @requires_httpx
 @pytest.mark.asyncio
-async def test_dns_resolution_error_not_retried(monkeypatch):
+async def test_dns_resolution_error_not_retried():
     """
     Ensure DNS/unknown-host style errors are treated as permanent and not retried.
 
@@ -291,6 +291,7 @@ async def test_dns_resolution_error_not_retried(monkeypatch):
     import httpx
     import socket
     from tldw_Server_API.app.core.http_client import afetch, create_async_client, RetryPolicy
+    from tldw_Server_API.app.core.exceptions import NetworkError
 
     calls = {"n": 0}
 
@@ -303,7 +304,7 @@ async def test_dns_resolution_error_not_retried(monkeypatch):
     client = create_async_client(transport=transport)
     try:
         policy = RetryPolicy(attempts=3)
-        with pytest.raises(Exception):
+        with pytest.raises(NetworkError):
             await afetch(method="GET", url="http://does-not-resolve.invalid/", client=client, retry=policy)
         # Handler should be called exactly once; no retries on DNS failures
         assert calls["n"] == 1
