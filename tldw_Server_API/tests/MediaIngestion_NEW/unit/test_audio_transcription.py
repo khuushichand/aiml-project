@@ -104,6 +104,55 @@ def test_convert_to_wav_respects_ffmpeg_path(monkeypatch, tmp_path):
 
 
 @pytest.mark.unit
+def test_convert_to_wav_avoids_redundant_version_checks(monkeypatch, tmp_path):
+    """
+    convert_to_wav should avoid spawning an extra `ffmpeg -version`
+    process on every call once a given ffmpeg binary has been verified.
+    """
+    input_file = tmp_path / "input_twice.mp3"
+    input_file.write_bytes(b"\x00" * 2048)
+
+    commands = []
+
+    def fake_run(cmd, *args, **kwargs):
+        commands.append(cmd)
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        # Simulate ffmpeg writing the output file during the conversion command
+        if "-i" in cmd and cmd:
+            output_target = Path(cmd[-1])
+            output_target.write_bytes(b"RIFF")
+
+        return Result()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.validate_audio_file",
+        lambda path: (True, ""),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.subprocess.run",
+        fake_run,
+    )
+
+    # Reset version-check cache for deterministic assertions
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+
+    atlib._FFMPEG_VERSION_CHECKED = False
+    atlib._FFMPEG_CMD_FOR_VERSION = None
+
+    # Call convert_to_wav twice; the ffmpeg -version probe should run once.
+    convert_to_wav(str(input_file), overwrite=True)
+    convert_to_wav(str(input_file), overwrite=True)
+
+    version_checks = [cmd for cmd in commands if "-version" in cmd]
+    assert len(version_checks) == 1
+
+
+@pytest.mark.unit
 def test_audio_transcription_lib_processing_choice_safe_when_config_missing(monkeypatch):
     """
     Audio_Transcription_Lib should not raise at import time

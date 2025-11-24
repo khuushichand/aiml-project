@@ -712,6 +712,9 @@ async def create_transcription(
             is_transcription_error_message as _is_transcription_error_message,
             parse_transcription_model,
         )
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import (
+            Audio_Files as audio_files,
+        )
 
         model_lower = (model or "").strip().lower()
         # Preserve legacy aliases first (e.g., "qwen" → "qwen2audio")
@@ -759,13 +762,46 @@ async def create_transcription(
             )
         detected_language: Optional[str] = None
         segments_for_timing: Optional[List[Dict[str, Any]]] = None
+        whisper_model_name = "large-v3"
         # Wrap the heavy work to ensure we always release the job slot
         try:
             if provider == "faster-whisper":
+                # Preflight check for Whisper model readiness. When the
+                # underlying faster-whisper model is not yet available
+                # locally, surface a structured 503 instead of returning a
+                # pseudo-transcript so HTTP clients do not persist "[MODEL STATUS]"
+                # text as real content. The inner finally below will still
+                # release the job slot.
+                try:
+                    model_status = audio_files.check_transcription_model_status(
+                        whisper_model_name
+                    )
+                    if not model_status.get("available", False):
+                        detail_payload: Dict[str, Any] = {
+                            "status": "model_downloading",
+                            "message": model_status.get("message")
+                            or "Requested transcription model is not available locally yet.",
+                            "model": model_status.get("model", whisper_model_name),
+                        }
+                        estimated_size = model_status.get("estimated_size")
+                        if estimated_size:
+                            detail_payload["estimated_size"] = estimated_size
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail=detail_payload,
+                        )
+                except HTTPException:
+                    # Preserve the structured 503 (or any other HTTPException) path.
+                    raise
+                except Exception as preflight_exc:  # pragma: no cover - defensive
+                    # If the preflight check itself fails, log and continue with
+                    # normal transcription behavior rather than failing the call.
+                    logger.debug(
+                        f"Whisper model preflight check failed; proceeding without it: {preflight_exc}"
+                    )
                 # For Whisper, support word-level timestamps and language detection
                 try:
                     # Use best model by default (consistent with prior behavior)
-                    whisper_model_name = "large-v3"
                     result = fw_speech_to_text(
                         canonical_path,
                         whisper_model=whisper_model_name,

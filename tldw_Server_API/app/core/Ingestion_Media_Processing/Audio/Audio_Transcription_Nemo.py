@@ -330,18 +330,6 @@ def transcribe_with_canary(
         else:
             target_lang = 'en'  # Default to English
 
-        # Transcribe with Canary
-        # The model expects specific prompt format
-        manifest = {
-            "audio_filepath": audio_path,
-            "duration": 1.0,  # Will be calculated by model
-            "taskname": "asr",
-            "source_lang": "en",  # Source language for transcription
-            "target_lang": target_lang,
-            "pnc": "yes",  # Punctuation and capitalization
-            "answer": "na"
-        }
-
         # Perform transcription
         transcriptions = model.transcribe(
             [audio_path],

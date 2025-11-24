@@ -67,6 +67,24 @@ def test_transcriptions_ok_with_override(monkeypatch, bypass_api_limits):
             raising=False,
         )
 
+        # Pretend the Whisper model is already available so the new
+        # preflight check does not short-circuit with a 503.
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
+
+        def _always_available_status(model_name: str):
+            return {
+                "available": True,
+                "message": f"Model {model_name} is available and ready for use",
+                "model": model_name,
+            }
+
+        monkeypatch.setattr(
+            audio_files,
+            "check_transcription_model_status",
+            _always_available_status,
+            raising=True,
+        )
+
         try:
             wav_bytes = _make_wav_bytes()
             files = {"file": ("test.wav", wav_bytes, "audio/wav")}
@@ -107,6 +125,24 @@ def test_translations_ok_with_override(monkeypatch, bypass_api_limits):
             "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text",
             _fake_speech_to_text,
             raising=False,
+        )
+
+        # Pretend the Whisper model is already available so the preflight
+        # check does not cause a 503 in tests.
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
+
+        def _always_available_status(model_name: str):
+            return {
+                "available": True,
+                "message": f"Model {model_name} is available and ready for use",
+                "model": model_name,
+            }
+
+        monkeypatch.setattr(
+            audio_files,
+            "check_transcription_model_status",
+            _always_available_status,
+            raising=True,
         )
 
         try:
@@ -203,5 +239,59 @@ def test_transcriptions_qwen2audio_variant_routes_to_qwen2audio(monkeypatch, byp
             resp = client.post("/api/v1/audio/transcriptions", files=files, data=data)
             assert resp.status_code == 200
             assert resp.json().get("text") == "qwen2audio transcript"
+        finally:
+            app.dependency_overrides.pop(get_request_user, None)
+
+
+def test_transcriptions_whisper_model_unavailable_returns_503(monkeypatch, bypass_api_limits):
+    """
+    When the underlying faster-whisper model is not available locally,
+    /audio/transcriptions should surface a structured 503 instead of
+    returning a pseudo-transcript that clients might persist.
+    """
+    ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+    with ctx, TestClient(app) as client:
+        async def _override_user():
+            return User(id=1, username="tester", email="t@example.com", is_active=True)
+
+        app.dependency_overrides[get_request_user] = _override_user
+
+        # Fail if the heavy Whisper STT path is invoked; the preflight
+        # should short-circuit before speech_to_text is called.
+        def _fail_speech_to_text(*args, **kwargs):
+            raise AssertionError("speech_to_text should not be called when model is unavailable")
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text",
+            _fail_speech_to_text,
+            raising=False,
+        )
+
+        # Pretend the canonical Whisper model is not yet available locally
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
+
+        def _fake_check_status(model_name: str):
+            return {
+                "available": False,
+                "message": f"Model {model_name} is not available locally and will be downloaded.",
+                "model": model_name,
+                "estimated_size": "10 GB",
+            }
+
+        monkeypatch.setattr(audio_files, "check_transcription_model_status", _fake_check_status, raising=True)
+
+        try:
+            wav_bytes = _make_wav_bytes()
+            files = {"file": ("test.wav", wav_bytes, "audio/wav")}
+            data = {"model": "whisper-1", "response_format": "json"}
+            resp = client.post("/api/v1/audio/transcriptions", files=files, data=data)
+            assert resp.status_code == 503
+            body = resp.json()
+            assert isinstance(body, dict)
+            detail = body.get("detail") or {}
+            assert detail.get("status") == "model_downloading"
+            assert "not available locally" in detail.get("message", "")
+            assert detail.get("model") == "large-v3"
+            assert "estimated_size" in detail
         finally:
             app.dependency_overrides.pop(get_request_user, None)

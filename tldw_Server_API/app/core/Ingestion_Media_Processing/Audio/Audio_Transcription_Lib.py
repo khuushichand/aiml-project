@@ -2439,6 +2439,10 @@ class ConversionError(Exception):
     """Custom exception for errors during audio/video conversion."""
     pass
 
+_FFMPEG_VERSION_CHECKED: bool = False
+_FFMPEG_CMD_FOR_VERSION: Optional[str] = None
+
+
 def _find_ffmpeg() -> str:
     """
     Finds the ffmpeg executable by checking common locations.
@@ -2649,12 +2653,29 @@ def convert_to_wav(
         logging.error(error_msg)
         raise RuntimeError(error_msg) from e
 
-    # Verify ffmpeg command works
+    # Verify ffmpeg command works, but avoid re-running the relatively
+    # expensive `ffmpeg -version` probe on every conversion. We cache the
+    # last-verified command and only re-check when the resolved executable
+    # path changes (for example, if FFMPEG_PATH/env is updated).
+    global _FFMPEG_VERSION_CHECKED, _FFMPEG_CMD_FOR_VERSION
     try:
-        subprocess.run([ffmpeg_cmd, "-version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
-        logging.debug(f"Confirmed ffmpeg command '{ffmpeg_cmd}' is available.")
+        if not _FFMPEG_VERSION_CHECKED or _FFMPEG_CMD_FOR_VERSION != ffmpeg_cmd:
+            subprocess.run(
+                [ffmpeg_cmd, "-version"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+            )
+            logging.debug(f"Confirmed ffmpeg command '{ffmpeg_cmd}' is available.")
+            _FFMPEG_VERSION_CHECKED = True
+            _FFMPEG_CMD_FOR_VERSION = ffmpeg_cmd
     except (FileNotFoundError, subprocess.CalledProcessError) as e:
-        error_msg = f"ffmpeg command '{ffmpeg_cmd}' not found or failed execution. Please ensure ffmpeg is installed and in the system PATH or in the expected ./Bin directory. Error: {e}"
+        error_msg = (
+            f"ffmpeg command '{ffmpeg_cmd}' not found or failed execution. "
+            "Please ensure ffmpeg is installed and in the system PATH or in the "
+            f"expected ./Bin directory. Error: {e}"
+        )
         logging.error(error_msg)
         raise RuntimeError(error_msg) from e
 

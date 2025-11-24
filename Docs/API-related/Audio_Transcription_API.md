@@ -68,6 +68,22 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 - **Languages**: Multiple languages
 - **Best For**: Complex audio understanding tasks
 
+#### Model ID patterns (HTTP + ingestion)
+
+The `model` string for `/api/v1/audio/transcriptions` is parsed via the same logic as the ingestion pipeline (`parse_transcription_model` in `Audio_Transcription_Lib.py`), so the following patterns are accepted:
+
+- **Whisper / faster-whisper**  
+  - `whisper-1`, `whisper` (aliases for the default faster-whisper Whisper model)  
+  - Raw faster-whisper ids such as `large-v3`, `distil-whisper-large-v3`, or full HF ids (e.g. `openai/whisper-large-v3`).
+- **NVIDIA NeMo Parakeet**  
+  - `parakeet`, `parakeet-standard`, `parakeet-onnx`, `parakeet-mlx`  
+  - Any string that `parse_transcription_model` resolves to provider `"parakeet"` (e.g., some `nemo-parakeet-*` ids).
+- **NVIDIA NeMo Canary**  
+  - `canary` (and related aliases whose provider resolves to `"canary"`).
+- **Qwen2Audio**  
+  - `qwen2audio`, `qwen2audio-*` (all map to provider `"qwen2audio"`)  
+  - Convenience alias `qwen` also maps to `qwen2audio` in the HTTP API.
+
 ## API Endpoints
 
 Authentication
@@ -133,6 +149,7 @@ Unsupported types return 415.
 Notes:
 - For `response_format: text|srt|vtt` responses, outputs are simple best-effort formats; precise per-segment timings require JSON.
 - For `response_format: verbose_json`, the response includes `task` and `duration` fields.
+- For Whisper-based models, the underlying `speech_to_text(...)` helper prepends a metadata header (model + detected language) to the first segment. The HTTP API always calls `strip_whisper_metadata_header(...)` before returning JSON/text so clients see only user content. If you use `speech_to_text` directly (e.g., in workflows or custom tools), call `strip_whisper_metadata_header` on segment lists, or `_strip_whisper_metadata_header_from_text` (speech chat) before presenting text to end users.
 
 ### Word-level Timestamps Example (Whisper only)
 
