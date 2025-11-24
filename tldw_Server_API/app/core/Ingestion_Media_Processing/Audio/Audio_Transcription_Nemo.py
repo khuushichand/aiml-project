@@ -36,6 +36,40 @@ from tldw_Server_API.app.core.config import load_and_log_configs, loaded_config_
 # Global model cache
 _model_cache: Dict[str, Any] = {}
 
+# Lightweight import probe for Nemo toolkit (used by streaming defaults and
+# health checks to decide whether Parakeet/Canary are even eligible).
+_nemo_import_checked: bool = False
+_nemo_available: bool = False
+
+
+def _temp_wav_from_numpy(audio_np: np.ndarray, sample_rate: int) -> str:
+    """Write NumPy audio to a temporary WAV file and return its path."""
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+        import soundfile as sf
+        sf.write(tmp_file.name, audio_np, sample_rate)
+        return tmp_file.name
+
+
+def is_nemo_available() -> bool:
+    """Return True if the core Nemo ASR toolkit appears importable.
+
+    This performs a lightweight import check (without loading any models) and
+    caches the result for subsequent calls. It does not guarantee that specific
+    models (Parakeet/Canary) are available, only that the `nemo.collections.asr`
+    package can be imported.
+    """
+    global _nemo_import_checked, _nemo_available
+    if _nemo_import_checked:
+        return _nemo_available
+
+    _nemo_import_checked = True
+    try:
+        import nemo.collections.asr  # type: ignore  # noqa: F401
+        _nemo_available = True
+    except Exception:
+        _nemo_available = False
+    return _nemo_available
+
 #######################################################################################################################
 # Model Loading Functions
 #
@@ -310,16 +344,31 @@ def transcribe_with_canary(
     if model is None:
         return "[Error: Canary model could not be loaded]"
 
-    # Save audio to temporary file if needed
+    cleanup_temp = False
+    audio_path: Optional[str] = None
+    audio_source: Union[np.ndarray, str] = audio_data
+
+    def _extract_result(transcriptions):
+        if transcriptions and len(transcriptions) > 0:
+            result = transcriptions[0]
+            if hasattr(result, 'text'):
+                result = result.text
+            elif not isinstance(result, str):
+                result = str(result)
+        else:
+            result = "[No transcription produced]"
+        return result
+
     if isinstance(audio_data, np.ndarray):
-        import soundfile as sf
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-            sf.write(tmp_file.name, audio_data, sample_rate)
-            audio_path = tmp_file.name
+        audio_np = np.asarray(audio_data, dtype=np.float32)
+        try:
+            transcriptions = model.transcribe([audio_np], batch_size=1)
+            return _extract_result(transcriptions)
+        except Exception as direct_err:
+            logging.debug(f"Canary direct numpy transcription failed, falling back to temp file: {direct_err}")
+            audio_path = _temp_wav_from_numpy(audio_np, sample_rate)
+            audio_source = audio_path
             cleanup_temp = True
-    else:
-        audio_path = audio_data
-        cleanup_temp = False
 
     try:
         # Prepare the transcription prompt
@@ -332,27 +381,17 @@ def transcribe_with_canary(
 
         # Perform transcription
         transcriptions = model.transcribe(
-            [audio_path],
+            [audio_source],
             batch_size=1
         )
 
-        if transcriptions and len(transcriptions) > 0:
-            result = transcriptions[0]
-            # Handle Hypothesis objects from Nemo
-            if hasattr(result, 'text'):
-                result = result.text
-            elif not isinstance(result, str):
-                result = str(result)
-        else:
-            result = "[No transcription produced]"
-
-        return result
+        return _extract_result(transcriptions)
 
     except Exception as e:
         logging.error(f"Error during Canary transcription: {e}")
         return f"[Transcription error: {str(e)}]"
     finally:
-        if cleanup_temp and os.path.exists(audio_path):
+        if cleanup_temp and audio_path and os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
             except Exception as rm_err:
@@ -397,16 +436,9 @@ def transcribe_with_parakeet(
     if model is None:
         return f"[Error: Parakeet model ({variant}) could not be loaded]"
 
-    # Save audio to temporary file if needed
-    if isinstance(audio_data, np.ndarray):
-        import soundfile as sf
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-            sf.write(tmp_file.name, audio_data, sample_rate)
-            audio_path = tmp_file.name
-            cleanup_temp = True
-    else:
-        audio_path = audio_data
-        cleanup_temp = False
+    cleanup_temp = False
+    audio_path: Optional[str] = None
+    audio_source: Union[np.ndarray, str] = audio_data
 
     try:
         # Perform transcription based on variant
@@ -416,24 +448,40 @@ def transcribe_with_parakeet(
                 transcribe_with_parakeet_mlx as mlx_transcribe
             )
             result = mlx_transcribe(
-                audio_path,
+                audio_source,
                 sample_rate=sample_rate,
                 chunk_duration=chunk_duration,
                 overlap_duration=overlap_duration,
                 chunk_callback=chunk_callback
             )
             transcriptions = [result] if result else ["[No transcription produced]"]
-        elif variant == 'onnx' and hasattr(model, 'transcribe'):
-            # ONNX model transcription with chunking support
+        elif isinstance(audio_source, np.ndarray):
+            audio_np = np.asarray(audio_source, dtype=np.float32)
+            try:
+                transcriptions = model.transcribe(
+                    audio_np,
+                    chunk_duration=chunk_duration,
+                    overlap_duration=overlap_duration,
+                    chunk_callback=chunk_callback
+                )
+            except Exception as direct_err:
+                logging.debug(f"Parakeet direct numpy transcription failed, falling back to temp file: {direct_err}")
+                audio_path = _temp_wav_from_numpy(audio_np, sample_rate)
+                audio_source = audio_path
+                cleanup_temp = True
+                transcriptions = model.transcribe(
+                    audio_source,
+                    chunk_duration=chunk_duration,
+                    overlap_duration=overlap_duration,
+                    chunk_callback=chunk_callback
+                )
+        else:
             transcriptions = model.transcribe(
-                audio_path,
+                audio_source,
                 chunk_duration=chunk_duration,
                 overlap_duration=overlap_duration,
                 chunk_callback=chunk_callback
             )
-        else:
-            # Standard Nemo model transcription
-            transcriptions = model.transcribe([audio_path], batch_size=1)
 
         if transcriptions and len(transcriptions) > 0:
             result = transcriptions[0]
@@ -451,7 +499,7 @@ def transcribe_with_parakeet(
         logging.error(f"Error during Parakeet transcription: {e}")
         return f"[Transcription error: {str(e)}]"
     finally:
-        if cleanup_temp and os.path.exists(audio_path):
+        if cleanup_temp and audio_path and os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
             except Exception as rm_err:

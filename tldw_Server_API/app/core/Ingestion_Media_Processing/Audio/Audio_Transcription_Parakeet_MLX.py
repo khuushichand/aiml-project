@@ -289,43 +289,31 @@ def transcribe_with_parakeet_mlx(
             else:
                 logging.info(f"Transcribing audio file")
 
-        # The parakeet-mlx model's transcribe method expects a file path
-        # Use existing file path if available, otherwise create temp file
-        if audio_file_path:
-            # We already have a file path that doesn't need resampling
-            # Build kwargs for transcribe method
-            transcribe_kwargs = {}
-            if chunk_duration is not None:
-                transcribe_kwargs['chunk_duration'] = chunk_duration
-                transcribe_kwargs['overlap_duration'] = overlap_duration
-            if chunk_callback is not None:
-                transcribe_kwargs['chunk_callback'] = chunk_callback
+        transcribe_kwargs = {}
+        if chunk_duration is not None:
+            transcribe_kwargs['chunk_duration'] = chunk_duration
+            transcribe_kwargs['overlap_duration'] = overlap_duration
+        if chunk_callback is not None:
+            transcribe_kwargs['chunk_callback'] = chunk_callback
 
+        if audio_file_path:
             result = model.transcribe(audio_file_path, **transcribe_kwargs)
         elif isinstance(audio_data, np.ndarray):
-            # Need to save numpy array to temp file
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
-                sf.write(tmp_file.name, audio_data, 16000, format='WAV')
-                temp_audio_path = tmp_file.name
-
-            # Build kwargs for transcribe method
-            transcribe_kwargs = {}
-            if chunk_duration is not None:
-                transcribe_kwargs['chunk_duration'] = chunk_duration
-                transcribe_kwargs['overlap_duration'] = overlap_duration
-            if chunk_callback is not None:
-                transcribe_kwargs['chunk_callback'] = chunk_callback
-
-            # Use the transcribe method with file path and chunking parameters
-            result = model.transcribe(temp_audio_path, **transcribe_kwargs)
-
-            # Clean up temp file
             try:
-                os.remove(temp_audio_path)
-            except Exception as rm_err:
-                logging.debug(f"Failed to remove temp audio file (Parakeet_MLX): path={temp_audio_path}, error={rm_err}")
+                result = model.transcribe(audio_data, **transcribe_kwargs)
+            except Exception as direct_err:
+                logging.debug(f"parakeet-mlx direct numpy transcription failed, falling back to temp file: {direct_err}")
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
+                    sf.write(tmp_file.name, audio_data, 16000, format='WAV')
+                    temp_audio_path = tmp_file.name
+                try:
+                    result = model.transcribe(temp_audio_path, **transcribe_kwargs)
+                finally:
+                    try:
+                        os.remove(temp_audio_path)
+                    except Exception as rm_err:
+                        logging.debug(f"Failed to remove temp audio file (Parakeet_MLX): path={temp_audio_path}, error={rm_err}")
         else:
-            # Shouldn't happen, but handle gracefully
             return "[Error: Invalid audio data format]"
 
         # The transcribe method returns an AlignedResult object

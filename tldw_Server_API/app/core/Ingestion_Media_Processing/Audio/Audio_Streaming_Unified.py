@@ -30,6 +30,7 @@ from fastapi import WebSocketDisconnect
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from loguru import logger
 from uuid import uuid4
+import copy
 
 # Import existing implementations
 from .Audio_Streaming_Parakeet import (
@@ -41,7 +42,7 @@ from .Audio_Transcription_Nemo import (
     load_canary_model,
     transcribe_with_canary,
     load_parakeet_model,
-    transcribe_with_parakeet
+    transcribe_with_parakeet,
 )
 from .model_utils import normalize_model_and_variant
 
@@ -55,9 +56,43 @@ except Exception:  # pragma: no cover
 # Expose get_whisper_model at module scope so tests can monkeypatch it
 # (WhisperStreamingTranscriber.initialize() will prefer a module-level symbol if present.)
 try:  # pragma: no cover - import availability varies in test contexts
-    from .Audio_Transcription_Lib import get_whisper_model as get_whisper_model  # type: ignore
+    from .Audio_Transcription_Lib import (
+        get_whisper_model as get_whisper_model,  # type: ignore
+        _resample_audio_if_needed,
+    )
 except Exception:  # Fallback when whisper deps are unavailable; tests may monkeypatch this
     get_whisper_model = None  # type: ignore[assignment]
+    def _resample_audio_if_needed(audio, sample_rate, target_sr=16000):  # type: ignore
+        return audio
+
+try:  # Optional torch/torchaudio/Nemo imports for Parakeet RNNT streaming
+    import torch  # type: ignore
+except Exception:  # pragma: no cover
+    torch = None  # type: ignore
+
+try:  # pragma: no cover
+    import torchaudio  # type: ignore
+except Exception:  # pragma: no cover
+    torchaudio = None  # type: ignore
+
+try:  # pragma: no cover
+    import nemo.collections.asr as nemo_asr  # type: ignore
+    from nemo.collections.asr.parts.submodules.rnnt_decoding import RNNTDecodingConfig  # type: ignore
+    from nemo.collections.asr.parts.utils.rnnt_utils import batched_hyps_to_hypotheses  # type: ignore
+    from nemo.collections.asr.parts.utils.streaming_utils import ContextSize, StreamingBatchedAudioBuffer  # type: ignore
+except Exception:  # pragma: no cover
+    nemo_asr = None  # type: ignore
+    RNNTDecodingConfig = None  # type: ignore
+    batched_hyps_to_hypotheses = None  # type: ignore
+    ContextSize = StreamingBatchedAudioBuffer = None  # type: ignore
+
+# Shared STT error sentinel detection for streaming paths
+try:  # pragma: no cover - available whenever Audio_Transcription_Lib imports
+    from .Audio_Transcription_Lib import is_transcription_error_message as _is_transcription_error_message  # type: ignore
+except Exception:  # pragma: no cover - degrade gracefully in minimal envs/tests
+    def _is_transcription_error_message(_: str) -> bool:  # type: ignore[override]
+        return False
+
 from .Audio_Streaming_Insights import LiveInsightSettings, LiveMeetingInsights
 
 try:
@@ -202,6 +237,12 @@ class UnifiedStreamingConfig(StreamingConfig):
     diarization_store_audio: bool = False
     diarization_storage_dir: Optional[str] = None
     diarization_num_speakers: Optional[int] = None
+    # Parakeet RNNT streaming
+    parakeet_use_rnnt_streamer: bool = True
+    parakeet_rnnt_model_name: str = "nvidia/parakeet-tdt-0.6b-v3"
+    parakeet_rnnt_device: Optional[str] = None
+    parakeet_rnnt_left_context_s: float = 10.0
+    parakeet_rnnt_max_buffer_s: float = 40.0
 
 
 class StreamingDiarizer:
@@ -618,6 +659,235 @@ class BaseStreamingTranscriber(ABC):
         }
 
 
+class _ParakeetRNNTStreamer:
+    """Lightweight adapter around Nemo RNNT streaming for Parakeet standard/ONNX variants."""
+
+    def __init__(
+        self,
+        model_name: str,
+        *,
+        device: Optional[str],
+        left_context_s: float,
+        chunk_s: float,
+        right_context_s: float,
+        max_buffer_s: float,
+        batch_size: int = 1,
+    ) -> None:
+        if nemo_asr is None or RNNTDecodingConfig is None or batched_hyps_to_hypotheses is None or ContextSize is None:
+            raise RuntimeError("Nemo RNNT streaming requires nemo_toolkit[asr] and its dependencies")
+        if torch is None:
+            raise RuntimeError("PyTorch is required for Parakeet RNNT streaming")
+
+        self.device = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        torch.set_grad_enabled(False)
+        torch.set_float32_matmul_precision("high")
+        try:
+            torch.set_num_threads(max(1, torch.get_num_threads() or 1))
+        except Exception:
+            pass
+
+        self.model = (
+            nemo_asr.models.EncDecRNNTModel.from_pretrained(model_name)
+            .to(self.device)
+            .eval()
+        )
+        for p in self.model.parameters():
+            try:
+                p.requires_grad_(False)
+            except Exception:
+                pass
+
+        try:
+            if hasattr(self.model, "preprocessor") and hasattr(self.model.preprocessor, "featurizer"):
+                self.model.preprocessor.featurizer.dither = 0.0
+                self.model.preprocessor.featurizer.pad_to = 0
+        except Exception:
+            pass
+
+        dec_cfg = RNNTDecodingConfig(
+            strategy="greedy_batch",
+            fused_batch_size=-1,
+            compute_timestamps=False,
+        )
+        try:
+            dec_cfg.greedy.loop_labels = True
+            dec_cfg.greedy.preserve_alignments = False
+        except Exception:
+            pass
+        self.model.change_decoding_strategy(dec_cfg)
+        self._decoding_computer = self.model.decoding.decoding.decoding_computer
+
+        mcfg = copy.deepcopy(getattr(self.model, "_cfg", getattr(self.model, "cfg", None)))
+        if mcfg is None or not hasattr(mcfg, "preprocessor"):
+            raise RuntimeError("Unable to access Parakeet RNNT model config")
+
+        self.sample_rate: int = int(getattr(mcfg.preprocessor, "sample_rate", 16000))
+        window_stride: float = float(getattr(mcfg.preprocessor, "window_stride", 0.01) or 0.01)
+        self.frames_per_second: float = 1.0 / window_stride
+
+        if not hasattr(self.model, "encoder") or not hasattr(self.model.encoder, "subsampling_factor"):
+            raise RuntimeError("Parakeet RNNT encoder must expose subsampling_factor for streaming alignment")
+        self.subsampling: int = int(self.model.encoder.subsampling_factor)
+
+        feat_f2a = self._floor_multiple(int(self.sample_rate * window_stride), self.subsampling)
+        self.enc_f2a = feat_f2a * self.subsampling
+
+        self.ctx_enc = ContextSize(
+            left=int(left_context_s * self.frames_per_second / self.subsampling),
+            chunk=int(chunk_s * self.frames_per_second / self.subsampling),
+            right=int(right_context_s * self.frames_per_second / self.subsampling),
+        )
+        self.ctx_samp = ContextSize(
+            left=self.ctx_enc.left * self.subsampling * feat_f2a,
+            chunk=self.ctx_enc.chunk * self.subsampling * feat_f2a,
+            right=self.ctx_enc.right * self.subsampling * feat_f2a,
+        )
+
+        self.max_samples = int(max_buffer_s * self.sample_rate)
+        self.batch_size = batch_size
+
+        self._stream_np: Optional[np.ndarray] = None
+        self._buf: Optional[StreamingBatchedAudioBuffer] = None
+        self._prev_state = None
+        self._cur_hyps = None
+        self._l = 0
+        self._r = 0
+        self._resampler_cache = {}
+
+    @staticmethod
+    def _floor_multiple(a: int, b: int) -> int:
+        return (a // b) * b
+
+    @staticmethod
+    def _to_mono(x: np.ndarray) -> np.ndarray:
+        x = np.asarray(x)
+        if x.ndim == 2:
+            x = x.mean(axis=-1 if x.shape[-1] in (1, 2) else 1)
+        return x.astype(np.float32, copy=False)
+
+    def _resample_if_needed(self, x: np.ndarray, in_sr: int) -> np.ndarray:
+        if in_sr == self.sample_rate:
+            return x.astype(np.float32, copy=False)
+        in_sr = int(in_sr)
+        cache_key = (in_sr, self.sample_rate)
+        if torchaudio is not None:
+            if cache_key not in self._resampler_cache:
+                try:
+                    self._resampler_cache[cache_key] = torchaudio.transforms.Resample(
+                        orig_freq=in_sr, new_freq=self.sample_rate
+                    )
+                except Exception:
+                    self._resampler_cache[cache_key] = None
+            resampler = self._resampler_cache.get(cache_key)
+            if resampler is not None:
+                try:
+                    y = resampler(torch.from_numpy(x))
+                    return y.numpy().astype(np.float32, copy=False)
+                except Exception:
+                    pass
+        try:
+            return _resample_audio_if_needed(x, in_sr, target_sr=self.sample_rate)
+        except Exception:
+            # Naive linear fallback
+            ratio = float(self.sample_rate) / float(in_sr)
+            new_len = max(1, int(round(len(x) * ratio)))
+            x_old = np.linspace(0.0, 1.0, num=len(x), endpoint=False)
+            x_new = np.linspace(0.0, 1.0, num=new_len, endpoint=False)
+            return np.interp(x_new, x_old, x).astype(np.float32, copy=False)
+
+    def reset(self) -> None:
+        self._stream_np = None
+        self._buf = None
+        self._prev_state = None
+        self._cur_hyps = None
+        self._l = 0
+        self._r = 0
+
+    def push(self, audio_np: np.ndarray, input_sr: int) -> str:
+        if audio_np is None or audio_np.size == 0:
+            return ""
+        if torch is None:
+            raise RuntimeError("PyTorch is required for Parakeet RNNT streaming")
+        y = self._to_mono(audio_np)
+        y = self._resample_if_needed(y, input_sr)
+
+        if self._stream_np is None or self._stream_np.size == 0:
+            self._stream_np = y
+        else:
+            self._stream_np = np.concatenate([self._stream_np, y])
+            if self._stream_np.size > self.max_samples:
+                drop = self._stream_np.size - self.max_samples
+                self._stream_np = self._stream_np[-self.max_samples:]
+                self._l = max(0, self._l - drop)
+                self._r = max(self.ctx_samp.chunk + self.ctx_samp.right, self._r - drop)
+
+        if self._buf is None:
+            self._buf = StreamingBatchedAudioBuffer(
+                batch_size=self.batch_size,
+                context_samples=self.ctx_samp,
+                dtype=torch.float32,
+                device=self.device,
+            )
+            self._l = 0
+            self._r = self.ctx_samp.chunk + self.ctx_samp.right
+
+        a = torch.from_numpy(self._stream_np).unsqueeze(0).to(torch.float32).to(self.device)
+
+        with torch.inference_mode():
+            while self._l < a.shape[1]:
+                if a.shape[1] < self._r:
+                    break
+                clen = int(self._r - self._l)
+                if clen <= 0:
+                    break
+
+                is_last_chunk = False
+                is_last_b = torch.tensor([False], dtype=torch.bool, device=self.device)
+                clen_b = torch.tensor([clen], dtype=torch.long, device=self.device)
+
+                self._buf.add_audio_batch_(
+                    a[:, self._l:self._r],
+                    audio_lengths=clen_b,
+                    is_last_chunk=is_last_chunk,
+                    is_last_chunk_batch=is_last_b,
+                )
+
+                enc, _ = self.model(
+                    input_signal=self._buf.samples,
+                    input_signal_length=self._buf.context_size_batch.total(),
+                )
+                enc = enc.transpose(1, 2)  # [B, T, C]
+
+                enc_ctx = self._buf.context_size.subsample(factor=self.enc_f2a)
+                enc_ctx_b = self._buf.context_size_batch.subsample(factor=self.enc_f2a)
+
+                enc = enc[:, enc_ctx.left:]
+
+                hyps, _, self._prev_state = self._decoding_computer(
+                    x=enc, out_len=enc_ctx_b.chunk, prev_batched_state=self._prev_state
+                )
+
+                if self._cur_hyps is None:
+                    self._cur_hyps = hyps
+                else:
+                    self._cur_hyps.merge_(hyps)
+
+                self._l = self._r
+                self._r = self._r + self.ctx_samp.chunk
+
+        outs = (
+            batched_hyps_to_hypotheses(self._cur_hyps, None, batch_size=self.batch_size)
+            if self._cur_hyps is not None
+            else []
+        )
+        for h in outs:
+            try:
+                h.text = self.model.tokenizer.ids_to_text(h.y_sequence.tolist())
+            except Exception:
+                pass
+        return outs[0].text if outs else ""
+
+
 class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
     """
     Parakeet-specific streaming transcriber.
@@ -629,6 +899,9 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
         """Load the Parakeet model based on configuration."""
         variant = self.config.model_variant
         logger.info(f"Loading Parakeet model (variant: {variant})")
+        self._rnnt_streamer: Optional[_ParakeetRNNTStreamer] = None
+        self._rnnt_last_partial: str = ""
+        self._rnnt_last_final: str = ""
 
         if variant == 'mlx':
             # MLX model is loaded on-demand in transcribe function
@@ -648,6 +921,20 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 if self.model is None:
                     raise RuntimeError(f"Failed to load Parakeet {variant} model")
                 logger.info(f"Loaded Parakeet {variant} model")
+                if self.config.parakeet_use_rnnt_streamer:
+                    try:
+                        self._rnnt_streamer = _ParakeetRNNTStreamer(
+                            model_name=self.config.parakeet_rnnt_model_name,
+                            device=self.config.parakeet_rnnt_device,
+                            left_context_s=self.config.parakeet_rnnt_left_context_s,
+                            chunk_s=max(float(self.config.chunk_duration or 0.0), 0.1),
+                            right_context_s=max(float(self.config.overlap_duration or 0.0), 0.0),
+                            max_buffer_s=float(self.config.max_buffer_duration or 40.0),
+                            batch_size=1,
+                        )
+                        logger.info("Initialized Parakeet RNNT streaming backend")
+                    except Exception as rnnt_err:
+                        logger.warning(f"Parakeet RNNT streaming unavailable, using legacy chunking: {rnnt_err}")
             except ImportError as e:
                 if "nemo" in str(e).lower():
                     logger.warning(f"Nemo toolkit not installed, attempting to fallback to MLX variant")
@@ -684,6 +971,67 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
         current_time = time.time()
         buffer_duration = self.buffer.get_duration()
 
+        # RNNT streaming path (standard/ONNX) avoids temp WAV I/O
+        if self._rnnt_streamer is not None:
+            try:
+                full_text = self._rnnt_streamer.push(audio_np, self.config.sample_rate)
+            except Exception as rnnt_err:
+                logger.warning(f"Parakeet RNNT streaming failed, falling back to legacy chunking: {rnnt_err}")
+                self._rnnt_streamer = None
+                full_text = ""
+
+            if full_text:
+                try:
+                    from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
+                    full_text = postprocess_text_if_enabled(full_text)
+                except Exception:
+                    pass
+
+            if (
+                self.config.enable_partial
+                and current_time - self.last_partial_time > self.config.partial_interval
+                and buffer_duration > max(self.config.min_partial_duration, 0.1)
+                and full_text
+                and full_text != self._rnnt_last_partial
+            ):
+                self._rnnt_last_partial = full_text
+                self.last_partial_time = current_time
+                metadata = self._prepare_partial_metadata(buffer_duration)
+                result = {
+                    "type": "partial",
+                    "text": full_text,
+                    "timestamp": current_time,
+                    "is_final": False,
+                    "model": f"parakeet-{self.config.model_variant}"
+                }
+                result.update(metadata)
+                return result
+
+            if buffer_duration >= self.config.chunk_duration:
+                audio_chunk = self.buffer.get_audio(self.config.chunk_duration)
+                if audio_chunk is not None:
+                    self.buffer.consume(
+                        self.config.chunk_duration,
+                        self.config.overlap_duration
+                    )
+                    if full_text and full_text != self._rnnt_last_final:
+                        self._rnnt_last_final = full_text
+                        chunk_duration = float(len(audio_chunk)) / float(self.config.sample_rate or 1)
+                        metadata = self._prepare_final_metadata(chunk_duration)
+                        self.transcription_history.append(full_text)
+                        result = {
+                            "type": "final",
+                            "text": full_text,
+                            "timestamp": current_time,
+                            "is_final": True,
+                            "model": f"parakeet-{self.config.model_variant}"
+                        }
+                        result.update(metadata)
+                        result["_audio_chunk"] = np.array(audio_chunk, copy=True)
+                        return result
+
+            return None
+
         # Check if we should send a partial result
         if (self.config.enable_partial and
             current_time - self.last_partial_time > self.config.partial_interval and
@@ -696,11 +1044,10 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 if self.config.model_variant == 'mlx':
                     # Use MLX implementation
                     from .Audio_Transcription_Parakeet_MLX import transcribe_with_parakeet_mlx
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                        import soundfile as sf
-                        sf.write(tmp_file.name, audio_for_partial, self.config.sample_rate)
-                        text = transcribe_with_parakeet_mlx(tmp_file.name)
-                        Path(tmp_file.name).unlink()
+                    text = transcribe_with_parakeet_mlx(
+                        audio_for_partial,
+                        sample_rate=self.config.sample_rate
+                    )
                 else:
                     # Use standard/ONNX implementation
                     text = transcribe_with_parakeet(
@@ -738,11 +1085,10 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 # Transcribe the chunk
                 if self.config.model_variant == 'mlx':
                     from .Audio_Transcription_Parakeet_MLX import transcribe_with_parakeet_mlx
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                        import soundfile as sf
-                        sf.write(tmp_file.name, audio_chunk, self.config.sample_rate)
-                        text = transcribe_with_parakeet_mlx(tmp_file.name)
-                        Path(tmp_file.name).unlink()
+                    text = transcribe_with_parakeet_mlx(
+                        audio_chunk,
+                        sample_rate=self.config.sample_rate
+                    )
                 else:
                     text = transcribe_with_parakeet(
                         audio_chunk,
@@ -1078,49 +1424,34 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
         Returns:
             Transcribed text
         """
-        tmp_path: Optional[Path] = None
         try:
-            # Save audio to temporary file (Whisper needs file input)
-            import soundfile as sf  # type: ignore
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                tmp_path = Path(tmp_file.name)
-                sf.write(tmp_file.name, audio_np, self.config.sample_rate)
+            # Resample to Whisper expected rate when necessary and avoid disk I/O
+            audio_for_model = _resample_audio_if_needed(audio_np, self.config.sample_rate, target_sr=16000)
 
-                # Transcribe using Whisper
-                segments_raw, info = self.model.transcribe(
-                    tmp_file.name,
-                    **self.transcribe_options
-                )
+            segments_raw, info = self.model.transcribe(
+                audio_for_model,
+                **self.transcribe_options
+            )
 
-                # Collect all text from segments
-                text_parts = []
-                for segment in segments_raw:
-                    text_parts.append(segment.text.strip())
+            text_parts = []
+            for segment in segments_raw:
+                text_parts.append(segment.text.strip())
 
-                # Join all text parts
-                text = " ".join(text_parts)
-                # Apply custom vocabulary post-replacements if enabled
-                try:
-                    from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
-                    text = postprocess_text_if_enabled(text)
-                except Exception:
-                    pass
+            text = " ".join(text_parts)
+            try:
+                from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
+                text = postprocess_text_if_enabled(text)
+            except Exception:
+                pass
 
-                # Log detected language if auto-detecting
-                if self.config.auto_detect_language and hasattr(info, 'language'):
-                    logger.debug(f"Detected language: {info.language} (confidence: {info.language_probability:.2f})")
+            if self.config.auto_detect_language and hasattr(info, 'language'):
+                logger.debug(f"Detected language: {info.language} (confidence: {info.language_probability:.2f})")
 
-                return text
+            return text
 
         except Exception as e:
             logger.error(f"Error during Whisper transcription: {e}")
             return ""
-        finally:
-            if tmp_path:
-                try:
-                    tmp_path.unlink(missing_ok=True)  # type: ignore[arg-type]
-                except Exception:
-                    pass
 
 
 class UnifiedStreamingTranscriber:
@@ -1273,6 +1604,11 @@ async def handle_unified_websocket(
                 config.enable_partial = config_data.get("enable_partial", True)
                 config.enable_vad = config_data.get("enable_vad", False)
                 config.vad_threshold = config_data.get("vad_threshold", 0.5)
+                config.parakeet_use_rnnt_streamer = config_data.get("parakeet_use_rnnt_streamer", config.parakeet_use_rnnt_streamer)
+                config.parakeet_rnnt_model_name = config_data.get("parakeet_rnnt_model_name", config.parakeet_rnnt_model_name)
+                config.parakeet_rnnt_device = config_data.get("parakeet_rnnt_device", config.parakeet_rnnt_device)
+                config.parakeet_rnnt_left_context_s = float(config_data.get("parakeet_rnnt_left_context_s", config.parakeet_rnnt_left_context_s))
+                config.parakeet_rnnt_max_buffer_s = float(config_data.get("parakeet_rnnt_max_buffer_s", config.parakeet_rnnt_max_buffer_s))
                 # Optional partial emission tuning
                 try:
                     if "min_partial_duration" in config_data:
@@ -1572,6 +1908,22 @@ async def handle_unified_websocket(
                     result = await transcriber.process_audio_chunk(audio_bytes)
 
                     if result:
+                        # Detect STT error sentinels so they do not leak as user text.
+                        text_field = result.get("text")
+                        if isinstance(text_field, str) and _is_transcription_error_message(text_field):
+                            logger.error(f"Unified streaming STT error sentinel: {text_field}")
+                            await stream.error(
+                                "provider_error",
+                                "Transcription error from STT provider",
+                                data={
+                                    "model": getattr(config, "model", None),
+                                    "variant": getattr(config, "model_variant", None),
+                                    "language": getattr(config, "language", None),
+                                    "raw_error": text_field,
+                                },
+                            )
+                            return
+
                         audio_np = result.pop("_audio_chunk", None)
                         if audio_np is not None and diarizer:
                             try:

@@ -58,6 +58,13 @@ async def test_transcription_endpoint(bypass_api_limits):
                         data=data
                     )
 
+                # In environments without the Whisper model, preflight may
+                # legitimately return a structured 503.
+                if response.status_code == 503:
+                    body = response.json()
+                    detail = body.get("detail") or {}
+                    if detail.get("status") == "model_downloading":
+                        pytest.skip("Whisper model not available locally; skipping transcription smoke test")
                 assert response.status_code == 200
                 result = response.json()
                 assert 'text' in result
@@ -153,14 +160,20 @@ async def test_transcription_formats(bypass_api_limits):
                             data=data
                         )
 
+                    if response.status_code == 503:
+                        body = response.json()
+                        detail = body.get("detail") or {}
+                        if detail.get("status") == "model_downloading":
+                            pytest.skip("Whisper model not available locally; skipping format tests")
                     assert response.status_code == 200
 
                     if fmt == 'json' or fmt == 'verbose_json':
                         result = response.json()
                         assert 'text' in result
                         if fmt == 'verbose_json':
-                            assert 'task' in result
-                            assert 'duration' in result
+                            # Ensure verbose JSON includes task/duration metadata
+                            assert result.get('task') in ('transcribe', 'translate')
+                            assert isinstance(result.get('duration'), (int, float))
                     elif fmt == 'text':
                         assert isinstance(response.text, str)
                     elif fmt == 'srt':
@@ -207,7 +220,11 @@ async def test_translation_endpoint(bypass_api_limits):
                         files=files,
                         data=data
                     )
-
+                if response.status_code == 503:
+                    body = response.json()
+                    detail = body.get("detail") or {}
+                    if detail.get("status") == "model_downloading":
+                        pytest.skip("Whisper model not available locally; skipping translation test")
                 assert response.status_code == 200
                 result = response.json()
                 assert 'text' in result

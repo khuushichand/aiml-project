@@ -107,6 +107,7 @@ Transcribe audio into text.
 | prompt | string | No | Optional text to guide the model's style |
 | response_format | string | No | Output format: `json`, `text`, `srt`, `vtt`, `verbose_json` (default: `json`) |
 | temperature | float | No | Sampling temperature 0-1 (default: 0) |
+| task | string | No | For Whisper-based models, decoding task: `transcribe` (default) or `translate`. For non-Whisper providers this hint is ignored and a plain transcription is performed. |
 | timestamp_granularities | string | No | Comma-separated values or JSON array. Supported tokens: `segment`, `word` |
 | segment | boolean | No | If true and JSON response, also run transcript segmentation (TreeSeg) and include `segmentation` in the JSON |
 | seg_K | integer | No | Max segments for TreeSeg (default 6) |
@@ -188,6 +189,11 @@ Translate audio into English.
 | prompt | string | No | Optional text to guide the model's style |
 | response_format | string | No | Output format (default: `json`) |
 | temperature | float | No | Sampling temperature 0-1 |
+
+For Whisper models, this endpoint internally calls the transcription endpoint
+with `task=translate` and no explicit `language`, allowing the backend to
+auto-detect the source language and return English output. Non-Whisper
+providers treat `task` as a no-op and perform a regular transcription.
 
 ## Configuration
 

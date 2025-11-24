@@ -28,11 +28,12 @@ from pathlib import Path
 # Import transcription functions
 from .Audio_Transcription_Nemo import (
     transcribe_with_parakeet,
-    load_parakeet_model
+    load_parakeet_model,
 )
 from .Audio_Transcription_Parakeet_MLX import (
-    transcribe_with_parakeet_mlx
+    transcribe_with_parakeet_mlx,
 )
+from .Audio_Transcription_Lib import is_transcription_error_message
 
 logger = logger
 
@@ -202,7 +203,9 @@ class ParakeetStreamingTranscriber:
                     # Transcribe
                     text = await self._transcribe_chunk(audio_chunk)
 
-                    if text and not text.startswith("["):
+                    if isinstance(text, str) and is_transcription_error_message(text):
+                        logger.error(f"ParakeetStreamingTranscriber STT error sentinel: {text}")
+                    elif text:
                         # Consume buffer with overlap
                         self.buffer.consume(
                             self.config.chunk_duration,
@@ -226,7 +229,9 @@ class ParakeetStreamingTranscriber:
                     partial_audio = self.buffer.get_audio()
                     if partial_audio is not None and len(partial_audio) > 0:
                         partial_text = await self._transcribe_chunk(partial_audio)
-                        if partial_text and not partial_text.startswith("["):
+                        if isinstance(partial_text, str) and is_transcription_error_message(partial_text):
+                            logger.error(f"ParakeetStreamingTranscriber STT error sentinel (partial): {partial_text}")
+                        elif partial_text:
                             self.last_partial_time = now
                             result = {
                                 "type": "partial",
@@ -283,7 +288,9 @@ class ParakeetStreamingTranscriber:
                 text = await self._transcribe_chunk(audio)
                 self.buffer.clear()
 
-                if text and not text.startswith("["):
+                if isinstance(text, str) and is_transcription_error_message(text):
+                    logger.error(f"ParakeetStreamingTranscriber STT error sentinel on flush: {text}")
+                elif text:
                     self.transcription_history.append(text)
                     return {
                         "type": "final",

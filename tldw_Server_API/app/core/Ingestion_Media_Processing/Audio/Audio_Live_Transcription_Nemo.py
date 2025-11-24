@@ -28,7 +28,10 @@ import torch
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
     load_canary_model,
     load_parakeet_model,
-    transcribe_with_nemo
+    transcribe_with_nemo,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+    is_transcription_error_message,
 )
 from tldw_Server_API.app.core.config import load_and_log_configs, loaded_config_data
 
@@ -347,10 +350,12 @@ class NemoLiveTranscriber:
                 sample_rate=self.config.sample_rate,
                 model=self.config.model,
                 variant=self.config.variant,
-                language=self.config.language
+                language=self.config.language,
             )
 
-            if text and not text.startswith("[Error"):
+            if isinstance(text, str) and is_transcription_error_message(text):
+                logger.error(f"NemoLiveTranscriber STT error sentinel: {text}")
+            elif text:
                 self.on_transcription(text)
 
         except Exception as e:
@@ -401,10 +406,12 @@ class NemoLiveTranscriber:
                 sample_rate=self.config.sample_rate,
                 model=self.config.model,
                 variant=self.config.variant,
-                language=self.config.language
+                language=self.config.language,
             )
 
-            if text and not text.startswith("[Error"):
+            if isinstance(text, str) and is_transcription_error_message(text):
+                logger.error(f"NemoLiveTranscriber STT error sentinel (partial): {text}")
+            elif text:
                 self.on_partial(text)
 
             # Clear old partial buffer data
@@ -506,7 +513,7 @@ class NemoStreamingTranscriber:
                 sample_rate=self.sample_rate,
                 model=self.model_name,
                 variant=self.variant,
-                language=self.language
+                language=self.language,
             )
 
             # Update buffer - keep overlap
@@ -516,7 +523,9 @@ class NemoStreamingTranscriber:
             else:
                 self.buffer.clear()
 
-            if text and not text.startswith("[Error"):
+            if isinstance(text, str) and is_transcription_error_message(text):
+                logger.error(f"NemoStreamingTranscriber STT error sentinel: {text}")
+            elif text:
                 self.transcriptions.append(text)
                 return text
 
@@ -538,10 +547,12 @@ class NemoStreamingTranscriber:
                 sample_rate=self.sample_rate,
                 model=self.model_name,
                 variant=self.variant,
-                language=self.language
+                language=self.language,
             )
 
-            if text and not text.startswith("[Error"):
+            if isinstance(text, str) and is_transcription_error_message(text):
+                logger.error(f"NemoStreamingTranscriber STT error sentinel on flush: {text}")
+            elif text:
                 self.transcriptions.append(text)
                 return text
 

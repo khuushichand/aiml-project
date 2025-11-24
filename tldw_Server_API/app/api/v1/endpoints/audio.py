@@ -9,7 +9,7 @@ import tempfile
 import io
 from pathlib import Path as PathLib
 import sqlite3  # for DB-specific exception handling in limits endpoints
-from typing import AsyncGenerator, Optional, Dict, Any
+from typing import AsyncGenerator, Optional, Dict, Any, List
 import numpy as np
 import soundfile as sf
 #
@@ -268,6 +268,46 @@ def _infer_tts_provider_from_model(model: Optional[str]) -> Optional[str]:
     if m.startswith("supertonic") or m.startswith("tts-supertonic"):
         return "supertonic"
     return None
+
+
+def _map_openai_audio_model_to_whisper(model: Optional[str]) -> str:
+    """Map OpenAI-style audio model ids to a faster-whisper model name.
+
+    - Known internal faster-whisper model ids (e.g., 'large-v3', 'distil-large-v3')
+      and Hugging Face ids are passed through unchanged.
+    - OpenAI aliases such as 'whisper-1' map to a configurable default
+      (currently 'large-v3' to preserve prior behavior).
+    - All unknown values fall back to 'large-v3'.
+    """
+    default_model = "large-v3"
+    if not model:
+        return default_model
+
+    raw = str(model).strip()
+    m = raw.lower()
+
+    # Try to detect known faster-whisper model sizes from the core library
+    valid_sizes = set()
+    try:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
+            WhisperModel as _WhisperModel,
+        )
+
+        valid_sizes = set(getattr(_WhisperModel, "valid_model_sizes", []))
+    except Exception:
+        # If the import fails (e.g., dependencies missing), we still fall back to defaults
+        valid_sizes = set()
+
+    # Pass through known internal sizes and HF ids
+    if raw in valid_sizes or m in valid_sizes or "/" in raw:
+        return raw
+
+    # OpenAI-compatible aliases
+    if m == "whisper-1":
+        return default_model
+
+    # Fallback to default
+    return default_model
 
 
 
@@ -542,6 +582,11 @@ async def create_transcription(
     prompt: Optional[str] = Form(default=None, description="Optional text to guide the model's style"),
     response_format: str = Form(default="json", description="Format of the transcript output"),
     temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
+    task: str = Form(
+        default="transcribe",
+        description="Task for Whisper models: 'transcribe' (default) or 'translate'. "
+        "For non-Whisper providers this is ignored.",
+    ),
     timestamp_granularities: Optional[str] = Form(default="segment", description="Timestamp granularities: 'segment', 'word' (comma-separated or JSON array)"),
     # Auto-segmentation options
     segment: bool = Form(default=False, description="If true and JSON response, also run transcript segmentation (TreeSeg)"),
@@ -701,6 +746,11 @@ async def create_transcription(
         if not granularity_tokens:
             granularity_tokens = {"segment"}
 
+        # Normalize task for Whisper providers; other providers treat this as a no-op.
+        task_normalized = (task or "transcribe").strip().lower()
+        if task_normalized not in {"transcribe", "translate"}:
+            task_normalized = "transcribe"
+
         # Determine provider from requested model name.
         # We reuse the core STT parser so that HTTP models like
         # "parakeet-mlx", "parakeet-onnx", "qwen2audio-*" route
@@ -762,7 +812,7 @@ async def create_transcription(
             )
         detected_language: Optional[str] = None
         segments_for_timing: Optional[List[Dict[str, Any]]] = None
-        whisper_model_name = "large-v3"
+        whisper_model_name = _map_openai_audio_model_to_whisper(model)
         # Wrap the heavy work to ensure we always release the job slot
         try:
             if provider == "faster-whisper":
@@ -799,18 +849,27 @@ async def create_transcription(
                     logger.debug(
                         f"Whisper model preflight check failed; proceeding without it: {preflight_exc}"
                     )
-                # For Whisper, support word-level timestamps and language detection
+                # For Whisper, support word-level timestamps, language detection,
+                # and optional translate task.
                 try:
-                    # Use best model by default (consistent with prior behavior)
+                    # Determine how we pass language into STT:
+                    #  - transcribe: honor explicit language when provided
+                    #  - translate: let the backend auto-detect source language
+                    if task_normalized == "translate":
+                        selected_lang_for_stt: Optional[str] = None
+                    else:
+                        selected_lang_for_stt = language if language else None
+
                     result = fw_speech_to_text(
                         canonical_path,
                         whisper_model=whisper_model_name,
-                        selected_source_lang=language if language else None,
+                        selected_source_lang=selected_lang_for_stt,
                         vad_filter=False,
                         diarize=False,
                         word_timestamps=("word" in granularity_tokens),
                         return_language=True,
                         initial_prompt=prompt,
+                        task=task_normalized,
                     )
                     if isinstance(result, tuple) and len(result) == 2:
                         segments_list, detected_language = result
@@ -841,7 +900,20 @@ async def create_transcription(
                 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
                     transcribe_with_canary
                 )
-                transcribed_text = transcribe_with_canary(audio_data, sample_rate, language)
+                # Validate Canary language (supports only a small fixed set).
+                canary_lang: Optional[str] = None
+                if language:
+                    raw_lang = str(language).strip().lower()
+                    # Accept simple locale forms like "en-US" → "en"
+                    if len(raw_lang) >= 4 and raw_lang[2] in {"-", "_"}:
+                        raw_lang = raw_lang[:2]
+                    if raw_lang not in {"en", "es", "de", "fr"}:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Canary provider supports only 'en', 'es', 'de', or 'fr' for language.",
+                        )
+                    canary_lang = raw_lang
+                transcribed_text = transcribe_with_canary(audio_data, sample_rate, canary_lang)
             else:
                 # Use the general transcribe_audio function
                 transcribe_params = {
@@ -1063,7 +1135,7 @@ async def create_transcription(
                     logger.warning(f"Auto-segmentation failed: {seg_err}")
 
             if response_format == "verbose_json":
-                response_data["task"] = "transcribe"
+                response_data["task"] = task_normalized
                 response_data["duration"] = duration
 
             return JSONResponse(content=response_data)
@@ -1128,15 +1200,19 @@ async def create_translation(
     # and then translate if needed (simplified implementation)
     # In a full implementation, you would use a translation model
 
-    # Call transcription with English as target
+    # Call transcription in translate mode. For Whisper providers this uses
+    # the "translate" task (source-language auto-detect, English output).
+    # For non-Whisper providers, the task hint is ignored and a normal
+    # transcription is performed.
     return await create_transcription(
         request=request,
         file=file,
         model=model,
-        language="en",  # Force English output
+        language=None,  # Allow backend to auto-detect source language
         prompt=prompt,
         response_format=response_format,
         temperature=temperature,
+        task="translate",
         timestamp_granularities="segment",
         current_user=current_user,
     )
@@ -1833,6 +1909,20 @@ async def websocket_transcribe(
                 default_variant = cfg.get('STT-Settings', 'nemo_model_variant', fallback='standard').strip().lower()
         except Exception as e:
             logger.warning(f"Could not read STT-Settings from config: {e}")
+
+        # If Nemo toolkit is unavailable in this environment, prefer Whisper
+        # as the initial streaming model so we avoid repeated initialization
+        # failures before falling back.
+        try:
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (  # type: ignore
+                is_nemo_available as _is_nemo_available,
+            )
+
+            nemo_ok = _is_nemo_available()
+        except Exception:
+            nemo_ok = False
+        if not nemo_ok:
+            default_model = "whisper"
 
         config = UnifiedStreamingConfig(
             model=default_model,

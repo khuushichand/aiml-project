@@ -607,6 +607,57 @@ class TestStreamingIntegration:
         # Ensure at least one transcription frame was emitted
         assert any(m.get("type") == "transcription" for m in ws.sent)
 
+    @pytest.mark.asyncio
+    async def test_ws_transcription_error_sentinel_maps_to_error_frame(self, monkeypatch):
+        """Ensure STT error sentinel strings are converted into structured error frames on the unified WS."""
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+            handle_unified_websocket,
+            UnifiedStreamingConfig,
+        )
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Streaming_Unified as unified
+
+        class _ErrorStubTranscriber:
+            def __init__(self, cfg):
+                self.cfg = cfg
+
+            def initialize(self):
+                return None
+
+            async def process_audio_chunk(self, audio_bytes: bytes):
+                # Simulate provider-level STT sentinel string
+                return {
+                    "type": "transcription",
+                    "text": "[Transcription error] Nemo model unavailable",
+                    "is_final": True,
+                }
+
+            def get_full_transcript(self):
+                return ""
+
+            def reset(self):
+                return None
+
+            def cleanup(self):
+                return None
+
+        monkeypatch.setattr(unified, "_ParakeetCoreAdapter", None)
+        monkeypatch.setattr(unified, "ParakeetStreamingTranscriber", _ErrorStubTranscriber)
+
+        frames = [
+            json.dumps({"type": "config", "model": "parakeet", "sample_rate": 16000}),
+            json.dumps({"type": "audio", "data": base64.b64encode(b"\x00" * 8).decode("utf-8")}),
+        ]
+        ws = _UnifiedDummyWebSocket(frames, empty_exception=asyncio.TimeoutError())
+
+        await handle_unified_websocket(ws, UnifiedStreamingConfig())
+
+        # The handler should send a structured error frame and close the websocket.
+        assert ws.closed is True
+        assert any(
+            (m.get("type") == "error" and m.get("code") == "provider_error")
+            for m in ws.sent
+        )
+
 
 @pytest.mark.performance
 class TestStreamingPerformance:

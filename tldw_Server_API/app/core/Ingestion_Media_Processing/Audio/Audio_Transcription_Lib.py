@@ -27,7 +27,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Optional, Union, List, Dict, Any
+from typing import Optional, Union, List, Dict, Any, Tuple
 #
 # DEBUG Imports
 #from memory_profiler import profile
@@ -74,6 +74,7 @@ except ImportError:
 from tldw_Server_API.app.core.Utils.Utils import sanitize_filename, logging
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram, timeit
 from tldw_Server_API.app.core.config import load_and_log_configs, loaded_config_data
+from typing import Union
 
 
 #
@@ -92,7 +93,7 @@ def _stt_cache_config():
     try:
         cfg = cfg() if callable(cfg) else cfg
     except Exception:
-        pass
+        logging.debug("Failed to load STT cache config, using empty dict")
     return cfg.get("STT-Settings", {}) if cfg else {}
 
 
@@ -115,9 +116,18 @@ def _coerce_float(val):
     except Exception:
         return None
 
-CACHE_MAX_FILES_PER_SOURCE = _coerce_int(_cache_cfg.get("transcript_cache_max_files_per_source") or os.getenv("STT_CACHE_MAX_FILES_PER_SOURCE"))
-CACHE_MAX_AGE_DAYS = _coerce_int(_cache_cfg.get("transcript_cache_max_age_days") or os.getenv("STT_CACHE_MAX_AGE_DAYS"))
-CACHE_MAX_TOTAL_MB = _coerce_float(_cache_cfg.get("transcript_cache_max_total_mb") or os.getenv("STT_CACHE_MAX_TOTAL_MB"))
+CACHE_MAX_FILES_PER_SOURCE = _coerce_int(
+    os.getenv("STT_CACHE_MAX_FILES_PER_SOURCE")
+    or _cache_cfg.get("transcript_cache_max_files_per_source")
+)
+CACHE_MAX_AGE_DAYS = _coerce_int(
+    os.getenv("STT_CACHE_MAX_AGE_DAYS")
+    or _cache_cfg.get("transcript_cache_max_age_days")
+)
+CACHE_MAX_TOTAL_MB = _coerce_float(
+    os.getenv("STT_CACHE_MAX_TOTAL_MB")
+    or _cache_cfg.get("transcript_cache_max_total_mb")
+)
 
 _env_skip_prevalidation = _to_bool(os.getenv("STT_SKIP_AUDIO_PREVALIDATION", ""))
 _cfg_skip_prevalidation = _cache_cfg.get("skip_audio_prevalidation", False)
@@ -126,6 +136,27 @@ SKIP_AUDIO_PREVALIDATION = _to_bool(_cfg_skip_prevalidation) or _env_skip_preval
 _env_disable_prune = _to_bool(os.getenv("STT_DISABLE_TRANSCRIPT_CACHE_PRUNING", ""))
 _cfg_disable_prune = _cache_cfg.get("disable_transcript_cache_pruning", False)
 DISABLE_TRANSCRIPT_CACHE_PRUNING = _to_bool(_cfg_disable_prune) or _env_disable_prune
+
+def _resample_audio_if_needed(audio: np.ndarray, sample_rate: int, target_sr: int = 16000) -> np.ndarray:
+    """
+    Return audio at the target sample rate, resampling if necessary.
+
+    Uses librosa when available; falls back to a simple linear interpolation so we
+    can avoid a hard dependency. Always returns float32.
+    """
+    if sample_rate == target_sr:
+        return audio.astype(np.float32, copy=False)
+    try:
+        import librosa
+        return librosa.resample(audio, orig_sr=sample_rate, target_sr=target_sr).astype(np.float32, copy=False)
+    except Exception as e:
+        logging.debug(f"Falling back to naive resample: {e}")
+        ratio = float(target_sr) / float(sample_rate)
+        new_len = max(1, int(round(len(audio) * ratio)))
+        # Linear interpolation fallback
+        x_old = np.linspace(0.0, 1.0, num=len(audio), endpoint=False)
+        x_new = np.linspace(0.0, 1.0, num=new_len, endpoint=False)
+        return np.interp(x_new, x_old, audio).astype(np.float32, copy=False)
 
 
 def _resolve_project_root() -> Path:
@@ -1006,36 +1037,21 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
 
     else:
         logging.info(f"Transcribing using faster-whisper with model: {whisper_model}")
-        # The function from your Audio_Transcription_Lib speech_to_text() expects a file path,
-        #   so we save the audio_data to a temporary WAV
-        import tempfile
-        import soundfile as sf
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-            sf.write(tmp_file.name, audio_data, sample_rate)
-            tmp_wav_path = tmp_file.name
 
-        # Now pass to faster-whisper
-        try:
-            segments = speech_to_text(
-                tmp_wav_path,
-                whisper_model=whisper_model,
-                selected_source_lang=speaker_lang
-            )
-            if isinstance(segments, dict) and 'error' in segments:
-                # handle error
-                return f"Error in transcription: {segments['error']}"
+        segments = speech_to_text(
+            audio_data,
+            whisper_model=whisper_model,
+            selected_source_lang=speaker_lang,
+            input_sample_rate=sample_rate,
+        )
+        if isinstance(segments, dict) and 'error' in segments:
+            # handle error
+            return f"Error in transcription: {segments['error']}"
 
-            # Merge all segment texts
-            final_text = " ".join(seg["Text"] for seg in segments['segments']) if isinstance(segments, dict) else " ".join(
-                seg["Text"] for seg in segments)
-            return final_text
-
-        finally:
-            # Clean up temporary file
-            try:
-                os.remove(tmp_wav_path)
-            except Exception as e:
-                logging.debug(f"Failed to remove temp wav file: path={tmp_wav_path}, error={e}")
+        # Merge all segment texts
+        final_text = " ".join(seg["Text"] for seg in segments['segments']) if isinstance(segments, dict) else " ".join(
+            seg["Text"] for seg in segments)
+        return final_text
 
 #
 # End of Sink Function
@@ -1695,10 +1711,10 @@ def unload_whisper_model():
         explicitly clears the cache.
     """
     global whisper_model_instance
-    if whisper_model_instance is not None:
-        del whisper_model_instance
-        whisper_model_instance = None
-        gc.collect()
+    whisper_model_instance = None  # kept for backward compat
+    with whisper_model_cache_lock:
+        whisper_model_cache.clear()
+    gc.collect()
 
 
 def unload_all_transcription_models():
@@ -2158,9 +2174,9 @@ def speech_to_text_qwen2audio(
         raise RuntimeError(f"Qwen2Audio transcription error: {str(e)}") from e
 
 def speech_to_text(
-    audio_file_path: str,
-    whisper_model: str = 'distil-large-v3',
-    selected_source_lang: str = 'en',  # Changed order of parameters
+    audio_input: Union[str, Path, np.ndarray],
+    whisper_model: str = "distil-large-v3",
+    selected_source_lang: str = "en",  # Changed order of parameters
     vad_filter: bool = False,
     diarize: bool = False,
     *,
@@ -2171,16 +2187,19 @@ def speech_to_text(
     cache_max_total_mb: Optional[float] = None,
     cache_max_files_per_source: Optional[int] = None,
     initial_prompt: Optional[str] = None,
-):
+    task: str = "transcribe",
+    input_sample_rate: Optional[int] = None,
+) -> Union[List[Dict[str, Any]], Tuple[List[Dict[str, Any]], Optional[str]]]:
     """
-    Transcribes an audio file to text using a specified faster-Whisper model.
+    Transcribes audio (file path or NumPy array) to text using a specified faster-Whisper model.
 
     This function loads the specified Whisper model (or retrieves it from a cache),
-    performs transcription on the given audio file, and returns the resulting
-    segments. It supports language specification and Voice Activity Detection (VAD).
+    performs transcription on the given audio, and returns the resulting segments.
+    It supports language specification and Voice Activity Detection (VAD).
 
     Args:
-        audio_file_path: Path to the WAV audio file to be transcribed.
+        audio_input: Path to the WAV audio file to be transcribed, or a NumPy array
+            of audio samples.
         whisper_model: Name or path of the faster-whisper model to use
             (e.g., 'distil-large-v3', 'base.en').
         selected_source_lang: Language code of the source audio (e.g., 'en', 'es').
@@ -2191,6 +2210,13 @@ def speech_to_text(
             segments.
         diarize: Placeholder for diarization flag. This parameter is not currently
             used within this function's transcription logic.
+        task: Whisper decoding task to perform. Valid values are "transcribe"
+            (default, transcribe in source language) and "translate" (translate
+            non-English speech to English, when supported by the underlying
+            model/provider). For non-Whisper providers this value is ignored and
+            transcription is always performed.
+        input_sample_rate: Sample rate of the provided NumPy array input. Ignored when a
+            file path is provided.
 
     Returns:
         By default, a list of segment dictionaries. Each dictionary contains:
@@ -2208,72 +2234,98 @@ def speech_to_text(
         will typically be the `selected_source_lang` value or None.
 
     Raises:
-        ValueError: If `audio_file_path` is not provided or is invalid.
-        FileNotFoundError: If the `audio_file_path` does not exist.
+        ValueError: If `audio_input` is not provided or is invalid.
+        FileNotFoundError: If the audio path does not exist.
         RuntimeError: If transcription fails for other reasons (e.g., model loading
             error, issue during transcription process, or if no segments are produced).
             The original exception may be chained.
     """
-    log_counter("speech_to_text_attempt", labels={"file_path": audio_file_path, "model": whisper_model})
+    file_path: Optional[Path] = None
+    file_path_label = "<memory>"
     time_start = time.time()
 
-    if not audio_file_path:
-        log_counter("speech_to_text_error", labels={"error": "No audio file provided"})
-        raise ValueError("speech-to-text: No audio file provided")
+    if audio_input is None or (isinstance(audio_input, (str, Path)) and not str(audio_input)):
+        log_counter("speech_to_text_error", labels={"error": "No audio input provided"})
+        raise ValueError("speech-to-text: No audio input provided")
 
     # Parse the model name to determine the provider
     provider, model, variant = parse_transcription_model(whisper_model)
 
-    # Route to the appropriate transcription provider
+    # Normalize task for Whisper-based providers. For non-Whisper providers,
+    # this is ignored and we always perform transcription.
+    task_normalized = str(task or "transcribe").strip().lower()
+    if task_normalized not in {"transcribe", "translate"}:
+        task_normalized = "transcribe"
+
+    # If a file path is provided, resolve and validate it
+    audio_path_for_model: Union[str, np.ndarray]
+    if isinstance(audio_input, (str, Path)):
+        file_path = Path(audio_input).resolve()
+        file_path_label = str(file_path)
+        if not file_path.exists():
+            log_counter("speech_to_text_error", labels={"error": "Audio file not found", "file_path": str(file_path)})
+            raise FileNotFoundError(f"speech-to-text: Audio file not found at {file_path}")
+        audio_path_for_model = str(file_path)
+    else:
+        audio_np = np.asarray(audio_input, dtype=np.float32).flatten()
+        sr = input_sample_rate or 16000
+        audio_path_for_model = _resample_audio_if_needed(audio_np, sr, target_sr=16000)
+
+    log_counter("speech_to_text_attempt", labels={"file_path": file_path_label, "model": whisper_model})
+
+    # Route to the appropriate transcription provider (only supports file paths today)
     if provider == "parakeet":
+        if file_path is None:
+            raise ValueError("speech-to-text: Parakeet provider requires an audio file path")
         logging.info(f"Routing to Parakeet transcription with variant: {variant}")
         try:
             segments_parakeet = speech_to_text_parakeet(
-                audio_file_path=audio_file_path,
+                audio_file_path=file_path,
                 variant=variant,
                 selected_source_lang=selected_source_lang,
-                vad_filter=vad_filter
+                vad_filter=vad_filter,
             )
             if return_language:
                 return segments_parakeet, selected_source_lang
             return segments_parakeet
         except Exception as e:
             logging.error(f"Parakeet transcription failed, falling back to whisper: {e}")
-            # Fall back to whisper
             provider = "whisper"
             model = "distil-whisper-large-v3"  # Default fallback model
 
     elif provider == "canary":
+        if file_path is None:
+            raise ValueError("speech-to-text: Canary provider requires an audio file path")
         logging.info("Routing to Canary transcription")
         try:
             segments_canary = speech_to_text_canary(
-                audio_file_path=audio_file_path,
+                audio_file_path=file_path,
                 selected_source_lang=selected_source_lang,
-                vad_filter=vad_filter
+                vad_filter=vad_filter,
             )
             if return_language:
                 return segments_canary, selected_source_lang
             return segments_canary
         except Exception as e:
             logging.error(f"Canary transcription failed, falling back to whisper: {e}")
-            # Fall back to whisper
             provider = "whisper"
             model = "distil-whisper-large-v3"
 
     elif provider == "qwen2audio":
+        if file_path is None:
+            raise ValueError("speech-to-text: Qwen2Audio provider requires an audio file path")
         logging.info("Routing to Qwen2Audio transcription")
         try:
             segments_qwen = speech_to_text_qwen2audio(
-                audio_file_path=audio_file_path,
+                audio_file_path=file_path,
                 selected_source_lang=selected_source_lang,
-                vad_filter=vad_filter
+                vad_filter=vad_filter,
             )
             if return_language:
                 return segments_qwen, selected_source_lang
             return segments_qwen
         except Exception as e:
             logging.error(f"Qwen2Audio transcription failed, falling back to whisper: {e}")
-            # Fall back to whisper
             provider = "whisper"
             model = "distil-whisper-large-v3"
 
@@ -2282,32 +2334,27 @@ def speech_to_text(
     if provider == "whisper":
         whisper_model = model
 
-    # Convert the string to a Path object and ensure it's resolved (absolute path)
-    file_path = Path(audio_file_path).resolve()
-    if not file_path.exists():
-        log_counter("speech_to_text_error", labels={"error": "Audio file not found", "file_path": str(file_path)})
-        raise FileNotFoundError(f"speech-to-text: Audio file not found at {file_path}")
-
-    logging.info(f"speech-to-text: Starting transcription for: {file_path}")
+    logging.info(
+        f"speech-to-text: Starting transcription for: {file_path_label}"
+    )
     logging.info(f"speech-to-text: Model={whisper_model}, Lang={selected_source_lang or 'auto'}, VAD={vad_filter}")
 
     try:
-        # Construct output filenames in the same directory as the input file
-        sanitized_whisper_model_name = sanitize_filename(whisper_model)
-        out_file = file_path.with_name(f"{file_path.stem}-whisper_model-{sanitized_whisper_model_name}.segments.json")
-        prettified_out_file = file_path.with_name(f"{file_path.stem}-whisper_model-{sanitized_whisper_model_name}.segments_pretty.json")
+        out_file = prettified_out_file = None
+        if file_path is not None:
+            sanitized_whisper_model_name = sanitize_filename(whisper_model)
+            out_file = file_path.with_name(f"{file_path.stem}-whisper_model-{sanitized_whisper_model_name}.segments.json")
+            prettified_out_file = file_path.with_name(f"{file_path.stem}-whisper_model-{sanitized_whisper_model_name}.segments_pretty.json")
 
-        options = dict(beam_size=5, best_of=5, vad_filter=vad_filter) # Simplified beam options
-        # FIXME - was 10? Evaluate...
+        options = dict(beam_size=5, best_of=5, vad_filter=vad_filter)  # Simplified beam options
         if selected_source_lang:
             options["language"] = selected_source_lang
-        # Enable word-level timestamps if requested
         if word_timestamps:
             options["word_timestamps"] = True
 
-        transcribe_options = dict(task="transcribe", **options)
-        # Build an initial prompt: combine optional user prompt with
-        # custom vocabulary prompt (if enabled).
+        # For Whisper, propagate the desired decoding task. Only "transcribe"
+        # and "translate" are accepted; other values are coerced earlier.
+        transcribe_options = dict(task=task_normalized, **options)
         combined_prompt = None
         if initial_prompt:
             combined_prompt = str(initial_prompt).strip() or None
@@ -2335,28 +2382,25 @@ def speech_to_text(
             check_download_status=False,
         )
 
-        # Perform transcription
-        segments_raw, info = whisper_model_instance.transcribe(str(file_path), **transcribe_options)
+        # Perform transcription (supports numpy arrays directly)
+        segments_raw, info = whisper_model_instance.transcribe(audio_path_for_model, **transcribe_options)
 
-        detected_lang = info.language
-        lang_prob = info.language_probability
-        logging.info(f"speech-to-text: Detected language: {detected_lang} (Confidence: {lang_prob:.2f})")
-        # You might want to store detected_lang somewhere if using auto-detect
+        detected_lang = getattr(info, "language", None)
+        lang_prob = getattr(info, "language_probability", None)
+        if detected_lang:
+            logging.info(f"speech-to-text: Detected language: {detected_lang} (Confidence: {lang_prob:.2f})")
 
         segments = []
         for segment_chunk in segments_raw:
-            # Store raw float seconds
             chunk = {
                 "start_seconds": segment_chunk.start,
                 "end_seconds": segment_chunk.end,
                 "Text": segment_chunk.text.strip() # Strip whitespace from text
             }
-            # Include word-level timestamps if available/requested
             if word_timestamps and hasattr(segment_chunk, 'words') and segment_chunk.words:
                 try:
                     words_list = []
                     for w in segment_chunk.words:
-                        # Some versions may return None for start/end; guard it
                         words_list.append({
                             "start": float(w.start) if w.start is not None else None,
                             "end": float(w.end) if w.end is not None else None,
@@ -2365,22 +2409,17 @@ def speech_to_text(
                     if words_list:
                         chunk["words"] = words_list
                 except Exception:
-                    # Non-fatal if words parsing fails
                     pass
             logging.debug(f"Segment: {chunk}")
-            # Post-process with custom vocabulary replacements if enabled
             try:
                 from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
                 chunk["Text"] = postprocess_text_if_enabled(chunk["Text"]) or chunk["Text"]
             except Exception:
-                # Non-fatal if replacement fails
                 pass
             segments.append(chunk)
-            # Log with limited precision for readability
             logging.debug(f"Segment: [{chunk['start_seconds']:.2f}-{chunk['end_seconds']:.2f}] {chunk['Text'][:100]}...")
 
         if segments:
-            # Insert metadata at the start of the first segment if desired
             segments[0]["Text"] = (
                 f"This text was transcribed using whisper model: {whisper_model}\n"
                 f"Detected language: {detected_lang}\n\n"
@@ -2389,20 +2428,20 @@ def speech_to_text(
 
         if not segments:
             log_counter("speech_to_text_error", labels={"error": "No transcription produced"})
-            raise RuntimeError("No transcription produced. The audio file may be invalid or empty.")
+            raise RuntimeError("No transcription produced. The audio may be invalid or empty.")
 
         transcription_time = time.time() - time_start
         logging.info(f"speech-to-text: Transcription completed in {transcription_time:.2f} seconds. Segments: {len(segments)}")
         log_histogram(
             "speech_to_text_duration",
             transcription_time,
-            labels={"file_path": str(file_path), "model": whisper_model}
+            labels={"file_path": file_path_label, "model": whisper_model}
         )
-        log_counter("speech_to_text_success", labels={"file_path": str(file_path), "model": whisper_model, "segments": len(segments)})
+        log_counter("speech_to_text_success", labels={"file_path": file_path_label, "model": whisper_model, "segments": len(segments)})
 
         # Persist transcription to disk for cache-aware callers (unless disabled)
-        _persist_allowed = PERSIST_TRANSCRIPTS_DEFAULT if persist_segments is None else persist_segments
-        if _persist_allowed:
+        _persist_allowed = (file_path is not None) and (PERSIST_TRANSCRIPTS_DEFAULT if persist_segments is None else persist_segments)
+        if _persist_allowed and out_file and prettified_out_file:
             try:
                 payload = {"segments": segments}
                 with open(out_file, "w", encoding="utf-8") as f:
@@ -2413,7 +2452,6 @@ def speech_to_text(
                 except Exception as prettify_err:
                     logging.debug(f"Failed to write prettified transcription file: {prettify_err}")
 
-                # Apply retention/cleanup
                 prune_transcript_cache(
                     file_path.parent,
                     current_file=out_file,
@@ -2425,19 +2463,19 @@ def speech_to_text(
                 logging.warning(f"Could not persist transcription segments to cache: {persist_err}")
 
         gc.collect() # Suggest garbage collection
-        # Return either segments or (segments, detected_lang)
         if return_language:
             return segments, detected_lang
-        return segments # Return the list of segment dictionaries
+        return segments
 
     except Exception as e:
-        logging.error(f"speech-to-text: Error transcribing audio file {file_path}: {e}", exc_info=True)
+        logging.error(f"speech-to-text: Error transcribing audio {file_path_label}: {e}", exc_info=True)
         log_counter(
             "speech_to_text_error",
-            labels={"file_path": str(file_path), "model": whisper_model, "error": type(e).__name__}
+            labels={"file_path": file_path_label, "model": whisper_model, "error": type(e).__name__}
         )
-        # Re-raise as a runtime error for the caller to handle
-        raise RuntimeError(f"speech-to-text: Error during transcription of {file_path.name}") from e
+        if file_path is not None:
+            raise RuntimeError(f"speech-to-text: Error during transcription of {file_path.name}") from e
+        raise RuntimeError("speech-to-text: Error during transcription of in-memory audio") from e
 
 #
 # End of Faster Whisper related functions
