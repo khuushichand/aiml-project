@@ -561,6 +561,23 @@ def process_audio_files(
         'language': chunk_language or transcription_language or 'en',
     } if perform_chunking else None
 
+    # Optional: preflight model availability check for Whisper models.
+    # This is informational only and does not block processing; downloads
+    # still occur lazily on first use inside the transcription library.
+    preflight_model_status: Optional[Dict[str, Any]] = None
+    try:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+            parse_transcription_model,
+        )
+        provider, parsed_model, _ = parse_transcription_model(transcription_model)
+        if provider == "whisper":
+            preflight_model_status = check_transcription_model_status(parsed_model)
+            msg = preflight_model_status.get("message")
+            if msg:
+                update_progress(f"Model status: {msg}")
+    except Exception as _status_exc:
+        logging.debug(f"Model preflight check skipped for {transcription_model}: {_status_exc}")
+
     try:
         # --- Process Each Input ---
         for i, input_item in enumerate(inputs, start=1):
@@ -585,6 +602,12 @@ def process_audio_files(
                 "db_id": None, # Standard fields for response consistency
                 "db_message": None,
             }
+            # Attach model preflight warning if model is not yet available
+            if preflight_model_status and not preflight_model_status.get("available", False):
+                msg = preflight_model_status.get("message")
+                if msg:
+                    item_result.setdefault("warnings", []).append(msg)
+
             current_audio_path = None
             downloaded_path = None
             wav_file_path = None

@@ -42,19 +42,19 @@ process_audio_files(
 ### Parameters
 
  - inputs: URLs (including YouTube) or absolute local paths to audio files.
- - transcription_model: Supports multiple providers via naming scheme:
-   - faster-whisper models (e.g., `base`, `medium`, `large-v3`, local path, or HF hub id)
-   - NVIDIA NeMo Parakeet: `parakeet:<variant>` (e.g., `parakeet:ctc-small`)
-   - NVIDIA NeMo Canary: `canary:<variant>`
-   - Qwen2Audio: `qwen2audio:<variant>`
-- transcription_language: target language (default `en`).
+ - transcription_model: Supports multiple providers via naming scheme (parsed via the same logic as the HTTP `/audio/transcriptions` endpoint):
+   - faster-whisper models (e.g., `base`, `medium`, `large-v3`, `distil-whisper-large-v3`, a local path, or HF hub id)
+   - NVIDIA NeMo Parakeet: `parakeet`, `parakeet-standard`, `parakeet-onnx`, `parakeet-mlx`, or any string where `parse_transcription_model` resolves the provider to `"parakeet"`
+   - NVIDIA NeMo Canary: `canary` or related aliases (provider `"canary"`)
+   - Qwen2Audio: `qwen2audio` or `qwen2audio-*` (provider `"qwen2audio"`)
+- transcription_language: target/source language (default `en`). When `None`, the underlying STT provider is allowed to auto-detect; this matches the behavior of `speech_to_text(..., selected_source_lang=None)` and the `/audio/transcriptions` endpoint.
 - diarize: enable speaker diarization; `vad_use`: enable voice activity detection.
 - perform_chunking: chunk transcript; `chunk_method`: e.g., `sentences`.
 - perform_analysis: use LLM summarization via `analyze`; `api_name` selects provider (keys from server config).
 - summarize_recursively: combine per-chunk summaries into a higher-level summary.
  - temp_dir: parent directory for temporary work files.
 
- Tip: To check if a model is ready/downloaded before processing, use `check_transcription_model_status(model_name)` from the same module.
+ Tip: To check if a model is ready/downloaded before processing, use `check_transcription_model_status(model_name)` from the same module. `process_audio_files` performs a preflight check for Whisper models and surfaces the status as a warning in each item result.
 
 ### Return Structure (batch)
 

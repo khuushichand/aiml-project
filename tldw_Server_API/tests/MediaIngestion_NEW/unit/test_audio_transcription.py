@@ -3,12 +3,15 @@ import os
 from pathlib import Path
 
 import pytest
+import importlib
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
     ConversionError,
     perform_transcription,
     speech_to_text,
     convert_to_wav,
+    is_transcription_error_message,
+    strip_whisper_metadata_header,
 )
 import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
 
@@ -98,6 +101,26 @@ def test_convert_to_wav_respects_ffmpeg_path(monkeypatch, tmp_path):
     # First call is version check, second is conversion
     assert commands[0][0] == str(ffmpeg_path)
     assert commands[1][0] == str(ffmpeg_path)
+
+
+@pytest.mark.unit
+def test_audio_transcription_lib_processing_choice_safe_when_config_missing(monkeypatch):
+    """
+    Audio_Transcription_Lib should not raise at import time
+    when load_and_log_configs returns None or a dict without
+    'processing_choice'. The module-level processing_choice
+    should safely default to 'cpu'.
+    """
+    import tldw_Server_API.app.core.config as core_config
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+
+    # Force load_and_log_configs used by the STT module to return None
+    monkeypatch.setattr(core_config, "load_and_log_configs", lambda: None, raising=True)
+
+    reloaded = importlib.reload(atlib)
+
+    assert hasattr(reloaded, "processing_choice")
+    assert reloaded.processing_choice == "cpu"
 
 
 @pytest.mark.unit
@@ -234,3 +257,230 @@ def test_speech_to_text_respects_persist_toggle(monkeypatch, tmp_path):
 
     out_file = audio_file.with_name(f"{audio_file.stem}-whisper_model-tiny.segments.json")
     assert not out_file.exists()
+
+
+@pytest.mark.unit
+def test_is_transcription_error_message_covers_external_provider_module():
+    msg = "External provider module not available. Please check installation."
+    assert is_transcription_error_message(msg) is True
+
+
+@pytest.mark.unit
+def test_is_transcription_error_message_covers_error_in_transcription():
+    msg = "Error in transcription: underlying failure"
+    assert is_transcription_error_message(msg) is True
+
+
+@pytest.mark.unit
+def test_strip_whisper_metadata_header_removes_prefix():
+    header = (
+        "This text was transcribed using whisper model: distil-large-v3\n"
+        "Detected language: en\n\n"
+        "Hello world"
+    )
+    segments = [{"Text": header, "start_seconds": 0.0, "end_seconds": 1.0}]
+    out = strip_whisper_metadata_header(segments)
+    assert out[0]["Text"] == "Hello world"
+
+
+@pytest.mark.unit
+def test_transcribe_audio_uses_safe_default_provider(monkeypatch, tmp_path):
+    # Ensure that when no transcription_provider is given and config is missing
+    # STT-Settings/default_transcriber, transcribe_audio falls back to
+    # faster-whisper instead of raising KeyError.
+    import numpy as np
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+
+    # Return an empty config to simulate missing STT-Settings section
+    monkeypatch.setattr(
+        atlib,
+        "load_and_log_configs",
+        lambda: {},
+    )
+
+    # Stub speech_to_text so we don't run a real model
+    called = {}
+
+    def fake_speech_to_text(path, whisper_model="distil-large-v3", selected_source_lang=None, **kwargs):
+        called["model"] = whisper_model
+        return [{"Text": "hello"}]
+
+    monkeypatch.setattr(atlib, "speech_to_text", fake_speech_to_text)
+
+    audio_data = np.zeros(1600, dtype=np.float32)
+    result = atlib.transcribe_audio(audio_data, transcription_provider=None, sample_rate=16000)
+
+    assert result == "hello"
+    # Default model comes from transcribe_audio's whisper_model argument
+    assert called["model"] == "distil-large-v3"
+
+
+@pytest.mark.unit
+def test_speech_to_text_qwen2audio_disabled_falls_back_to_whisper(monkeypatch, tmp_path):
+    """When Qwen2Audio is disabled via config, speech_to_text with a qwen2audio model
+    should fall back to Whisper without raising."""
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+
+    # Disable Qwen2Audio via config gating
+    monkeypatch.setattr(
+        atlib,
+        "load_and_log_configs",
+        lambda: {"STT-Settings": {"qwen2audio_enabled": "false"}},
+    )
+
+    class _Seg:
+        start = 0.0
+        end = 1.0
+        text = "fallback whisper"
+
+    class _Info:
+        language = "en"
+        language_probability = 0.9
+
+    class _Model:
+        def transcribe(self, *args, **kwargs):
+            return [_Seg()], _Info()
+
+    # Ensure Whisper fallback is cheap and deterministic
+    monkeypatch.setattr(atlib, "get_whisper_model", lambda *args, **kwargs: _Model())
+    monkeypatch.setattr(atlib, "processing_choice", "cpu")
+
+    # Use a model name that routes to provider 'qwen2audio'
+    segments = atlib.speech_to_text(str(audio_file), whisper_model="qwen2audio-test", selected_source_lang="en")
+    assert isinstance(segments, list)
+    assert segments
+
+
+@pytest.mark.unit
+def test_speech_to_text_does_not_return_model_downloading_sentinel(monkeypatch, tmp_path):
+    """
+    speech_to_text should always return real transcript segments,
+    not a special 'model_downloading' sentinel payload.
+    """
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+
+    class _Seg:
+        start = 0.0
+        end = 1.0
+        text = "hello world"
+
+    class _Info:
+        language = "en"
+        language_probability = 0.9
+
+    class _Model:
+        def transcribe(self, *args, **kwargs):
+            return [_Seg()], _Info()
+
+    calls = []
+
+    def fake_get_whisper_model(model_name, device, check_download_status=False):
+        calls.append(check_download_status)
+        return _Model()
+
+    monkeypatch.setattr(atlib, "get_whisper_model", fake_get_whisper_model)
+    monkeypatch.setattr(atlib, "processing_choice", "cpu")
+
+    segments = atlib.speech_to_text(str(audio_file), whisper_model="tiny", selected_source_lang="en")
+
+    # Ensure we only called get_whisper_model once without any download-status check
+    assert calls == [False]
+    assert isinstance(segments, list)
+    assert len(segments) == 1
+    assert segments[0].get("Text") == "This text was transcribed using whisper model: tiny\nDetected language: en\n\nhello world"
+
+
+@pytest.mark.unit
+def test_speech_to_text_return_language_consistent_for_whisper(monkeypatch, tmp_path):
+    """When return_language=True, Whisper branch should return (segments, lang)."""
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+
+    class _Seg:
+        start = 0.0
+        end = 1.0
+        text = "hello"
+
+    class _Info:
+        language = "en"
+        language_probability = 0.9
+
+    class _Model:
+        def transcribe(self, *args, **kwargs):
+            return [_Seg()], _Info()
+
+    monkeypatch.setattr(atlib, "get_whisper_model", lambda *args, **kwargs: _Model())
+    monkeypatch.setattr(atlib, "processing_choice", "cpu")
+
+    segments, lang = atlib.speech_to_text(
+        str(audio_file),
+        whisper_model="tiny",
+        selected_source_lang=None,
+        return_language=True,
+    )
+
+    assert isinstance(segments, list)
+    assert lang == "en"
+
+
+@pytest.mark.unit
+def test_speech_to_text_return_language_consistent_for_parakeet(monkeypatch, tmp_path):
+    """When return_language=True, Parakeet branch should return (segments, lang_or_none)."""
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+
+    def fake_parakeet(audio_file_path, variant, selected_source_lang, vad_filter):
+        assert audio_file_path == str(audio_file)
+        assert variant == "standard"
+        return [{"start_seconds": 0.0, "end_seconds": 1.0, "Text": "parakeet"}]
+
+    monkeypatch.setattr(atlib, "speech_to_text_parakeet", fake_parakeet)
+
+    segments, lang = atlib.speech_to_text(
+        str(audio_file),
+        whisper_model="parakeet-standard",
+        selected_source_lang="de",
+        return_language=True,
+    )
+
+    assert isinstance(segments, list)
+    assert segments[0]["Text"] == "parakeet"
+    # For non-Whisper providers we surface the selected_source_lang
+    assert lang == "de"
+
+
+@pytest.mark.unit
+def test_speech_to_text_return_language_consistent_for_qwen2audio(monkeypatch, tmp_path):
+    """When return_language=True, Qwen2Audio branch should return (segments, lang_or_none)."""
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+
+    def fake_qwen(audio_file_path, selected_source_lang, vad_filter):
+        assert audio_file_path == str(audio_file)
+        return [{"start_seconds": 0.0, "end_seconds": 1.0, "Text": "qwen"}]
+
+    monkeypatch.setattr(atlib, "speech_to_text_qwen2audio", fake_qwen)
+
+    segments, lang = atlib.speech_to_text(
+        str(audio_file),
+        whisper_model="qwen2audio-test",
+        selected_source_lang=None,
+        return_language=True,
+    )
+
+    assert isinstance(segments, list)
+    assert segments[0]["Text"] == "qwen"
+    # selected_source_lang was None, so language is None
+    assert lang is None

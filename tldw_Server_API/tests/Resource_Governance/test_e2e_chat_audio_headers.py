@@ -197,7 +197,7 @@ async def test_e2e_audio_transcriptions_headers_and_mocked_stt(monkeypatch, tmp_
     # Mock Whisper STT function used in the endpoint
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as tl
 
-    def fake_speech_to_text(path, whisper_model, selected_source_lang=None, vad_filter=False, diarize=False, word_timestamps=False, return_language=False):
+    def fake_speech_to_text(path, whisper_model, selected_source_lang=None, vad_filter=False, diarize=False, word_timestamps=False, return_language=False, **kwargs):
         segs = [{"Text": "hello world"}]
         if return_language:
             return segs, "en"

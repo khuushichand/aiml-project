@@ -244,12 +244,8 @@ class TestAudioTranscriptionLibIntegration:
             transcribe_audio
         )
 
-        mock_config.return_value = {
-            'STT-Settings': {
-                'default_transcriber': 'parakeet',
-                'nemo_model_variant': 'standard'
-            }
-        }
+        # loaded_config_data is lazy in production; for this test we rely on the
+        # explicit transcription_provider argument rather than config defaults.
 
         mock_transcribe_parakeet.return_value = "Transcribed text from Parakeet"
 
@@ -271,11 +267,7 @@ class TestAudioTranscriptionLibIntegration:
             transcribe_audio
         )
 
-        mock_config.return_value = {
-            'STT-Settings': {
-                'default_transcriber': 'canary'
-            }
-        }
+        # As above, rely on explicit provider rather than config defaults.
 
         mock_transcribe_canary.return_value = "Transcribed text from Canary"
 

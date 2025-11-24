@@ -2458,8 +2458,28 @@ def load_and_log_configs():
         local_api_timeout = config_parser_object.get('Local-API', 'local_api_timeout', fallback='90')
 
         # STT Settings
-        default_stt_provider = config_parser_object.get('STT-Settings', 'default_stt_provider', fallback='faster_whisper')
-        default_transcriber = config_parser_object.get('STT-Settings', 'default_transcriber', fallback='faster-whisper')
+        raw_default_stt_provider = config_parser_object.get('STT-Settings', 'default_stt_provider', fallback='faster-whisper')
+        raw_default_transcriber = config_parser_object.get('STT-Settings', 'default_transcriber', fallback='')
+
+        def _normalize_stt_provider_name(name: str) -> str:
+            """
+            Normalize STT provider/transcriber identifiers from config.
+
+            - Accepts both 'faster_whisper' and 'faster-whisper' and normalizes to 'faster-whisper'.
+            - Returns lower-cased identifiers for consistency.
+            """
+            name = (name or "").strip()
+            if not name:
+                return ""
+            lowered = name.lower()
+            if lowered in ("faster-whisper", "faster_whisper"):
+                return "faster-whisper"
+            return lowered
+
+        default_stt_provider = _normalize_stt_provider_name(raw_default_stt_provider)
+        tmp_default_transcriber = _normalize_stt_provider_name(raw_default_transcriber)
+        # If default_transcriber is not set explicitly, fall back to default_stt_provider
+        default_transcriber = tmp_default_transcriber or default_stt_provider
         nemo_model_variant = config_parser_object.get('STT-Settings', 'nemo_model_variant', fallback='standard')
         nemo_device = config_parser_object.get('STT-Settings', 'nemo_device', fallback='cuda')
         nemo_cache_dir = config_parser_object.get('STT-Settings', 'nemo_cache_dir', fallback='./models/nemo')

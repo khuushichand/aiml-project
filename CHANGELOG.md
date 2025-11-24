@@ -23,6 +23,7 @@ and this project adheres to Some kind of Versioning
 - Model discovery for local LLM endpoints
 - Audit event replay mechanism for failed exports
 - Enhanced HTTP error handling for DNS resolution failures
+- SuperSonicTTS support + setup script
 
 ### Changed
 - Audio:

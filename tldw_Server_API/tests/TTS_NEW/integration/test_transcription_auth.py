@@ -53,7 +53,7 @@ def test_transcriptions_ok_with_override(monkeypatch, bypass_api_limits):
 
         app.dependency_overrides[get_request_user] = _override_user
 
-        # Patch the production function used by the endpoint (faster-whisper path)
+        # Patch the production function used by the endpoint (Whisper path)
         def _fake_speech_to_text(*args, **kwargs):
             # Endpoint expects a tuple (segments_list, detected_language) when return_language=True
             segments = [
@@ -96,7 +96,7 @@ def test_translations_ok_with_override(monkeypatch, bypass_api_limits):
 
         app.dependency_overrides[get_request_user] = _override_user
 
-        # Patch the production function used by the endpoint (faster-whisper path)
+        # Patch the production function used by the endpoint (Whisper path)
         def _fake_speech_to_text(*args, **kwargs):
             segments = [
                 {"start_seconds": 0.0, "end_seconds": 0.1, "Text": "translated transcript"}
@@ -116,5 +116,92 @@ def test_translations_ok_with_override(monkeypatch, bypass_api_limits):
             resp = client.post("/api/v1/audio/translations", files=files, data=data)
             assert resp.status_code == 200
             assert resp.json().get("text") == "translated transcript"
+        finally:
+            app.dependency_overrides.pop(get_request_user, None)
+
+
+def test_transcriptions_parakeet_variant_routes_to_parakeet(monkeypatch, bypass_api_limits):
+    """Model strings like 'parakeet-mlx' should route to the Parakeet provider, not Whisper."""
+    ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+    with ctx, TestClient(app) as client:
+        async def _override_user():
+            return User(id=1, username="tester", email="t@example.com", is_active=True)
+
+        app.dependency_overrides[get_request_user] = _override_user
+
+        # Force lightweight config for Nemo path
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.config.load_and_log_configs",
+            lambda: {"STT-Settings": {"nemo_model_variant": "standard"}},
+            raising=False,
+        )
+
+        # If Whisper path is hit incorrectly, fail fast
+        def _fail_speech_to_text(*args, **kwargs):
+            raise AssertionError("Whisper path should not be used for parakeet-mlx")
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text",
+            _fail_speech_to_text,
+            raising=False,
+        )
+
+        # Parakeet Nemo implementation stub
+        def _fake_parakeet(audio_data, sample_rate, variant):
+            return "parakeet transcript"
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.transcribe_with_parakeet",
+            _fake_parakeet,
+            raising=False,
+        )
+
+        try:
+            wav_bytes = _make_wav_bytes()
+            files = {"file": ("test.wav", wav_bytes, "audio/wav")}
+            data = {"model": "parakeet-mlx", "response_format": "json"}
+            resp = client.post("/api/v1/audio/transcriptions", files=files, data=data)
+            assert resp.status_code == 200
+            assert resp.json().get("text") == "parakeet transcript"
+        finally:
+            app.dependency_overrides.pop(get_request_user, None)
+
+
+def test_transcriptions_qwen2audio_variant_routes_to_qwen2audio(monkeypatch, bypass_api_limits):
+    """Model strings like 'qwen2audio-test' should route to Qwen2Audio provider, not Whisper."""
+    ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+    with ctx, TestClient(app) as client:
+        async def _override_user():
+            return User(id=1, username="tester", email="t@example.com", is_active=True)
+
+        app.dependency_overrides[get_request_user] = _override_user
+
+        # Fail if faster-whisper path is chosen
+        def _fail_speech_to_text(*args, **kwargs):
+            raise AssertionError("Whisper path should not be used for qwen2audio-*")
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text",
+            _fail_speech_to_text,
+            raising=False,
+        )
+
+        # General transcribe_audio stub for qwen2audio provider
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Transcription_Lib as ATL
+
+        def _fake_transcribe_audio(audio_data, transcription_provider, sample_rate=16000, speaker_lang=None, whisper_model="distil-large-v3"):
+            # Ensure we are invoked with the expected provider
+            assert transcription_provider == "qwen2audio"
+            return "qwen2audio transcript"
+
+        monkeypatch.setattr(ATL, "transcribe_audio", _fake_transcribe_audio, raising=True)
+
+        try:
+            wav_bytes = _make_wav_bytes()
+            files = {"file": ("test.wav", wav_bytes, "audio/wav")}
+            data = {"model": "qwen2audio-test", "response_format": "json"}
+            resp = client.post("/api/v1/audio/transcriptions", files=files, data=data)
+            assert resp.status_code == 200
+            assert resp.json().get("text") == "qwen2audio transcript"
         finally:
             app.dependency_overrides.pop(get_request_user, None)

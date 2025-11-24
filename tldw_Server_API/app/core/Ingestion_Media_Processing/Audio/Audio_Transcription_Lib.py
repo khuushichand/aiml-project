@@ -918,14 +918,21 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
           if selected, unless Nemo toolkit is installed and the FIXME is resolved.
         - For 'faster-whisper', this function creates and deletes a temporary WAV file.
     """
-    loaded_config_data = load_and_log_configs()
+    # Load configuration safely; fall back to sane defaults if missing/malformed
+    config_data = load_and_log_configs() or {}
     if not transcription_provider:
-        # Load default transcription provider via config file
-        transcription_provider = loaded_config_data['STT-Settings']['default_transcriber']
+        # Load default transcription provider via config file, but guard against
+        # missing sections/keys so we always have a sane default.
+        stt_cfg = config_data.get("STT-Settings") or {}
+        transcription_provider = stt_cfg.get("default_transcriber", "faster-whisper")
 
     if transcription_provider.lower() == 'qwen2audio':
         logging.info("Transcribing using Qwen2Audio")
-        return transcribe_with_qwen2audio(audio_data, sample_rate)
+        try:
+            return transcribe_with_qwen2audio(audio_data, sample_rate)
+        except Exception as e:
+            logging.error(f"Qwen2Audio transcription failed: {e}", exc_info=True)
+            return f"[Transcription error] Qwen2Audio transcription failed: {e}"
 
     elif transcription_provider.lower() == "parakeet":
         logging.info("Transcribing using Parakeet")
@@ -934,7 +941,7 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
                 transcribe_with_parakeet
             )
             # Get model variant from config
-            config = loaded_config_data or load_and_log_configs()
+            config = config_data or load_and_log_configs()
             variant = 'standard'
             if config and 'STT-Settings' in config:
                 variant = config['STT-Settings'].get('nemo_model_variant', 'standard')
@@ -1021,6 +1028,89 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
 #
 # End of Sink Function
 ##########################################################
+
+
+def is_transcription_error_message(msg: str) -> bool:
+    """
+    Heuristic to detect transcription error sentinel strings.
+
+    This centralizes detection used by API endpoints and speech chat so that
+    provider-specific error messages stay in sync with callers.
+    """
+    if not isinstance(msg, str):
+        return False
+
+    lower_msg = msg.lower().strip()
+    if not lower_msg:
+        return False
+
+    return (
+        lower_msg.startswith("[error")
+        or lower_msg.startswith("[transcription error")
+        or lower_msg.startswith("error in transcription")
+        or lower_msg.startswith("canary transcription error")
+        or lower_msg.startswith("parakeet transcription error")
+        or lower_msg.startswith("external provider transcription error")
+        or lower_msg.startswith("external provider module not available")
+        or lower_msg.startswith("external provider transcription failed")
+        or lower_msg.startswith("nemo transcription module not available")
+        or lower_msg.startswith("failed to import nemo")
+        or lower_msg.startswith("failed to import external provider")
+    )
+
+
+def strip_whisper_metadata_header(segments):
+    """
+    Remove the Whisper metadata header from the first segment's Text, if present.
+
+    The speech_to_text function prepends a header like:
+        "This text was transcribed using whisper model: ...\\n"
+        "Detected language: ...\\n\\n"
+    into the first segment. For API/user-facing flows we often want the bare
+    transcript, so this helper trims that header in-place.
+
+    Args:
+        segments: Either a list of segment dicts or a dict with a "segments" list.
+
+    Returns:
+        The same segments object that was passed in (mutated if a header was removed).
+    """
+    try:
+        if isinstance(segments, dict):
+            seg_list = segments.get("segments") or []
+        else:
+            seg_list = segments
+
+        if not seg_list:
+            return segments
+
+        first = seg_list[0]
+        if not isinstance(first, dict):
+            return segments
+
+        text = first.get("Text")
+        if not isinstance(text, str):
+            return segments
+
+        header_prefix = "This text was transcribed using whisper model:"
+        if not text.startswith(header_prefix):
+            return segments
+
+        # Preferred: split on the blank line separating header from content
+        parts = text.split("\n\n", 1)
+        if len(parts) == 2:
+            first["Text"] = parts[1]
+            return segments
+
+        # Fallback: drop the first two lines (model + language)
+        lines = text.splitlines()
+        if len(lines) >= 3:
+            first["Text"] = "\n".join(lines[2:])
+
+        return segments
+    except Exception:
+        # Never fail the caller because of header stripping
+        return segments
 
 
 ##########################################################
@@ -1198,7 +1288,15 @@ class LiveAudioStreamer:
                             )
 
                         # Then do something with user_text (e.g. add to chatbot)
-                        self.handle_transcribed_text(user_text)
+                        # Skip known STT error sentinel strings so they are not
+                        # treated as real user speech.
+                        try:
+                            if isinstance(user_text, str) and is_transcription_error_message(user_text):
+                                logging.error(f"LiveAudioStreamer STT error sentinel: {user_text}")
+                            else:
+                                self.handle_transcribed_text(user_text)
+                        except Exception as _cb_exc:
+                            logging.error(f"LiveAudioStreamer handle_transcribed_text error: {_cb_exc}")
                         self.silence_start_time = None
             else:
                 # reset silence timer
@@ -1261,10 +1359,25 @@ def load_qwen2audio():
     """
     global qwen_processor, qwen_model
     if qwen_processor is None or qwen_model is None:
-        logging.info("Loading Qwen2Audio model...")
-        qwen_processor = AutoProcessor.from_pretrained("Qwen/Qwen2-Audio-7B-Instruct")
+        # Gate heavy Qwen2Audio loading behind config so typical installs
+        # do not attempt to download/initialize this large model unless
+        # explicitly enabled.
+        cfg = load_and_log_configs() or {}
+        stt_cfg = cfg.get("STT-Settings") or {}
+        enabled_raw = stt_cfg.get("qwen2audio_enabled")
+        if enabled_raw is None or not _to_bool(enabled_raw):
+            logging.warning(
+                "Qwen2Audio requested but STT-Settings.qwen2audio_enabled is not set or false; "
+                "treating Qwen2Audio as disabled."
+            )
+            raise RuntimeError("[Transcription error] Qwen2Audio is disabled or not configured")
+
+        model_id = stt_cfg.get("qwen2audio_model_id", "Qwen/Qwen2-Audio-7B-Instruct")
+        logging.info(f"Loading Qwen2Audio model: {model_id}")
+
+        qwen_processor = AutoProcessor.from_pretrained(model_id)
         qwen_model = Qwen2AudioForConditionalGeneration.from_pretrained(
-            "Qwen/Qwen2-Audio-7B-Instruct",
+            model_id,
             torch_dtype=torch.float16,
             device_map="auto"
         )
@@ -1333,8 +1446,8 @@ def transcribe_with_qwen2audio(audio: np.ndarray, sample_rate: int = 16000) -> s
 #
 # Faster Whisper related functions
 whisper_model_instance = None
-config = load_and_log_configs()
-processing_choice = config['processing_choice'] or 'cpu'
+config = load_and_log_configs() or {}
+processing_choice = config.get("processing_choice", "cpu")
 total_thread_count = multiprocessing.cpu_count()
 
 # Model download status tracking
@@ -1611,6 +1724,7 @@ def unload_all_transcription_models():
     logging.info("Unloaded all transcription models from memory")
 
 whisper_model_cache = {}
+whisper_model_cache_lock = threading.Lock()
 
 def get_whisper_model(model_name, device, check_download_status=False):
     """
@@ -1636,65 +1750,68 @@ def get_whisper_model(model_name, device, check_download_status=False):
         ValueError: If `WhisperModel` initialization fails (e.g., invalid model name).
         RuntimeError: For other unexpected errors during model loading.
     """
-    compute_type = "float16" if "cuda" in device else "int8" # Example compute type logic
+    compute_type = "float16" if "cuda" in device else "int8"  # Example compute type logic
     cache_key = (model_name, device, compute_type)
 
-    # If checking download status and model not in cache
-    if check_download_status and cache_key not in whisper_model_cache:
-        if not check_model_exists(model_name):
-            return None, {
-                'status': 'model_downloading',
-                'message': f'Model {model_name} is not available locally and will be downloaded on first use. This may take several minutes depending on your internet connection.',
-                'model': model_name
-            }
+    with whisper_model_cache_lock:
+        # If checking download status and model not in cache
+        if check_download_status and cache_key not in whisper_model_cache:
+            if not check_model_exists(model_name):
+                return None, {
+                    'status': 'model_downloading',
+                    'message': (
+                        f'Model {model_name} is not available locally and will be '
+                        'downloaded on first use. This may take several minutes '
+                        'depending on your internet connection.'
+                    ),
+                    'model': model_name
+                }
 
-    if cache_key not in whisper_model_cache:
-        logging.info(f"Cache miss. Initializing WhisperModel for key: {cache_key}")
-        try:
-            # This now calls the *corrected* WhisperModel.__init__
-            instance = WhisperModel(
-                model_size_or_path=model_name,
-                device=device,
-                compute_type=compute_type
-                # Pass download_root explicitly here if it's NOT handled by the class default
-                # download_root=WhisperModel.default_download_root
-            )
-            whisper_model_cache[cache_key] = instance
-        except (ValueError, RuntimeError) as e:
-            # Check if the error is related to CUDA not being available
-            if "cuda" in device.lower() and ("CUDA" in str(e) or "cuda" in str(e).lower()):
-                logging.warning(f"CUDA initialization failed for {model_name}: {e}. Falling back to CPU.")
-                # Try again with CPU
-                cpu_compute_type = "int8"
-                cpu_cache_key = (model_name, "cpu", cpu_compute_type)
+        if cache_key not in whisper_model_cache:
+            logging.info(f"Cache miss. Initializing WhisperModel for key: {cache_key}")
+            try:
+                # This now calls the *corrected* WhisperModel.__init__
+                instance = WhisperModel(
+                    model_size_or_path=model_name,
+                    device=device,
+                    compute_type=compute_type
+                )
+                whisper_model_cache[cache_key] = instance
+            except (ValueError, RuntimeError) as e:
+                # Check if the error is related to CUDA not being available
+                if "cuda" in device.lower() and ("CUDA" in str(e) or "cuda" in str(e).lower()):
+                    logging.warning(f"CUDA initialization failed for {model_name}: {e}. Falling back to CPU.")
+                    # Try again with CPU
+                    cpu_compute_type = "int8"
+                    cpu_cache_key = (model_name, "cpu", cpu_compute_type)
 
-                if cpu_cache_key not in whisper_model_cache:
-                    try:
-                        instance = WhisperModel(
-                            model_size_or_path=model_name,
-                            device="cpu",
-                            compute_type=cpu_compute_type
-                        )
-                        whisper_model_cache[cpu_cache_key] = instance
-                        # Also cache it under the original key to avoid retrying CUDA
-                        whisper_model_cache[cache_key] = instance
-                        logging.info(f"Successfully initialized WhisperModel on CPU as fallback")
+                    if cpu_cache_key not in whisper_model_cache:
+                        try:
+                            instance = WhisperModel(
+                                model_size_or_path=model_name,
+                                device="cpu",
+                                compute_type=cpu_compute_type
+                            )
+                            whisper_model_cache[cpu_cache_key] = instance
+                            # Also cache it under the original key to avoid retrying CUDA
+                            whisper_model_cache[cache_key] = instance
+                            logging.info("Successfully initialized WhisperModel on CPU as fallback")
+                            return instance
+                        except (ValueError, RuntimeError) as cpu_e:
+                            logging.error(f"Failed to initialize WhisperModel on CPU as well: {cpu_e}")
+                            raise RuntimeError(f"Failed to initialize model on both CUDA and CPU: {cpu_e}") from cpu_e
+                    else:
+                        # Use existing CPU instance
+                        instance = whisper_model_cache[cpu_cache_key]
+                        whisper_model_cache[cache_key] = instance  # Cache under original key too
                         return instance
-                    except (ValueError, RuntimeError) as cpu_e:
-                        logging.error(f"Failed to initialize WhisperModel on CPU as well: {cpu_e}")
-                        raise RuntimeError(f"Failed to initialize model on both CUDA and CPU: {cpu_e}") from cpu_e
                 else:
-                    # Use existing CPU instance
-                    instance = whisper_model_cache[cpu_cache_key]
-                    whisper_model_cache[cache_key] = instance  # Cache under original key too
-                    return instance
-            else:
-                logging.error(f"Fatal error creating whisper model instance for key {cache_key}: {e}")
-                raise # Re-raise the exception
-    else:
-        logging.debug(f"Cache hit. Reusing existing WhisperModel instance for key: {cache_key}")
+                    logging.error(f"Fatal error creating whisper model instance for key {cache_key}: {e}")
+                    raise  # Re-raise the exception
+        else:
+            logging.debug(f"Cache hit. Reusing existing WhisperModel instance for key: {cache_key}")
 
-    return whisper_model_cache[cache_key]
+        return whisper_model_cache[cache_key]
 
 
 # Transcribe .wav into .segments.json
@@ -2008,11 +2125,7 @@ def speech_to_text_qwen2audio(
         List of segments in whisper-compatible format
     """
     try:
-        logging.info("Transcribing with Qwen2Audio model")
-
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Qwen2Audio import (
-            transcribe_with_qwen2audio
-        )
+        logging.info("Transcribing with Qwen2Audio model via speech_to_text_qwen2audio")
 
         # Load audio data
         import numpy as np
@@ -2045,6 +2158,7 @@ def speech_to_text(
     cache_max_age_days: Optional[int] = None,
     cache_max_total_mb: Optional[float] = None,
     cache_max_files_per_source: Optional[int] = None,
+    initial_prompt: Optional[str] = None,
 ):
     """
     Transcribes an audio file to text using a specified faster-Whisper model.
@@ -2067,7 +2181,7 @@ def speech_to_text(
             used within this function's transcription logic.
 
     Returns:
-        A list of segment dictionaries. Each dictionary contains:
+        By default, a list of segment dictionaries. Each dictionary contains:
         - "start_seconds" (float): Start time of the segment in seconds.
         - "end_seconds" (float): End time of the segment in seconds.
         - "Text" (str): The transcribed text of the segment.
@@ -2075,6 +2189,11 @@ def speech_to_text(
           {"start": float, "end": float, "word": str} entries per segment.
         The first segment may include metadata about the transcription model
         and detected language prepended to its "Text" field.
+
+        When `return_language` is True, returns a tuple of
+        `(segments, language_or_none)` for all providers. For Whisper,
+        `language_or_none` is the detected language; for other providers it
+        will typically be the `selected_source_lang` value or None.
 
     Raises:
         ValueError: If `audio_file_path` is not provided or is invalid.
@@ -2097,12 +2216,15 @@ def speech_to_text(
     if provider == "parakeet":
         logging.info(f"Routing to Parakeet transcription with variant: {variant}")
         try:
-            return speech_to_text_parakeet(
+            segments_parakeet = speech_to_text_parakeet(
                 audio_file_path=audio_file_path,
                 variant=variant,
                 selected_source_lang=selected_source_lang,
                 vad_filter=vad_filter
             )
+            if return_language:
+                return segments_parakeet, selected_source_lang
+            return segments_parakeet
         except Exception as e:
             logging.error(f"Parakeet transcription failed, falling back to whisper: {e}")
             # Fall back to whisper
@@ -2112,11 +2234,14 @@ def speech_to_text(
     elif provider == "canary":
         logging.info("Routing to Canary transcription")
         try:
-            return speech_to_text_canary(
+            segments_canary = speech_to_text_canary(
                 audio_file_path=audio_file_path,
                 selected_source_lang=selected_source_lang,
                 vad_filter=vad_filter
             )
+            if return_language:
+                return segments_canary, selected_source_lang
+            return segments_canary
         except Exception as e:
             logging.error(f"Canary transcription failed, falling back to whisper: {e}")
             # Fall back to whisper
@@ -2126,11 +2251,14 @@ def speech_to_text(
     elif provider == "qwen2audio":
         logging.info("Routing to Qwen2Audio transcription")
         try:
-            return speech_to_text_qwen2audio(
+            segments_qwen = speech_to_text_qwen2audio(
                 audio_file_path=audio_file_path,
                 selected_source_lang=selected_source_lang,
                 vad_filter=vad_filter
             )
+            if return_language:
+                return segments_qwen, selected_source_lang
+            return segments_qwen
         except Exception as e:
             logging.error(f"Qwen2Audio transcription failed, falling back to whisper: {e}")
             # Fall back to whisper
@@ -2166,32 +2294,34 @@ def speech_to_text(
             options["word_timestamps"] = True
 
         transcribe_options = dict(task="transcribe", **options)
-        # Inject custom vocabulary as initial prompt if enabled
+        # Build an initial prompt: combine optional user prompt with
+        # custom vocabulary prompt (if enabled).
+        combined_prompt = None
+        if initial_prompt:
+            combined_prompt = str(initial_prompt).strip() or None
+
         try:
             from .Audio_Custom_Vocabulary import initial_prompt_if_enabled
             _init_prompt = initial_prompt_if_enabled()
             if _init_prompt:
-                transcribe_options["initial_prompt"] = _init_prompt
+                _init_prompt = str(_init_prompt).strip()
+                if _init_prompt:
+                    if combined_prompt:
+                        combined_prompt = f"{_init_prompt}\n{combined_prompt}"
+                    else:
+                        combined_prompt = _init_prompt
         except Exception as _cv_err:
             logging.debug(f"Custom vocab initial_prompt injection skipped: {_cv_err}")
 
-        # Check if model needs downloading first
-        model_result = get_whisper_model(whisper_model, processing_choice, check_download_status=True)
+        if combined_prompt:
+            transcribe_options["initial_prompt"] = combined_prompt
 
-        # Handle the case where model needs downloading
-        if isinstance(model_result, tuple) and model_result[0] is None:
-            _, status_info = model_result
-            logging.info(f"Model download status: {status_info}")
-            # Return special status to indicate model is downloading
-            return [{
-                "start_seconds": 0,
-                "end_seconds": 0,
-                "Text": f"[MODEL STATUS] {status_info['message']}",
-                "status": "model_downloading"
-            }]
-
-        # Get model instance (cached) - now without status check
-        whisper_model_instance = get_whisper_model(whisper_model, processing_choice, check_download_status=False)
+        # Get model instance (cached)
+        whisper_model_instance = get_whisper_model(
+            whisper_model,
+            processing_choice,
+            check_download_status=False,
+        )
 
         # Perform transcription
         segments_raw, info = whisper_model_instance.transcribe(str(file_path), **transcribe_options)

@@ -1391,17 +1391,33 @@ async def handle_unified_websocket(
             # Check if fallback to Whisper is enabled in config (module-level alias for test monkeypatching)
             comprehensive_config = load_comprehensive_config()
 
-            # ConfigParser returns a ConfigParser object, not a dict
-            fallback_enabled = False
+            # ConfigParser returns a ConfigParser object, not a dict.
+            # Default behavior: enable Whisper fallback when configuration is
+            # missing or unreadable so users with faster-whisper installed still
+            # get functional streaming without extra config.
+            fallback_enabled = True
             try:
                 if comprehensive_config.has_section('STT-Settings'):
-                    fallback_value = comprehensive_config.get('STT-Settings', 'streaming_fallback_to_whisper', fallback='false')
+                    fallback_value = comprehensive_config.get(
+                        'STT-Settings',
+                        'streaming_fallback_to_whisper',
+                        fallback='true',
+                    )
                     fallback_enabled = str(fallback_value).lower() == 'true'
-                    logger.info(f"Streaming fallback to Whisper enabled: {fallback_enabled}")
+                else:
+                    logger.info(
+                        "No [STT-Settings] section found in config; "
+                        "defaulting streaming_fallback_to_whisper=true. "
+                        "To disable, add [STT-Settings].streaming_fallback_to_whisper=false to config.txt."
+                    )
+                logger.info(f"Streaming fallback to Whisper enabled: {fallback_enabled}")
             except Exception as config_error:
-                logger.warning(f"Could not read streaming_fallback_to_whisper from config: {config_error}")
-                # Defer Whisper fallback unless explicitly configured
-                fallback_enabled = False
+                logger.warning(
+                    "Could not read streaming_fallback_to_whisper from config; "
+                    "defaulting to Whisper fallback enabled. "
+                    f"Error: {config_error}. To change, set [STT-Settings].streaming_fallback_to_whisper in config.txt."
+                )
+                fallback_enabled = True
 
             # Try to fall back to Whisper if enabled and not already using Whisper
             if fallback_enabled and config.model.lower() != 'whisper':

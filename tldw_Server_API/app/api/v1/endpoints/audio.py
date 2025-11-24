@@ -701,24 +701,34 @@ async def create_transcription(
         if not granularity_tokens:
             granularity_tokens = {"segment"}
 
-        # Map OpenAI model names to our providers
+        # Determine provider from requested model name.
+        # We reuse the core STT parser so that HTTP models like
+        # "parakeet-mlx", "parakeet-onnx", "qwen2audio-*" route
+        # consistently with the transcription library.
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+            transcribe_audio,
+            speech_to_text as fw_speech_to_text,
+            strip_whisper_metadata_header,
+            is_transcription_error_message as _is_transcription_error_message,
+            parse_transcription_model,
+        )
+
+        model_lower = (model or "").strip().lower()
+        # Preserve legacy aliases first (e.g., "qwen" → "qwen2audio")
+        if model_lower == "qwen":
+            provider_raw = "qwen2audio"
+        else:
+            provider_raw, _, _ = parse_transcription_model(model)
+
         provider_map = {
-            "whisper-1": "faster-whisper",
             "whisper": "faster-whisper",
             "parakeet": "parakeet",
             "canary": "canary",
             "qwen2audio": "qwen2audio",
-            "qwen": "qwen2audio"
         }
+        provider = provider_map.get(provider_raw, "faster-whisper")
 
-        provider = provider_map.get(model.lower(), "faster-whisper")
-
-        # Import transcription functions
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-            transcribe_audio,
-            speech_to_text as fw_speech_to_text,
-        )
-
+        # Import transcription functions and helpers (already imported above)
         # Get configuration for Nemo models
         from tldw_Server_API.app.core.config import load_and_log_configs
         config = load_and_log_configs()
@@ -748,6 +758,7 @@ async def create_transcription(
                 detail="Transcription quota exceeded (daily minutes)"
             )
         detected_language: Optional[str] = None
+        segments_for_timing: Optional[List[Dict[str, Any]]] = None
         # Wrap the heavy work to ensure we always release the job slot
         try:
             if provider == "faster-whisper":
@@ -763,6 +774,7 @@ async def create_transcription(
                         diarize=False,
                         word_timestamps=("word" in granularity_tokens),
                         return_language=True,
+                        initial_prompt=prompt,
                     )
                     if isinstance(result, tuple) and len(result) == 2:
                         segments_list, detected_language = result
@@ -770,6 +782,10 @@ async def create_transcription(
                         # Fallback: handle as plain segments list
                         segments_list, detected_language = result, None
 
+                    # For API-facing responses, strip Whisper metadata header from
+                    # the first segment's Text so clients see only user content.
+                    segments_list = strip_whisper_metadata_header(segments_list)
+                    segments_for_timing = segments_list
                     # Merge text
                     transcribed_text = " ".join(seg.get("Text", "").strip() for seg in segments_list if isinstance(seg, dict))
                 except Exception as e:
@@ -809,22 +825,8 @@ async def create_transcription(
                     f"Failed to release job slot in finally: user_id={current_user.id}, error={e}; request_id={rid}"
                 )
 
-        # Helper: detect various error messages
-        def is_transcription_error(msg: str) -> bool:
-            lower_msg = msg.lower()
-            return (
-                lower_msg.startswith("[error")
-                or lower_msg.startswith("[transcription error")
-                or lower_msg.startswith("canary transcription error")
-                or lower_msg.startswith("parakeet transcription error")
-                or lower_msg.startswith("external provider transcription error")
-                or lower_msg.startswith("nemo transcription module not available")
-                or lower_msg.startswith("failed to import nemo")
-                or lower_msg.startswith("failed to import external provider")
-            )
-
         # Check for errors in transcription
-        if is_transcription_error(transcribed_text):
+        if _is_transcription_error_message(transcribed_text):
             logger.error(f"Transcription failed: {transcribed_text}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -849,35 +851,101 @@ async def create_transcription(
             )
 
         # Format response based on requested format
-            if is_transcription_error(transcribed_text):
-                logger.error(f"Transcription failed: {transcribed_text}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Transcription failed. Please try again or use a different model."
-                )
         if response_format == "text":
             return Response(content=transcribed_text, media_type="text/plain")
 
         elif response_format == "srt":
-            if is_transcription_error(transcribed_text):
+            if _is_transcription_error_message(transcribed_text):
                 logger.error(f"Transcription failed: {transcribed_text}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Transcription failed. Please try again or use a different model."
                 )
-            # Simple SRT format (would need proper timing for real implementation)
-            srt_content = f"1\n00:00:00,000 --> 00:00:10,000\n{transcribed_text}\n"
+            # Prefer real segment timings for Whisper; otherwise fall back to a
+            # simple single-chunk SRT block.
+            if provider == "faster-whisper" and segments_for_timing:
+                lines: List[str] = []
+
+                def _fmt_srt_timestamp(total_seconds: float) -> str:
+                    try:
+                        if total_seconds is None:
+                            total_seconds = 0.0
+                        total_ms = int(round(max(float(total_seconds), 0.0) * 1000))
+                    except Exception:
+                        total_ms = 0
+                    seconds, ms = divmod(total_ms, 1000)
+                    hours, seconds = divmod(seconds, 3600)
+                    minutes, seconds = divmod(seconds, 60)
+                    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{ms:03d}"
+
+                idx = 1
+                for seg in segments_for_timing:
+                    if not isinstance(seg, dict):
+                        continue
+                    text_seg = str(seg.get("Text", "")).strip()
+                    if not text_seg:
+                        continue
+                    start = seg.get("start_seconds", 0.0)
+                    end = seg.get("end_seconds", start)
+                    start_ts = _fmt_srt_timestamp(start)
+                    end_ts = _fmt_srt_timestamp(end)
+                    lines.append(str(idx))
+                    lines.append(f"{start_ts} --> {end_ts}")
+                    lines.append(text_seg)
+                    lines.append("")
+                    idx += 1
+
+                if lines:
+                    srt_content = "\n".join(lines).rstrip() + "\n"
+                else:
+                    srt_content = f"1\n00:00:00,000 --> 00:00:10,000\n{transcribed_text}\n"
+            else:
+                # Simple SRT format fallback when timing information is unavailable
+                srt_content = f"1\n00:00:00,000 --> 00:00:10,000\n{transcribed_text}\n"
             return Response(content=srt_content, media_type="text/plain")
 
         elif response_format == "vtt":
-            if is_transcription_error(transcribed_text):
+            if _is_transcription_error_message(transcribed_text):
                 logger.error(f"Transcription failed: {transcribed_text}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Transcription failed. Please try again or use a different model."
                 )
-            # Simple VTT format
-            vtt_content = f"WEBVTT\n\n00:00:00.000 --> 00:00:10.000\n{transcribed_text}\n"
+            # Prefer real segment timings for Whisper; otherwise use a simple
+            # single-chunk VTT block.
+            if provider == "faster-whisper" and segments_for_timing:
+                lines_vtt: List[str] = ["WEBVTT", ""]
+
+                def _fmt_vtt_timestamp(total_seconds: float) -> str:
+                    try:
+                        if total_seconds is None:
+                            total_seconds = 0.0
+                        total_ms = int(round(max(float(total_seconds), 0.0) * 1000))
+                    except Exception:
+                        total_ms = 0
+                    seconds, ms = divmod(total_ms, 1000)
+                    hours, seconds = divmod(seconds, 3600)
+                    minutes, seconds = divmod(seconds, 60)
+                    return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{ms:03d}"
+
+                for seg in segments_for_timing:
+                    if not isinstance(seg, dict):
+                        continue
+                    text_seg = str(seg.get("Text", "")).strip()
+                    if not text_seg:
+                        continue
+                    start = seg.get("start_seconds", 0.0)
+                    end = seg.get("end_seconds", start)
+                    start_ts = _fmt_vtt_timestamp(start)
+                    end_ts = _fmt_vtt_timestamp(end)
+                    lines_vtt.append(f"{start_ts} --> {end_ts}")
+                    lines_vtt.append(text_seg)
+                    lines_vtt.append("")
+
+                vtt_content = "\n".join(lines_vtt).rstrip() + "\n"
+            else:
+                # Simple VTT fallback when timing information is unavailable
+                vtt_content = f"WEBVTT\n\n00:00:00.000 --> 00:00:10.000\n{transcribed_text}\n"
             return Response(content=vtt_content, media_type="text/vtt")
 
         else:  # json or verbose_json
@@ -1821,13 +1889,9 @@ async def websocket_transcribe(
         FAIL_OPEN_CAP_MINUTES = _get_failopen_cap_minutes()
         failopen_remaining = FAIL_OPEN_CAP_MINUTES
 
-        def _on_audio(seconds: float, sr: int) -> None:
-            nonlocal used_minutes
-            # Check allowance before processing
-            minutes_chunk = float(seconds) / 60.0
-            # Note: async check in sync callback not ideal; fast path uses last known remaining
-            # For MVP, perform a quick synchronous budget check using a cached remaining
-            used_minutes += minutes_chunk
+        # Local snapshot of remaining minutes for this connection; when None,
+        # the next chunk will trigger a DB refresh.
+        remaining_minutes_snapshot: Optional[float] = None
 
         try:
             # Use shared exception class so inner handler can bubble it up
@@ -1848,11 +1912,21 @@ async def websocket_transcribe(
                     - Checks whether the user's remaining daily minutes allow this chunk; if allowed, increments the nonlocal
                       `used_minutes` counter and records the minutes via `add_daily_minutes`.
                 """
-                nonlocal used_minutes, failopen_remaining
+                nonlocal used_minutes, failopen_remaining, remaining_minutes_snapshot
                 minutes_chunk = float(seconds) / 60.0
                 deducted = False
+                # Fast-path local check: if we have a remaining snapshot and this
+                # chunk would exceed it, raise immediately without a DB round-trip.
+                if remaining_minutes_snapshot is not None and minutes_chunk > remaining_minutes_snapshot:
+                    raise _QuotaExceeded("daily_minutes")
+
+                # Refresh remaining snapshot periodically by asking the DB for this
+                # chunk; on success, we treat the returned "remaining_after" value
+                # as the new snapshot.
                 try:
-                    allow, _ = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
+                    allow, remaining_after = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
+                    if allow and remaining_after is not None:
+                        remaining_minutes_snapshot = float(remaining_after)
                 except EXPECTED_DB_EXC as e:
                     # Backing store failed; allow temporarily but deduct from bounded fail-open budget
                     logger.warning(
@@ -1880,6 +1954,11 @@ async def websocket_transcribe(
                     # Raise structured signal to outer scope
                     raise _QuotaExceeded("daily_minutes")
                 used_minutes += minutes_chunk
+                # Reduce the local snapshot so subsequent chunks can be checked
+                # without hitting the DB until it is exhausted or refreshed on
+                # the next successful check.
+                if remaining_minutes_snapshot is not None:
+                    remaining_minutes_snapshot = max(0.0, remaining_minutes_snapshot - minutes_chunk)
                 try:
                     await add_daily_minutes(user_id_for_usage, minutes_chunk)
                 except EXPECTED_DB_EXC as e:
