@@ -56,6 +56,16 @@ process_audio_files(
 
  Tip: To check if a model is ready/downloaded before processing, use `check_transcription_model_status(model_name)` from the same module. `process_audio_files` performs a preflight check for Whisper models and surfaces the status as a warning in each item result.
 
+ Performance notes:
+ - `convert_to_wav(...)` performs a preflight validation using `ffprobe` by default (via `validate_audio_file(...)`) and then runs the actual `ffmpeg` conversion. In high-throughput deployments you can disable this pre-validation by setting either:
+   - `[STT-Settings] skip_audio_prevalidation = true` in `config.txt`, or
+   - `STT_SKIP_AUDIO_PREVALIDATION=1` in the environment.  
+   In that mode, invalid files are left for `ffmpeg` to handle directly.
+ - Transcript cache pruning (`prune_transcript_cache(...)`) runs inline after successful STT when transcript persistence is enabled. To avoid any pruning work on the hot path (for example, when you manage cache directories via an external job), set:
+   - `[STT-Settings] disable_transcript_cache_pruning = true`, or
+   - `STT_DISABLE_TRANSCRIPT_CACHE_PRUNING=1`.  
+   The server will continue to write transcripts but skip age/size-based cleanup.
+
 ### Return Structure (batch)
 
 ```

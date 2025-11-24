@@ -153,6 +153,57 @@ def test_convert_to_wav_avoids_redundant_version_checks(monkeypatch, tmp_path):
 
 
 @pytest.mark.unit
+def test_convert_to_wav_can_skip_prevalidation(monkeypatch, tmp_path):
+    """
+    When STT_SKIP_AUDIO_PREVALIDATION / skip_audio_prevalidation is enabled,
+    convert_to_wav should not invoke validate_audio_file.
+    """
+    input_file = tmp_path / "input_skip.mp3"
+    input_file.write_bytes(b"\x00" * 2048)
+
+    commands = []
+
+    def fake_run(cmd, *args, **kwargs):
+        commands.append(cmd)
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        # Simulate ffmpeg writing the output file during the conversion command
+        if "-i" in cmd and cmd:
+            output_target = Path(cmd[-1])
+            output_target.write_bytes(b"RIFF")
+
+        return Result()
+
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+
+    # Ensure any calls to validate_audio_file would fail the test if prevalidation is not skipped.
+    def _fail_validate(_):
+        raise AssertionError("validate_audio_file should not be called when prevalidation is skipped")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.validate_audio_file",
+        _fail_validate,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.subprocess.run",
+        fake_run,
+    )
+
+    # Flip the module-level flag to skip prevalidation for this test.
+    original_skip = atlib.SKIP_AUDIO_PREVALIDATION
+    atlib.SKIP_AUDIO_PREVALIDATION = True
+    try:
+        output_path = convert_to_wav(str(input_file), overwrite=True)
+        assert Path(output_path).suffix == ".wav"
+    finally:
+        atlib.SKIP_AUDIO_PREVALIDATION = original_skip
+
+
+@pytest.mark.unit
 def test_audio_transcription_lib_processing_choice_safe_when_config_missing(monkeypatch):
     """
     Audio_Transcription_Lib should not raise at import time

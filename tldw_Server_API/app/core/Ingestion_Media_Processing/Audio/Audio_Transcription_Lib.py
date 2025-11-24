@@ -119,6 +119,14 @@ CACHE_MAX_FILES_PER_SOURCE = _coerce_int(_cache_cfg.get("transcript_cache_max_fi
 CACHE_MAX_AGE_DAYS = _coerce_int(_cache_cfg.get("transcript_cache_max_age_days") or os.getenv("STT_CACHE_MAX_AGE_DAYS"))
 CACHE_MAX_TOTAL_MB = _coerce_float(_cache_cfg.get("transcript_cache_max_total_mb") or os.getenv("STT_CACHE_MAX_TOTAL_MB"))
 
+_env_skip_prevalidation = _to_bool(os.getenv("STT_SKIP_AUDIO_PREVALIDATION", ""))
+_cfg_skip_prevalidation = _cache_cfg.get("skip_audio_prevalidation", False)
+SKIP_AUDIO_PREVALIDATION = _to_bool(_cfg_skip_prevalidation) or _env_skip_prevalidation
+
+_env_disable_prune = _to_bool(os.getenv("STT_DISABLE_TRANSCRIPT_CACHE_PRUNING", ""))
+_cfg_disable_prune = _cache_cfg.get("disable_transcript_cache_pruning", False)
+DISABLE_TRANSCRIPT_CACHE_PRUNING = _to_bool(_cfg_disable_prune) or _env_disable_prune
+
 
 def _resolve_project_root() -> Path:
     """Return the repository root to anchor shared model directories."""
@@ -135,6 +143,8 @@ def _resolve_project_root() -> Path:
 
 PROJECT_ROOT_DIR = _resolve_project_root()
 WHISPER_MODEL_BASE_DIR = (PROJECT_ROOT_DIR / "models" / "Whisper").resolve()
+
+_AUDIO_VALIDATION_CACHE: Dict[str, tuple] = {}
 
 def prune_transcript_cache(
     cache_dir: Path,
@@ -154,6 +164,8 @@ def prune_transcript_cache(
         max_total_mb: Delete oldest files until total size is under limit (None disables).
         max_files_per_source: Keep only the newest N files per base source (None disables).
     """
+    if DISABLE_TRANSCRIPT_CACHE_PRUNING:
+        return
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
     except Exception:
@@ -2513,9 +2525,15 @@ def validate_audio_file(file_path: str) -> tuple:
         if not path.exists():
             return False, "File does not exist"
 
-        file_size = path.stat().st_size
+        stat = path.stat()
+        file_size = stat.st_size
         if file_size < 1024:  # Less than 1KB
             return False, f"File too small ({file_size} bytes), likely corrupted"
+
+        cache_key = str(path.resolve())
+        cached = _AUDIO_VALIDATION_CACHE.get(cache_key)
+        if cached and cached[0] == stat.st_mtime:
+            return cached[1], cached[2]
 
         # Find ffprobe command
         ffmpeg_cmd = _find_ffmpeg()
@@ -2556,6 +2574,9 @@ def validate_audio_file(file_path: str) -> tuple:
             if not result.stdout.strip():
                 return False, "No audio stream detected"
 
+        # Cache successful validation result keyed by file path + mtime so
+        # repeated conversions of the same file avoid an extra ffprobe call.
+        _AUDIO_VALIDATION_CACHE[cache_key] = (stat.st_mtime, True, "")
         return True, ""
 
     except subprocess.TimeoutExpired:
@@ -2680,51 +2701,54 @@ def convert_to_wav(
         raise RuntimeError(error_msg) from e
 
 
-    # Validate the audio file first
-    is_valid, validation_msg = validate_audio_file(str(input_path))
-    if not is_valid:
-        logging.warning(f"Audio file validation warning for '{input_path.name}': {validation_msg}")
-        # For critical validation failures, we should fail early
-        if "0 channels" in validation_msg or "No audio stream" in validation_msg or "too small" in validation_msg:
-            logging.error(f"Critical audio file issue detected, cannot proceed with conversion: {validation_msg}")
+    # Validate the audio file first (optional preflight). This can be disabled
+    # via STT_SKIP_AUDIO_PREVALIDATION / [STT-Settings].skip_audio_prevalidation
+    # for throughput-critical deployments that prefer to rely on ffmpeg alone.
+    if not SKIP_AUDIO_PREVALIDATION:
+        is_valid, validation_msg = validate_audio_file(str(input_path))
+        if not is_valid:
+            logging.warning(f"Audio file validation warning for '{input_path.name}': {validation_msg}")
+            # For critical validation failures, we should fail early
+            if "0 channels" in validation_msg or "No audio stream" in validation_msg or "too small" in validation_msg:
+                logging.error(f"Critical audio file issue detected, cannot proceed with conversion: {validation_msg}")
 
-            # Special handling for potential format mismatch (e.g., m4a file with .mp3 extension)
-            if str(input_path).lower().endswith('.mp3') and "0 channels" in validation_msg:
-                logging.info("Possible format mismatch detected. Checking if file is actually a different format...")
+                # Special handling for potential format mismatch (e.g., m4a file with .mp3 extension)
+                if str(input_path).lower().endswith('.mp3') and "0 channels" in validation_msg:
+                    logging.info("Possible format mismatch detected. Checking if file is actually a different format...")
 
-                # Try to detect actual format using ffprobe
-                try:
-                    ffprobe_cmd = ffmpeg_cmd.replace('ffmpeg', 'ffprobe') if 'ffmpeg' in ffmpeg_cmd else 'ffprobe'
-                    probe_result = subprocess.run(
-                        [ffprobe_cmd, "-v", "error", "-show_entries", "format=format_name",
-                         "-of", "default=noprint_wrappers=1:nokey=1", str(input_path)],
-                        capture_output=True,
-                        text=True,
-                        timeout=5
-                    )
+                    # Try to detect actual format using ffprobe
+                    try:
+                        ffprobe_cmd = ffmpeg_cmd.replace('ffmpeg', 'ffprobe') if 'ffmpeg' in ffmpeg_cmd else 'ffprobe'
+                        probe_result = subprocess.run(
+                            [ffprobe_cmd, "-v", "error", "-show_entries", "format=format_name",
+                             "-of", "default=noprint_wrappers=1:nokey=1", str(input_path)],
+                            capture_output=True,
+                            text=True,
+                            timeout=5
+                        )
 
-                    if probe_result.returncode == 0 and probe_result.stdout.strip():
-                        detected_format = probe_result.stdout.strip()
-                        logging.info(f"Detected actual format: {detected_format}")
+                        if probe_result.returncode == 0 and probe_result.stdout.strip():
+                            detected_format = probe_result.stdout.strip()
+                            logging.info(f"Detected actual format: {detected_format}")
 
-                        # If it's actually m4a/mp4 audio, we can try to process it
-                        if 'mp4' in detected_format or 'm4a' in detected_format or 'mov' in detected_format:
-                            logging.info("File appears to be MP4/M4A format despite .mp3 extension. Will attempt conversion with format override.")
-                            # Don't raise error, let FFmpeg try with proper format detection
+                            # If it's actually m4a/mp4 audio, we can try to process it
+                            if 'mp4' in detected_format or 'm4a' in detected_format or 'mov' in detected_format:
+                                logging.info("File appears to be MP4/M4A format despite .mp3 extension. Will attempt conversion with format override.")
+                                # Don't raise error, let FFmpeg try with proper format detection
+                            else:
+                                raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
                         else:
                             raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
-                    else:
-                        raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
 
-                except subprocess.TimeoutExpired:
-                    logging.error("Format detection timed out")
+                    except subprocess.TimeoutExpired:
+                        logging.error("Format detection timed out")
+                        raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
+                    except Exception as e:
+                        logging.error(f"Error during format detection: {e}")
+                        raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
+                else:
                     raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
-                except Exception as e:
-                    logging.error(f"Error during format detection: {e}")
-                    raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
-            else:
-                raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
-        # For other issues, continue anyway as FFmpeg might still handle it
+            # For other issues, continue anyway as FFmpeg might still handle it
 
     logging.info(f"Starting conversion to WAV: '{input_path.name}' -> '{out_path.name}'")
 
