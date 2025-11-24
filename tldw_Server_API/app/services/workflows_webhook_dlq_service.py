@@ -223,6 +223,18 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
                 tenant_id = str(r.get("tenant_id") or "default")
                 url = str(r.get("url") or "")
                 attempts = int(r.get("attempts") or 0)
+                # Mark that we are attempting a delivery now so callers observing mid-loop
+                # see attempts >= 1 even before backoff bookkeeping is applied.
+                current_attempt = attempts + 1
+                try:
+                    db.update_webhook_dlq_failure(
+                        dlq_id=dlq_id,
+                        last_error=r.get("last_error") or "",
+                        next_attempt_at_iso=None,
+                        attempts=current_attempt,
+                    )
+                except Exception:
+                    current_attempt = attempts + 1
                 try:
                     body = json.loads(r.get("body_json") or "{}")
                 except Exception as e:
@@ -242,7 +254,7 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
                         dlq_id=dlq_id,
                         last_error="denied_by_policy",
                         next_attempt_at_iso=None,
-                        attempts=attempts + 1,
+                        attempts=current_attempt,
                     )
                     continue
 
@@ -265,7 +277,7 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
                     continue
 
                 # Failure: compute next backoff
-                next_delay = _compute_next_backoff(attempts)
+                next_delay = _compute_next_backoff(current_attempt)
                 try:
                     import datetime as _dt
                     next_at = (_dt.datetime.utcnow() + _dt.timedelta(seconds=next_delay)).isoformat()

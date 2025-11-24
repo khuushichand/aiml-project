@@ -25,6 +25,7 @@ https://arxiv.org/abs/2406.07599
 https://github.com/waynchi/editbench
 https://github.com/argmaxinc/OpenBench/blob/main/BENCHMARKS.md#real-time-transcription
 https://github.com/FluidInference/FluidAudio/blob/main/Documentation/Benchmarks.md
+https://speechmap.ai/models/
 https://github.com/microsoft/SecRL
 https://github.com/semvec/embedstresstest
 https://github.com/t3dotgg/SnitchBench

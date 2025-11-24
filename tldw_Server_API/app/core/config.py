@@ -301,8 +301,18 @@ def load_tts_config() -> Dict[str, Any]:
         Dictionary containing TTS configuration
     """
     current_file_path = Path(__file__).resolve()
-    # Navigate to TTS config file: .../tldw_Server_API/app/core/TTS/tts_providers_config.yaml
-    tts_config_path = current_file_path.parent / 'TTS' / 'tts_providers_config.yaml'
+    candidate_paths = [
+        current_file_path.parent / 'TTS' / 'tts_providers_config.yaml',
+        current_file_path.parent.parent / 'Config_Files' / 'tts_providers_config.yaml',
+        Path.cwd() / 'tldw_Server_API' / 'Config_Files' / 'tts_providers_config.yaml',
+    ]
+    tts_config_path = None
+    for p in candidate_paths:
+        if p.exists():
+            tts_config_path = p
+            break
+    if tts_config_path is None:
+        tts_config_path = candidate_paths[0]
 
     _log_info(f"Loading TTS configuration from: {tts_config_path}")
 

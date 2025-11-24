@@ -59,7 +59,6 @@ class StreamingAudioWriter:
         if self.format in ["wav", "flac", "mp3", "pcm", "aac", "opus"]:
             # WAV is handled via raw PCM buffering (with optional disk spill) so we
             # can rewrite the header on finalize without holding unbounded memory.
-            self._defer_until_finalize = self.format == "wav"
             if self.format == "wav":
                 self.output_buffer = BytesIO()
             elif self.format != "pcm":
@@ -105,8 +104,12 @@ class StreamingAudioWriter:
         Write a chunk of audio data and return bytes in the target format.
 
         Args:
-            audio_data: NumPy array of audio samples (int16)
-            finalize: If True, flush and finalize the stream
+            audio_data: NumPy array of audio samples (int16). When `finalize` is
+                True, this argument is ignored.
+            finalize: If True, flush and finalize the stream. The expected call
+                pattern is one or more `write_chunk(audio_data=...)` calls
+                followed by a final `write_chunk(finalize=True)` call; do not
+                combine `audio_data` and `finalize=True` in a single call.
 
         Returns:
             Bytes of encoded audio in the target format
@@ -123,6 +126,7 @@ class StreamingAudioWriter:
 
                 # Close the container to write final data
                 self.container.close()
+                self.container = None
 
                 # Return only the new bytes written since the last chunk,
                 # to avoid duplicating audio when concatenating chunks.
@@ -135,6 +139,7 @@ class StreamingAudioWriter:
                     f"total_bytes={self.bytes_written}"
                 )
                 self.output_buffer.close()
+                self.output_buffer = None
                 return data
             else:
                 logger.debug("StreamingAudioWriter finalize: PCM format, no trailer bytes")
@@ -169,13 +174,6 @@ class StreamingAudioWriter:
             # For streaming, we need to read what's been written so far
             # This is not ideal for all formats but works for streaming
             current_pos = self.output_buffer.tell()
-            if getattr(self, "_defer_until_finalize", False):
-                # WAV headers are rewritten on close; avoid returning provisional bytes
-                logger.debug(
-                    f"StreamingAudioWriter chunk: format={self.format}, samples={len(audio_data)}, "
-                    f"new_bytes=0, total_bytes={current_pos} (deferred until finalize)"
-                )
-                return b""
             self.output_buffer.seek(self.bytes_written)
             data = self.output_buffer.read(current_pos - self.bytes_written)
             self.bytes_written = current_pos
@@ -187,10 +185,12 @@ class StreamingAudioWriter:
 
     def close(self):
         """Clean up resources."""
-        if hasattr(self, "container"):
+        container = getattr(self, "container", None)
+        if container is not None:
             try:
                 # Some container implementations do not expose .closed; best-effort close.
-                self.container.close()
+                container.close()
+                self.container = None
             except Exception as e:
                 logger.error(f"Error closing container: {e}")
 
@@ -198,14 +198,18 @@ class StreamingAudioWriter:
         if buf is not None:
             try:
                 buf.close()
+                self.output_buffer = None
             except Exception as e:
                 logger.error(f"Error closing output buffer: {e}")
 
-        if getattr(self, "_wav_file_path", None):
+        wav_path = getattr(self, "_wav_file_path", None)
+        if wav_path:
             try:
-                os.remove(self._wav_file_path)  # type: ignore[arg-type]
-            except Exception:
-                pass
+                os.remove(wav_path)
+            except OSError as e:
+                logger.debug(f"Error removing WAV temp file {wav_path}: {e}")
+            finally:
+                self._wav_file_path = None
 
     #
     # WAV-specific helpers
@@ -281,6 +285,7 @@ class StreamingAudioWriter:
             f"wav_bytes={len(data)}, pcm_bytes={len(pcm_bytes)}"
         )
         buf.close()
+        self.output_buffer = None
         return data
 
     def _finalize_wav_from_file(self) -> bytes:
@@ -318,8 +323,8 @@ class StreamingAudioWriter:
                 if path:
                     try:
                         os.remove(path)
-                    except Exception:
-                        pass
+                    except OSError as e:
+                        logger.debug(f"Error removing temp WAV file {path}: {e}")
             self._wav_file_path = None
 
 

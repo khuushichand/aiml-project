@@ -648,6 +648,16 @@ custom_vocab_prompt_template = Domain terms: {terms}.
 # When True, replacements are case-sensitive
 custom_vocab_case_sensitive = False
 
+# --- Transcript cache + retention ---
+# Disable writing transcription cache files (env override: STT_DISABLE_TRANSCRIPT_CACHE)
+disable_transcript_cache = false
+# Max cached transcript files per source (newest kept). Empty/None to disable.
+transcript_cache_max_files_per_source =
+# Delete cached transcripts older than this many days. Empty/None to disable.
+transcript_cache_max_age_days =
+# Cap total transcript cache size (MB) per directory. Oldest files evicted first. Empty/None to disable.
+transcript_cache_max_total_mb =
+
 [external_providers]
 
 [TTS-Settings]

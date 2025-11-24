@@ -17,7 +17,8 @@ from .adapters.base import TTSAdapter, TTSCapabilities, ProviderStatus, AudioFor
 from .tts_exceptions import (
     TTSProviderNotConfiguredError,
     TTSProviderInitializationError,
-    TTSModelNotFoundError
+    TTSModelNotFoundError,
+    TTSError,
 )
 from .tts_resource_manager import get_resource_manager
 from .utils import parse_bool
@@ -46,6 +47,7 @@ class TTSProvider(Enum):
     VIBEVOICE = "vibevoice"
     NEUTTS = "neutts"
     INDEX_TTS = "index_tts"
+    SUPERTONIC = "supertonic"
     # Additional providers
     ALLTALK = "alltalk"  # TODO: Implement AllTalk adapter
     MOCK = "mock"  # Mock provider for testing
@@ -68,6 +70,7 @@ class TTSAdapterRegistry:
         TTSProvider.VIBEVOICE: "tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter.VibeVoiceAdapter",
         TTSProvider.NEUTTS: "tldw_Server_API.app.core.TTS.adapters.neutts_adapter.NeuTTSAdapter",
         TTSProvider.INDEX_TTS: "tldw_Server_API.app.core.TTS.adapters.index_tts_adapter.IndexTTS2Adapter",
+        TTSProvider.SUPERTONIC: "tldw_Server_API.app.core.TTS.adapters.supertonic_adapter.SupertonicOnnxAdapter",
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -323,6 +326,9 @@ class TTSAdapterRegistry:
                 return False
 
         except Exception as e:
+            if isinstance(e, TTSError):
+                logger.error(f"Error initializing {provider.value} adapter: {e}")
+                raise
             logger.error(f"Error initializing {provider.value} adapter: {e}")
             # Don't store failed adapter - it will be retried next time
             return False
@@ -473,7 +479,7 @@ class TTSAdapterRegistry:
             # Only try to get adapters that are likely to work quickly
             # Skip local model providers in testing unless explicitly enabled
             if provider in [TTSProvider.KOKORO, TTSProvider.HIGGS, TTSProvider.DIA,
-                           TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE]:
+                           TTSProvider.CHATTERBOX, TTSProvider.VIBEVOICE, TTSProvider.SUPERTONIC]:
                 # Check if explicitly enabled in config
                 if self.config_manager:
                     if not self.config_manager.is_provider_enabled(provider.value):
@@ -730,6 +736,11 @@ class TTSAdapterFactory:
         "neuphonic/neutts-air": TTSProvider.NEUTTS,
         "neutts-air-q4-gguf": TTSProvider.NEUTTS,
         "neutts-air-q8-gguf": TTSProvider.NEUTTS,
+
+        # Supertonic models (canonical + aliases)
+        "tts-supertonic-1": TTSProvider.SUPERTONIC,
+        "supertonic": TTSProvider.SUPERTONIC,
+        "supertonic-onnx": TTSProvider.SUPERTONIC,
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):

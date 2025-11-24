@@ -1078,12 +1078,12 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
         Returns:
             Transcribed text
         """
+        tmp_path: Optional[Path] = None
         try:
             # Save audio to temporary file (Whisper needs file input)
-            import tempfile
-            import soundfile as sf
-
+            import soundfile as sf  # type: ignore
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                tmp_path = Path(tmp_file.name)
                 sf.write(tmp_file.name, audio_np, self.config.sample_rate)
 
                 # Transcribe using Whisper
@@ -1096,9 +1096,6 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
                 text_parts = []
                 for segment in segments_raw:
                     text_parts.append(segment.text.strip())
-
-                # Clean up temp file
-                Path(tmp_file.name).unlink()
 
                 # Join all text parts
                 text = " ".join(text_parts)
@@ -1118,6 +1115,12 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
         except Exception as e:
             logger.error(f"Error during Whisper transcription: {e}")
             return ""
+        finally:
+            if tmp_path:
+                try:
+                    tmp_path.unlink(missing_ok=True)  # type: ignore[arg-type]
+                except Exception:
+                    pass
 
 
 class UnifiedStreamingTranscriber:

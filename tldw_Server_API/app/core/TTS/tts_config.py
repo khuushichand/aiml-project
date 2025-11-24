@@ -188,10 +188,37 @@ class TTSConfigManager:
 
         # 2. Load config.txt settings
         if self.config_txt_path and self.config_txt_path.exists():
-            config_dict.update(self._load_config_txt())
+            cfg_txt = self._load_config_txt()
+            if "providers" in cfg_txt and "providers" in config_dict:
+                # Deep-merge provider settings instead of clobbering the YAML list
+                providers = config_dict.get("providers", {}).copy()
+                for prov, prov_cfg in cfg_txt.get("providers", {}).items():
+                    base = providers.get(prov, {})
+                    if isinstance(base, dict) and isinstance(prov_cfg, dict):
+                        merged = base.copy()
+                        merged.update(prov_cfg)
+                        providers[prov] = merged
+                    else:
+                        providers[prov] = prov_cfg
+                config_dict["providers"] = providers
+                cfg_txt = {k: v for k, v in cfg_txt.items() if k != "providers"}
+            config_dict.update(cfg_txt)
 
         # 3. Apply environment variable overrides
-        config_dict.update(self._load_env_overrides())
+        cfg_env = self._load_env_overrides()
+        if "providers" in cfg_env and "providers" in config_dict:
+            providers = config_dict.get("providers", {}).copy()
+            for prov, prov_cfg in cfg_env.get("providers", {}).items():
+                base = providers.get(prov, {})
+                if isinstance(base, dict) and isinstance(prov_cfg, dict):
+                    merged = base.copy()
+                    merged.update(prov_cfg)
+                    providers[prov] = merged
+                else:
+                    providers[prov] = prov_cfg
+            config_dict["providers"] = providers
+            cfg_env = {k: v for k, v in cfg_env.items() if k != "providers"}
+        config_dict.update(cfg_env)
 
         # 4. Create configuration object
         self._config = TTSConfig(**config_dict)

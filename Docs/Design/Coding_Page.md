@@ -17,6 +17,9 @@ https://potpie.ai/
 https://github.com/presstab/jrdev
 https://github.com/rmusser01/slice
 https://github.com/coderabbitai/git-worktree-runner
+https://github.com/mrgoonie/claudekit-skills/tree/main
+
+
 
 ### Link Dump:
 repo2txt integration/clone https://github.com/abinthomasonline/repo2txt

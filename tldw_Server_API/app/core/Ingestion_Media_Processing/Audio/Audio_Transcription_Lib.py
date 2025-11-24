@@ -20,6 +20,7 @@ import multiprocessing
 import os
 import shutil
 from pathlib import Path
+from datetime import datetime, timedelta
 import queue
 import subprocess
 import sys
@@ -85,6 +86,39 @@ media_config = loaded_config_data.get('media_processing', {}) if loaded_config_d
 AUDIO_TRANSCRIPTION_BUFFER_SIZE_MB = media_config.get('audio_transcription_buffer_size_mb', 10)
 """int: Maximum buffer size for audio transcription in MB."""
 
+# Transcript cache settings (env overrides config)
+def _stt_cache_config():
+    cfg = loaded_config_data
+    try:
+        cfg = cfg() if callable(cfg) else cfg
+    except Exception:
+        pass
+    return cfg.get("STT-Settings", {}) if cfg else {}
+
+
+_cache_cfg = _stt_cache_config()
+def _to_bool(val) -> bool:
+    return str(val).lower() in {"1", "true", "yes", "on"}
+
+_env_disable = _to_bool(os.getenv("STT_DISABLE_TRANSCRIPT_CACHE", ""))
+_cfg_disable = _cache_cfg.get("disable_transcript_cache", False)
+PERSIST_TRANSCRIPTS_DEFAULT = not (_to_bool(_cfg_disable) or _env_disable)
+def _coerce_int(val):
+    try:
+        return int(val)
+    except Exception:
+        return None
+
+def _coerce_float(val):
+    try:
+        return float(val)
+    except Exception:
+        return None
+
+CACHE_MAX_FILES_PER_SOURCE = _coerce_int(_cache_cfg.get("transcript_cache_max_files_per_source") or os.getenv("STT_CACHE_MAX_FILES_PER_SOURCE"))
+CACHE_MAX_AGE_DAYS = _coerce_int(_cache_cfg.get("transcript_cache_max_age_days") or os.getenv("STT_CACHE_MAX_AGE_DAYS"))
+CACHE_MAX_TOTAL_MB = _coerce_float(_cache_cfg.get("transcript_cache_max_total_mb") or os.getenv("STT_CACHE_MAX_TOTAL_MB"))
+
 
 def _resolve_project_root() -> Path:
     """Return the repository root to anchor shared model directories."""
@@ -101,6 +135,93 @@ def _resolve_project_root() -> Path:
 
 PROJECT_ROOT_DIR = _resolve_project_root()
 WHISPER_MODEL_BASE_DIR = (PROJECT_ROOT_DIR / "models" / "Whisper").resolve()
+
+def prune_transcript_cache(
+    cache_dir: Path,
+    *,
+    current_file: Optional[Path] = None,
+    max_age_days: Optional[int] = CACHE_MAX_AGE_DAYS,
+    max_total_mb: Optional[float] = CACHE_MAX_TOTAL_MB,
+    max_files_per_source: Optional[int] = CACHE_MAX_FILES_PER_SOURCE,
+) -> None:
+    """
+    Prune cached transcript files by age, total size, and per-source limits.
+
+    Args:
+        cache_dir: Directory containing transcript cache files.
+        current_file: File that was just written; always preserved.
+        max_age_days: Delete files older than this many days (None disables).
+        max_total_mb: Delete oldest files until total size is under limit (None disables).
+        max_files_per_source: Keep only the newest N files per base source (None disables).
+    """
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+
+    files = sorted(
+        cache_dir.glob("*-whisper_model-*.segments*.json"),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0,
+        reverse=True,
+    )
+    if current_file:
+        files = [f for f in files if f.exists()]
+
+    now = datetime.now().timestamp()
+
+    def _unlink(path: Path):
+        try:
+            path.unlink(missing_ok=True)  # type: ignore[arg-type]
+        except Exception:
+            pass
+
+    # Age-based pruning
+    if max_age_days is not None and max_age_days >= 0:
+        cutoff = now - (max_age_days * 86400)
+        for f in list(files):
+            if f == current_file:
+                continue
+            try:
+                if f.stat().st_mtime < cutoff:
+                    _unlink(f)
+                    files.remove(f)
+            except FileNotFoundError:
+                files.remove(f)
+
+    # Per-source limit (group by base name before ".segments")
+    if max_files_per_source is not None and max_files_per_source > 0:
+        grouped: Dict[str, List[Path]] = {}
+        for f in files:
+            key = f.name.split(".segments")[0]
+            grouped.setdefault(key, []).append(f)
+        for paths in grouped.values():
+            # paths already sorted newest→oldest
+            for old in paths[max_files_per_source:]:
+                if old == current_file:
+                    continue
+                _unlink(old)
+                files.remove(old)
+
+    # Total size pruning
+    if max_total_mb is not None and max_total_mb > 0:
+        def _file_size(path: Path) -> int:
+            try:
+                return path.stat().st_size
+            except FileNotFoundError:
+                return 0
+
+        # Re-sort oldest→newest for eviction
+        files_sorted_oldest = sorted(files, key=lambda p: p.stat().st_mtime if p.exists() else 0)
+        total_bytes = sum(_file_size(f) for f in files)
+        limit_bytes = max_total_mb * 1024 * 1024
+        idx = 0
+        while total_bytes > limit_bytes and idx < len(files_sorted_oldest):
+            victim = files_sorted_oldest[idx]
+            idx += 1
+            if victim == current_file:
+                continue
+            total_bytes -= _file_size(victim)
+            _unlink(victim)
 
 #######################################################################################################################
 # Function Definitions
@@ -335,11 +456,9 @@ def perform_transcription(
                         logging.debug(f"Loaded valid segments from existing file.")
                         return audio_file_path, segments
                     else:
-                        logging.warning(f"Existing segments file {segments_json_path} has invalid format, but overwrite=False.")
-                        return audio_file_path, None # Treat as transcription failure
+                        logging.warning(f"Existing segments file {segments_json_path} has invalid format, regenerating.")
                 except (json.JSONDecodeError, ValueError, TypeError, KeyError) as e:
-                    logging.warning(f"Failed to read/parse existing segments file {segments_json_path}: {e}. Overwrite=False.")
-                    return audio_file_path, None # Treat as transcription failure
+                    logging.warning(f"Failed to read/parse existing segments file {segments_json_path}: {e}. Regenerating.")
 
             # Generate new transcription (or overwrite existing)
             logging.info(f"Generating/Overwriting transcription for {audio_file_path}")
@@ -1922,6 +2041,10 @@ def speech_to_text(
     *,
     word_timestamps: bool = False,
     return_language: bool = False,
+    persist_segments: Optional[bool] = None,
+    cache_max_age_days: Optional[int] = None,
+    cache_max_total_mb: Optional[float] = None,
+    cache_max_files_per_source: Optional[int] = None,
 ):
     """
     Transcribes an audio file to text using a specified faster-Whisper model.
@@ -2135,6 +2258,30 @@ def speech_to_text(
         )
         log_counter("speech_to_text_success", labels={"file_path": str(file_path), "model": whisper_model, "segments": len(segments)})
 
+        # Persist transcription to disk for cache-aware callers (unless disabled)
+        _persist_allowed = PERSIST_TRANSCRIPTS_DEFAULT if persist_segments is None else persist_segments
+        if _persist_allowed:
+            try:
+                payload = {"segments": segments}
+                with open(out_file, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False)
+                try:
+                    with open(prettified_out_file, "w", encoding="utf-8") as f:
+                        json.dump(payload, f, ensure_ascii=False, indent=2)
+                except Exception as prettify_err:
+                    logging.debug(f"Failed to write prettified transcription file: {prettify_err}")
+
+                # Apply retention/cleanup
+                prune_transcript_cache(
+                    file_path.parent,
+                    current_file=out_file,
+                    max_age_days=cache_max_age_days if cache_max_age_days is not None else CACHE_MAX_AGE_DAYS,
+                    max_total_mb=cache_max_total_mb if cache_max_total_mb is not None else CACHE_MAX_TOTAL_MB,
+                    max_files_per_source=cache_max_files_per_source if cache_max_files_per_source is not None else CACHE_MAX_FILES_PER_SOURCE,
+                )
+            except Exception as persist_err:
+                logging.warning(f"Could not persist transcription segments to cache: {persist_err}")
+
         gc.collect() # Suggest garbage collection
         # Return either segments or (segments, detected_lang)
         if return_language:
@@ -2177,16 +2324,17 @@ def _find_ffmpeg() -> str:
     Raises:
         FileNotFoundError: If ffmpeg is not found in any of the checked locations.
     """
-    # 1. Check specific relative path (if applicable to your structure)
+    # 1. Check project Bin path (Windows) relative to repo structure
     if os.name == 'nt':
-        # Adjust this path based on your project structure relative to this file
-        # Example: Assuming 'Bin' is two levels up from this script's dir
-        script_dir = Path(__file__).parent
-        bin_dir = script_dir.parent.parent / "Bin" # Adjust depth as needed
-        ffmpeg_exe = bin_dir / "ffmpeg.exe"
-        if ffmpeg_exe.exists():
-            logging.debug(f"Found ffmpeg at specific Windows path: {ffmpeg_exe}")
-            return str(ffmpeg_exe)
+        try:
+            app_dir = Path(__file__).resolve().parents[3]  # .../app
+            bin_dir = app_dir / "Bin"
+            ffmpeg_exe = bin_dir / "ffmpeg.exe"
+            if ffmpeg_exe.exists():
+                logging.debug(f"Found ffmpeg at project Bin path: {ffmpeg_exe}")
+                return str(ffmpeg_exe)
+        except Exception:
+            pass
 
     # 2. Check environment variable (useful for Docker/server setups)
     ffmpeg_env = os.environ.get("FFMPEG_PATH")
@@ -2194,13 +2342,23 @@ def _find_ffmpeg() -> str:
         logging.debug(f"Found ffmpeg via FFMPEG_PATH env var: {ffmpeg_env}")
         return ffmpeg_env
 
-    # 3. Check PATH using shutil.which (cross-platform)
+    # 3. Project Bin path for non-Windows environments
+    try:
+        app_dir = Path(__file__).resolve().parents[3]
+        candidate = app_dir / "Bin" / "ffmpeg"
+        if candidate.exists():
+            logging.debug(f"Found ffmpeg at project Bin path: {candidate}")
+            return str(candidate)
+    except Exception:
+        pass
+
+    # 4. Check PATH using shutil.which (cross-platform)
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path:
         logging.debug(f"Found ffmpeg in system PATH: {ffmpeg_path}")
         return ffmpeg_path
 
-    # 4. If not found, raise error
+    # 5. If not found, raise error
     raise FileNotFoundError("ffmpeg executable not found in Bin directory, FFMPEG_PATH, or system PATH.")
 
 # os.system(r'.\Bin\ffmpeg.exe -ss 00:00:00 -i "{video_file_path}" -ar 16000 -ac 1 -c:a pcm_s16le "{out_path}"')
@@ -2353,23 +2511,13 @@ def convert_to_wav(
     else:
         duration_seconds = None
 
-    # Determine ffmpeg executable path
-    ffmpeg_cmd = "ffmpeg" # Default for non-Windows or if specific path fails
-    if sys.platform.startswith('win'):
-        # Look for ffmpeg relative to this file's location structure
-        # Assumes: .../app/core/Ingestion_Media_Processing/Audio/Audio_Transcription_Lib.py
-        # Goal: .../app/Bin/ffmpeg.exe
-        try:
-            APP_DIR = Path(__file__).resolve().parents[3] # .../app
-            BIN_DIR = APP_DIR / "Bin"
-            FFMPEG_WIN_PATH = BIN_DIR / "ffmpeg.exe"
-            if FFMPEG_WIN_PATH.exists():
-                ffmpeg_cmd = str(FFMPEG_WIN_PATH)
-                logging.debug(f"Using specific ffmpeg path: {ffmpeg_cmd}")
-            else:
-                logging.warning(f"ffmpeg.exe not found at {FFMPEG_WIN_PATH}. Falling back to 'ffmpeg' in PATH.")
-        except IndexError:
-             logging.warning("Could not determine app directory structure. Falling back to 'ffmpeg' in PATH.")
+    # Determine ffmpeg executable path (honors FFMPEG_PATH and project Bin/)
+    try:
+        ffmpeg_cmd = _find_ffmpeg()
+    except FileNotFoundError as e:
+        error_msg = str(e)
+        logging.error(error_msg)
+        raise RuntimeError(error_msg) from e
 
     # Verify ffmpeg command works
     try:
@@ -2632,7 +2780,7 @@ def record_audio(duration, sample_rate=16000, chunk_size=1024):
             data = stream.read(chunk_size)
             audio_queue.put(data)
 
-    audio_thread = threading.Thread(target=audio_callback)
+    audio_thread = threading.Thread(target=audio_callback, daemon=True)
     audio_thread.start()
 
     return p, stream, audio_queue, stop_recording, audio_thread

@@ -1,16 +1,18 @@
+from __future__ import annotations
+
 # evaluation_reports.py
 # Generate evaluation reports for Prompt Studio
 
 import json
 import csv
 from io import StringIO
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from datetime import datetime
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 from loguru import logger
+
+if TYPE_CHECKING:
+    from matplotlib.backends.backend_pdf import PdfPages  # pragma: no cover
 
 # Try to import optional dependencies
 try:
@@ -28,7 +30,29 @@ class EvaluationReportGenerator:
 
     def __init__(self):
         """Initialize report generator."""
-        pass
+        self._mpl_ready = False
+        self._plt = None
+        self._PdfPages = None
+
+    def _ensure_matplotlib(self) -> bool:
+        """Lazy-load matplotlib in a non-interactive backend to avoid import-time side effects."""
+        if self._mpl_ready:
+            return bool(self._plt and self._PdfPages)
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt  # type: ignore
+            from matplotlib.backends.backend_pdf import PdfPages  # type: ignore
+            self._plt = plt
+            self._PdfPages = PdfPages
+            self._mpl_ready = True
+            return True
+        except Exception as e:
+            logger.warning("Matplotlib unavailable for evaluation reports: {}", e)
+            self._mpl_ready = True
+            self._plt = None
+            self._PdfPages = None
+            return False
 
     ####################################################################################################################
     # Text Reports
@@ -286,8 +310,12 @@ class EvaluationReportGenerator:
             evaluation_results: Evaluation results
             output_path: Path to save PDF report
         """
+        if not self._ensure_matplotlib():
+            logger.warning("Skipping visual report generation because matplotlib is unavailable")
+            return
         try:
-            with PdfPages(output_path) as pdf:
+            assert self._plt is not None and self._PdfPages is not None  # for type checkers
+            with self._PdfPages(output_path) as pdf:
                 # Page 1: Summary
                 self._create_summary_page(evaluation_results, pdf)
 
@@ -317,7 +345,7 @@ class EvaluationReportGenerator:
 
     def _create_summary_page(self, results: Dict[str, Any], pdf: PdfPages):
         """Create summary page for visual report."""
-        fig = plt.figure(figsize=(8.5, 11))
+        fig = self._plt.figure(figsize=(8.5, 11))
 
         # Title
         fig.text(0.5, 0.95, 'Evaluation Report',
@@ -352,13 +380,13 @@ class EvaluationReportGenerator:
                   startangle=90)
             ax.set_title('Test Success Rate')
 
-        plt.tight_layout()
+        self._plt.tight_layout()
         pdf.savefig(fig)
-        plt.close()
+        self._plt.close()
 
     def _create_score_distribution_page(self, results: Dict[str, Any], pdf: PdfPages):
         """Create score distribution visualization."""
-        fig, axes = plt.subplots(2, 2, figsize=(8.5, 11))
+        fig, axes = self._plt.subplots(2, 2, figsize=(8.5, 11))
         fig.suptitle('Score Distributions', size=16, weight='bold')
 
         test_runs = results.get("test_runs", [])
@@ -390,13 +418,13 @@ class EvaluationReportGenerator:
         for idx in range(len(all_scores), 4):
             axes[idx // 2, idx % 2].set_visible(False)
 
-        plt.tight_layout()
+        self._plt.tight_layout()
         pdf.savefig(fig)
-        plt.close()
+        self._plt.close()
 
     def _create_model_comparison_page(self, results: Dict[str, Any], pdf: PdfPages):
         """Create model comparison visualization."""
-        fig, axes = plt.subplots(2, 2, figsize=(8.5, 11))
+        fig, axes = self._plt.subplots(2, 2, figsize=(8.5, 11))
         fig.suptitle('Model Comparison', size=16, weight='bold')
 
         comparison = results.get("model_comparison", {})
@@ -448,13 +476,13 @@ class EvaluationReportGenerator:
                 ax.set_title('Model Value')
                 ax.grid(True, alpha=0.3)
 
-        plt.tight_layout()
+        self._plt.tight_layout()
         pdf.savefig(fig)
-        plt.close()
+        self._plt.close()
 
     def _create_performance_page(self, results: Dict[str, Any], pdf: PdfPages):
         """Create performance metrics visualization."""
-        fig, axes = plt.subplots(2, 2, figsize=(8.5, 11))
+        fig, axes = self._plt.subplots(2, 2, figsize=(8.5, 11))
         fig.suptitle('Performance Metrics', size=16, weight='bold')
 
         metrics = results.get("aggregated_metrics", {})
@@ -531,9 +559,9 @@ class EvaluationReportGenerator:
             ax.legend()
             ax.grid(True, alpha=0.3)
 
-        plt.tight_layout()
+        self._plt.tight_layout()
         pdf.savefig(fig)
-        plt.close()
+        self._plt.close()
 
 ########################################################################################################################
 # Report Manager
