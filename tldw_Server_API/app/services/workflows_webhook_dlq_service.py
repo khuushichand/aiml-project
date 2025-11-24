@@ -181,10 +181,20 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
         f"Starting Workflows webhook DLQ worker (interval={interval}s, batch={batch}, timeout={timeout_sec}s, max_attempts={max_attempts})"
     )
 
-    # Create client directly from httpx so test monkeypatch can inject a dummy AsyncClient.
-    # Avoid passing kwargs to support simple fakes.
+    # Prefer a monkeypatched httpx.AsyncClient (tests inject a dummy SimpleNamespace)
+    # and fall back to the standard client factory for production.
     from tldw_Server_API.app.core.http_client import create_async_client
-    async with create_async_client() as client:  # type: ignore[call-arg]
+    _client_ctx = None
+    try:
+        import types as _types
+        if isinstance(httpx, _types.SimpleNamespace) and hasattr(httpx, "AsyncClient"):
+            _client_ctx = httpx.AsyncClient()  # type: ignore[call-arg]
+    except Exception:
+        _client_ctx = None
+    if _client_ctx is None:
+        _client_ctx = create_async_client()
+
+    async with _client_ctx as client:  # type: ignore[call-arg]
         while not stop_event.is_set():
             try:
                 rows = db.list_webhook_dlq_due(limit=batch)
@@ -236,7 +246,10 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
                     )
                     continue
 
-                ok, err = await _attempt_delivery(client, url, body, timeout=timeout_sec)
+                try:
+                    ok, err = await _attempt_delivery(client, url, body, timeout=timeout_sec)
+                except Exception as e:
+                    ok, err = False, str(e)
                 if ok:
                     try:
                         db.delete_webhook_dlq(dlq_id=dlq_id)
@@ -266,10 +279,12 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
                     except Exception:
                         logger.debug("metrics increment failed for workflows_dlq next_attempt_compute_failed")
                     next_at = None
+
                 db.update_webhook_dlq_failure(
                     dlq_id=dlq_id,
                     last_error=err or "unknown_error",
                     next_attempt_at_iso=next_at,
+                    attempts=attempts + 1,
                 )
                 logger.debug(f"DLQ retry scheduled in {next_delay}s (id={dlq_id} attempts={attempts+1}): {err}")
 

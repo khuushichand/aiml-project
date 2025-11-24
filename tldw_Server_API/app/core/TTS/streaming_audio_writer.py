@@ -194,9 +194,10 @@ class StreamingAudioWriter:
             except Exception as e:
                 logger.error(f"Error closing container: {e}")
 
-        if hasattr(self, "output_buffer"):
+        buf = getattr(self, "output_buffer", None)
+        if buf is not None:
             try:
-                self.output_buffer.close()
+                buf.close()
             except Exception as e:
                 logger.error(f"Error closing output buffer: {e}")
 
@@ -260,12 +261,13 @@ class StreamingAudioWriter:
         if self._wav_file_path:
             return self._finalize_wav_from_file()
 
-        if not hasattr(self, "output_buffer"):
+        buf = getattr(self, "output_buffer", None)
+        if buf is None:
             logger.warning("StreamingAudioWriter finalize called with no WAV buffer present.")
             return b""
 
-        self.output_buffer.seek(0)
-        pcm_bytes = self.output_buffer.read()
+        buf.seek(0)
+        pcm_bytes = buf.read()
         out = BytesIO()
         with wave.open(out, "wb") as wav_file:
             wav_file.setnchannels(self.channels)
@@ -278,7 +280,7 @@ class StreamingAudioWriter:
             f"StreamingAudioWriter finalize: format=wav (in-memory), "
             f"wav_bytes={len(data)}, pcm_bytes={len(pcm_bytes)}"
         )
-        self.output_buffer.close()
+        buf.close()
         return data
 
     def _finalize_wav_from_file(self) -> bytes:

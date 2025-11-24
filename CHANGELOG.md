@@ -13,13 +13,6 @@ and this project adheres to Some kind of Versioning
 
 ### Fixed
 
-## [Unreleased]
-
-### Changed
-
-### Removed
-
-### Fixed
 
 
 ## [0.1.8] - 2025-11-22
@@ -32,7 +25,18 @@ and this project adheres to Some kind of Versioning
 - Enhanced HTTP error handling for DNS resolution failures
 
 ### Changed
-- Refactored parakeet to not be independent.
+- Audio:
+  - Replace Parakeet-specific transcriber/config usage with unified UnifiedStreamingTranscriber/UnifiedStreamingConfig; add _LegacyWebSocketAdapter to adapt legacy WS to unified handler; defer imports and update tests to use unified stubs.
+- Audit:
+  - Add config-driven auto-stream threshold, support streaming for json/jsonl/csv, force streaming when max_rows exceeds threshold; CSV streaming generator; non-stream export caps; API-key hashing; fallback JSONL queue with background replay task; tests for streaming and replay.
+- LLM:
+  - Add local model discovery (short timeouts, TTL cache, candidate endpoints), get_configured_providers_async and integrate async provider loading into startup and web UI config; provider payloads include is_configured and endpoint_only.
+- TTS
+  - WAV output now buffered and deferred until finalize with in-memory threshold and disk spill; StreamingAudioWriter.__init__ adds max_in_memory_bytes; tests validate spill and finalize behavior.
+- Web Scraping
+  - Use defusedxml, broaden sitemap parse error handling, add test-mode egress bypass, add conditional process_web_scraping_task import/export, and preserve HTTPException semantics in ingestion endpoint.
+- Tests
+  - Extensive test updates (unified WS stub, fake HTTP client for RSS, env snapshot/restore, admin override fixtures, watchlists full-app fixture, connectors pre-mounting); CI embedding cache key changed to a static key.
 
 ### Removed
 - Hopes, Dreams.
@@ -44,6 +48,7 @@ and this project adheres to Some kind of Versioning
 - Improved WebSocket disconnect handling
 - Consistent error handling in session cleanup and web ingestion
 - Better network error resilience with graceful fallbacks
+- Add _is_dns_resolution_error detection and mark DNS resolution errors non-retriable (DNSResolutionError signal); tests verify DNS errors are not retried while other network errors follow retry policy.
 - My life.
 
 
