@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """
 Supertonic ONNX installer helper.
 

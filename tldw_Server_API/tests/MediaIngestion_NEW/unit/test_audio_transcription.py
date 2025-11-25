@@ -239,11 +239,11 @@ def test_speech_to_text_persists_cache_files(monkeypatch, tmp_path):
         language_probability = 0.9
 
     class _FakeModel:
-        def transcribe(self, path, **kwargs):
+        def transcribe(self, *_args, **_kwargs):
             return [_FakeSeg()], _FakeInfo()
 
     # Ensure the stub model is returned regardless of check_download_status flag
-    monkeypatch.setattr(atlib, "get_whisper_model", lambda *args, **kwargs: _FakeModel())
+    monkeypatch.setattr(atlib, "get_whisper_model", lambda *_args, **_kwargs: _FakeModel())
     monkeypatch.setattr(atlib, "processing_choice", "cpu")
 
     segments = speech_to_text(str(audio_file), whisper_model="tiny", selected_source_lang="en")
@@ -254,7 +254,7 @@ def test_speech_to_text_persists_cache_files(monkeypatch, tmp_path):
 
     assert out_file.exists()
     payload = json.loads(out_file.read_text())
-    assert "segments" in payload and payload["segments"]
+    assert payload.get("segments")
     assert pretty_file.exists()
 
 

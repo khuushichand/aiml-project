@@ -198,7 +198,15 @@ nemo_cache_dir = ./models/nemo
 
 ### Environment Variables
 
-Note: In the current codebase, STT configuration is read from `Config_Files/config.txt`. Environment variable overrides for STT (e.g., default transcriber, Nemo device, cache dir) are not wired up yet. Use `config.txt` to change these settings.
+STT configuration is primarily read from `Config_Files/config.txt` in the `[STT-Settings]` section, and the options shown above remain fully supported. Transcript cache behavior can also be controlled via environment variables, which override the corresponding `config.txt` values when set:
+
+- `STT_DISABLE_TRANSCRIPT_CACHE` – when truthy, disables writing new transcript cache files.
+- `STT_CACHE_MAX_FILES_PER_SOURCE` – max cached files per source (overrides `transcript_cache_max_files_per_source`).
+- `STT_CACHE_MAX_AGE_DAYS` – max age in days before cached transcripts are eligible for pruning (overrides `transcript_cache_max_age_days`).
+- `STT_CACHE_MAX_TOTAL_MB` – max cumulative size (in MB) for cached transcripts (overrides `transcript_cache_max_total_mb`).
+- `STT_DISABLE_TRANSCRIPT_CACHE_PRUNING` – when truthy, disables transcript cache pruning entirely (overrides `disable_transcript_cache_pruning`).
+
+Other STT settings listed above (for example `default_transcriber`, `nemo_model_variant`, `nemo_device`, `nemo_cache_dir`, and `whisper_compute_type`) are currently configured via `Config_Files/config.txt` only and do not have dedicated environment variable overrides.
 
 ## Live Transcription
 

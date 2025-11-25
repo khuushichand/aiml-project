@@ -28,18 +28,23 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
 
 import urllib.request
+from urllib.error import URLError
 
 DEFAULT_SILERO_VAD_URL = (
-    "https://raw.githubusercontent.com/snakers4/silero-vad/refs/heads/master/src/silero_vad/data/silero_vad.onnx"
+    "https://raw.githubusercontent.com/snakers4/silero-vad/refs/heads/"
+    "master/src/silero_vad/data/silero_vad.onnx"
 )
 
 
 def find_repo_root(start: Path) -> Path:
-    """Best-effort repo root detection by walking up until pyproject or .git is found."""
-    for parent in [start] + list(start.parents):
+    """Best-effort repo root detection.
+
+    Walk up from `start` until a directory containing either pyproject.toml
+    or .git is found. If none is found, return the original `start`.
+    """
+    for parent in [start, *start.parents]:
         if (parent / "pyproject.toml").exists() or (parent / ".git").exists():
             return parent
     return start
@@ -49,8 +54,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Install Silero VAD weights into models/. "
-            "By default copies from faster-whisper assets; with --url it downloads ONLY the .onnx file you specify."
-        )
+            "By default copies from faster-whisper assets; with --url it "
+            "downloads ONLY the .onnx file you specify."
+        ),
     )
     parser.add_argument(
         "--dest",
@@ -65,19 +71,24 @@ def parse_args() -> argparse.Namespace:
         default=env_url_default if env_url_default else None,
         help=(
             "URL to a Silero VAD ONNX file. "
-            "If faster-whisper assets are unavailable, this URL will be downloaded. "
-            "Omit this (and leave SILERO_VAD_WEIGHTS_URL unset) to disable downloading entirely; "
-            "you can pass the official Silero VAD ONNX asset URL or a mirror you control."
+            "If faster-whisper assets are unavailable, this URL will be "
+            "downloaded. Omit this (and leave SILERO_VAD_WEIGHTS_URL "
+            "unset) to disable downloading entirely; you can pass the "
+            "official Silero VAD ONNX asset URL or a mirror you control."
         ),
     )
     return parser.parse_args()
 
 
 def _copy_from_faster_whisper(dest_dir: Path) -> bool:
-    """Copy weights from faster-whisper assets if available. Returns True on success."""
+    """Copy weights from faster-whisper assets if available.
+
+    Returns True on success, False when faster-whisper is unavailable or
+    its Silero VAD asset cannot be found.
+    """
     try:
         from faster_whisper.utils import get_assets_path
-    except Exception:
+    except ImportError:
         return False
 
     assets = Path(get_assets_path())
@@ -93,7 +104,7 @@ def _copy_from_faster_whisper(dest_dir: Path) -> bool:
 
 
 def _download_weights(url: str, dest_dir: Path) -> None:
-    """Download ONNX weights from the given URL into dest_dir (weights only, no code)."""
+    """Download ONNX weights from the given URL into dest_dir (weights only)."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / "silero_vad_v6.onnx"
     print(f"Downloading Silero VAD weights from {url} -> {dest}")
@@ -106,7 +117,11 @@ def main() -> int:
     args = parse_args()
     repo_root = find_repo_root(Path(__file__).resolve())
     default_dest_dir = repo_root / "models" / "silero_vad"
-    dest_dir = (repo_root / args.dest) if args.dest and not args.dest.is_absolute() else (args.dest or default_dest_dir)
+    dest_dir = (
+        (repo_root / args.dest)
+        if args.dest and not args.dest.is_absolute()
+        else (args.dest or default_dest_dir)
+    )
     dest_dir = dest_dir.resolve()
     # 1) Try faster-whisper assets first (no network)
     if _copy_from_faster_whisper(dest_dir):
@@ -116,18 +131,24 @@ def main() -> int:
     if args.url:
         try:
             _download_weights(args.url, dest_dir)
-            return 0
-        except Exception as err:
-            print(f"Failed to download Silero VAD weights from {args.url}: {err}", file=sys.stderr)
+        except (OSError, URLError) as err:
+            print(
+                f"Failed to download Silero VAD weights from {args.url}: {err}",
+                file=sys.stderr,
+            )
             return 1
+        else:
+            return 0
 
     # 3) Nothing to do
     print(
-        "Silero VAD weights not installed: faster-whisper assets not found and no --url / SILERO_VAD_WEIGHTS_URL provided.",
+        "Silero VAD weights not installed: faster-whisper assets not found "
+        "and no --url / SILERO_VAD_WEIGHTS_URL provided.",
         file=sys.stderr,
     )
     print(
-        "Either install faster-whisper or rerun with --url pointing to a silero_vad_v6.onnx file you control.",
+        "Either install faster-whisper or rerun with --url pointing to a "
+        "silero_vad_v6.onnx file you control.",
         file=sys.stderr,
     )
     return 1

@@ -577,4 +577,8 @@ def record_system_audio(
         temp_file.close()
         Path(temp_file.name).unlink(missing_ok=True)
         raise RuntimeError(f"Recording failed: {str(e)}")
-
+    finally:
+        try:
+            temp_file.close()
+        except Exception:
+            pass

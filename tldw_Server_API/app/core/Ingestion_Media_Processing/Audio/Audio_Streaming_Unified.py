@@ -1243,10 +1243,24 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                         return  # Success with fallback
                     except ImportError:
                         logger.error("MLX fallback failed - MLX dependencies not available")
-                        raise RuntimeError(f"Nemo toolkit not installed for {variant} variant and MLX fallback unavailable. "
+                raise RuntimeError(f"Nemo toolkit not installed for {variant} variant and MLX fallback unavailable. "
                                          f"Install Nemo with: pip install nemo_toolkit[asr] "
                                          f"OR install MLX with: pip install mlx mlx-lm")
                 raise
+
+    def reset(self):
+        """Reset transcriber buffers and Parakeet RNNT streaming state."""
+        super().reset()
+        streamer = getattr(self, "_rnnt_streamer", None)
+        if streamer is not None:
+            try:
+                streamer.reset()
+            except Exception:
+                # Fail open: RNNT will rebuild state on next push if needed.
+                pass
+        # Clear RNNT-specific tracking so partial/final comparisons start fresh
+        self._rnnt_last_partial = ""
+        self._rnnt_last_final = ""
 
     async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
         """

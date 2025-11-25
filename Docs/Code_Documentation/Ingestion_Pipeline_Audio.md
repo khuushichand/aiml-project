@@ -47,7 +47,7 @@ process_audio_files(
    - NVIDIA NeMo Parakeet: `parakeet`, `parakeet-standard`, `parakeet-onnx`, `parakeet-mlx`, or any string where `parse_transcription_model` resolves the provider to `"parakeet"`
    - NVIDIA NeMo Canary: `canary` or related aliases (provider `"canary"`)
    - Qwen2Audio: `qwen2audio` or `qwen2audio-*` (provider `"qwen2audio"`)
-- transcription_language: target/source language (default `en`). When `None`, the underlying STT provider is allowed to auto-detect; this matches the behavior of `speech_to_text(..., selected_source_lang=None)` and the `/audio/transcriptions` endpoint.
+ - transcription_language: target/source language (default `en`). When `None`, the underlying STT provider is allowed to auto-detect; this matches the behavior of `speech_to_text(..., selected_source_lang=None)` and the `/audio/transcriptions` endpoint.
  - diarize: enable speaker diarization; `vad_use`: enable voice activity detection.
  - perform_chunking: chunk transcript; `chunk_method`: e.g., `sentences`.
  - perform_analysis: use LLM summarization via `analyze`; `api_name` selects provider (keys from server config).

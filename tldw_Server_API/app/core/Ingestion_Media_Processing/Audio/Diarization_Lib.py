@@ -1037,7 +1037,10 @@ class DiarizationService:
                 elif len(input_meta.shape) == 2:
                     audio_in = audio_np.reshape(1, -1)
                 else:
-                    audio_in = audio_np.reshape(input_meta.shape)
+                    # Some ONNX exports use dynamic dimensions (None) for one or
+                    # more axes. In those cases, reshaping to input_meta.shape
+                    # would fail. Fall back to a simple [batch, samples] layout.
+                    audio_in = audio_np.reshape(1, -1)
 
                 outputs = session.run(None, {input_name: audio_in})
                 if not outputs:

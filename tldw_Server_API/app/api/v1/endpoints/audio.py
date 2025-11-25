@@ -1511,8 +1511,8 @@ async def get_stt_health(
     # Base status from cached/downloaded model presence.
     try:
         status_info = audio_files.check_transcription_model_status(resolved_model)
-    except Exception as e:
-        logger.exception(f"STT health: check_transcription_model_status failed")
+    except Exception:
+        logger.exception("STT health: check_transcription_model_status failed")
         status_info = {
             "available": False,
             "message": "Failed to check model status.",
@@ -1537,9 +1537,15 @@ async def get_stt_health(
         try:
             stt_lib.get_whisper_model(resolved_model, device, check_download_status=False)
             warm_info = {"ok": True, "device": device}
-        except Exception as e:
-            logger.error(f"STT health warm-up failed for model={resolved_model}, device={device}: {e}")
-            warm_info = {"ok": False, "device": device, "error": str(e)}
+        except Exception:
+            logger.exception(
+                f"STT health warm-up failed for model={resolved_model}, device={device}"
+            )
+            warm_info = {
+                "ok": False,
+                "device": device,
+                "error": "Model initialization failed.",
+            }
 
     if warm_info:
         health["warm"] = warm_info
@@ -2157,6 +2163,7 @@ async def websocket_transcribe(
                 nonlocal used_minutes, failopen_remaining, remaining_minutes_snapshot
                 minutes_chunk = float(seconds) / 60.0
                 deducted = False
+                allow = False
                 # Fast-path local check: if we have a remaining snapshot and this
                 # chunk would exceed it, raise immediately without a DB round-trip.
                 if remaining_minutes_snapshot is not None and minutes_chunk > remaining_minutes_snapshot:
