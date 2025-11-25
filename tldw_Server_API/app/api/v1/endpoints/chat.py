@@ -134,14 +134,16 @@ from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 from tldw_Server_API.app.core.Chat.chat_service import (
     parse_provider_model_for_metrics,
     normalize_request_provider_and_model,
+    resolve_provider_and_model,
+    resolve_provider_api_key,
     merge_api_keys_for_provider,
     build_call_params_from_request,
     estimate_tokens_from_json,
     moderate_input_messages,
     build_context_and_messages,
-   apply_prompt_templating,
-   execute_streaming_call,
-   execute_non_stream_call,
+    apply_prompt_templating,
+    execute_streaming_call,
+    execute_non_stream_call,
     queue_is_active,
 )
 import os
@@ -167,15 +169,21 @@ from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
     ValidationIssue,
 )
 from tldw_Server_API.app.core.Chat.validate_dictionary import validate_dictionary as _validate_dictionary
+from . import chat_dictionaries, chat_documents
 #######################################################################################################################
 #
 # ---------------------------------------------------------------------------
 # Constants & helpers
 # ---------------------------------------------------------------------------
- # Backward-compatibility for tests that patch API_KEYS directly (in schemas module)
+# Backward-compatibility for tests that patch API_KEYS directly (in schemas module).
+# This map is for test overrides/transitional compatibility; prefer get_api_keys()
+# / resolve_provider_api_key for new code paths.
 API_KEYS = SCHEMAS_API_KEYS
 
 router = APIRouter()
+
+router.include_router(chat_dictionaries.router)
+router.include_router(chat_documents.router)
 
 # Load configuration values from config
 from tldw_Server_API.app.core.config import load_comprehensive_config, load_and_log_configs
@@ -397,7 +405,6 @@ async def validate_chat_dictionary(
 ):
     """Run server-side validation for a chat dictionary, returning taxonomy-aligned results."""
     result = _validate_dictionary(req.data, schema_version=req.schema_version, strict=req.strict)
-    # Convert validator result into response model
     return ValidateDictionaryResponse(
         ok=result.ok,
         schema_version=result.schema_version,
@@ -812,10 +819,32 @@ async def create_chat_completion(
     # Budget enforcement is handled by the dependency and/or middleware.
     # Avoid duplicating authorization logic in the handler to prevent drift.
 
-    # Parse provider and model for metrics (no mutation)
-    provider, model = parse_provider_model_for_metrics(request_data, DEFAULT_LLM_PROVIDER)
-    initial_provider = provider
+    # Capture raw model input before any normalization for later decisions
     raw_model_input = request_data.model
+
+    # Resolve provider/model for both metrics and execution, and record decision path
+    (
+        metrics_provider,
+        metrics_model,
+        selected_provider,
+        selected_model,
+        provider_debug,
+    ) = resolve_provider_and_model(
+        request_data=request_data,
+        metrics_default_provider=DEFAULT_LLM_PROVIDER,
+        normalize_default_provider=_get_default_provider(),
+    )
+
+    # Use metrics_* for request-level metrics/audit; selected_* for downstream calls
+    provider = metrics_provider
+    model = metrics_model
+    initial_provider = metrics_provider
+
+    try:
+        logger.debug("Provider/model resolution: {}", provider_debug)
+    except Exception:
+        # Debug logging should never interfere with request handling
+        pass
 
     client_id = getattr(chat_db, 'client_id', 'unknown_client')
 
@@ -1276,9 +1305,9 @@ async def create_chat_completion(
         except Exception as e:
             logger.warning(f"Moderation input processing error: {e}")
 
-        # Normalize provider/model on the request for downstream logic
-        provider = normalize_request_provider_and_model(request_data, _get_default_provider())
-        model = request_data.model or model
+        # Normalize provider/model on the request for downstream logic (already resolved)
+        provider = selected_provider
+        model = selected_model or model
 
         user_identifier_for_log = getattr(chat_db, 'client_id', 'unknown_client') # Example from original
         logger.info(
@@ -1291,55 +1320,25 @@ async def create_chat_completion(
         final_character_db_id: Optional[int] = None # Initialize
 
         try:
-            # Get API keys and resolve provider default in a way that honors runtime patches
             import os as _os_keys
-            # Gather possible module-level API key maps from both schemas and this module,
-            # so tests that patch either location are honored.
-            schema_keys = None
-            try:
-                from tldw_Server_API.app.api.v1.schemas import chat_request_schemas as _schemas_mod  # type: ignore
-                _sk = getattr(_schemas_mod, "API_KEYS", None)
-                if isinstance(_sk, dict) and _sk:
-                    schema_keys = dict(_sk)
-            except Exception:
-                schema_keys = None
-            local_keys = API_KEYS if isinstance(API_KEYS, dict) and API_KEYS else None
-            combined_keys = {}
-            if isinstance(schema_keys, dict):
-                combined_keys.update(schema_keys)
-            if isinstance(local_keys, dict):
-                combined_keys.update(local_keys)
-            module_keys = combined_keys or None
-            dynamic_keys = get_api_keys()
-
-            # In tests, prefer module-level keys (patched by tests) over environment
-            # to ensure deterministic behavior regardless of host env vars.
-            try:
-                _is_pytest = bool(os.getenv("PYTEST_CURRENT_TEST"))
-            except Exception:
-                _is_pytest = False
-            _is_test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-            prefer_module_keys = (_is_pytest or _is_test_mode) and isinstance(module_keys, dict)
-            if prefer_module_keys and (provider in module_keys):
-                # Ignore dynamic for this provider so module patch wins
-                dynamic_keys = {k: v for k, v in dynamic_keys.items() if k != provider}
-
             # If default provider resolved to 'local-llm' but an explicit provider key exists
-            # (e.g., 'openai') in module or dynamic keys, prefer that provider to satisfy
+            # (e.g., 'openai') in env/config or module overrides, prefer that provider to satisfy
             # integration tests that expect config-driven defaults in test mode.
             if (
                 provider == "local-llm"
                 and getattr(request_data, "api_provider", None) in (None, "")
             ):
-                if (module_keys and module_keys.get("openai")) or dynamic_keys.get("openai"):
+                openai_key, _openai_debug = resolve_provider_api_key(
+                    "openai",
+                    prefer_module_keys_in_tests=True,
+                )
+                if openai_key:
                     provider = "openai"
 
             target_api_provider = provider  # Already determined (possibly adjusted above)
-            _raw_key, provider_api_key = merge_api_keys_for_provider(
+            provider_api_key, _api_key_debug = resolve_provider_api_key(
                 target_api_provider,
-                module_keys,
-                dynamic_keys,
-                requires_key_map={},
+                prefer_module_keys_in_tests=True,
             )
 
             # Centralized provider capabilities
@@ -1351,8 +1350,7 @@ async def create_chat_completion(
             _force_mock = os.getenv("CHAT_FORCE_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}
             _test_mode_flag = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
             _auto_mock_family = target_api_provider in {"openai", "groq", "mistral"}
-            # Use the raw value for validation so empty strings are treated as missing
-            if PROVIDER_REQUIRES_KEY.get(target_api_provider, False) and not _raw_key and not (_force_mock or (_test_mode_flag and _auto_mock_family)):
+            if PROVIDER_REQUIRES_KEY.get(target_api_provider, False) and not provider_api_key and not (_force_mock or (_test_mode_flag and _auto_mock_family)):
                 logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Service for '{target_api_provider}' is not configured (key missing).")
             # Additional deterministic behavior for tests: if a clearly invalid key is provided, fail fast with 401.
@@ -1420,17 +1418,13 @@ async def create_chat_completion(
                             f"or configure a default via environment variable 'DEFAULT_MODEL_{provider.replace('.', '_').replace('-', '_').upper()}'"
                         ),
                     )
-                    model = default_model_for_provider
 
             def rebuild_call_params_for_provider(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
-                dynamic_keys_latest = get_api_keys()
-                raw_value_new, provider_api_key_new = merge_api_keys_for_provider(
+                provider_api_key_new, _resolver_debug = resolve_provider_api_key(
                     target_provider,
-                    module_keys,
-                    dynamic_keys_latest,
-                    PROVIDER_REQUIRES_KEY,
+                    prefer_module_keys_in_tests=True,
                 )
-                if PROVIDER_REQUIRES_KEY.get(target_provider, False) and not raw_value_new:
+                if PROVIDER_REQUIRES_KEY.get(target_provider, False) and not provider_api_key_new:
                     logger.error(
                         f"API key for provider '{target_provider}' is missing or not configured (fallback)."
                     )
@@ -2093,14 +2087,14 @@ import time
 import warnings
 
 
-@router.post(
-    "/dictionaries",
-    response_model=ChatDictionaryResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create a new chat dictionary",
-    description="Create a dictionary used for pattern-based text replacements in chat messages.",
-    tags=["chat-dictionaries"],
-)
+# @router.post(
+#     "/dictionaries",
+#     response_model=ChatDictionaryResponse,
+#     status_code=status.HTTP_201_CREATED,
+#     summary="Create a new chat dictionary",
+#     description="Create a dictionary used for pattern-based text replacements in chat messages.",
+#     tags=["chat-dictionaries"],
+# )
 async def create_chat_dictionary(
     dictionary: ChatDictionaryCreate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2136,13 +2130,13 @@ async def create_chat_dictionary(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get(
-    "/dictionaries",
-    response_model=DictionaryListResponse,
-    summary="List all chat dictionaries",
-    description="List dictionaries for the current user. Use include_inactive to show inactive ones.",
-    tags=["chat-dictionaries"],
-)
+# @router.get(
+#     "/dictionaries",
+#     response_model=DictionaryListResponse,
+#     summary="List all chat dictionaries",
+#     description="List dictionaries for the current user. Use include_inactive to show inactive ones.",
+#     tags=["chat-dictionaries"],
+# )
 async def list_chat_dictionaries(
     include_inactive: bool = Query(False, description="Include inactive dictionaries"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2174,13 +2168,13 @@ async def list_chat_dictionaries(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get(
-    "/dictionaries/{dictionary_id}",
-    response_model=ChatDictionaryWithEntries,
-    summary="Get dictionary with entries",
-    description="Retrieve a dictionary and all its entries by ID.",
-    tags=["chat-dictionaries"],
-)
+# @router.get(
+#     "/dictionaries/{dictionary_id}",
+#     response_model=ChatDictionaryWithEntries,
+#     summary="Get dictionary with entries",
+#     description="Retrieve a dictionary and all its entries by ID.",
+#     tags=["chat-dictionaries"],
+# )
 async def get_chat_dictionary(
     dictionary_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2213,13 +2207,13 @@ async def get_chat_dictionary(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.put(
-    "/dictionaries/{dictionary_id}",
-    response_model=ChatDictionaryResponse,
-    summary="Update a dictionary",
-    description="Update dictionary metadata such as name, description, and active status.",
-    tags=["chat-dictionaries"],
-)
+# @router.put(
+#     "/dictionaries/{dictionary_id}",
+#     response_model=ChatDictionaryResponse,
+#     summary="Update a dictionary",
+#     description="Update dictionary metadata such as name, description, and active status.",
+#     tags=["chat-dictionaries"],
+# )
 async def update_chat_dictionary(
     dictionary_id: int,
     update: ChatDictionaryUpdate,
@@ -2254,13 +2248,13 @@ async def update_chat_dictionary(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.delete(
-    "/dictionaries/{dictionary_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a dictionary",
-    description="Delete a dictionary and its entries.",
-    tags=["chat-dictionaries"],
-)
+# @router.delete(
+#     "/dictionaries/{dictionary_id}",
+#     status_code=status.HTTP_204_NO_CONTENT,
+#     summary="Delete a dictionary",
+#     description="Delete a dictionary and its entries.",
+#     tags=["chat-dictionaries"],
+# )
 async def delete_chat_dictionary(
     dictionary_id: int,
     hard_delete: bool = Query(False, description="Permanently delete instead of soft delete"),
@@ -2283,14 +2277,14 @@ async def delete_chat_dictionary(
 
 # --- Dictionary Entry Endpoints ---
 
-@router.post(
-    "/dictionaries/{dictionary_id}/entries",
-    response_model=DictionaryEntryResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Add entry to dictionary",
-    description="Add a pattern/replacement entry to a dictionary.",
-    tags=["chat-dictionaries"],
-)
+# @router.post(
+#     "/dictionaries/{dictionary_id}/entries",
+#     response_model=DictionaryEntryResponse,
+#     status_code=status.HTTP_201_CREATED,
+#     summary="Add entry to dictionary",
+#     description="Add a pattern/replacement entry to a dictionary.",
+#     tags=["chat-dictionaries"],
+# )
 async def add_dictionary_entry(
     dictionary_id: int,
     entry: DictionaryEntryCreate,
@@ -2356,13 +2350,13 @@ async def add_dictionary_entry(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get(
-    "/dictionaries/{dictionary_id}/entries",
-    response_model=EntryListResponse,
-    summary="List dictionary entries",
-    description="List entries for a dictionary. Supports pagination/filters in body if present.",
-    tags=["chat-dictionaries"],
-)
+# @router.get(
+#     "/dictionaries/{dictionary_id}/entries",
+#     response_model=EntryListResponse,
+#     summary="List dictionary entries",
+#     description="List entries for a dictionary. Supports pagination/filters in body if present.",
+#     tags=["chat-dictionaries"],
+# )
 async def list_dictionary_entries(
     dictionary_id: int,
     group: Optional[str] = Query(None, description="Filter by group"),
@@ -2398,13 +2392,13 @@ async def list_dictionary_entries(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.put(
-    "/dictionaries/entries/{entry_id}",
-    response_model=DictionaryEntryResponse,
-    summary="Update dictionary entry",
-    description="Update entry fields such as replacement, enabled, group, case sensitivity, and probability.",
-    tags=["chat-dictionaries"],
-)
+# @router.put(
+#     "/dictionaries/entries/{entry_id}",
+#     response_model=DictionaryEntryResponse,
+#     summary="Update dictionary entry",
+#     description="Update entry fields such as replacement, enabled, group, case sensitivity, and probability.",
+#     tags=["chat-dictionaries"],
+# )
 async def update_dictionary_entry(
     entry_id: int,
     update: DictionaryEntryUpdate,
@@ -2452,13 +2446,13 @@ async def update_dictionary_entry(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.delete(
-    "/dictionaries/entries/{entry_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete dictionary entry",
-    description="Delete a single dictionary entry by ID.",
-    tags=["chat-dictionaries"],
-)
+# @router.delete(
+#     "/dictionaries/entries/{entry_id}",
+#     status_code=status.HTTP_204_NO_CONTENT,
+#     summary="Delete dictionary entry",
+#     description="Delete a single dictionary entry by ID.",
+#     tags=["chat-dictionaries"],
+# )
 async def delete_dictionary_entry(
     entry_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2480,13 +2474,13 @@ async def delete_dictionary_entry(
 
 # --- Text Processing Endpoint ---
 
-@router.post(
-    "/dictionaries/process",
-    response_model=ProcessTextResponse,
-    summary="Process text through dictionaries",
-    description="Apply active dictionaries to the provided text and return transformed text and statistics.",
-    tags=["chat-dictionaries"],
-)
+# @router.post(
+#     "/dictionaries/process",
+#     response_model=ProcessTextResponse,
+#     summary="Process text through dictionaries",
+#     description="Apply active dictionaries to the provided text and return transformed text and statistics.",
+#     tags=["chat-dictionaries"],
+# )
 async def process_text_with_dictionaries(
     request: ProcessTextRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2540,14 +2534,14 @@ async def process_text_with_dictionaries(
 
 # --- Import/Export Endpoints ---
 
-@router.post(
-    "/dictionaries/import",
-    response_model=ImportDictionaryResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Import dictionary from markdown",
-    description="Create a dictionary and entries from a markdown representation.",
-    tags=["chat-dictionaries"],
-)
+# @router.post(
+#     "/dictionaries/import",
+#     response_model=ImportDictionaryResponse,
+#     status_code=status.HTTP_201_CREATED,
+#     summary="Import dictionary from markdown",
+#     description="Create a dictionary and entries from a markdown representation.",
+#     tags=["chat-dictionaries"],
+# )
 async def import_dictionary(
     import_request: ImportDictionaryRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2594,13 +2588,13 @@ async def import_dictionary(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get(
-    "/dictionaries/{dictionary_id}/export",
-    response_model=ExportDictionaryResponse,
-    summary="Export dictionary to markdown",
-    description="Export a dictionary and entries to a markdown representation.",
-    tags=["chat-dictionaries"],
-)
+# @router.get(
+#     "/dictionaries/{dictionary_id}/export",
+#     response_model=ExportDictionaryResponse,
+#     summary="Export dictionary to markdown",
+#     description="Export a dictionary and entries to a markdown representation.",
+#     tags=["chat-dictionaries"],
+# )
 async def export_dictionary(
     dictionary_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2636,13 +2630,13 @@ async def export_dictionary(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get(
-    "/dictionaries/{dictionary_id}/export/json",
-    response_model=ExportDictionaryJSONResponse,
-    summary="Export dictionary to JSON",
-    description="Export a dictionary and entries to a JSON representation.",
-    tags=["chat-dictionaries"],
-)
+# @router.get(
+#     "/dictionaries/{dictionary_id}/export/json",
+#     response_model=ExportDictionaryJSONResponse,
+#     summary="Export dictionary to JSON",
+#     description="Export a dictionary and entries to a JSON representation.",
+#     tags=["chat-dictionaries"],
+# )
 async def export_dictionary_json(
     dictionary_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2660,14 +2654,14 @@ async def export_dictionary_json(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post(
-    "/dictionaries/import/json",
-    response_model=ImportDictionaryResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Import dictionary from JSON",
-    description="Create a dictionary and entries from a JSON payload.",
-    tags=["chat-dictionaries"],
-)
+# @router.post(
+#     "/dictionaries/import/json",
+#     response_model=ImportDictionaryResponse,
+#     status_code=status.HTTP_201_CREATED,
+#     summary="Import dictionary from JSON",
+#     description="Create a dictionary and entries from a JSON payload.",
+#     tags=["chat-dictionaries"],
+# )
 async def import_dictionary_json(
     import_request: ImportDictionaryJSONRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2694,13 +2688,13 @@ async def import_dictionary_json(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get(
-    "/dictionaries/{dictionary_id}/statistics",
-    response_model=DictionaryStatistics,
-    summary="Get dictionary statistics",
-    description="Return counts, groups, usage metrics, and averages for the specified dictionary.",
-    tags=["chat-dictionaries"],
-)
+# @router.get(
+#     "/dictionaries/{dictionary_id}/statistics",
+#     response_model=DictionaryStatistics,
+#     summary="Get dictionary statistics",
+#     description="Return counts, groups, usage metrics, and averages for the specified dictionary.",
+#     tags=["chat-dictionaries"],
+# )
 async def get_dictionary_statistics(
     dictionary_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -2758,22 +2752,22 @@ from tldw_Server_API.app.api.v1.schemas.document_generator_schemas import (
     BulkGenerateRequest,
     BulkGenerateResponse,
     GenerationStatistics,
-    DocumentGeneratorError
+    DocumentGeneratorError,
 )
 from tldw_Server_API.app.core.Chat.document_generator import (
     DocumentGeneratorService,
     DocumentType,
-    GenerationStatus as GenStatus
+    GenerationStatus as GenStatus,
 )
 
 
-@router.post(
-    "/documents/generate",
-    response_model=Union[GenerateDocumentResponse, AsyncGenerationResponse],
-    summary="Generate a document from conversation",
-    description="Generate a document using conversation content and a template. May return async job metadata.",
-    tags=["chat-documents"],
-)
+# @router.post(
+#     "/documents/generate",
+#     response_model=Union[GenerateDocumentResponse, AsyncGenerationResponse],
+#     summary="Generate a document from conversation",
+#     description="Generate a document using conversation content and a template. May return async job metadata.",
+#     tags=["chat-documents"],
+# )
 async def generate_document(
     request: GenerateDocumentRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -3134,13 +3128,13 @@ async def generate_document(
         )
 
 
-@router.get(
-    "/documents/jobs/{job_id}",
-    response_model=JobStatusResponse,
-    summary="Get generation job status",
-    description="Check the current status and progress of a document generation job.",
-    tags=["chat-documents"],
-)
+# @router.get(
+#     "/documents/jobs/{job_id}",
+#     response_model=JobStatusResponse,
+#     summary="Get generation job status",
+#     description="Check the current status and progress of a document generation job.",
+#     tags=["chat-documents"],
+# )
 async def get_job_status(
     job_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -3187,12 +3181,12 @@ async def get_job_status(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.delete(
-    "/documents/jobs/{job_id}",
-    summary="Cancel generation job",
-    description="Cancel a pending or running document generation job.",
-    tags=["chat-documents"],
-)
+# @router.delete(
+#     "/documents/jobs/{job_id}",
+#     summary="Cancel generation job",
+#     description="Cancel a pending or running document generation job.",
+#     tags=["chat-documents"],
+# )
 async def cancel_job(
     job_id: str,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -3231,13 +3225,13 @@ async def cancel_job(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get(
-    "/documents",
-    response_model=DocumentListResponse,
-    summary="List generated documents",
-    description="List previously generated documents for the current user.",
-    tags=["chat-documents"],
-)
+# @router.get(
+#     "/documents",
+#     response_model=DocumentListResponse,
+#     summary="List generated documents",
+#     description="List previously generated documents for the current user.",
+#     tags=["chat-documents"],
+# )
 async def list_generated_documents(
     conversation_id: Optional[str] = Query(None, min_length=1, description="Filter by conversation ID"),
     document_type: Optional[DocType] = Query(None, description="Filter by document type"),
@@ -3272,13 +3266,13 @@ async def list_generated_documents(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get(
-    "/documents/{document_id}",
-    response_model=GeneratedDocument,
-    summary="Get generated document",
-    description="Retrieve a generated document by its identifier.",
-    tags=["chat-documents"],
-)
+# @router.get(
+#     "/documents/{document_id}",
+#     response_model=GeneratedDocument,
+#     summary="Get generated document",
+#     description="Retrieve a generated document by its identifier.",
+#     tags=["chat-documents"],
+# )
 async def get_generated_document(
     document_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -3304,12 +3298,12 @@ async def get_generated_document(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.delete(
-    "/documents/{document_id}",
-    summary="Delete generated document",
-    description="Delete a generated document by its identifier.",
-    tags=["chat-documents"],
-)
+# @router.delete(
+#     "/documents/{document_id}",
+#     summary="Delete generated document",
+#     description="Delete a generated document by its identifier.",
+#     tags=["chat-documents"],
+# )
 async def delete_generated_document(
     document_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -3335,13 +3329,13 @@ async def delete_generated_document(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post(
-    "/documents/prompts",
-    response_model=PromptConfigResponse,
-    summary="Save custom prompt configuration",
-    description="Save a custom prompt configuration for a given document type.",
-    tags=["chat-documents"],
-)
+# @router.post(
+#     "/documents/prompts",
+#     response_model=PromptConfigResponse,
+#     summary="Save custom prompt configuration",
+#     description="Save a custom prompt configuration for a given document type.",
+#     tags=["chat-documents"],
+# )
 async def save_prompt_config(
     config: SavePromptConfigRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -3385,13 +3379,13 @@ async def save_prompt_config(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get(
-    "/documents/prompts/{document_type}",
-    response_model=PromptConfigResponse,
-    summary="Get prompt configuration",
-    description="Retrieve the saved prompt configuration for a document type.",
-    tags=["chat-documents"],
-)
+# @router.get(
+#     "/documents/prompts/{document_type}",
+#     response_model=PromptConfigResponse,
+#     summary="Get prompt configuration",
+#     description="Retrieve the saved prompt configuration for a document type.",
+#     tags=["chat-documents"],
+# )
 async def get_prompt_config(
     document_type: DocType,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -3440,13 +3434,13 @@ async def get_prompt_config(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.post(
-    "/documents/bulk",
-    response_model=BulkGenerateResponse,
-    summary="Bulk generate documents",
-    description="Submit multiple document generations in one request. May return async job IDs.",
-    tags=["chat-documents"],
-)
+# @router.post(
+#     "/documents/bulk",
+#     response_model=BulkGenerateResponse,
+#     summary="Bulk generate documents",
+#     description="Submit multiple document generations in one request. May return async job IDs.",
+#     tags=["chat-documents"],
+# )
 async def bulk_generate_documents(
     request: BulkGenerateRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
@@ -3488,13 +3482,13 @@ async def bulk_generate_documents(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
-@router.get(
-    "/documents/statistics",
-    response_model=GenerationStatistics,
-    summary="Get generation statistics",
-    description="Aggregate statistics across generated documents (counts, durations, errors).",
-    tags=["chat-documents"],
-)
+# @router.get(
+#     "/documents/statistics",
+#     response_model=GenerationStatistics,
+#     summary="Get generation statistics",
+#     description="Aggregate statistics across generated documents (counts, durations, errors).",
+#     tags=["chat-documents"],
+# )
 async def get_generation_statistics(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ) -> GenerationStatistics:

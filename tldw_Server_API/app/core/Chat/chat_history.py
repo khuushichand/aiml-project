@@ -3,6 +3,14 @@
 """
 Utility functions for persisting chat history, exporting conversations, and
 preparing media content for chat interactions.
+
+Note:
+- The primary chat persistence path for `/api/v1/chat/completions` now lives in
+  the Chat service module (`chat_service.build_context_and_messages` and
+  related helpers).
+- `save_chat_history_to_db_wrapper` is retained for legacy callers and
+  Character Chat utilities; new code should prefer the chat module’s unified
+  conversation/message persistence pipeline.
 """
 
 from __future__ import annotations
@@ -42,6 +50,11 @@ def save_chat_history_to_db_wrapper(
 ) -> Tuple[Optional[str], str]:
     """
     Persist a chat history into the ChaChaNotes database, creating or updating a conversation record.
+
+    This function is maintained for legacy integrations and Character Chat
+    utilities. For new features built on `/api/v1/chat/completions`, prefer
+    using the Chat module’s conversation/message persistence via
+    `chat_service.build_context_and_messages` and `_save_message_turn_to_db`.
     """
     log_counter("save_chat_history_to_db_attempt")
     start_time = time.time()

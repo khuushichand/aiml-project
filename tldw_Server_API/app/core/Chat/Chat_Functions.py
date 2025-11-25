@@ -2,9 +2,14 @@
 # Description: Chat functions for interacting with the LLMs as chatbots
 """
 This module now acts as a compatibility shim around the refactored chat stack.
-Prefer importing from `chat_orchestrator`, `chat_history`, `chat_dictionary`, or
-`chat_characters` directly. These exports are retained for legacy integrations
-and will be deprecated once downstream callers migrate.
+
+Usage guidance:
+- Prefer importing from `chat_orchestrator`, `chat_service`, `chat_history`,
+  `chat_dictionary`, or `chat_characters` directly for new features.
+- The `chat` and `chat_api_call` functions here are maintained for legacy
+  integrations and tests; they forward into the orchestrator and may be
+  removed once downstream callers migrate to the `/api/v1/chat/completions`
+  endpoint and the Chat service helpers.
 """
 #
 # Imports

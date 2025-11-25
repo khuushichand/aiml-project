@@ -152,8 +152,9 @@ def get_api_keys() -> Dict[str, Optional[str]]:
         for name in ALL_SUPPORTED_PROVIDER_NAMES_LIST
     }
 
-# Keep API_KEYS for backward compatibility but make it compute on first access
-# This will be deprecated in favor of get_api_keys()
+# Keep API_KEYS for backward compatibility but make it compute on first access.
+# This map is for test overrides and transitional compatibility; new code should
+# use get_api_keys() / resolve_provider_api_key.
 API_KEYS = get_api_keys()
 
 # For type hinting - define explicitly
@@ -209,7 +210,13 @@ class ChatCompletionRequestMessageContentPartText(BaseModel):
     text: str
 
 class ChatCompletionRequestMessageContentPartImageURL(BaseModel):
-    url: Union[HttpUrl, str] = Field(..., description="Either a URL of the image or the base64 encoded image data.")
+    url: Union[HttpUrl, str] = Field(
+        ...,
+        description=(
+            "Base64-encoded image data as a data URI (e.g., 'data:image/png;base64,...'). "
+            "External HTTP/HTTPS URLs are not supported for chat images."
+        ),
+    )
     detail: Optional[Literal["auto", "low", "high"]] = Field("auto", description="Specifies the detail level of the image.")
 
     @field_validator('url')
@@ -366,8 +373,11 @@ class ChatCompletionRequest(BaseModel):
     character_id: Optional[str] = Field(None, description="Optional ID of the character to use for context.")
     conversation_id: Optional[str] = Field(None, description="Optional ID of the conversation to use for context.")
     save_to_db: Optional[bool] = Field(
-        False,
-        description="[Extension] If true, persist conversation and messages to the database. Defaults to false (ephemeral)."
+        None,
+        description=(
+            "[Extension] If true, persist conversation and messages to the database. "
+            "If omitted, the server uses its configured default (see Chat-Module.chat_save_default/default_save_to_db)."
+        ),
     )
     model_config = ConfigDict(
         extra="allow",
