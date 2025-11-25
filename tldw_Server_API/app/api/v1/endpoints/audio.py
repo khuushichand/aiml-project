@@ -1512,10 +1512,10 @@ async def get_stt_health(
     try:
         status_info = audio_files.check_transcription_model_status(resolved_model)
     except Exception as e:
-        logger.debug(f"STT health: check_transcription_model_status failed: {e}")
+        logger.exception(f"STT health: check_transcription_model_status failed")
         status_info = {
             "available": False,
-            "message": f"Failed to check model status: {e}",
+            "message": "Failed to check model status.",
             "model": resolved_model,
         }
 
