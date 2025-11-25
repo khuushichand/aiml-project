@@ -126,8 +126,8 @@ def main() -> None:
     clone_root.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        print(f"Installing git lfs filters...")
-        _run(["git", "lfs", "install", "--local"])
+        print("Installing git lfs filters...")
+        _run(["git", "lfs", "install"])
 
         print(f"Cloning {args.repo_url} -> {clone_root}")
         _run(["git", "clone", "--depth", "1", args.repo_url, str(clone_root)])

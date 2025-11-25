@@ -64,11 +64,16 @@ except Exception:
     pass
 import pytest
 
+
 def _log_lingering_threads():
     try:
         import sys, traceback
 
-        remaining = [t for t in threading.enumerate() if t is not threading.current_thread() and not t.daemon]
+        remaining = [
+            t
+            for t in threading.enumerate()
+            if t is not threading.current_thread() and not t.daemon
+        ]
         if remaining:
             details = []
             for t in remaining:
@@ -89,10 +94,69 @@ def _log_lingering_threads():
             _log.warning("Non-daemon threads still running at exit: %s", summary)
             for name, target, formatted_stack in details:
                 if formatted_stack:
-                    _log.warning("Thread %s target=%s stack:\n%s", name, target, formatted_stack)
-                    print(f"Thread {name} target={target} stack:\n{formatted_stack}", file=sys.stderr)
+                    _log.warning(
+                        "Thread %s target=%s stack:\n%s", name, target, formatted_stack
+                    )
+                    print(
+                        f"Thread {name} target={target} stack:\n{formatted_stack}",
+                        file=sys.stderr,
+                    )
     except Exception:
         pass
+
+
+def _cleanup_lingering_threads(log: logging.Logger, context: str = "teardown") -> None:
+    """Best-effort cleanup of lingering non-daemon threads during tests.
+
+    Performs a first pass join with timeout for non-daemon threads and then logs
+    any remaining threads with their stack frames before marking them as daemon
+    to avoid interpreter shutdown hangs.
+    """
+    try:
+        import sys
+
+        current = threading.current_thread()
+        # First pass: try to join all non-daemon threads with a timeout
+        for t in threading.enumerate():
+            if t is current or t.daemon:
+                continue
+            try:
+                t.join(timeout=1.0)
+            except Exception:
+                pass
+
+        # Second pass: log any remaining threads and mark them daemon
+        for t in threading.enumerate():
+            if t is current or t.daemon:
+                continue
+            try:
+                stack = sys._current_frames().get(t.ident)
+            except Exception:
+                stack = None
+            msg = (
+                f"Lingering non-daemon thread during {context}: "
+                f"name={t.name} target={getattr(t, '_target', None)}"
+            )
+            print(msg, file=sys.stderr)
+            try:
+                log.warning("%s stack=%s", msg, stack)
+            except Exception:
+                pass
+            try:
+                t.daemon = True  # allow interpreter shutdown to proceed
+            except Exception:
+                pass
+    except Exception as e:
+        try:
+            import sys as _local_sys
+
+            print(
+                f"Failed to log lingering threads during {context}: {e}",
+                file=_local_sys.stderr,
+            )
+        except Exception:
+            pass
+
 
 atexit.register(_log_lingering_threads)
 # Ensure problematic optional routers don't import during test collection
@@ -356,26 +420,7 @@ def _shutdown_executors_and_evaluations_pool():
     except Exception:
         pass
     # Proactively join/mark any lingering non-daemon threads so interpreter shutdown won't hang
-    try:
-        import sys, time
-        current = threading.current_thread()
-        for t in threading.enumerate():
-            if t is current or t.daemon:
-                continue
-            t.join(timeout=1.0)
-        for t in threading.enumerate():
-            if t is current or t.daemon:
-                continue
-            stack = sys._current_frames().get(t.ident)
-            msg = f"Lingering non-daemon thread at teardown: name={t.name} target={getattr(t, '_target', None)}"
-            print(msg, file=sys.stderr)
-            _log.warning(msg + f" stack={stack}")
-            try:
-                t.daemon = True  # allow interpreter shutdown to proceed
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"Failed to log lingering threads: {e}", file=sys.stderr)
+    _cleanup_lingering_threads(_log, context="teardown")
 
 
 @pytest.fixture(autouse=True)
@@ -395,21 +440,7 @@ def _reset_workflow_scheduler():
 
 
     # Log any lingering non-daemon threads with their stack frames to aid debugging hangs
-    try:
-        import sys
-        for t in threading.enumerate():
-            if t is threading.current_thread() or t.daemon:
-                continue
-            stack = sys._current_frames().get(t.ident)
-            msg = f"Lingering non-daemon thread at teardown: name={t.name} target={getattr(t, '_target', None)}"
-            print(msg, file=sys.stderr)
-            _log.warning(msg + f" stack={stack}")
-            try:
-                t.daemon = True  # prevent interpreter hang on shutdown
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"Failed to log lingering threads: {e}", file=sys.stderr)
+    _cleanup_lingering_threads(_log, context="scheduler reset")
 
 
 # Unified Postgres fixtures are provided by tldw_Server_API.tests._plugins.postgres

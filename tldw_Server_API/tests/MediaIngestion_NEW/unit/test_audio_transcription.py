@@ -564,7 +564,7 @@ def test_speech_to_text_return_language_consistent_for_parakeet(monkeypatch, tmp
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
 
     def fake_parakeet(audio_file_path, variant, selected_source_lang, vad_filter):
-        assert audio_file_path == str(audio_file)
+        assert str(audio_file_path) == str(audio_file)
         assert variant == "standard"
         return [{"start_seconds": 0.0, "end_seconds": 1.0, "Text": "parakeet"}]
 
@@ -592,7 +592,7 @@ def test_speech_to_text_return_language_consistent_for_qwen2audio(monkeypatch, t
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
 
     def fake_qwen(audio_file_path, selected_source_lang, vad_filter):
-        assert audio_file_path == str(audio_file)
+        assert str(audio_file_path) == str(audio_file)
         return [{"start_seconds": 0.0, "end_seconds": 1.0, "Text": "qwen"}]
 
     monkeypatch.setattr(atlib, "speech_to_text_qwen2audio", fake_qwen)

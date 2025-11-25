@@ -122,7 +122,7 @@ providers:
 
   # Supertonic ONNX Configuration (local; user-supplied models)
   supertonic:
-    enabled: true               # Disabled by default; requires manual asset install
+    enabled: false              # Disabled by default; enable after installing assets
     model_path: "models/supertonic/onnx"        # ONNX directory
     sample_rate: 24000
     device: "cpu"                # Placeholder for future GPU support

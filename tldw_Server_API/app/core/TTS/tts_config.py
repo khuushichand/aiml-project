@@ -194,6 +194,11 @@ class TTSConfigManager:
                 providers = config_dict.get("providers", {}).copy()
                 for prov, prov_cfg in cfg_txt.get("providers", {}).items():
                     base = providers.get(prov, {})
+                    # Normalize ProviderConfig instances to plain dicts before merging
+                    if isinstance(base, ProviderConfig):
+                        base = model_dump_compat(base)
+                    if isinstance(prov_cfg, ProviderConfig):
+                        prov_cfg = model_dump_compat(prov_cfg)
                     if isinstance(base, dict) and isinstance(prov_cfg, dict):
                         merged = base.copy()
                         merged.update(prov_cfg)
@@ -210,6 +215,11 @@ class TTSConfigManager:
             providers = config_dict.get("providers", {}).copy()
             for prov, prov_cfg in cfg_env.get("providers", {}).items():
                 base = providers.get(prov, {})
+                # Normalize ProviderConfig instances to plain dicts before merging
+                if isinstance(base, ProviderConfig):
+                    base = model_dump_compat(base)
+                if isinstance(prov_cfg, ProviderConfig):
+                    prov_cfg = model_dump_compat(prov_cfg)
                 if isinstance(base, dict) and isinstance(prov_cfg, dict):
                     merged = base.copy()
                     merged.update(prov_cfg)

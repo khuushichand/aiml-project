@@ -10,8 +10,8 @@ Priority:
      copy that file into `<repo_root>/models/silero_vad/` (or `--dest`).
   2. If faster-whisper is not available, and you pass `--url` (or set
      `SILERO_VAD_WEIGHTS_URL`), download that URL to the destination path.
-     By default, the script uses the official Silero VAD ONNX asset from:
-       https://raw.githubusercontent.com/snakers4/silero-vad/refs/heads/master/src/silero_vad/data/silero_vad.onnx
+     If neither `--url` nor `SILERO_VAD_WEIGHTS_URL` is provided, the script
+     will not download anything and will exit with an error.
 
 Examples:
     # Copy from faster-whisper assets (no network):
@@ -58,14 +58,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Destination directory under repo root (default: models/silero_vad)",
     )
+    env_url_default = os.environ.get("SILERO_VAD_WEIGHTS_URL")
     parser.add_argument(
         "--url",
         type=str,
-        default=os.environ.get("SILERO_VAD_WEIGHTS_URL", "").strip() or DEFAULT_SILERO_VAD_URL,
+        default=env_url_default if env_url_default else None,
         help=(
             "URL to a Silero VAD ONNX file. "
             "If faster-whisper assets are unavailable, this URL will be downloaded. "
-            "Defaults to the official Silero VAD ONNX asset; override with --url or SILERO_VAD_WEIGHTS_URL to use a mirror you control."
+            "Omit this (and leave SILERO_VAD_WEIGHTS_URL unset) to disable downloading entirely; "
+            "you can pass the official Silero VAD ONNX asset URL or a mirror you control."
         ),
     )
     return parser.parse_args()

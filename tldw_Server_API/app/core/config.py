@@ -588,14 +588,21 @@ def load_settings():
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 
     # Audit export streaming threshold (env overrides config.txt [Audit])
-    _audit_cfg = comprehensive_config.get("audit") if isinstance(comprehensive_config, dict) else None
-    if not isinstance(_audit_cfg, dict):
-        _audit_cfg = comprehensive_config.get("Audit") if isinstance(comprehensive_config, dict) else None
-    if not isinstance(_audit_cfg, dict):
-        _audit_cfg = {}
+    audit_stream_env_raw = os.getenv("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS")
+    audit_stream_cfg_raw: Optional[str] = None
+    if audit_stream_env_raw is None:
+        try:
+            _audit_parser = load_comprehensive_config()
+        except Exception:
+            _audit_parser = None
+        if _audit_parser is not None:
+            try:
+                if hasattr(_audit_parser, "has_section") and _audit_parser.has_section("Audit"):
+                    audit_stream_cfg_raw = _audit_parser.get("Audit", "export_stream_auto_max_rows", fallback=None)
+            except Exception:
+                audit_stream_cfg_raw = None
     audit_stream_auto_max_rows = _safe_int(
-        os.getenv("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS")
-        or _audit_cfg.get("export_stream_auto_max_rows"),
+        audit_stream_env_raw if audit_stream_env_raw is not None else audit_stream_cfg_raw,
         5000,
     )
 

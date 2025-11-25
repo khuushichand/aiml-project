@@ -967,8 +967,9 @@ class _ParakeetRNNTStreamer:
             raise RuntimeError("PyTorch is required for Parakeet RNNT streaming")
 
         self.device = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        torch.set_grad_enabled(False)
-        torch.set_float32_matmul_precision("high")
+        # Avoid mutating global grad/precision state here; the streaming hot
+        # path runs under torch.inference_mode() and model parameters are
+        # frozen below. We only tune thread count for performance.
         try:
             torch.set_num_threads(max(1, torch.get_num_threads() or 1))
         except Exception:
@@ -1078,7 +1079,7 @@ class _ParakeetRNNTStreamer:
         except Exception:
             # Naive linear fallback
             ratio = float(self.sample_rate) / float(in_sr)
-            new_len = max(1, int(round(len(x) * ratio)))
+            new_len = max(1, round(len(x) * ratio))
             x_old = np.linspace(0.0, 1.0, num=len(x), endpoint=False)
             x_new = np.linspace(0.0, 1.0, num=new_len, endpoint=False)
             return np.interp(x_new, x_old, x).astype(np.float32, copy=False)

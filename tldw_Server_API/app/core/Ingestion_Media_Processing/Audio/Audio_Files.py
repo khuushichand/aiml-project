@@ -746,10 +746,10 @@ def process_audio_files(
                 try:
                     # Ensure wav_file_path is valid before calling speech_to_text
                     if not wav_file_path:
-                         raise ValueError("Cannot transcribe, WAV file path is missing.")
+                        raise ValueError("Cannot transcribe, WAV file path is missing.")
 
                     transcription_output = speech_to_text(
-                        audio_file_path=wav_file_path,
+                        audio_input=wav_file_path,
                         whisper_model=transcription_model,
                         selected_source_lang=transcription_language,
                         vad_filter=vad_use,
