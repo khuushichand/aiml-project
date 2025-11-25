@@ -20,7 +20,7 @@ class _DummyLogger:
 
 
 class _FakeTTSService:
-    async def generate_speech(self, request_data, provider=None, fallback=True):
+    async def generate_speech(self, request_data, provider=None, fallback=True, voice_to_voice_start=None, voice_to_voice_route="audio.speech"):
         yield b"audio-bytes"
 
 

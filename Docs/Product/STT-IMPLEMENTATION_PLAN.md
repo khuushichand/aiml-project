@@ -12,12 +12,18 @@
 **Implementation Notes**:
 - VAD engine: Silero VAD.
 - Integration point: Unified WS loop (tldw_Server_API/app/core/Ingestion_Media_Processing/Audio/Audio_Streaming_Unified.py:1200) before forwarding to `transcriber.process_audio_chunk`.
-- Tunables and bounds (server‑validated):
+- Tunables and bounds (server-validated):
   - `vad_threshold` [0.1..0.9], default 0.5
   - `min_silence_ms` [150..1500], default 250
   - `turn_stop_secs` [0.1..0.75], default 0.2 (guard minimum utterance length 0.4 s)
-- Commit mapping: VAD end‑of‑speech triggers a server‑side finalize that emits `{type:"full_transcript"}` equivalent to receiving a client `commit` (see Audio_Streaming_Unified.py:1585).
-**Status**: Not Started
+- Commit mapping: VAD end-of-speech triggers a server-side finalize that emits `{type:"full_transcript"}` equivalent to receiving a client `commit` (see Audio_Streaming_Unified.py:1585).
+- Fail-open behavior: if Silero VAD is unavailable or fails to load, continue streaming without auto-commit and log once per session.
+**Status**: In Progress (auto-commit wired; fail-open fallback and metrics in place)
+
+**Next Steps**:
+- Tune Silero thresholds on reference audio (validate `turn_stop_secs`/`min_silence_ms`/`min_utterance_secs` defaults) and document recommended client values.
+- Add end-to-end WS test with synthetic pauses (mocked clock or small sleep) asserting finals arrive within target latency and no duplicate commits.
+- Add a brief doc snippet in STT docs describing the new VAD knobs and the fail-open behavior for locked-down envs.
 
 ## Stage 2: Latency Metrics (STT/TTS + Voice‑to‑Voice)
 **Goal**: Instrument STT end‑of‑speech → final transcript, TTS request → first audio chunk (TTFB), and voice‑to‑voice (EOS → first audio on wire).
@@ -34,7 +40,8 @@
   - `tts_ttfb_seconds{provider,voice,format,endpoint="audio.speech"}`
   - `voice_to_voice_seconds{provider,route}`
 - Correlation: propagate `X-Request-Id` if present or generate UUIDv4 on entry to WS/REST; include in logs and internal spans to correlate metrics.
-**Status**: Not Started
+- Label guidance: use `route="audio.speech"` for REST; reserve `audio.stream.tts` (or similar) for future WS TTS to keep series distinct.
+**Status**: Done
 
 ## Stage 3: TTS PCM Streaming Path
 **Goal**: Support `response_format=pcm` end‑to‑end for lowest overhead; document and validate output shape/sample rate.
@@ -48,7 +55,7 @@
 - Content‑Type: `audio/L16; rate=<sr>; channels=<n>`; default `rate=24000`, `channels=1`.
 - Headers: include `X-Audio-Sample-Rate: <sr>` for clarity.
 - Negotiation: Default to provider/sample pipeline rate; optional `target_sample_rate` accepted when supported by adapter.
-**Status**: Not Started
+**Status**: Done
 
 ## Stage 4: Phoneme/Lexicon Overrides (Kokoro)
 **Goal**: Add configurable phoneme mapping for consistent pronunciation of brand/technical terms.
@@ -62,7 +69,14 @@
 - Schema: YAML or JSON file with entries: `{ term: "OpenAI", phonemes: "oʊ p ən aɪ", lang?: "en", boundary?: true }`.
 - Tokenization: apply on word boundaries by default (`boundary: true`), case‑insensitive match with preserve‑case replacement.
 - Precedence: per‑request > provider‑level > global; if no match, fall back to provider defaults.
+- Config location: `Config_Files/tts_phonemes.{yaml,json}` (startup load; no hot-reload required).
+- Validation: reject overlapping/ambiguous terms; cap map size to avoid perf regressions; escape regex-like input where needed.
 **Status**: Not Started
+
+**Next Steps**:
+- Define config schema and load path (YAML/JSON) for Kokoro phoneme overrides; validate entries and precedence.
+- Plumb overrides through Kokoro adapter (ONNX/PT) with word-boundary/case handling; add per-request override passthrough.
+- Add unit tests for mapping correctness, boundary handling, and fallback when map missing; add integration sample asserting pronunciation change.
 
 ## Stage 5: Docs & Perf Harness
 **Goal**: Update docs and add a simple harness to measure voice‑to‑voice latency on a reference setup.
@@ -75,7 +89,14 @@
 - Harness location: `Helper_Scripts/voice_latency_harness/` (or `tldw_Server_API/tests/perf/`).
 - Outputs: JSON summary (p50/p90 for STT final, TTS TTFB, voice‑to‑voice); optional Prometheus text for CI scrape.
 - Fixtures: include the 10 s 16 kHz float32 speech sample and scripts to generate variants (noise/silence).
+- Use the existing `voice_to_voice_seconds` metric wiring as the measurement source; harness should pull from metrics or emit its own JSON events if Prom scrape is unavailable.
 **Status**: Not Started
+
+**Next Steps**:
+- Scaffold a minimal harness script under `Helper_Scripts/voice_latency_harness/` (or `tldw_Server_API/tests/perf/`) that drives STT WS → TTS REST, captures `voice_to_voice_seconds` (from metrics or emitted JSON), and outputs p50/p90.
+- Add a short-mode flag for CI (fast synthetic audio, no external deps); gate any real-provider runs behind env flags.
+- Document how to run and interpret results; link the harness in STT/TTS docs.
+- Define CLI shape, e.g., `python Helper_Scripts/voice_latency_harness/run.py --out out.json --short`; document JSON schema for results.
 
 ## Stage 6: WebSocket TTS (Optional)
 **Goal**: `/api/v1/audio/stream/tts` PCM16 streaming with backpressure and auth/rate‑limit parity with STT WS.
@@ -89,6 +110,12 @@
 - Frames: client `{type:"prompt", text, voice?, speed?, format?:"pcm"}`; server: binary PCM16 frames (20–40 ms) + `{type:"error", message}`.
 - Backpressure: bounded queue; if consumer is slow, throttle generation or drop oldest with metric `audio_stream_underruns_total`.
 **Status**: Not Started
+
+**Next Steps**:
+- Design WS schema (frames, headers, error codes) to mirror STT WS; add handler under `/api/v1/audio/stream/tts`.
+- Reuse `streaming_audio_writer` for PCM framing; ensure backpressure via bounded queue and emit `audio_stream_underruns_total` on drops.
+- Add auth/quota parity with STT WS; cover slow reader/disconnect tests and ensure TTFB/underrun metrics are emitted.
+- Specify PCM frame size (20–40 ms) and queue depth/backpressure policy (block vs drop-oldest) plus close codes for overload/disconnect.
 
 ---
 

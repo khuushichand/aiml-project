@@ -21,42 +21,22 @@ import os
 import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
-import queue
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import queue
 from typing import Optional, Union, List, Dict, Any, Tuple
 #
 # DEBUG Imports
 #from memory_profiler import profile
 # Third-Party Imports
-# Optional desktop audio deps (guarded to avoid server import failures)
-try:
-    import pyaudio  # type: ignore
-    HAS_PYAUDIO = True
-except Exception:
-    pyaudio = None  # type: ignore
-    HAS_PYAUDIO = False
-
 from faster_whisper import WhisperModel as OriginalWhisperModel
 import numpy as np
 import torch
 from scipy.io import wavfile
 from transformers import AutoProcessor, Qwen2AudioForConditionalGeneration
-try:
-    import sounddevice as sd  # type: ignore
-    HAS_SOUNDDEVICE = True
-except Exception:
-    sd = None  # type: ignore
-    HAS_SOUNDDEVICE = False
-try:
-    import wave  # type: ignore
-    HAS_WAVE = True
-except Exception:
-    wave = None  # type: ignore
-    HAS_WAVE = False
 
 # Import diarization module (optional dependency)
 try:
@@ -73,7 +53,7 @@ except ImportError:
 # Import Local
 from tldw_Server_API.app.core.Utils.Utils import sanitize_filename, logging
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram, timeit
-from tldw_Server_API.app.core.config import load_and_log_configs, loaded_config_data
+from tldw_Server_API.app.core.config import load_and_log_configs, loaded_config_data, get_stt_config
 from typing import Union
 
 
@@ -87,28 +67,39 @@ media_config = loaded_config_data.get('media_processing', {}) if loaded_config_d
 AUDIO_TRANSCRIPTION_BUFFER_SIZE_MB = media_config.get('audio_transcription_buffer_size_mb', 10)
 """int: Maximum buffer size for audio transcription in MB."""
 
-# Transcript cache settings (env overrides config)
+# Transcript cache and STT settings (env overrides config)
 def _stt_cache_config():
-    cfg = loaded_config_data
+    """
+    Return the `[STT-Settings]` section from the loaded config (if any).
+
+    This helper is shared by transcript-cache and STT-related toggles so that
+    all STT knobs live under a single INI section.
+    """
     try:
-        cfg = cfg() if callable(cfg) else cfg
+        return get_stt_config()
     except Exception:
         logging.debug("Failed to load STT cache config, using empty dict")
-    return cfg.get("STT-Settings", {}) if cfg else {}
+        return {}
 
 
 _cache_cfg = _stt_cache_config()
+
+
 def _to_bool(val) -> bool:
     return str(val).lower() in {"1", "true", "yes", "on"}
+
 
 _env_disable = _to_bool(os.getenv("STT_DISABLE_TRANSCRIPT_CACHE", ""))
 _cfg_disable = _cache_cfg.get("disable_transcript_cache", False)
 PERSIST_TRANSCRIPTS_DEFAULT = not (_to_bool(_cfg_disable) or _env_disable)
+
+
 def _coerce_int(val):
     try:
         return int(val)
     except Exception:
         return None
+
 
 def _coerce_float(val):
     try:
@@ -116,17 +107,38 @@ def _coerce_float(val):
     except Exception:
         return None
 
-CACHE_MAX_FILES_PER_SOURCE = _coerce_int(
-    os.getenv("STT_CACHE_MAX_FILES_PER_SOURCE")
-    or _cache_cfg.get("transcript_cache_max_files_per_source")
+
+# Conservative defaults to prevent unbounded cache growth unless explicitly
+# disabled via `disable_transcript_cache_pruning` or environment variables.
+DEFAULT_CACHE_MAX_FILES_PER_SOURCE = 32
+DEFAULT_CACHE_MAX_AGE_DAYS = 30
+DEFAULT_CACHE_MAX_TOTAL_MB = 512.0
+
+_raw_max_files = os.getenv("STT_CACHE_MAX_FILES_PER_SOURCE") or _cache_cfg.get(
+    "transcript_cache_max_files_per_source"
 )
-CACHE_MAX_AGE_DAYS = _coerce_int(
-    os.getenv("STT_CACHE_MAX_AGE_DAYS")
-    or _cache_cfg.get("transcript_cache_max_age_days")
+_raw_max_age = os.getenv("STT_CACHE_MAX_AGE_DAYS") or _cache_cfg.get(
+    "transcript_cache_max_age_days"
 )
-CACHE_MAX_TOTAL_MB = _coerce_float(
-    os.getenv("STT_CACHE_MAX_TOTAL_MB")
-    or _cache_cfg.get("transcript_cache_max_total_mb")
+_raw_max_total = os.getenv("STT_CACHE_MAX_TOTAL_MB") or _cache_cfg.get(
+    "transcript_cache_max_total_mb"
+)
+
+_max_files_val = _coerce_int(_raw_max_files)
+_max_age_val = _coerce_int(_raw_max_age)
+_max_total_val = _coerce_float(_raw_max_total)
+
+# When values are absent/invalid (None), fall back to conservative defaults;
+# explicit 0 or negative values are preserved so callers can disable individual
+# limits if desired.
+CACHE_MAX_FILES_PER_SOURCE = (
+    DEFAULT_CACHE_MAX_FILES_PER_SOURCE if _max_files_val is None else _max_files_val
+)
+CACHE_MAX_AGE_DAYS = (
+    DEFAULT_CACHE_MAX_AGE_DAYS if _max_age_val is None else _max_age_val
+)
+CACHE_MAX_TOTAL_MB = (
+    DEFAULT_CACHE_MAX_TOTAL_MB if _max_total_val is None else _max_total_val
 )
 
 _env_skip_prevalidation = _to_bool(os.getenv("STT_SKIP_AUDIO_PREVALIDATION", ""))
@@ -136,6 +148,14 @@ SKIP_AUDIO_PREVALIDATION = _to_bool(_cfg_skip_prevalidation) or _env_skip_preval
 _env_disable_prune = _to_bool(os.getenv("STT_DISABLE_TRANSCRIPT_CACHE_PRUNING", ""))
 _cfg_disable_prune = _cache_cfg.get("disable_transcript_cache_pruning", False)
 DISABLE_TRANSCRIPT_CACHE_PRUNING = _to_bool(_cfg_disable_prune) or _env_disable_prune
+
+# Optional faster-whisper compute_type override. When unset or equal to "auto",
+# Whisper models default to float16 on CUDA and int8 on CPU; when set to a
+# supported faster-whisper compute_type (e.g. "int8", "int8_float16"), that
+# value is passed through to the underlying WhisperModel.
+WHISPER_COMPUTE_TYPE_OVERRIDE = str(
+    _cache_cfg.get("whisper_compute_type", "")
+).strip().lower()
 
 def _resample_audio_if_needed(audio: np.ndarray, sample_rate: int, target_sr: int = 16000) -> np.ndarray:
     """
@@ -176,6 +196,7 @@ PROJECT_ROOT_DIR = _resolve_project_root()
 WHISPER_MODEL_BASE_DIR = (PROJECT_ROOT_DIR / "models" / "Whisper").resolve()
 
 _AUDIO_VALIDATION_CACHE: Dict[str, tuple] = {}
+_PRUNE_DISABLED_LOGGED: bool = False
 
 def prune_transcript_cache(
     cache_dir: Path,
@@ -196,6 +217,13 @@ def prune_transcript_cache(
         max_files_per_source: Keep only the newest N files per base source (None disables).
     """
     if DISABLE_TRANSCRIPT_CACHE_PRUNING:
+        global _PRUNE_DISABLED_LOGGED
+        if not _PRUNE_DISABLED_LOGGED:
+            _PRUNE_DISABLED_LOGGED = True
+            logging.info(
+                "Transcript cache pruning is disabled via STT-Settings.disable_transcript_cache_pruning "
+                "or STT_DISABLE_TRANSCRIPT_CACHE_PRUNING; cached transcripts may grow without bound."
+            )
         return
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -558,16 +586,21 @@ def re_generate_transcription(audio_file_path, whisper_model, vad_filter, select
     """
     logging.info(f"Regenerating transcription for {audio_file_path} using model {whisper_model}")
     try:
-        # IMPORTANT: Pass all necessary parameters to speech_to_text
+        # IMPORTANT: Pass all necessary parameters to speech_to_text.
+        # The canonical return type of speech_to_text is a list of segment
+        # dicts (or (segments, language) when return_language=True). We treat
+        # any dict-with-'segments' shape here as a defensive normalization
+        # only, not as a public contract.
         segments = speech_to_text(
-            audio_file_path=audio_file_path,
+            audio_file_path,
             whisper_model=whisper_model,
             selected_source_lang=selected_source_lang,  # Ensure language is passed
             vad_filter=vad_filter,
             diarize=False  # Explicitly false for non-diarized regeneration
         )
-        # speech_to_text now returns the segments list directly on success (or raises error)
-        # It might return {'segments': [...]} if loading from an existing file structure. Adapt if necessary.
+        # speech_to_text returns the segments list directly on success (or raises).
+        # Normalize a dict-with-'segments' defensively in case a future change or
+        # external wrapper passes that shape through.
         if isinstance(segments, dict) and 'segments' in segments:
             actual_segments = segments['segments']
         else:
@@ -746,198 +779,20 @@ class PartialTranscriptionThread(threading.Thread):
             self.last_ts = time.time()
 
 
-def record_audio_to_disk(device_id, output_file_path, stop_event, audio_queue):
-    """
-    Records audio from a specified PyAudio device and writes it to a WAV file
-    while also putting chunks into a queue for live processing.
-
-    This function is intended to be run in a separate thread. It opens an
-    audio stream from the selected device, reads audio data in chunks,
-    writes each chunk to the specified WAV file, and simultaneously adds
-    the chunk to the `audio_queue`.
-
-    Args:
-        device_id: The index of the PyAudio input device to use for recording.
-        output_file_path: The path where the recorded WAV file will be saved.
-        stop_event: A `threading.Event` object. When set, the recording loop will terminate.
-        audio_queue: A `queue.Queue` object where raw audio chunks (bytes) will be put.
-
-    Raises:
-        ValueError: If the `device_id` is invalid, or if the selected device
-            does not support audio input or the required settings.
-        Exception: Propagates PyAudio stream errors or other exceptions encountered
-            during recording, often related to device issues (e.g., device in use,
-            unsupported sample rate).
-    """
-    p = pyaudio.PyAudio()
-    CHUNK = 1024
-    FORMAT = pyaudio.paInt16
-    CHANNELS = 2
-    RATE = 44100
-
-    try:
-        # Validate device ID
-        device_count = p.get_device_count()
-        if device_id is None or device_id < 0 or device_id >= device_count:
-            err_msg = f"Invalid device ID: {device_id}. Valid range is 0-{device_count - 1}"
-            logging.error(err_msg)
-            raise ValueError(err_msg)
-
-        # Check device capabilities
-        device_info = p.get_device_info_by_index(device_id)
-        logging.info(f"Using device: {device_info['name']}")
-
-        if device_info['maxInputChannels'] < 1:
-            err_msg = f"Device {device_id} ({device_info['name']}) doesn't support audio input"
-            logging.error(err_msg)
-            raise ValueError(err_msg)
-
-        # Adjust channels to device capability
-        actual_channels = min(CHANNELS, int(device_info['maxInputChannels']))
-        if actual_channels != CHANNELS:
-            logging.info(f"Adjusted channels from {CHANNELS} to {actual_channels} for device limitations")
-
-        # Open audio stream
-        stream = p.open(
-            format=FORMAT,
-            channels=actual_channels,
-            rate=RATE,
-            input=True,
-            input_device_index=device_id,
-            frames_per_buffer=CHUNK
-        )
-
-        # Open the WAV for writing
-        wf = wave.open(output_file_path, 'wb')
-        wf.setnchannels(actual_channels)
-        wf.setsampwidth(2)  # 16-bit
-        wf.setframerate(RATE)
-
-        while not stop_event.is_set():
-            try:
-                data = stream.read(CHUNK, exception_on_overflow=False)
-                # write to disk
-                wf.writeframes(data)
-                # also push to queue for partial
-                audio_queue.put(data)
-            except Exception as e:
-                logging.error(f"Recording error: {e}")
-                break
-
-    except Exception as e:
-        # Enhanced error messages for common issues
-        if "9999" in str(e):
-            logging.error(f"Device {device_id} is likely in use by another application")
-        elif "Invalid sample rate" in str(e):
-            logging.error(f"Device {device_id} doesn't support {RATE}Hz sample rate")
-        else:
-            logging.error(f"Error with device {device_id}: {e}")
-        raise
-
-    finally:
-        # Ensure proper cleanup even if errors occur
-        if 'stream' in locals():
-            try:
-                stream.stop_stream()
-                stream.close()
-            except Exception as e:
-                logging.debug(f"Failed to stop/close audio stream during cleanup: error={e}")
-        if 'wf' in locals():
-            try:
-                wf.close()
-            except Exception as e:
-                logging.debug(f"Failed to close wav file during cleanup: error={e}")
-        p.terminate()
-
-
-def stop_recording_short(record_state):
-    """
-        Stops active recording threads and returns the partial transcription results.
-
-        This function signals the recording and partial transcription threads (managed
-        within `record_state`) to stop, waits for them to join, and then retrieves
-        the final partial transcription text. It also reports any errors encountered
-        by the partial transcription thread.
-
-        Args:
-            record_state: A dictionary containing the state of the active recording,
-                expected to have keys:
-                - "stop_event" (threading.Event): The event to signal threads to stop.
-                - "record_thread" (threading.Thread): The audio recording thread.
-                - "partial_thread" (PartialTranscriptionThread): The partial transcription thread.
-                - "wav_path" (str): Path to the WAV file being recorded.
-                - "partial_text_state" (dict): Shared dict with "text" key for partial transcription. (Implicitly used by partial_thread)
-
-
-        Returns:
-            A tuple `(partial_text, error_message, output_file_path)`:
-            - `partial_text` (Optional[str]): The last available partial transcription text.
-              `None` if recording wasn't active or if an error occurred preventing text retrieval.
-            - `error_message` (str): An error message if the partial transcription thread
-              encountered an exception, or a message indicating no active recording.
-              Empty if successful.
-            - `output_file_path` (Optional[str]): The path to the recorded WAV file.
-              `None` if recording wasn't active.
-    """
-    if not record_state:
-        return None, "[No active recording to stop]", None
-
-    stop_event = record_state["stop_event"]
-    rec_thread = record_state["record_thread"]
-    partial_thread = record_state["partial_thread"]
-    output_file_path = record_state["wav_path"]
-
-    stop_event.set()
-    rec_thread.join(timeout=5)
-    if rec_thread.is_alive():
-        logging.warning("record_thread didn't stop in time.")
-
-    partial_thread.join(timeout=5)
-    if partial_thread.is_alive():
-        logging.warning("partial_thread didn't stop in time.")
-
-    if partial_thread.exception_encountered:
-        return None, f"[Partial transcription error: {partial_thread.exception_encountered}]", output_file_path
-
-    return partial_thread.partial_text_state["text"], "", output_file_path
-
-
-def parse_device_id(selected_device_text: str):
-    """
-    Parses a device ID integer from a string, typically formatted as "ID: Device Name".
-
-    It expects the string to start with the device ID followed by a colon.
-    If the string is empty, `None`, or cannot be parsed, it returns `None`.
-
-    Args:
-        selected_device_text: The string containing the device information.
-            Example: "0: Microphone (Realtek Audio)".
-
-    Returns:
-        The parsed integer device ID, or `None` if parsing fails or
-        input is invalid.
-    """
-    if not selected_device_text:
-        return None
-    try:
-        parts = selected_device_text.split(":", 1)
-        return int(parts[0].strip())
-    except Exception as e:
-        logging.error(f"Could not parse device from '{selected_device_text}': {e}")
-        return None
-
-
-
 ##########################################################
 # Transcription Sink Function
 def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate: int = 16000, speaker_lang=None, whisper_model="distil-large-v3") -> str:
     """
-    Unified entry point for audio transcription using different providers.
+    Canonical waveform-based entry point for speech-to-text across providers.
 
-    This function selects the transcription provider based on the `transcription_provider`
-    argument or a default from configuration. It supports 'qwen2audio', 'parakeet'
-    (placeholder), and 'faster-whisper'. For 'faster-whisper', it saves the
-    `audio_data` to a temporary WAV file before calling `speech_to_text`.
+    This helper is the central sink used by higher-level modules (REST endpoints,
+    speech chat, live tools) when they already have in-memory audio. It selects
+    the transcription provider based on the `transcription_provider` argument or
+    a default from configuration and normalizes results to a plain text string.
+
+    It currently supports 'qwen2audio', 'parakeet', 'canary', 'external:*', and
+    'faster-whisper'. For 'faster-whisper', it routes to `speech_to_text` and
+    merges the returned segments into a single user-facing transcript.
 
     Args:
         audio_data: A NumPy array containing the raw audio waveform (float32).
@@ -952,21 +807,32 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
             is the provider (e.g., 'distil-large-v3', 'base.en').
 
     Returns:
-        The transcribed text as a string. If an error occurs or no text is
-        produced, an error message or an empty string might be returned depending
-        on the provider.
+        The transcribed text as a string. This function never returns segments;
+        all providers are normalized to a single text transcript.
 
-    Note:
-        - 'parakeet' support is currently a FIXME and will return an error message
-          if selected, unless Nemo toolkit is installed and the FIXME is resolved.
-        - For 'faster-whisper', this function creates and deletes a temporary WAV file.
+        For providers that may fail (e.g. Qwen2Audio, external backends), this
+        function returns a provider-specific error sentinel such as
+        "[Transcription error] ...". Callers that surface `transcribe_audio`
+        output to users must treat such sentinels as structured errors via
+        `is_transcription_error_message` rather than as real user speech.
+
+    Notes:
+        - `transcribe_audio` is the preferred entry point whenever you already
+          have a NumPy waveform (speech chat, WebSocket sinks, background audio
+          tools).
+        - `speech_to_text` is the canonical file/segment-based entry point used
+          by media ingestion and offline workers; it returns structured segments
+          (or `(segments, language)` when requested) rather than plain text.
     """
-    # Load configuration safely; fall back to sane defaults if missing/malformed
-    config_data = load_and_log_configs() or {}
+    # Load STT settings safely; fall back to sane defaults if missing/malformed.
+    try:
+        stt_cfg = get_stt_config()
+    except Exception:
+        stt_cfg = {}
+
     if not transcription_provider:
         # Load default transcription provider via config file, but guard against
         # missing sections/keys so we always have a sane default.
-        stt_cfg = config_data.get("STT-Settings") or {}
         transcription_provider = stt_cfg.get("default_transcriber", "faster-whisper")
 
     if transcription_provider.lower() == 'qwen2audio':
@@ -984,10 +850,7 @@ def transcribe_audio(audio_data: np.ndarray, transcription_provider, sample_rate
                 transcribe_with_parakeet
             )
             # Get model variant from config
-            config = config_data or load_and_log_configs()
-            variant = 'standard'
-            if config and 'STT-Settings' in config:
-                variant = config['STT-Settings'].get('nemo_model_variant', 'standard')
+            variant = stt_cfg.get('nemo_model_variant', 'standard')
 
             return transcribe_with_parakeet(audio_data, sample_rate, variant)
         except ImportError as e:
@@ -1143,223 +1006,6 @@ def strip_whisper_metadata_header(segments):
 
 ##########################################################
 #
-# Live Audio Transcription Functions
-
-# FIXME - Sample code for live audio transcription
-class LiveAudioStreamer:
-    def __init__(self, sample_rate=16000, chunk_size=1024, silence_threshold=0.01, silence_duration=1.6,
-                 transcription_provider='faster-whisper', whisper_model='distil-large-v3',
-                 speaker_lang='en', nemo_variant='standard'):
-        """
-        Manages live audio streaming, silence detection, and transcription.
-
-        This class opens a PyAudio stream, continuously listens for audio,
-        buffers incoming audio chunks, and attempts to detect periods of silence.
-        When sufficient silence is detected after speech, the accumulated audio
-        buffer is passed to a transcription function.
-
-        Attributes:
-            transcription_provider (str): Provider to use ('faster-whisper', 'parakeet', 'canary', 'qwen2audio')
-            whisper_model (str): Model name for faster-whisper provider
-            speaker_lang (str): Language code for transcription
-            nemo_variant (str): Variant for Parakeet model ('standard', 'onnx', 'mlx')
-            sample_rate (int): Audio sample rate in Hz.
-            chunk_size (int): Number of frames per buffer for PyAudio stream.
-            silence_threshold (float): Amplitude threshold below which audio is
-                considered "silence".
-            silence_duration (float): Duration in seconds of continuous silence
-                required to finalize an audio segment for transcription.
-            audio_queue (queue.Queue): Queue to hold incoming audio chunks (np.ndarray).
-            is_recording (bool): Flag indicating if the audio stream is active.
-            stop_event (threading.Event): Event to signal threads to stop.
-            pa (pyaudio.PyAudio): PyAudio instance.
-            stream (Optional[pyaudio.Stream]): PyAudio stream object.
-            listener_thread (Optional[threading.Thread]): Thread for the `listen_loop`.
-        """
-        self.sample_rate = sample_rate
-        self.chunk_size = chunk_size
-        self.silence_threshold = silence_threshold
-        self.silence_duration = silence_duration
-        self.transcription_provider = transcription_provider
-        self.whisper_model = whisper_model
-        self.speaker_lang = speaker_lang
-        self.nemo_variant = nemo_variant
-
-        self.audio_queue = queue.Queue()
-        self.is_recording = False
-        self.stop_event = threading.Event()
-
-        self.last_audio_chunk_time = time.time()
-        self.silence_start_time = None
-
-        self.pa = pyaudio.PyAudio()
-
-    def audio_callback(self, in_data, frame_count, time_info, status):
-        """
-        PyAudio stream callback function.
-
-        This callback is invoked by PyAudio when new audio data is available.
-        It converts the raw byte data to a NumPy float32 array and puts it
-        into the `audio_queue`.
-
-        Args:
-            in_data: Raw audio data bytes from the stream.
-            frame_count: Number of frames in `in_data`.
-            time_info: Dictionary containing timestamp information.
-            status: PortAudio status flags.
-
-        Returns:
-            A tuple `(in_data, pyaudio.paContinue)` to continue streaming.
-        """
-        if status:
-            print(f"Stream status: {status}")
-        if not self.is_recording:
-            return (in_data, pyaudio.paContinue)
-
-        # Convert the raw audio data to a numpy array
-        audio_data = np.frombuffer(in_data, dtype=np.float32)
-        self.audio_queue.put(audio_data.copy())
-        return (in_data, pyaudio.paContinue)
-
-    def start(self):
-        """
-        Opens the audio stream and starts the listening thread.
-
-        Sets up the PyAudio stream with the configured parameters and starts
-        the `listener_thread` which processes audio from the `audio_queue`.
-        """
-        self.is_recording = True
-        self.stream = self.pa.open(
-            format=pyaudio.paFloat32,
-            channels=1,
-            rate=self.sample_rate,
-            input=True,
-            frames_per_buffer=self.chunk_size,
-            stream_callback=self.audio_callback
-        )
-        self.stream.start_stream()
-        self.listener_thread = threading.Thread(target=self.listen_loop, daemon=True)
-        self.listener_thread.start()
-
-    def stop(self):
-        """Stop recording and close the stream."""
-        self.is_recording = False
-        self.stop_event.set()
-        if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
-        self.listener_thread.join()
-        self.pa.terminate()
-
-    def listen_loop(self):
-        """
-        Continuously processes audio chunks from the queue, detects silence,
-        and triggers transcription.
-
-        This method runs in a separate thread (`listener_thread`). It accumulates
-        audio chunks into a buffer. If the amplitude of incoming audio drops below
-        `silence_threshold` for a duration of `silence_duration`, the accumulated
-        buffer is considered a complete speech segment and is sent for transcription
-        via `transcribe_audio`. The transcribed text is then handled by
-        `handle_transcribed_text`.
-
-        FIXME:
-            - Transcription model (`whisper_model`) is hardcoded to "distil-large-v3".
-            - Speaker language (`speaker_lang`) is hardcoded to "en".
-            - Transcription provider is hardcoded to "faster-whisper".
-            These should be configurable.
-        """
-        audio_buffer = []
-
-        while not self.stop_event.is_set():
-            try:
-                chunk = self.audio_queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
-            audio_buffer.append(chunk)
-
-            # Check amplitude in this chunk
-            amplitude = np.abs(chunk).mean()
-            # If amplitude < threshold, we might be in silence
-            if amplitude < self.silence_threshold:
-                # Mark time
-                if self.silence_start_time is None:
-                    self.silence_start_time = time.time()
-                else:
-                    elapsed = time.time() - self.silence_start_time
-                    if elapsed >= self.silence_duration:
-                        # We have enough silence: finalize
-                        print("Silence detected. Finalizing the chunk.")
-                        final_audio = np.concatenate(audio_buffer, axis=0).flatten()
-                        audio_buffer.clear()
-                        # Transcribe the finalized audio using configured provider
-                        if self.transcription_provider == 'parakeet':
-                            # Use Nemo Parakeet with configured variant
-                            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                                transcribe_with_parakeet
-                            )
-                            user_text = transcribe_with_parakeet(final_audio, self.sample_rate, self.nemo_variant)
-                        elif self.transcription_provider == 'canary':
-                            # Use Nemo Canary
-                            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                                transcribe_with_canary
-                            )
-                            user_text = transcribe_with_canary(final_audio, self.sample_rate, self.speaker_lang)
-                        else:
-                            # Use existing transcribe_audio function
-                            user_text = transcribe_audio(
-                                final_audio,
-                                sample_rate=self.sample_rate,
-                                whisper_model=self.whisper_model,
-                                speaker_lang=self.speaker_lang,
-                                transcription_provider=self.transcription_provider
-                            )
-
-                        # Then do something with user_text (e.g. add to chatbot)
-                        # Skip known STT error sentinel strings so they are not
-                        # treated as real user speech.
-                        try:
-                            if isinstance(user_text, str) and is_transcription_error_message(user_text):
-                                logging.error(f"LiveAudioStreamer STT error sentinel: {user_text}")
-                            else:
-                                self.handle_transcribed_text(user_text)
-                        except Exception as _cb_exc:
-                            logging.error(f"LiveAudioStreamer handle_transcribed_text error: {_cb_exc}")
-                        self.silence_start_time = None
-            else:
-                # reset silence timer
-                self.silence_start_time = None
-
-    def handle_transcribed_text(self, text: str):
-        """
-        Hook/callback for handling transcribed text.
-
-        This method is called by `listen_loop` after a segment of audio
-        has been transcribed. Users of this class should override this
-        method or connect a signal to process the `text` (e.g., send it
-        to a chatbot, display it in a UI).
-
-        Args:
-            text: The transcribed text string.
-        """
-        print(f"USER SAID: {text}")
-
-# # Usage example
-# if __name__ == "__main__":
-#     streamer = LiveAudioStreamer(silence_threshold=0.01, silence_duration=1.5)
-#     streamer.start()
-#     print("Recording... talk, then remain silent for 1.5s to finalize.")
-#     time.sleep(15)  # Let it run for 15 seconds
-#     streamer.stop()
-#     print("Stopped.")
-
-#
-# End of Live Audio Transcription Functions
-##########################################################
-
-
-##########################################################
-#
 # Qwen2-Audio-related Functions
 
 # Load Qwen2Audio (lazy load or load once at startup)
@@ -1380,10 +1026,15 @@ def load_qwen2audio():
         - `model`: The `Qwen2AudioForConditionalGeneration` model.
 
     Raises:
+        RuntimeError: When Qwen2Audio is explicitly disabled or not configured
+            in `[STT-Settings].qwen2audio_enabled`. In this case the error
+            message is a sentinel string starting with
+            "[Transcription error] Qwen2Audio is disabled or not configured"
+            so higher-level helpers (e.g. `transcribe_audio`) can convert it
+            into a consistent error sentinel for REST and speech-chat flows.
         ImportError: If `transformers` library is not installed.
-        Exception: Can propagate errors from `from_pretrained` if model
-                   downloading or loading fails (e.g., network issues,
-                   insufficient memory).
+        Exception: Propagates errors from `from_pretrained` if model downloading
+            or loading fails (e.g., network issues, insufficient memory).
     """
     global qwen_processor, qwen_model
     if qwen_processor is None or qwen_model is None:
@@ -1425,11 +1076,16 @@ def transcribe_with_qwen2audio(audio: np.ndarray, sample_rate: int = 16000) -> s
         sample_rate: The sample rate of the input `audio` in Hz.
 
     Returns:
-        The transcribed text as a string. Returns an empty string or an
-        error message if transcription fails.
+        The transcribed text as a string. Returns an empty string or raises
+        an exception if transcription fails; error sentinel strings with the
+        "[Transcription error]" prefix are produced by higher-level helpers
+        such as `transcribe_audio`, not by this function directly.
 
     Raises:
-        Can propagate exceptions from `load_qwen2audio` if model loading fails.
+        RuntimeError: May propagate the sentinel-style `RuntimeError` raised by
+            `load_qwen2audio` when Qwen2Audio is disabled or misconfigured.
+        Exception: Any other error encountered while preparing model inputs
+            or during `model.generate`.
     """
     processor, model = load_qwen2audio()
 
@@ -1761,8 +1417,15 @@ def get_whisper_model(model_name, device, check_download_status=False):
     This function checks a cache for an existing model instance matching the
     `model_name`, `device`, and a determined `compute_type`. If not found,
     it initializes a new `WhisperModel` instance, stores it in the cache,
-    and returns it. `compute_type` is set to "float16" if CUDA is used,
-    otherwise "int8" for CPU.
+    and returns it.
+
+    The `compute_type` is resolved as follows:
+      - When `[STT-Settings].whisper_compute_type` is set to a non-empty value
+        other than "auto", that value is passed through to the underlying
+        faster-whisper constructor (for example: "float16", "int8",
+        "int8_float16").
+      - Otherwise, the compute type defaults to "float16" when `device`
+        contains "cuda" and "int8" for CPU devices.
 
     Args:
         model_name: The name or path of the Whisper model (e.g., "base.en",
@@ -1778,7 +1441,12 @@ def get_whisper_model(model_name, device, check_download_status=False):
         ValueError: If `WhisperModel` initialization fails (e.g., invalid model name).
         RuntimeError: For other unexpected errors during model loading.
     """
-    compute_type = "float16" if "cuda" in device else "int8"  # Example compute type logic
+    # Optional override from STT-Settings; when unset or "auto", fall back to
+    # the prior device-based heuristic.
+    if WHISPER_COMPUTE_TYPE_OVERRIDE and WHISPER_COMPUTE_TYPE_OVERRIDE != "auto":
+        compute_type = WHISPER_COMPUTE_TYPE_OVERRIDE
+    else:
+        compute_type = "float16" if "cuda" in device else "int8"
     cache_key = (model_name, device, compute_type)
 
     with whisper_model_cache_lock:
@@ -2191,11 +1859,12 @@ def speech_to_text(
     input_sample_rate: Optional[int] = None,
 ) -> Union[List[Dict[str, Any]], Tuple[List[Dict[str, Any]], Optional[str]]]:
     """
-    Transcribes audio (file path or NumPy array) to text using a specified faster-Whisper model.
+    Canonical file/segment-based speech-to-text helper.
 
-    This function loads the specified Whisper model (or retrieves it from a cache),
-    performs transcription on the given audio, and returns the resulting segments.
-    It supports language specification and Voice Activity Detection (VAD).
+    This function is the primary entry point for offline/media workflows that
+    work with files (or occasionally in-memory waveforms). It loads the
+    requested model/provider, performs transcription, and returns structured
+    segments suitable for storage and downstream processing.
 
     Args:
         audio_input: Path to the WAV audio file to be transcribed, or a NumPy array
@@ -2232,6 +1901,10 @@ def speech_to_text(
         `(segments, language_or_none)` for all providers. For Whisper,
         `language_or_none` is the detected language; for other providers it
         will typically be the `selected_source_lang` value or None.
+
+        This function never returns plain text; callers that need a single
+        transcript string should explicitly merge segment "Text" fields or use
+        `transcribe_audio` instead.
 
     Raises:
         ValueError: If `audio_input` is not provided or is invalid.
@@ -2280,7 +1953,7 @@ def speech_to_text(
         logging.info(f"Routing to Parakeet transcription with variant: {variant}")
         try:
             segments_parakeet = speech_to_text_parakeet(
-                audio_file_path=file_path,
+                audio_file_path=str(file_path),
                 variant=variant,
                 selected_source_lang=selected_source_lang,
                 vad_filter=vad_filter,
@@ -2299,7 +1972,7 @@ def speech_to_text(
         logging.info("Routing to Canary transcription")
         try:
             segments_canary = speech_to_text_canary(
-                audio_file_path=file_path,
+                audio_file_path=str(file_path),
                 selected_source_lang=selected_source_lang,
                 vad_filter=vad_filter,
             )
@@ -2317,7 +1990,7 @@ def speech_to_text(
         logging.info("Routing to Qwen2Audio transcription")
         try:
             segments_qwen = speech_to_text_qwen2audio(
-                audio_file_path=file_path,
+                audio_file_path=str(file_path),
                 selected_source_lang=selected_source_lang,
                 vad_filter=vad_filter,
             )
@@ -2556,6 +2229,15 @@ def validate_audio_file(file_path: str) -> tuple:
 
     Returns:
         Tuple of (is_valid, error_message)
+
+    Notes:
+        This helper is a best-effort preflight check. When ffprobe is missing
+        or misconfigured, unexpected exceptions are logged and the function
+        returns ``(True, "Validation warning: ...")`` so that downstream
+        conversion still runs and can surface more precise errors. The
+        ``convert_to_wav`` helper applies stricter handling for clearly
+        corrupted files (for example, zero channels or missing audio streams)
+        and raises ``ConversionError`` in those cases.
     """
     try:
         # Check file exists and has minimum size
@@ -2621,7 +2303,8 @@ def validate_audio_file(file_path: str) -> tuple:
         return False, "File validation timed out (possible corrupt file)"
     except Exception as e:
         logging.warning(f"Audio validation error: {e}")
-        # Don't fail completely if validation has issues, let FFmpeg try
+        # Don't fail completely if validation has issues; allow FFmpeg-based
+        # conversion/transcription to attempt processing and surface any errors.
         return True, f"Validation warning: {str(e)}"
 
 #DEBUG
@@ -2896,313 +2579,6 @@ def convert_to_wav(
     return str(out_path)
 #
 # End of Audio Conversion Functions
-##########################################################
-
-
-##########################################################
-#
-# Audio Recording Functions
-
-def test_device_availability(device_id):
-    """
-    Tests if a specific PyAudio input device is available for recording.
-
-    It tries to get device information and briefly open an input stream
-    on the specified device.
-
-    Args:
-        device_id: The index of the PyAudio device to test. If None,
-                   the function will return False.
-
-    Returns:
-        True if the device is available and can be opened for input,
-        False otherwise.
-    """
-    if device_id is None:
-        return False
-
-    p = pyaudio.PyAudio()
-    try:
-        # Try to get device info
-        device_info = p.get_device_info_by_index(device_id)
-        if not device_info or device_info['maxInputChannels'] < 1:
-            return False
-
-        # Try to open stream briefly
-        stream = p.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=44100,
-            input=True,
-            input_device_index=device_id,
-            frames_per_buffer=1024,
-            start=False
-        )
-        stream.close()
-        return True
-    except Exception as e:
-        logging.debug(f"Device {device_id} not available: {e}")
-        return False
-    finally:
-        p.terminate()
-
-
-@timeit
-def record_audio(duration, sample_rate=16000, chunk_size=1024):
-    """
-    Starts recording audio from the default input device for a specified duration.
-
-    This function initializes PyAudio, opens an audio stream, and starts a
-    separate thread to read audio data from the stream and put it into a queue.
-    The recording will run for approximately the given `duration`.
-
-    Args:
-        duration: The desired duration of the recording in seconds.
-        sample_rate: The sample rate for recording in Hz (samples per second).
-        chunk_size: The number of frames per buffer (audio chunk size).
-
-    Returns:
-        A tuple containing:
-        - `p` (pyaudio.PyAudio): The PyAudio instance.
-        - `stream` (pyaudio.Stream): The opened PyAudio stream.
-        - `audio_queue` (queue.Queue[bytes]): A queue where audio data chunks (bytes) are placed.
-        - `stop_recording_event` (threading.Event): An event to signal the recording thread to stop.
-        - `audio_thread` (threading.Thread): The thread performing the audio reading.
-
-    Raises:
-        pyaudio.PyAudioError: If there's an issue opening the audio stream
-                              (e.g., no input device, unsupported parameters).
-    """
-    log_counter("record_audio_attempt", labels={"duration": duration})
-    p = pyaudio.PyAudio()
-    stream = p.open(format=pyaudio.paInt16,
-                    channels=1,
-                    rate=sample_rate,
-                    input=True,
-                    frames_per_buffer=chunk_size)
-
-    print("Recording...")
-    frames = []
-    stop_recording = threading.Event()
-    audio_queue = queue.Queue()
-
-    def audio_callback():
-        for _ in range(0, int(sample_rate / chunk_size * duration)):
-            if stop_recording.is_set():
-                break
-            data = stream.read(chunk_size)
-            audio_queue.put(data)
-
-    audio_thread = threading.Thread(target=audio_callback, daemon=True)
-    audio_thread.start()
-
-    return p, stream, audio_queue, stop_recording, audio_thread
-
-
-@timeit
-def stop_recording_infinite(p, stream, audio_queue, stop_recording_event, audio_thread):
-    """
-    Stops an ongoing "infinite" (externally managed duration) audio recording.
-
-    This function signals the recording thread to stop, waits for it to join,
-    collects all audio data from the queue, and then closes and terminates
-    the PyAudio stream and instance. It's designed for recordings where the
-    duration isn't fixed beforehand by `record_audio` itself.
-
-    Args:
-        p: The PyAudio instance.
-        stream: The PyAudio stream object.
-        audio_queue: The queue containing recorded audio chunks (bytes).
-        stop_recording_event: The `threading.Event` used to signal the recording thread to stop.
-        audio_thread: The `threading.Thread` that is performing the recording.
-
-    Returns:
-        A bytes object containing all concatenated audio frames collected from the queue.
-    """
-    log_counter("stop_recording_attempt")
-    start_time = time.time()
-    stop_recording_event.set()
-    audio_thread.join()
-
-    frames = []
-    while not audio_queue.empty():
-        frames.append(audio_queue.get())
-
-    print("Recording finished.")
-
-    stream.stop_stream()
-    stream.close()
-    p.terminate()
-
-    stop_time = time.time() - start_time
-    log_histogram("stop_recording_duration", stop_time)
-    log_counter("stop_recording_success")
-    return b''.join(frames)
-
-
-@timeit
-def save_audio_temp(audio_data, sample_rate=16000):
-    """
-    Saves audio data (NumPy array or PyTorch Tensor) to a temporary WAV file.
-
-    The audio data is normalized if its absolute maximum exceeds 1.0 (for float32),
-    then converted to 16-bit integers before saving. The temporary file is
-    created with a ".wav" suffix and is not automatically deleted (delete=False).
-
-    Args:
-        audio_data: The audio data to save. Can be a NumPy ndarray or a
-            PyTorch Tensor. Assumed to be float32 data if normalization is applied.
-        sample_rate: The sample rate of the audio data in Hz.
-
-    Returns:
-        The file path (string) to the created temporary WAV file if successful,
-        otherwise `None`.
-    """
-    log_counter("save_audio_temp_attempt")
-
-    try:
-        # Convert tensor to numpy array if needed
-        if isinstance(audio_data, torch.Tensor):
-            audio_data = audio_data.cpu().numpy()
-
-        # Ensure float32 format and make writable
-        audio_data = np.asarray(audio_data, dtype=np.float32).copy()
-
-        # Normalize audio
-        max_amp = np.max(np.abs(audio_data))
-        if max_amp > 1.0:
-            audio_data /= max_amp
-
-        # Convert to int16
-        audio_data_int16 = np.int16(audio_data * 32767)
-
-        # Create temporary file
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-            wavfile.write(temp_file.name, sample_rate, audio_data_int16)
-            log_counter("save_audio_temp_success")
-            return temp_file.name
-
-    except Exception as e:
-        logging.error(f"Error saving temp audio: {str(e)}")
-        log_counter("save_audio_temp_error")
-        return None
-
-
-# Non-Filtering version
-def get_system_audio_devices() -> List[Dict]:
-    """
-    Return available audio devices for system audio recording with better
-    identification of loopback capabilities.
-    """
-    # Keywords commonly found in device names that can capture system output
-    loopback_keywords = [
-        "loopback",  # WASAPI loopback
-        "stereo mix",  # Realtek driver
-        "monitor",  # PulseAudio monitor on Linux
-        "blackhole",  # macOS loopback driver
-        "soundflower",  # older macOS loopback driver
-        "what u hear",  # Sound Blaster
-        "output",  # Generic term that might indicate system output
-        "mix"  # Common in stereo mix devices
-    ]
-
-    devices = []
-    try:
-        host_apis = sd.query_hostapis()
-        all_devs = sd.query_devices()
-
-        for device_index, device in enumerate(all_devs):
-            # Only include input devices
-            if device["max_input_channels"] > 0:
-                name_lower = device["name"].lower()
-                api_name = host_apis[device["hostapi"]]["name"]
-
-                # Check if it might be a loopback device
-                is_likely_loopback = any(keyword in name_lower for keyword in loopback_keywords)
-
-                devices.append({
-                    "id": device_index,
-                    "name": f"{device['name']} ({api_name})" +
-                            (" [SYSTEM AUDIO]" if is_likely_loopback else ""),
-                    "hostapi": device["hostapi"],
-                    "max_input_channels": device["max_input_channels"],
-                    "max_output_channels": device["max_output_channels"],
-                    "rate": device["default_samplerate"],
-                    "is_loopback": is_likely_loopback
-                })
-
-        # Sort to put potential loopback devices first
-        devices.sort(key=lambda x: (not x.get("is_loopback"), x["name"]))
-    except Exception as e:
-        logging.error(f"Error enumerating audio devices: {e}")
-
-    return devices
-# Filtering version
-# def get_system_audio_devices() -> List[Dict]:
-#     """Get list of available system audio devices with their capabilities"""
-#     devices = []
-#     host_apis = sd.query_hostapis()
-#
-#     for device_index, device in enumerate(sd.query_devices()):
-#         if device['max_input_channels'] > 0:
-#             # Windows loopback devices show up as inputs
-#             api_name = host_apis[device['hostapi']]['name']
-#             devices.append({
-#                 'id': device_index,
-#                 'name': f"{device['name']} ({api_name})",
-#                 'is_loopback': 'loopback' in device['name'].lower(),
-#                 'hostapi': device['hostapi'],
-#                 'max_channels': device['max_input_channels'],
-#                 'rate': device['default_samplerate']
-#             })
-#
-#     # Sort devices with loopback first
-#     return sorted(devices, key=lambda x: not x['is_loopback'])
-
-
-def record_system_audio(duration: float, device_id: int, sample_rate: int = 44100,
-                        channels: int = 2, subtype: str = 'PCM_16') -> str:
-    """
-    Record system audio output to a temporary WAV file
-    Returns path to recorded file
-    """
-    temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-
-    try:
-        # Configure recording settings based on device capabilities
-        device_info = sd.query_devices(device_id)
-        actual_sample_rate = int(device_info['default_samplerate'] if device_info['default_samplerate'] > 0
-                                 else sample_rate)
-
-        logging.info(f"Starting system audio recording (Duration: {duration}s, "
-                     f"Device: {device_info['name']}, SR: {actual_sample_rate})")
-
-        audio_data = sd.rec(
-            int(duration * actual_sample_rate),
-            samplerate=actual_sample_rate,
-            channels=min(channels, device_info['max_input_channels']),
-            device=device_id,
-            dtype=np.int16,
-            blocking=True
-        )
-
-        # Save to WAV file
-        with wave.open(temp_file.name, 'wb') as wav_file:
-            wav_file.setnchannels(min(channels, device_info['max_input_channels']))
-            wav_file.setsampwidth(2)  # 16-bit PCM
-            wav_file.setframerate(actual_sample_rate)
-            wav_file.writeframes(audio_data.tobytes())
-
-        logging.info(f"Recording saved to {temp_file.name}")
-        return temp_file.name
-
-    except Exception as e:
-        temp_file.close()
-        os.unlink(temp_file.name)
-        raise RuntimeError(f"Recording failed: {str(e)}")
-
-#
-# End of Audio Recording Functions
 ##########################################################
 
 

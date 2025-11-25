@@ -532,6 +532,30 @@ def test_speech_to_text_return_language_consistent_for_whisper(monkeypatch, tmp_
 
 
 @pytest.mark.unit
+def test_get_whisper_model_respects_compute_type_override(monkeypatch):
+    """
+    get_whisper_model should honor the STT-Settings.whisper_compute_type override
+    when present, instead of always deriving compute_type from the device.
+    """
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+
+    captured = {}
+
+    class _StubModel:
+        def __init__(self, *args, **kwargs):
+            captured["compute_type"] = kwargs.get("compute_type")
+
+    # Ensure a clean cache so the stub is exercised
+    atlib.whisper_model_cache.clear()
+    monkeypatch.setattr(atlib, "WhisperModel", _StubModel)
+    # Force an override that differs from the default CUDA/CPU heuristic
+    monkeypatch.setattr(atlib, "WHISPER_COMPUTE_TYPE_OVERRIDE", "int8_float16", raising=False)
+
+    _ = atlib.get_whisper_model("tiny", "cuda", check_download_status=False)
+    assert captured.get("compute_type") == "int8_float16"
+
+
+@pytest.mark.unit
 def test_speech_to_text_return_language_consistent_for_parakeet(monkeypatch, tmp_path):
     """When return_language=True, Parakeet branch should return (segments, lang_or_none)."""
     audio_file = tmp_path / "sample.wav"

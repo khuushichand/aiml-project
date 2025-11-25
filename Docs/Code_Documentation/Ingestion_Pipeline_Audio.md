@@ -48,10 +48,10 @@ process_audio_files(
    - NVIDIA NeMo Canary: `canary` or related aliases (provider `"canary"`)
    - Qwen2Audio: `qwen2audio` or `qwen2audio-*` (provider `"qwen2audio"`)
 - transcription_language: target/source language (default `en`). When `None`, the underlying STT provider is allowed to auto-detect; this matches the behavior of `speech_to_text(..., selected_source_lang=None)` and the `/audio/transcriptions` endpoint.
-- diarize: enable speaker diarization; `vad_use`: enable voice activity detection.
-- perform_chunking: chunk transcript; `chunk_method`: e.g., `sentences`.
-- perform_analysis: use LLM summarization via `analyze`; `api_name` selects provider (keys from server config).
-- summarize_recursively: combine per-chunk summaries into a higher-level summary.
+ - diarize: enable speaker diarization; `vad_use`: enable voice activity detection.
+ - perform_chunking: chunk transcript; `chunk_method`: e.g., `sentences`.
+ - perform_analysis: use LLM summarization via `analyze`; `api_name` selects provider (keys from server config).
+ - summarize_recursively: combine per-chunk summaries into a higher-level summary.
  - temp_dir: parent directory for temporary work files.
 
  Tip: To check if a model is ready/downloaded before processing, use `check_transcription_model_status(model_name)` from the same module. `process_audio_files` performs a preflight check for Whisper models and surfaces the status as a warning in each item result.
@@ -64,7 +64,16 @@ process_audio_files(
  - Transcript cache pruning (`prune_transcript_cache(...)`) runs inline after successful STT when transcript persistence is enabled. To avoid any pruning work on the hot path (for example, when you manage cache directories via an external job), set:
    - `[STT-Settings] disable_transcript_cache_pruning = true`, or
    - `STT_DISABLE_TRANSCRIPT_CACHE_PRUNING=1`.  
-   The server will continue to write transcripts but skip age/size-based cleanup.
+   The server will continue to write transcripts but skip age/size-based cleanup.  
+   When pruning is enabled and no explicit limits are set, the server applies
+   conservative defaults (max age ≈ 30 days, total cache size ≈ 512MB, and
+   up to ≈ 32 transcript files per source). These defaults can be tuned via
+   `[STT-Settings] transcript_cache_max_age_days`, `transcript_cache_max_total_mb`,
+   and `transcript_cache_max_files_per_source`.
+
+Canonical STT entrypoints:
+- `speech_to_text(...)` (in `Audio_Transcription_Lib.py`) is the file/segment-based helper used by ingestion. It returns a list of segment dicts (or `(segments, language)` when `return_language=True`) and is responsible for transcript caching and pruning.
+- `transcribe_audio(...)` (in `Audio_Transcription_Lib.py`) is the waveform-based sink used when you already have NumPy audio (for example, in speech-chat or streaming sinks). It routes to the appropriate provider and returns a single transcript string. Errors from providers are returned as sentinel strings such as `"[Transcription error] ..."`; callers should detect these via `is_transcription_error_message(...)` and convert them into structured errors instead of treating them as user content.
 
 ### Return Structure (batch)
 

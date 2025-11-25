@@ -180,6 +180,20 @@ nemo_device = cuda
 
 # Cache directory for downloaded models
 nemo_cache_dir = ./models/nemo
+
+# Optional faster-whisper compute type override
+# When unset or set to "auto", the server uses float16 on CUDA and int8 on CPU.
+# whisper_compute_type = auto
+# Examples: float16, int8, int8_float16
+
+# Transcript cache limits (applied to on-disk .segments.json files)
+# When omitted, conservative defaults are used (age ~30 days, total ~512MB,
+# up to ~32 files per source). Set disable_transcript_cache_pruning=true to
+# turn pruning off entirely.
+# transcript_cache_max_age_days = 30
+# transcript_cache_max_total_mb = 512
+# transcript_cache_max_files_per_source = 32
+# disable_transcript_cache_pruning = false
 ```
 
 ### Environment Variables
@@ -470,11 +484,11 @@ with open("audio.wav", "rb") as f:
 ### Live Transcription Example
 
 ```python
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-    LiveAudioStreamer
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.ARCHIVE.Desktop_Live_Audio_Samples import (
+    LiveAudioStreamer,
 )
 
-# Configure for Parakeet with ONNX
+# Configure for Parakeet with ONNX (desktop sample)
 streamer = LiveAudioStreamer(
     transcription_provider='parakeet',
     nemo_variant='onnx',
@@ -489,7 +503,7 @@ def handle_text(text):
 
 streamer.handle_transcribed_text = handle_text
 
-# Start live transcription
+# Start live transcription (desktop-only sample)
 streamer.start()
 print("Listening... Press Ctrl+C to stop")
 

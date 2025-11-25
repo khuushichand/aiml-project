@@ -25,8 +25,8 @@ The tldw_server project includes comprehensive support for NVIDIA Nemo transcrip
 ### Prerequisites
 
 ```bash
-# Core dependency
-pip install nemo_toolkit[asr]
+# Core dependency (Nemo 2.5+ recommended for streaming/RNNT)
+pip install -U "nemo_toolkit[asr]"
 
 # For ONNX support
 pip install onnxruntime  # or onnxruntime-gpu for CUDA
@@ -37,6 +37,12 @@ pip install mlx parakeet-mlx
 # Additional dependencies
 pip install huggingface_hub librosa soundfile
 ```
+
+For **real-time RNNT streaming** with Parakeet-Realtime-EOU you should also:
+
+- Install a recent PyTorch + CUDA build appropriate for your GPU.
+- Install `torchaudio` matching your PyTorch version.
+- Run on Linux with an NVIDIA GPU (Ampere/Hopper/Volta/Blackwell) for best latency.
 
 ### Model Downloads
 
@@ -49,6 +55,12 @@ from huggingface_hub import snapshot_download
 snapshot_download(
     repo_id="istupakov/parakeet-tdt-0.6b-v3-onnx",
     local_dir="~/.cache/parakeet_onnx"
+)
+
+# Download Parakeet-Realtime-EOU (RNNT) into your Nemo cache
+snapshot_download(
+    repo_id="nvidia/parakeet_realtime_eou_120m-v1",
+    local_dir="./models/nemo",  # or os.environ['NEMO_CACHE_DIR']
 )
 ```
 
@@ -125,6 +137,15 @@ text = transcribe_with_canary(
     sample_rate=16000,
     language='es'  # Specify language
 )
+
+# Canary translation (e.g., French speech → English text)
+text_en = transcribe_with_canary(
+    audio_data=audio_array,
+    sample_rate=16000,
+    language='fr',         # Source language
+    task='translate',      # Enable AST mode
+    target_language='en',  # Target language (defaults to 'en' when omitted)
+)
 ```
 
 ### Chunked Transcription for Long Audio
@@ -193,6 +214,101 @@ with open("audio_stream.wav", "rb") as f:
         if result:
             print(f"Partial: {result['text']}")
 ```
+
+### Real-time Streaming with Parakeet-Realtime-EOU (RNNT)
+
+The unified WebSocket streaming endpoint can use NVIDIA's realtime RNNT model
+`nvidia/parakeet_realtime_eou_120m-v1` for low-latency English-only ASR with
+end-of-utterance (EOU) detection.
+
+#### Requirements
+
+- `nemo_toolkit[asr]` 2.5.3+ (or a recent 2.5.x) providing:
+  - `RNNTDecodingConfig`
+  - `StreamingBatchedAudioBuffer`
+  - `batched_hyps_to_hypotheses`
+- PyTorch + CUDA and a compatible NVIDIA GPU.
+- `torchaudio` installed and compatible with your PyTorch version.
+- Outbound network access the first time the model is downloaded from Hugging Face
+  (or pre-download via `huggingface_hub.snapshot_download` into your Nemo cache dir).
+
+The server will respect `NEMO_CACHE_DIR` or `[STT-Settings].nemo_cache_dir` for
+where to store the model weights.
+
+#### Server-side configuration (WebSocket)
+
+You configure the realtime model per stream via the initial WebSocket config
+message sent by the client; no `config.txt` changes are required. Example:
+
+```json
+{
+  "type": "config",
+  "model": "parakeet",
+  "sample_rate": 16000,
+  "chunk_duration": 0.2,
+  "overlap_duration": 0.0,
+  "parakeet_use_rnnt_streamer": true,
+  "parakeet_rnnt_model_name": "nvidia/parakeet_realtime_eou_120m-v1"
+}
+```
+
+Internally, this drives the `_ParakeetRNNTStreamer` in
+`Audio_Streaming_Unified.py`, which:
+
+- Streams audio frames through the RNNT model with small chunks.
+- Decodes tokens into text incrementally.
+- Strips the literal `<EOU>` token from transcripts so clients see clean text
+  while still benefitting from end-of-utterance detection for segmentation.
+
+#### Quick client example (Python, websockets)
+
+```python
+import asyncio
+import base64
+import json
+import soundfile as sf
+import websockets
+
+
+async def stream_realtime_parakeet(api_key: str, wav_path: str):
+    uri = f"ws://localhost:8000/api/v1/audio/stream/transcribe?token={api_key}"
+    async with websockets.connect(uri) as ws:
+        cfg = {
+            "type": "config",
+            "model": "parakeet",
+            "sample_rate": 16000,
+            "chunk_duration": 0.2,
+            "overlap_duration": 0.0,
+            "parakeet_use_rnnt_streamer": True,
+            "parakeet_rnnt_model_name": "nvidia/parakeet_realtime_eou_120m-v1",
+        }
+        await ws.send(json.dumps(cfg))
+
+        audio, sr = sf.read(wav_path)
+        assert sr == 16000
+        chunk_size = int(sr * 0.2)
+        for i in range(0, len(audio), chunk_size):
+            chunk = audio[i:i + chunk_size].astype("float32").tobytes()
+            msg = {
+                "type": "audio",
+                "data": base64.b64encode(chunk).decode("utf-8"),
+            }
+            await ws.send(json.dumps(msg))
+            resp = await ws.recv()
+            print("Server:", resp)
+
+        await ws.send(json.dumps({"type": "commit"}))
+
+
+asyncio.run(stream_realtime_parakeet("YOUR_API_TOKEN", "audio.wav"))
+```
+
+Notes:
+
+- The realtime model is English-only and does not emit punctuation/capitalization;
+  you can post-process text in your own pipeline if needed.
+- The server will return the usual `"partial"` / `"final"` frames described in
+  `Docs/API-related/Audio_Transcription_API.md` under the WebSocket section.
 
 ## Performance Comparison
 

@@ -410,6 +410,24 @@ async def create_speech(
     logger.info(
         f"Received speech request: model={request_data.model}, voice={request_data.voice}, format={request_data.response_format}, request_id={request_id}"
     )
+    voice_to_voice_start: Optional[float] = None
+    try:
+        raw_v2v = request.headers.get("x-voice-to-voice-start") or request.headers.get("X-Voice-To-Voice-Start")
+    except Exception:
+        raw_v2v = None
+    if raw_v2v:
+        try:
+            ts = float(raw_v2v)
+            if ts > 0:
+                voice_to_voice_start = ts
+        except (TypeError, ValueError):
+            logger.debug(f"Invalid X-Voice-To-Voice-Start header: {raw_v2v}")
+    try:
+        state_ts = getattr(request.state, "voice_to_voice_start", None)
+        if voice_to_voice_start is None and isinstance(state_ts, (int, float)):
+            voice_to_voice_start = float(state_ts)
+    except Exception:
+        pass
     try:
         usage_log.log_event(
             "audio.tts",
@@ -484,6 +502,8 @@ async def create_speech(
             request_data,
             provider=None,
             fallback=True,
+            voice_to_voice_start=voice_to_voice_start,
+            voice_to_voice_route="audio.speech",
         )
     except Exception as exc:
         _raise_for_tts_error(exc)
@@ -898,22 +918,37 @@ async def create_transcription(
                 transcribed_text = transcribe_with_parakeet(audio_data, sample_rate, variant)
             elif provider == "canary":
                 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                    transcribe_with_canary
+                    transcribe_with_canary,
+                    CANARY_SUPPORTED_LANG_CODES,
+                    CANARY_SUPPORTED_LANG_CODES_STR,
                 )
-                # Validate Canary language (supports only a small fixed set).
+                # Validate Canary language against the full supported set when provided.
                 canary_lang: Optional[str] = None
                 if language:
                     raw_lang = str(language).strip().lower()
                     # Accept simple locale forms like "en-US" → "en"
                     if len(raw_lang) >= 4 and raw_lang[2] in {"-", "_"}:
                         raw_lang = raw_lang[:2]
-                    if raw_lang not in {"en", "es", "de", "fr"}:
+                    if raw_lang not in CANARY_SUPPORTED_LANG_CODES:
                         raise HTTPException(
                             status_code=status.HTTP_400_BAD_REQUEST,
-                            detail="Canary provider supports only 'en', 'es', 'de', or 'fr' for language.",
+                            detail=(
+                                "Canary provider language must be one of: "
+                                f"{CANARY_SUPPORTED_LANG_CODES_STR}."
+                            ),
                         )
                     canary_lang = raw_lang
-                transcribed_text = transcribe_with_canary(audio_data, sample_rate, canary_lang)
+
+                # For Canary, respect the requested task: in "transcribe" mode we
+                # perform same-language ASR; in "translate" mode we request
+                # translation to English to mirror Whisper's translate semantics.
+                transcribed_text = transcribe_with_canary(
+                    audio_data,
+                    sample_rate,
+                    canary_lang,
+                    task=task_normalized,
+                    target_language="en" if task_normalized == "translate" else None,
+                )
             else:
                 # Use the general transcribe_audio function
                 transcribe_params = {
@@ -1429,6 +1464,81 @@ async def get_tts_health(
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         }
+
+
+@router.get("/transcriptions/health", summary="Check STT transcription model health")
+async def get_stt_health(
+    model: Optional[str] = Query(
+        default="whisper-1",
+        description="Transcription model to check (OpenAI-style id or internal STT model name).",
+    ),
+    warm: bool = Query(
+        default=False,
+        description="If true and the provider is Whisper, eagerly load the model to verify it can be initialized.",
+    ),
+):
+    """
+    Lightweight health/readiness endpoint for STT models.
+
+    - Resolves the requested model to an internal STT provider and model id.
+    - Uses `Audio_Files.check_transcription_model_status` to report availability
+      and estimated download size.
+    - When `warm=true` and the provider is Whisper, attempts to initialize the
+      faster-whisper model via `get_whisper_model` so operators can exercise
+      the cache and surface initialization errors before production traffic.
+    """
+    from datetime import datetime
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as stt_lib
+
+    raw_model = model or "whisper-1"
+    # Determine provider using the same parser as the main STT pipeline.
+    provider_raw, _, _ = stt_lib.parse_transcription_model(raw_model)
+
+    # For Whisper providers, map OpenAI-style ids (e.g. "whisper-1") to an
+    # internal faster-whisper model name so health checks align with /transcriptions.
+    if provider_raw == "whisper":
+        resolved_model = _map_openai_audio_model_to_whisper(raw_model)
+    else:
+        resolved_model = raw_model
+
+    # Base status from cached/downloaded model presence.
+    try:
+        status_info = audio_files.check_transcription_model_status(resolved_model)
+    except Exception as e:
+        logger.debug(f"STT health: check_transcription_model_status failed: {e}")
+        status_info = {
+            "available": False,
+            "message": f"Failed to check model status: {e}",
+            "model": resolved_model,
+        }
+
+    health: Dict[str, Any] = {
+        "provider": provider_raw,
+        "alias": raw_model,
+        "model": status_info.get("model", resolved_model),
+        "available": bool(status_info.get("available", False)),
+        "message": status_info.get("message"),
+        "estimated_size": status_info.get("estimated_size"),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    # Optional warmup: try to instantiate the Whisper model to ensure the
+    # configured device/compute_type settings are compatible with this runtime.
+    warm_info: Dict[str, Any] = {}
+    if warm and provider_raw == "whisper":
+        device = getattr(stt_lib, "processing_choice", "cpu")
+        try:
+            stt_lib.get_whisper_model(resolved_model, device, check_download_status=False)
+            warm_info = {"ok": True, "device": device}
+        except Exception as e:
+            logger.error(f"STT health warm-up failed for model={resolved_model}, device={device}: {e}")
+            warm_info = {"ok": False, "device": device, "error": str(e)}
+
+    if warm_info:
+        health["warm"] = warm_info
+
+    return health
 
 
 @router.get("/providers")

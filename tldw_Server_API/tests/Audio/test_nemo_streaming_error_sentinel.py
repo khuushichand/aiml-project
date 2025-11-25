@@ -35,3 +35,20 @@ def test_nemo_streaming_suppresses_error_sentinel(monkeypatch):
     # Error sentinel should be filtered out and not returned/accumulated
     assert result is None
     assert tx.get_full_transcription() == ""
+
+
+@pytest.mark.unit
+def test_parakeet_rnnt_eou_token_stripped():
+    """
+    The helper used by the Parakeet RNNT streaming path should strip the
+    literal `<EOU>` token emitted by Parakeet-Realtime-EOU style models.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+        _strip_parakeet_eou_token,
+    )
+
+    assert _strip_parakeet_eou_token("hello<EOU>") == "hello"
+    assert _strip_parakeet_eou_token(" hi <EOU> ") == "hi"
+    assert _strip_parakeet_eou_token("<EOU>") == ""
+    # Non-EOU text should be unchanged aside from surrounding whitespace
+    assert _strip_parakeet_eou_token("  just text  ") == "just text"

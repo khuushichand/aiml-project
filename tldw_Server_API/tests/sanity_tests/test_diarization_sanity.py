@@ -77,13 +77,13 @@ def test_agglomerative_metric_fallback(monkeypatch):
 
 
 def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
-    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib as vlib
 
     # Reset global cache to ensure test isolation for VAD lazy import
-    monkeypatch.setattr(dlib, "_silero_vad_model", None)
-    monkeypatch.setattr(dlib, "_silero_vad_utils", None)
+    monkeypatch.setattr(vlib, "_silero_vad_model", None)
+    monkeypatch.setattr(vlib, "_silero_vad_utils", None)
 
-    monkeypatch.setattr(dlib, "_torch_available", lambda: True)
+    monkeypatch.setattr(vlib, "_torch_available", lambda: True)
 
     class _FakeHub:
         def set_dir(self, path):
@@ -115,7 +115,7 @@ def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
             """
             self.hub = _FakeHub()
 
-    monkeypatch.setattr(dlib, "_lazy_import_torch", lambda: _FakeTorch())
+    monkeypatch.setattr(vlib, "_lazy_import_torch", lambda: _FakeTorch())
 
-    model, utils = dlib._lazy_import_silero_vad()
+    model, utils = vlib._lazy_import_silero_vad()
     assert model is None and utils is None

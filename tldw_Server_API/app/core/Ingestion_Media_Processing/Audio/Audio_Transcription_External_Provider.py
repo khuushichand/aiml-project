@@ -158,7 +158,17 @@ async def transcribe_with_external_provider_async(
         **kwargs: Additional parameters to pass to the API
 
     Returns:
-        Transcribed text or error message
+        Transcribed text or error message.
+
+    Notes:
+        - ``config.base_url`` is interpreted as either:
+          * a bare API base such as ``https://api.openai.com`` (the standard
+            ``/v1/audio/transcriptions`` path will be appended), or
+          * a full audio transcription endpoint such as
+            ``https://api.example.com/v1/audio/transcriptions`` (used as-is).
+        - Intermediate paths (for example a proxy prefix without the final
+          ``/v1/audio/transcriptions`` suffix) are not automatically supported;
+          in those cases, configure ``base_url`` with the full endpoint URL.
     """
     # Load configuration
     if config is None:
@@ -184,11 +194,16 @@ async def transcribe_with_external_provider_async(
             buffer.seek(0)
             file_handle = buffer
 
-        # Prepare the request
-        endpoint = urljoin(config.base_url, "/v1/audio/transcriptions")
-        if not endpoint.startswith(config.base_url):
-            # Handle cases where base_url already includes the full path
+        # Prepare the request endpoint:
+        # - If base_url already points at the full audio endpoint
+        #   (.../v1/audio/transcriptions), use it as-is.
+        # - Otherwise, treat base_url as an API root and append the standard
+        #   OpenAI-compatible audio transcription path.
+        parsed = urlparse(config.base_url)
+        if parsed.path.rstrip("/").endswith("/v1/audio/transcriptions"):
             endpoint = config.base_url
+        else:
+            endpoint = urljoin(config.base_url.rstrip("/") + "/", "v1/audio/transcriptions")
 
         # Prepare headers
         headers = {}

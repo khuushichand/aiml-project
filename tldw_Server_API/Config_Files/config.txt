@@ -426,6 +426,49 @@ agentic_cache_backend = memory
 # Env override: RAG_AGENTIC_CACHE_TTL_SEC (default 600)
 agentic_cache_ttl_sec = 600
 
+[Diarization]
+# VAD backend:
+#   silero_hub (default): use the Silero PyTorch repo via torch.hub (and optional local checkout under models/).
+#   onnx_silero: use a local Silero ONNX model via onnxruntime (no torch.hub or faster-whisper required).
+vad_backend = silero_hub
+
+# VAD thresholds and timing (used by diarization VAD path)
+vad_threshold = 0.5
+vad_min_speech_duration = 0.25
+vad_min_silence_duration = 0.25
+allow_vad_fallback = true
+enable_torch_hub_fetch = true
+
+# ONNX backend (onnx_silero) settings
+# Path to silero_vad_v6.onnx (installed via Helper_Scripts/install_silero_vad_weights.py or manually).
+onnx_model_path = models/silero_vad/silero_vad_v6.onnx
+
+# Segmentation
+segment_duration = 30.0
+segment_overlap = 0.5
+min_segment_duration = 1.0
+max_segment_duration = 3.0
+
+# Embeddings & clustering
+embedding_model = speechbrain/spkrec-ecapa-voxceleb
+embedding_device = auto
+embedding_local_only = false
+embedding_batch_size = 32
+clustering_method = spectral
+similarity_threshold = 0.85
+min_speakers = 1
+max_speakers = 10
+
+# Post-processing
+merge_threshold = 0.5
+min_speaker_duration = 3.0
+detect_overlapping_speech = false
+overlap_confidence_threshold = 0.7
+
+# Memory
+memory_efficient = false
+max_memory_mb = 2048
+
 [API]
 anthropic_model = claude-opus-4-20250514
 anthropic_streaming = True
@@ -626,6 +669,10 @@ nemo_cache_dir = ./models/nemo
 nemo_chunk_duration = 120
 nemo_overlap_duration = 15
 streaming_fallback_to_whisper = false
+# Optional: faster-whisper compute type override. When unset or set to "auto",
+# the server uses float16 on CUDA and int8 on CPU. Examples of explicit
+# overrides: float16, int8, int8_float16.
+whisper_compute_type = auto
 mlx_chunk_duration = 30.0
 mlx_overlap_duration = 5.0
 buffered_chunk_duration = 20.0
@@ -651,12 +698,22 @@ custom_vocab_case_sensitive = False
 # --- Transcript cache + retention ---
 # Disable writing transcription cache files (env override: STT_DISABLE_TRANSCRIPT_CACHE)
 disable_transcript_cache = false
-# Max cached transcript files per source (newest kept). Empty/None to disable.
+# When true, keep writing transcripts but skip all age/size-based pruning (env: STT_DISABLE_TRANSCRIPT_CACHE_PRUNING).
+disable_transcript_cache_pruning = false
+# Max cached transcript files per source (newest kept). Leave empty for defaults
+# or set 0/negative to disable this limit entirely.
 transcript_cache_max_files_per_source =
-# Delete cached transcripts older than this many days. Empty/None to disable.
+# Delete cached transcripts older than this many days. Leave empty for defaults
+# or set 0/negative to disable age-based pruning.
 transcript_cache_max_age_days =
-# Cap total transcript cache size (MB) per directory. Oldest files evicted first. Empty/None to disable.
+# Cap total transcript cache size (MB) per directory. Oldest files evicted first.
+# Leave empty for defaults or set 0/negative to disable size-based pruning.
 transcript_cache_max_total_mb =
+
+# --- Audio validation ---
+# When true, skip ffprobe-based audio validation and rely on ffmpeg + STT to
+# surface bad files (env: STT_SKIP_AUDIO_PREVALIDATION).
+skip_audio_prevalidation = false
 
 [external_providers]
 

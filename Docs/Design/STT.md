@@ -35,8 +35,13 @@ Review potential use of quantized STT Models:
     2. If transcribing non-english audio, use [Whisper-Large distil v3](https://huggingface.co/distil-whisper/distil-large-v3)
     3. If that fails, then use [Whisper-Large v3](https://huggingface.co/openai/whisper-large-v3) -> Whisper-Large v2
 - **Voice-Audio-Detection(VAD)**
-    - Use VAD to detect voice activity in audio files.
-    - This feature is currently not properly understood, so :shrug:
+    - Unified WS path now supports Silero-based turn detection with auto-commit.
+    - Server-clamped tunables: `vad_threshold` [0.1..0.9] (default 0.5), `min_silence_ms` [150..1500] (default 250), `turn_stop_secs` [0.1..0.75] (default 0.2), `min_utterance_secs` guard (default 0.4).
+    - Fail-open: if Silero cannot load (e.g., torch hub disabled), streaming continues without auto-commit and logs once.
+    - Client guidance: keep pauses ≥ configured `turn_stop_secs` to trigger finals; still allowed to send manual `{type:"commit"}`.
+    - Runtime Silero VAD integration for streaming turn detection loads the Python model via `torch.hub.load("snakers4/silero-vad", "silero_vad", ...)` or a local checkout under `models/`, not directly from any ONNX weights file.
+    - Offline diarization VAD can optionally use a local Silero ONNX model via onnxruntime when `[Diarization].vad_backend=onnx_silero` in `Config_Files/config.txt`; when unset or set to `silero_hub` it uses the PyTorch Silero repo via torch.hub.
+    - Weights: faster-whisper already ships `silero_vad_v6.onnx`; use `python Helper_Scripts/install_silero_vad_weights.py` if you want a copy under `models/` (no downloads; it only copies from the existing package assets). This helper is optional; current streaming VAD path does not consume the copied ONNX file directly, while the ONNX diarization backend looks at `[Diarization].onnx_model_path`.
 - **Speaker-Diarization**
     - Use Pyannote to determine speaker boundaries in audio files.
     - This feature is currently either implemented poorly or it's not that great at diarization.
@@ -64,6 +69,16 @@ Review potential use of quantized STT Models:
     - [Pyannote](https://github.com/pyannote/pyannote-audio) (pyannote.audio.pipelines.speaker_diarization) for speaker diarization.
     - [FFmpeg](https://www.ffmpeg.org/) (via subprocess or os.system) to convert audio to the desired WAV format.
     - [PyAudio](https://people.csail.mit.edu/hubert/pyaudio/) (for optional live recording).
+
+#### Canonical STT entrypoints
+
+- `speech_to_text(...)` (in `Audio_Transcription_Lib.py`)
+  - File or NumPy input; returns a list of segment dicts (or `(segments, language)` when `return_language=True`).
+  - Used by media ingestion, offline workers, and any code that needs structured timestamps or caching on disk.
+- `transcribe_audio(...)` (in `Audio_Transcription_Lib.py`)
+  - NumPy waveform input; routes to the appropriate provider and returns a single transcript string.
+  - Used by `/audio/transcriptions`, speech-chat, and streaming sinks when they already have in-memory audio.
+  - May return provider-specific error sentinels like `"[Transcription error] ..."`, which callers must detect with `is_transcription_error_message(...)` and convert into structured errors instead of treating as user speech.
 
 
 ### Benchmarks

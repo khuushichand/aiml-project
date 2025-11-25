@@ -152,6 +152,10 @@ Notes:
 - For `response_format: verbose_json`, the response includes `task` and `duration` fields.
 - For Whisper-based models, the underlying `speech_to_text(...)` helper prepends a metadata header (model + detected language) to the first segment. The HTTP API always calls `strip_whisper_metadata_header(...)` before returning JSON/text so clients see only user content. If you use `speech_to_text` directly (e.g., in workflows or custom tools), call `strip_whisper_metadata_header` on segment lists, or `_strip_whisper_metadata_header_from_text` (speech chat) before presenting text to end users.
 
+Internal STT helpers:
+- `speech_to_text(...)` (file or NumPy input) is the canonical segment-based helper used by media ingestion and offline workers; it returns a list of segments (or `(segments, language)` when requested).
+- `transcribe_audio(...)` (NumPy waveform input) is the canonical plain-text helper used by this HTTP endpoint, speech-chat, and streaming sinks; it routes to the configured provider and returns a single transcript string. Provider failures are surfaced as error sentinel strings (for example, `"[Transcription error] Qwen2Audio ..."`), which HTTP handlers detect via `is_transcription_error_message(...)` and map to appropriate HTTP error responses rather than returning the sentinel text as user content.
+
 ### Word-level Timestamps Example (Whisper only)
 
 When `timestamp_granularities` includes `word`, each segment contains `words` with start/end per tokenized word:
@@ -290,6 +294,17 @@ Examples (wscat)
 wscat -c "ws://localhost:8000/api/v1/audio/stream/transcribe?token=$API_KEY"
 wscat -H "Authorization: Bearer $JWT" -c "ws://localhost:8000/api/v1/audio/stream/transcribe"
 ```
+
+For multilingual Nemo streaming with Canary:
+
+- Use `model: "canary"` in the initial config message.
+- Set `"task": "transcribe"` for same-language ASR, or `"task": "translate"` to request English translations (mirrors the `/audio/translations` HTTP endpoint semantics).
+
+For low-latency English-only streaming with NVIDIA Parakeet-Realtime-EOU:
+
+- Keep `model: "parakeet"` and enable the RNNT backend with `"parakeet_use_rnnt_streamer": true`.
+- Set `"parakeet_rnnt_model_name": "nvidia/parakeet_realtime_eou_120m-v1"` in the config message to use the new realtime EOU model.
+- The server strips the literal `<EOU>` token from transcripts while still using it internally as an utterance boundary hint.
 
 #### Live Insights Configuration (Granola-style Notes)
 
@@ -612,11 +627,11 @@ with open("audio.wav", "rb") as f:
 ### Live Transcription Example
 
 ```python
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-    LiveAudioStreamer
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.ARCHIVE.Desktop_Live_Audio_Samples import (
+    LiveAudioStreamer,
 )
 
-# Configure for Parakeet with ONNX
+# Configure for Parakeet with ONNX (desktop sample)
 streamer = LiveAudioStreamer(
     transcription_provider='parakeet',
     nemo_variant='onnx',
@@ -631,7 +646,7 @@ def handle_text(text):
 
 streamer.handle_transcribed_text = handle_text
 
-# Start live transcription
+# Start live transcription (desktop-only sample)
 streamer.start()
 print("Listening... Press Ctrl+C to stop")
 

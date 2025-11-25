@@ -103,8 +103,6 @@ def _sklearn_available() -> bool:
 # Lazy-loaded modules (will be imported only when needed)
 _torch = None
 _numpy = None
-_silero_vad_model = None
-_silero_vad_utils = None
 _speechbrain_encoder = None
 _sklearn_modules = None
 _torchaudio = None
@@ -190,6 +188,32 @@ def _sanitize_path_component(name: str) -> str:
     return safe_name
 
 
+@lru_cache(maxsize=1)
+def _onnxruntime_available() -> bool:
+    """Return True when onnxruntime is importable."""
+    if not _module_spec_available("onnxruntime"):
+        logger.debug("onnxruntime not installed or not discoverable.")
+        return False
+    try:
+        import onnxruntime  # type: ignore  # noqa: F401
+        return True
+    except Exception as exc:  # pragma: no cover - import error surfaces once
+        logger.debug(f"onnxruntime import failed: {exc}")
+        return False
+
+
+def _lazy_import_onnxruntime():
+    """Lazy import onnxruntime for Silero ONNX VAD."""
+    if not _onnxruntime_available():
+        return None
+    try:
+        import onnxruntime  # type: ignore
+        return onnxruntime
+    except ImportError as e:  # pragma: no cover - defensive
+        logger.warning(f"Failed to import onnxruntime for Silero ONNX VAD: {e}")
+        return None
+
+
 def _lazy_import_torch():
     """Lazy import torch."""
     global _torch
@@ -216,102 +240,7 @@ def _lazy_import_numpy():
     return _numpy
 
 
-def _lazy_import_silero_vad():
-    """
-    Load and cache the Silero VAD model and its utility functions from torch.hub.
-
-    Configures the torch hub cache directory using `TORCH_HOME` (defaulting to `~/.cache/torch`), then calls
-    `torch.hub.set_dir(...)` to ensure downloads/caches go to a predictable location. Attempts to load the
-    Silero VAD package via `torch.hub.load`, validates the returned `(model, utils)` tuple, and stores them in
-    module-level cache variables for reuse. On failure the cache is left unset and the function returns `(None, None)`.
-
-    Returns:
-        tuple: `(model, utils)` on success where `utils` is a sequence whose first five items are, in order,
-        `get_speech_timestamps`, `save_audio`, `read_audio`, `VADIterator`, and `collect_chunks`; `(None, None)`
-        if loading or validation fails.
-    """
-    global _silero_vad_model, _silero_vad_utils
-
-    # Check if already loaded
-    if _silero_vad_model is not None:
-        return _silero_vad_model, _silero_vad_utils
-
-    # Check torch availability
-    if not _torch_available():
-        logger.warning("PyTorch not available, cannot load Silero VAD")
-        return None, None
-
-    torch = _lazy_import_torch()
-    if not torch:
-        logger.warning("Failed to import torch for Silero VAD")
-        return None, None
-
-    try:
-        logger.info("Loading Silero VAD model from torch hub...")
-
-        # Configure torch hub cache directory
-        # Prefer TORCH_HOME (root), fallback to default
-        default_home_dir = Path.home() / '.cache' / 'torch'
-        torch_home = Path(os.environ.get('TORCH_HOME', str(default_home_dir)))
-        hub_dir = torch_home / 'hub'
-        hub_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            # Ensure torch uses the directory we just created
-            if hasattr(torch, 'hub') and hasattr(torch.hub, 'set_dir'):
-                torch.hub.set_dir(str(hub_dir))
-        except Exception as _hub_dir_err:  # pragma: no cover - best-effort
-            logger.debug(f"torch.hub.set_dir failed: {_hub_dir_err}")
-
-        # Load model with explicit parameters
-        result = torch.hub.load(
-            repo_or_dir='snakers4/silero-vad',
-            model='silero_vad',
-            force_reload=False,  # Use cached version if available
-            trust_repo=True,  # Required for loading
-            verbose=False  # Reduce output noise
-        )
-
-        # Validate the result format
-        if not isinstance(result, (tuple, list)) or len(result) != 2:
-            logger.error(
-                f"Unexpected Silero VAD return format. Expected (model, utils) tuple, "
-                f"got {type(result).__name__} with length {len(result) if hasattr(result, '__len__') else 'unknown'}"
-            )
-            return None, None
-
-        model, utils = result
-
-        # Validate model
-        if model is None:
-            logger.error("Silero VAD model is None")
-            return None, None
-
-        # Validate utils format
-        if not isinstance(utils, (tuple, list)) or len(utils) < 5:
-            logger.error(
-                f"Unexpected Silero VAD utils format. Expected tuple/list with 5+ items, "
-                f"got {type(utils).__name__} with {len(utils) if hasattr(utils, '__len__') else 'unknown'} items"
-            )
-            return None, None
-
-        # Store globally for future use
-        _silero_vad_model = model
-        _silero_vad_utils = utils
-
-        logger.info("Silero VAD loaded successfully")
-        logger.debug(f"Silero VAD utils count: {len(utils)}")
-
-        return model, utils
-
-    except Exception as e:
-        logger.error(f"Failed to load Silero VAD: {type(e).__name__}: {e}")
-        logger.debug("Full error:", exc_info=True)
-
-        # Reset globals on failure
-        _silero_vad_model = None
-        _silero_vad_utils = None
-
-        return None, None
+from .VAD_Lib import _lazy_import_silero_vad  # type: ignore  # re-exported for backwards compatibility
 
 
 def _lazy_import_speechbrain():
@@ -531,6 +460,7 @@ class DiarizationService:
         """
         return {
             # VAD settings
+            'vad_backend': 'silero_hub',
             'vad_threshold': DEFAULT_VAD_THRESHOLD,
             'vad_min_speech_duration': 0.25,
             'vad_min_silence_duration': 0.25,
@@ -647,6 +577,12 @@ class DiarizationService:
         valid_methods = [m.value for m in ClusteringMethod]
         if config['clustering_method'] not in valid_methods:
             raise ValueError(f"clustering_method must be one of {valid_methods}")
+
+        # VAD backend validation
+        backend = str(config.get('vad_backend', 'silero_hub')).strip().lower()
+        valid_backends = {'silero_hub', 'onnx_silero'}
+        if backend not in valid_backends:
+            raise ValueError(f"vad_backend must be one of {sorted(valid_backends)}")
 
     def _get_device(self) -> str:
         """Determine the device to use for inference."""
@@ -1044,6 +980,7 @@ class DiarizationService:
             DiarizationError: If VAD is unavailable and `allow_vad_fallback` in the configuration is False.
         """
         allow_fallback: bool = bool(self.config.get('allow_vad_fallback', True))
+        backend: str = str(self.config.get('vad_backend', 'silero_hub')).strip().lower()
 
         def _fallback_full_span() -> List[Dict]:
             """
@@ -1060,6 +997,114 @@ class DiarizationService:
                 logger.warning("VAD unavailable; falling back to single full-span speech region")
                 return [{'start': 0.0, 'end': dur}]
             raise DiarizationError("VAD unavailable and allow_vad_fallback is False")
+
+        # Optional ONNX-based VAD backend via onnxruntime and a local Silero ONNX model.
+        if backend == 'onnx_silero':
+            ort = _lazy_import_onnxruntime()
+            np_mod = _lazy_import_numpy()
+            if ort is None or np_mod is None:
+                logger.warning("onnxruntime or NumPy unavailable; using fallback full-span for diarization VAD")
+                return _fallback_full_span()
+
+            try:
+                # Convert waveform to 1-D float32 numpy array
+                if hasattr(waveform, "detach") and hasattr(waveform, "cpu"):
+                    try:
+                        audio_np = waveform.detach().cpu().numpy().astype("float32")
+                    except Exception:
+                        audio_np = np_mod.asarray(waveform, dtype=np_mod.float32).reshape(-1)
+                else:
+                    audio_np = np_mod.asarray(waveform, dtype=np_mod.float32).reshape(-1)
+
+                if audio_np.ndim != 1:
+                    audio_np = audio_np.reshape(-1)
+
+                model_path_cfg = self.config.get('onnx_model_path') or "models/silero_vad/silero_vad_v6.onnx"
+                model_path = Path(model_path_cfg).expanduser()
+                if not model_path.is_absolute():
+                    model_path = (Path.cwd() / model_path).resolve()
+                if not model_path.is_file():
+                    logger.warning(f"Silero ONNX VAD model not found at {model_path}; using fallback full-span")
+                    return _fallback_full_span()
+
+                session = ort.InferenceSession(str(model_path), providers=ort.get_available_providers())
+                input_meta = session.get_inputs()[0]
+                input_name = input_meta.name
+
+                # Common Silero layout is [batch, channels, samples]; accept 2D or 3D as well.
+                if len(input_meta.shape) == 3:
+                    audio_in = audio_np.reshape(1, 1, -1)
+                elif len(input_meta.shape) == 2:
+                    audio_in = audio_np.reshape(1, -1)
+                else:
+                    audio_in = audio_np.reshape(input_meta.shape)
+
+                outputs = session.run(None, {input_name: audio_in})
+                if not outputs:
+                    logger.debug("ONNX VAD session returned no outputs; using fallback full-span")
+                    return _fallback_full_span()
+
+                probs = np_mod.asarray(outputs[0]).reshape(-1)
+                if probs.size == 0:
+                    logger.debug("ONNX VAD returned empty probability array; using fallback full-span")
+                    return _fallback_full_span()
+
+                # Derive window size from total samples and probability frames.
+                num_frames = int(probs.size)
+                window_size_samples = max(1, int(len(audio_np) / num_frames))
+
+                threshold = float(self.config.get('vad_threshold', DEFAULT_VAD_THRESHOLD))
+                min_silence_secs = float(self.config.get('vad_min_silence_duration', 0.25))
+                speech_pad_ms = int(self.config.get('speech_pad_ms', 400))
+                min_silence_frames = max(1, int((min_silence_secs * sample_rate) / window_size_samples))
+                pad_samples = int((speech_pad_ms / 1000.0) * sample_rate)
+
+                speech_timestamps: List[Dict[str, float]] = []
+                in_speech = False
+                start_frame = 0
+                silence_run = 0
+
+                for idx, p in enumerate(probs):
+                    if p >= threshold:
+                        if not in_speech:
+                            in_speech = True
+                            start_frame = idx
+                        silence_run = 0
+                    else:
+                        if in_speech:
+                            silence_run += 1
+                            if silence_run >= min_silence_frames:
+                                # Close current speech region
+                                end_frame = max(start_frame, idx - silence_run)
+                                start_sample = max(0, start_frame * window_size_samples - pad_samples)
+                                end_sample = min(len(audio_np), (end_frame + 1) * window_size_samples + pad_samples)
+                                if end_sample > start_sample:
+                                    speech_timestamps.append({
+                                        'start': float(start_sample) / sample_rate,
+                                        'end': float(end_sample) / sample_rate,
+                                    })
+                                in_speech = False
+                                silence_run = 0
+
+                # Flush trailing region if still in speech
+                if in_speech:
+                    start_sample = max(0, start_frame * window_size_samples - pad_samples)
+                    end_sample = len(audio_np)
+                    if end_sample > start_sample:
+                        speech_timestamps.append({
+                            'start': float(start_sample) / sample_rate,
+                            'end': float(end_sample) / sample_rate,
+                        })
+
+                if not speech_timestamps:
+                    logger.debug("ONNX VAD produced no speech regions; using fallback full-span")
+                    return _fallback_full_span()
+
+                return speech_timestamps
+
+            except Exception as outer_onnx:
+                logger.warning(f"ONNX-based VAD detection failed: {outer_onnx}; using fallback full-span")
+                return _fallback_full_span()
 
         try:
             # Ensure VAD model is loaded

@@ -5,6 +5,7 @@ from typing import Any, Dict
 import numpy as np
 import pytest
 import soundfile as sf
+from fastapi import HTTPException, status
 
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
     SpeechChatRequest,
@@ -53,7 +54,7 @@ class _StubChatDB:
 
 
 class _StubTTSService:
-    async def generate_speech(self, request, provider=None, fallback=True):
+    async def generate_speech(self, request, provider=None, fallback=True, voice_to_voice_start=None, voice_to_voice_route="audio.speech"):
         # Return a single tiny chunk of bytes
         yield b"stub-audio"
 
@@ -209,10 +210,3 @@ async def test_run_speech_chat_turn_stt_error_sentinel_raises(monkeypatch):
         )
 
     assert exc_info.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-    assert resp.output_audio
-    assert resp.output_audio_mime_type.startswith("audio/")
-    assert resp.timing.stt_ms >= 0.0
-    assert resp.timing.llm_ms >= 0.0
-    assert resp.timing.tts_ms >= 0.0
-    assert resp.token_usage is not None
-    assert resp.token_usage.total_tokens == 15

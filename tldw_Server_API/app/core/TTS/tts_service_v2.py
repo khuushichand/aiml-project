@@ -496,7 +496,9 @@ class TTSServiceV2:
         self,
         request: OpenAISpeechRequest,
         provider: Optional[str] = None,
-        fallback: bool = True
+        fallback: bool = True,
+        voice_to_voice_start: Optional[float] = None,
+        voice_to_voice_route: str = "audio.speech",
     ) -> AsyncGenerator[bytes, None]:
         """
         Generate speech from text using the best available provider.
@@ -577,6 +579,38 @@ class TTSServiceV2:
         chunks_count = 0
         released_active_slot = False
         fallback_plan: Optional[Tuple[List[str], str]] = None
+        voice_to_voice_recorded = False
+        voice_to_voice_route_label = voice_to_voice_route or "audio.speech"
+        voice_to_voice_start_ts: Optional[float] = None
+        try:
+            if voice_to_voice_start is not None:
+                start_val = float(voice_to_voice_start)
+                if start_val > 0:
+                    voice_to_voice_start_ts = start_val
+        except Exception:
+            voice_to_voice_start_ts = None
+
+        if voice_to_voice_start_ts is not None:
+            try:
+                setattr(tts_request, "voice_to_voice_start", voice_to_voice_start_ts)
+                setattr(tts_request, "voice_to_voice_route", voice_to_voice_route_label)
+            except Exception:
+                pass
+
+        def _record_voice_to_voice(provider_name: str) -> None:
+            nonlocal voice_to_voice_recorded
+            if voice_to_voice_recorded or voice_to_voice_start_ts is None:
+                return
+            try:
+                self.metrics.observe(
+                    "voice_to_voice_seconds",
+                    max(0.0, time.time() - voice_to_voice_start_ts),
+                    labels={"provider": provider_name, "route": voice_to_voice_route_label},
+                )
+                voice_to_voice_recorded = True
+            except Exception:
+                pass
+
         await self._increment_active_requests(adapter.provider_name)
 
         # Generate speech with circuit breaker and comprehensive error handling
@@ -629,6 +663,7 @@ class TTSServiceV2:
                                             "format": tts_request.format.value,
                                         },
                                     )
+                                    _record_voice_to_voice(adapter.provider_name)
                                 except Exception:
                                     pass
                             chunks_count += 1
@@ -647,6 +682,7 @@ class TTSServiceV2:
                                     "format": tts_request.format.value,
                                 },
                             )
+                            _record_voice_to_voice(adapter.provider_name)
                         except Exception:
                             pass
                         audio_size = len(response.audio_data)
@@ -799,6 +835,32 @@ class TTSServiceV2:
         audio_size = 0
         success = False
         error_message: Optional[str] = None
+        voice_metric_recorded = False
+        v2v_start: Optional[float] = None
+        try:
+            raw = getattr(request, "voice_to_voice_start", None)
+            if raw is not None:
+                parsed = float(raw)
+                if parsed > 0:
+                    v2v_start = parsed
+        except Exception:
+            v2v_start = None
+        v2v_route = getattr(request, "voice_to_voice_route", "audio.speech") or "audio.speech"
+
+        def _record_voice_to_voice() -> None:
+            nonlocal voice_metric_recorded
+            if voice_metric_recorded or v2v_start is None:
+                return
+            try:
+                self.metrics.observe(
+                    "voice_to_voice_seconds",
+                    max(0.0, time.time() - v2v_start),
+                    labels={"provider": adapter.provider_name, "route": v2v_route},
+                )
+                voice_metric_recorded = True
+            except Exception:
+                pass
+
         try:
             async with self._semaphore:
                 response = await adapter.generate(request)
@@ -818,6 +880,7 @@ class TTSServiceV2:
                                         "format": request.format.value,
                                     },
                                 )
+                                _record_voice_to_voice()
                             except Exception:
                                 pass
                         audio_size += len(chunk)
@@ -833,6 +896,7 @@ class TTSServiceV2:
                                 "format": request.format.value,
                             },
                         )
+                        _record_voice_to_voice()
                     except Exception:
                         pass
                     audio_size = len(response.audio_data)

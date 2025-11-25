@@ -6,14 +6,14 @@
   - The STT module should unify these providers, expose consistent REST/WebSocket behaviors, and integrate cleanly with Jobs, Media ingestion, Embeddings, and AuthNZ.
 
 - **Problem Statement**
-  Contributors need a single, predictable STT subsystem that accepts uploaded or streamed audio, selects the appropriate provider, and yields normalized transcripts plus metadata suitable for RAG pipelines. The current implementation mixes provider-specific logic, lacks full streaming parity, and provides limited observability.
+  Contributors need a single, predictable STT subsystem that accepts uploaded or streamed audio, selects the appropriate provider, and yields normalized transcripts plus metadata suitable for RAG pipelines. Current state: REST + WS parity exists, PCM TTS is available, and STT/TTS/voice-to-voice metrics are wired. Remaining gaps: turn detection/auto-commit, phoneme/lexicon overrides for Kokoro, an optional WS TTS endpoint, and a documented harness to validate latency end-to-end.
 
 - **Goals**
-  - Unified provider interface for batch and streaming STT with plug-and-play expansion.
-  - Deterministic REST & WS behavior (same features, shared validation, consistent outputs).
-  - Rich transcript artifacts: timestamps, speaker labels, confidence, diarization flags, language detection.
-  - Robust operational profile: retries, queue integration, observability, audit support.
-  - Reproducible developer experience-fixtures, docs, and tests that don’t depend on proprietary hardware.
+  - Complete turn detection/auto-commit in unified WS STT for lower final latency (fail-open if VAD unavailable).
+  - Add phoneme/lexicon overrides for Kokoro (per-request/provider/global precedence).
+  - Add optional WS TTS endpoint with backpressure/auth parity.
+  - Provide a small latency harness (voice-to-voice) and refreshed docs so contributors can validate the metrics that now exist.
+  - Keep unified provider interface and deterministic REST/WS behavior with normalized transcript artifacts (timestamps, diarization, confidence, language detection) and existing observability intact.
 
 - **Non-Goals**
   - No SIP ingestion, telephony gateways, or mobile SDKs in this release.
@@ -42,7 +42,8 @@
   - Config-driven defaults with request-level overrides (bounded validation).
   - Rate limiting via SlowAPI/global plus per-provider thresholds.
   - Retry/backoff policy with provider-specific fatal vs retriable errors.
-  - Metrics and audit: emit `audio.stt.*` counters/histograms, hook into unified audit service for lifecycle events.
+  - Metrics and audit: emit `audio.stt.*` counters/histograms, hook into unified audit service for lifecycle events; STT/TTS/voice-to-voice metrics labels documented.
+  - Failure modes: fail-open when VAD/diarization unavailable (log once, continue streaming) rather than blocking.
   - Worker SDK updates: strict worker_id/lease_id enforcement, explicit completion tokens, provider context metadata.
 
 - **Non-Functional Requirements**
@@ -76,7 +77,6 @@
   - Provider registry with configuration metadata (name, model, streaming support, hardware requirements).
   - Standard methods: `transcribe_batch`, `transcribe_stream`, `detect_language`, `healthcheck`.
   - Config via `.env`/`config.txt` with defaults for beam size, temperature, chunk length.
-  - Provide local stubs/mocks (e.g., text fixture provider) for offline testing.
   - Fallback order: try preferred provider, fallback chain depending on capabilities.
 
 - **Data Contracts**
@@ -114,7 +114,7 @@
 
 - **Metrics & Observability**
   - Counters: `audio.stt.requests`, `audio.stt.streaming_sessions`, `audio.stt.errors`, per-provider successes/failures.
-  - Histograms: `audio.stt.latency`, `audio.stt.queue_wait`, `audio.stt.streaming_token_latency`.
+  - Histograms: `audio.stt.latency`, `audio.stt.queue_wait`, `audio.stt.streaming_token_latency`, `stt_final_latency_seconds{model,variant,endpoint}`, `tts_ttfb_seconds{provider,voice,format}`, `voice_to_voice_seconds{provider,route}`.
   - Gauges: active workers, GPU memory usage (if available).
   - Logs: include request/job ID, provider, timing, errors.
   - Audit: create, updated, failed transcripts recorded when audit bridge enabled.
@@ -137,12 +137,14 @@
   - Config loader (`core/config`) for provider settings.
 
 - **Milestones**
-  1. **M1 - Baseline Documentation & Inventory**: capture current STT endpoints, provider configurations, and worker topology in docs; ensure contributors know existing touchpoints.
-  2. **M2 - Provider Interface Formalization**: refactor existing providers under a shared interface, add deterministic mock provider for CI.
-  3. **M3 - Streaming Parity**: finalize WebSocket pipeline (partial results, flow control, acknowledgement semantics).
-  4. **M4 - Persistence & Audit Enhancements**: diarization metadata, chunk table updates, audit event coverage.
-  5. **M5 - Observability & Testing Improvements**: metrics instrumentation, fixtures, offline evaluation scripts.
-  6. **M6 - Performance Tuning & Benchmarks**: GPU/CPU profiling, regression thresholds, publish benchmark scripts.
+  1. **M1 - Turn Detection/Auto-Commit**: Silero VAD-driven turn detection in unified WS STT; auto-commit finals within target latency on reference audio (fail-open if VAD missing).  
+     - **Status**: Implemented in unified WS path (fail-open); needs real-world threshold tuning + doc polish.
+  2. **M2 - Phoneme/Lexicon Overrides**: configurable pronunciation maps for Kokoro with safe defaults and precedence rules; demo request shows changed pronunciation.  
+     - **Status**: Not started.
+  3. **M3 - Optional WS TTS**: `/api/v1/audio/stream/tts` with backpressure/auth/quota parity and PCM streaming; passes slow-reader/disconnect tests.  
+     - **Status**: Not started.
+  4. **M4 - Docs & Harness**: refreshed STT/TTS docs plus a lightweight voice-to-voice latency harness consuming existing metrics; documented CLI/outputs.  
+     - **Status**: Not started (metrics are wired; harness outstanding).
 
 - **Risks & Mitigations**
   - Provider downtime/unavailability → multi-provider fallbacks, local deterministic mock, error escalation.
