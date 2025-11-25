@@ -1088,6 +1088,12 @@ async def create_transcription(
                 vtt_content = "\n".join(lines_vtt).rstrip() + "\n"
             else:
                 # Simple VTT fallback when timing information is unavailable
+                if _is_transcription_error_message(transcribed_text):
+                    logger.error(f"Transcription failed: {transcribed_text}")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Transcription failed. Please try again or use a different model."
+                    )
                 vtt_content = f"WEBVTT\n\n00:00:00.000 --> 00:00:10.000\n{transcribed_text}\n"
             return Response(content=vtt_content, media_type="text/vtt")
 
@@ -1506,10 +1512,10 @@ async def get_stt_health(
     try:
         status_info = audio_files.check_transcription_model_status(resolved_model)
     except Exception as e:
-        logger.debug(f"STT health: check_transcription_model_status failed: {e}")
+        logger.exception(f"STT health: check_transcription_model_status failed")
         status_info = {
             "available": False,
-            "message": f"Failed to check model status: {e}",
+            "message": "Failed to check model status.",
             "model": resolved_model,
         }
 
