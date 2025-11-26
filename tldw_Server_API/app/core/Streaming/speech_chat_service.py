@@ -40,6 +40,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
     transcribe_audio,
+    is_transcription_error_message,
 )
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
 from tldw_Server_API.app.core.Chat.chat_helpers import (
@@ -101,18 +102,36 @@ def _load_audio_to_mono_np(audio_bytes: bytes) -> Tuple[np.ndarray, int]:
 
 
 def _is_transcription_error(msg: str) -> bool:
-    """Heuristic used by transcription endpoint to detect error sentinel strings."""
-    lower_msg = msg.lower()
-    return (
-        lower_msg.startswith("[error")
-        or lower_msg.startswith("[transcription error")
-        or lower_msg.startswith("canary transcription error")
-        or lower_msg.startswith("parakeet transcription error")
-        or lower_msg.startswith("external provider transcription error")
-        or lower_msg.startswith("nemo transcription module not available")
-        or lower_msg.startswith("failed to import nemo")
-        or lower_msg.startswith("failed to import external provider")
-    )
+    """Delegate to the shared transcription error sentinel helper."""
+    return is_transcription_error_message(msg)
+
+
+def _strip_whisper_metadata_header_from_text(text: str) -> str:
+    """
+    Remove the Whisper metadata header from a plain-text transcript, if present.
+
+    The faster-whisper pipeline may prepend a header like:
+        "This text was transcribed using whisper model: ...\\n"
+        "Detected language: ...\\n\\n"
+    For LLM input we want only the user content, so we trim this header.
+    """
+    if not isinstance(text, str):
+        return text
+
+    header_prefix = "This text was transcribed using whisper model:"
+    if not text.startswith(header_prefix):
+        return text
+
+    # Preferred: split on the blank line separating header from content
+    parts = text.split("\n\n", 1)
+    if len(parts) == 2:
+        return parts[1]
+
+    # Fallback: drop the first two lines (model + language) if present
+    lines = text.splitlines()
+    if len(lines) >= 3:
+        return "\n".join(lines[2:])
+    return text
 
 
 def _map_tts_exception(exc: Exception) -> HTTPException:
@@ -207,20 +226,27 @@ async def run_speech_chat_turn(
         ) from e
 
     if not isinstance(transcript, str):
-        transcript = str(transcript)
+        logger.error(f"Speech chat STT returned non-string transcript: type={type(transcript)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Transcription failed for speech chat. Please verify STT configuration in config.txt.",
+        )
 
     if _is_transcription_error(transcript):
         logger.error(f"Speech chat STT returned error sentinel: {transcript}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Transcription failed. Please try again or use a different model.",
+            detail="Transcription failed for speech chat. Please try again or verify STT configuration in config.txt.",
         )
 
+    # Remove known Whisper metadata header lines so the LLM receives only
+    # user content in the prompt.
+    transcript = _strip_whisper_metadata_header_from_text(transcript)
     transcript = transcript.strip()
     if not transcript:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Transcription produced empty text from input_audio",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Transcription produced empty text from input_audio. Please verify STT configuration in config.txt.",
         )
     stt_ms = (time.time() - stt_start) * 1000.0
 

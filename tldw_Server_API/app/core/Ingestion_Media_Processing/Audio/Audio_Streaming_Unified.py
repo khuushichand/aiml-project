@@ -30,6 +30,7 @@ from fastapi import WebSocketDisconnect
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from loguru import logger
 from uuid import uuid4
+import copy
 
 # Import existing implementations
 from .Audio_Streaming_Parakeet import (
@@ -41,7 +42,7 @@ from .Audio_Transcription_Nemo import (
     load_canary_model,
     transcribe_with_canary,
     load_parakeet_model,
-    transcribe_with_parakeet
+    transcribe_with_parakeet,
 )
 from .model_utils import normalize_model_and_variant
 
@@ -55,9 +56,47 @@ except Exception:  # pragma: no cover
 # Expose get_whisper_model at module scope so tests can monkeypatch it
 # (WhisperStreamingTranscriber.initialize() will prefer a module-level symbol if present.)
 try:  # pragma: no cover - import availability varies in test contexts
-    from .Audio_Transcription_Lib import get_whisper_model as get_whisper_model  # type: ignore
+    from .Audio_Transcription_Lib import (
+        get_whisper_model as get_whisper_model,  # type: ignore
+        _resample_audio_if_needed,
+        WHISPER_COMPUTE_TYPE_OVERRIDE as _WHISPER_COMPUTE_TYPE_OVERRIDE,  # type: ignore
+    )
 except Exception:  # Fallback when whisper deps are unavailable; tests may monkeypatch this
     get_whisper_model = None  # type: ignore[assignment]
+
+    def _resample_audio_if_needed(audio, sample_rate, target_sr=16000):  # type: ignore
+        return audio
+
+    _WHISPER_COMPUTE_TYPE_OVERRIDE = ""  # type: ignore[assignment]
+
+try:  # Optional torch/torchaudio/Nemo imports for Parakeet RNNT streaming
+    import torch  # type: ignore
+except Exception:  # pragma: no cover
+    torch = None  # type: ignore
+
+try:  # pragma: no cover
+    import torchaudio  # type: ignore
+except Exception:  # pragma: no cover
+    torchaudio = None  # type: ignore
+
+try:  # pragma: no cover
+    import nemo.collections.asr as nemo_asr  # type: ignore
+    from nemo.collections.asr.parts.submodules.rnnt_decoding import RNNTDecodingConfig  # type: ignore
+    from nemo.collections.asr.parts.utils.rnnt_utils import batched_hyps_to_hypotheses  # type: ignore
+    from nemo.collections.asr.parts.utils.streaming_utils import ContextSize, StreamingBatchedAudioBuffer  # type: ignore
+except Exception:  # pragma: no cover
+    nemo_asr = None  # type: ignore
+    RNNTDecodingConfig = None  # type: ignore
+    batched_hyps_to_hypotheses = None  # type: ignore
+    ContextSize = StreamingBatchedAudioBuffer = None  # type: ignore
+
+# Shared STT error sentinel detection for streaming paths
+try:  # pragma: no cover - available whenever Audio_Transcription_Lib imports
+    from .Audio_Transcription_Lib import is_transcription_error_message as _is_transcription_error_message  # type: ignore
+except Exception:  # pragma: no cover - degrade gracefully in minimal envs/tests
+    def _is_transcription_error_message(_: str) -> bool:  # type: ignore[override]
+        return False
+
 from .Audio_Streaming_Insights import LiveInsightSettings, LiveMeetingInsights
 
 try:
@@ -191,6 +230,9 @@ class UnifiedStreamingConfig(StreamingConfig):
     auto_detect_language: bool = False  # Auto-detect language
     enable_vad: bool = False  # Voice Activity Detection
     vad_threshold: float = 0.5
+    vad_min_silence_ms: int = 250  # Silence window before considering EOS
+    vad_turn_stop_secs: float = 0.2  # Wall clock silence duration to finalize a turn
+    vad_min_utterance_secs: float = 0.4  # Guard minimum speech duration before auto-finalizing
     min_partial_duration: float = 0.5
     # Whisper-specific options
     whisper_model_size: str = 'distil-large-v3'  # Whisper model size
@@ -202,6 +244,267 @@ class UnifiedStreamingConfig(StreamingConfig):
     diarization_store_audio: bool = False
     diarization_storage_dir: Optional[str] = None
     diarization_num_speakers: Optional[int] = None
+    # Parakeet RNNT streaming
+    parakeet_use_rnnt_streamer: bool = True
+    parakeet_rnnt_model_name: str = "nvidia/parakeet-tdt-0.6b-v3"
+    parakeet_rnnt_device: Optional[str] = None
+    parakeet_rnnt_left_context_s: float = 10.0
+    parakeet_rnnt_max_buffer_s: float = 40.0
+
+
+class SileroTurnDetector:
+    """
+    Lightweight Silero VAD gate that marks end-of-speech to trigger an auto-commit.
+
+    This helper intentionally fails open: if Silero VAD cannot be loaded, it will
+    disable auto-commit and emit a single warning.
+    """
+
+    def __init__(
+        self,
+        sample_rate: int,
+        *,
+        enabled: bool,
+        vad_threshold: float,
+        min_silence_ms: int,
+        turn_stop_secs: float,
+        min_utterance_secs: float = 0.4,
+    ) -> None:
+        self.available = False
+        self.unavailable_reason: Optional[str] = None
+        self._iterator = None
+        self._armed = False
+        self._speech_started_at: Optional[float] = None
+        self._last_speech_at: Optional[float] = None
+        self._last_trigger_at: Optional[float] = None
+        self._sample_rate = int(sample_rate or 16000)
+        self._turn_stop_secs = max(0.05, float(turn_stop_secs))
+        self._min_utterance_secs = max(0.0, float(min_utterance_secs))
+        self._vad_threshold = float(vad_threshold)
+        self._backend: str = "silero_hub"
+        self._onnx_session = None
+        self._onnx_input_name: Optional[str] = None
+
+        if not enabled:
+            self.unavailable_reason = "disabled"
+            return
+
+        # Resolve backend from config ([Diarization].vad_backend); default to silero_hub
+        backend = "silero_hub"
+        onnx_model_path: Optional[str] = None
+        try:
+            cfg = load_comprehensive_config()
+            if cfg and cfg.has_section("Diarization"):
+                try:
+                    raw_backend = cfg.get("Diarization", "vad_backend", fallback=backend)
+                    backend = str(raw_backend or "").strip().lower() or backend
+                except Exception:
+                    backend = "silero_hub"
+                try:
+                    onnx_model_path = cfg.get("Diarization", "onnx_model_path", fallback=None)
+                except Exception:
+                    onnx_model_path = None
+        except Exception:
+            backend = "silero_hub"
+
+        self._backend = backend
+
+        # Backend: ONNX Silero via onnxruntime (no torch.hub)
+        if self._backend == "onnx_silero":
+            try:
+                import onnxruntime  # type: ignore
+            except Exception as err:  # pragma: no cover - optional dependency
+                self.unavailable_reason = f"onnxruntime_not_available: {err}"
+                logger.warning(f"ONNX Silero VAD unavailable (onnxruntime missing); continuing without auto-commit: {err}")
+                return
+
+            model_path_str = onnx_model_path or "models/silero_vad/silero_vad_v6.onnx"
+            model_path = Path(model_path_str).expanduser()
+            if not model_path.is_absolute():
+                model_path = (Path.cwd() / model_path).resolve()
+            if not model_path.is_file():
+                self.unavailable_reason = f"onnx_model_missing: {model_path}"
+                logger.warning(f"ONNX Silero VAD model not found at {model_path}; continuing without auto-commit")
+                return
+
+            try:
+                session = onnxruntime.InferenceSession(str(model_path), providers=onnxruntime.get_available_providers())
+                inputs = session.get_inputs()
+                if not inputs:
+                    raise RuntimeError("ONNX Silero VAD session has no inputs")
+                self._onnx_session = session
+                self._onnx_input_name = inputs[0].name
+                self.available = True
+                logger.info(f"Streaming ONNX Silero VAD initialized from {model_path}")
+                return
+            except Exception as err:  # pragma: no cover - defensive
+                self.unavailable_reason = f"onnx_session_error: {err}"
+                logger.warning(f"ONNX Silero VAD failed to initialize; continuing without auto-commit: {err}")
+                self.available = False
+                self._onnx_session = None
+                return
+
+        # Backend: original Silero via torch.hub
+        try:
+            try:
+                from .VAD_Lib import _lazy_import_silero_vad  # type: ignore
+            except Exception:
+                _lazy_import_silero_vad = None  # type: ignore
+
+            if _lazy_import_silero_vad is None:
+                self.unavailable_reason = "silero_vad_not_available"
+                logger.warning("Silero VAD unavailable; continuing without auto-commit")
+                return
+
+            model, utils = _lazy_import_silero_vad()
+            VADIterator = None
+            if utils and len(utils) > 3:
+                VADIterator = utils[3]
+
+            if not model or VADIterator is None:
+                self.unavailable_reason = "silero_vad_not_available"
+                logger.warning("Silero VAD unavailable; continuing without auto-commit")
+                return
+
+            self._iterator = VADIterator(
+                model=model,
+                threshold=self._vad_threshold,
+                sampling_rate=self._sample_rate,
+                min_silence_duration_ms=int(min_silence_ms),
+                speech_pad_ms=30,
+            )
+            self.available = True
+        except Exception as err:  # pragma: no cover - defensive; exercised in fail-open tests
+            self.unavailable_reason = str(err)
+            logger.warning(f"Silero VAD failed to initialize; continuing without auto-commit: {err}")
+            self.available = False
+            self._iterator = None
+
+    @property
+    def last_trigger_at(self) -> Optional[float]:
+        """Return the last auto-commit trigger timestamp if one was raised."""
+        return self._last_trigger_at
+
+    def _saw_speech(self, vad_result: Any) -> bool:
+        """Best-effort speech detection from Silero iterator outputs."""
+        if vad_result is None:
+            return False
+        try:
+            if isinstance(vad_result, dict):
+                if vad_result.get("speech_timestamps"):
+                    return True
+                if vad_result.get("start") is not None or vad_result.get("end") is not None:
+                    return True
+                probs = vad_result.get("speech_probs") or vad_result.get("probs")
+                if probs:
+                    try:
+                        return max(float(p) for p in probs) >= self._vad_threshold
+                    except Exception:
+                        return True
+        except Exception:
+            return False
+        return False
+
+    def observe(self, audio_bytes: bytes) -> bool:
+        """
+        Feed an audio chunk into the detector.
+
+        Returns True exactly once per speech turn when silence >= turn_stop_secs
+        occurs after a detected speech span (minimum utterance guard applied).
+        """
+        if not self.available:
+            return False
+        if not audio_bytes:
+            return False
+
+        # Backend: ONNX Silero (simple chunk-level gate using max probability)
+        if self._backend == "onnx_silero":
+            if self._onnx_session is None or self._onnx_input_name is None:
+                return False
+            try:
+                audio_np = np.frombuffer(audio_bytes, dtype=np.float32)
+                if audio_np.size == 0:
+                    return False
+
+                # Prepare input tensor based on model input rank
+                input_meta = self._onnx_session.get_inputs()[0]
+                shape = input_meta.shape
+                if len(shape) == 3:
+                    audio_in = audio_np.reshape(1, 1, -1)
+                elif len(shape) == 2:
+                    audio_in = audio_np.reshape(1, -1)
+                else:
+                    audio_in = audio_np.reshape(1, -1)
+
+                outputs = self._onnx_session.run(None, {self._onnx_input_name: audio_in})
+                if not outputs:
+                    return False
+                probs = np.asarray(outputs[0]).reshape(-1)
+                if probs.size == 0:
+                    return False
+                speech_detected = bool(float(probs.max()) >= self._vad_threshold)
+            except Exception as err:
+                logger.warning(f"ONNX Silero VAD failed during observe; disabling auto-commit: {err}")
+                self.available = False
+                self.unavailable_reason = str(err)
+                return False
+        else:
+            # Backend: classic Silero iterator
+            if not self._iterator:
+                return False
+            try:
+                audio_np = np.frombuffer(audio_bytes, dtype=np.float32)
+                if audio_np.size == 0:
+                    return False
+                audio_in = audio_np
+                # Prefer torch tensor input when available (Silero expects torch tensors)
+                if torch is not None:
+                    try:
+                        audio_in = torch.from_numpy(audio_np)  # type: ignore
+                    except Exception:
+                        audio_in = audio_np
+                vad_result = self._iterator(audio_in, return_seconds=False)
+                speech_detected = self._saw_speech(vad_result)
+            except Exception as err:
+                logger.warning(f"Silero VAD failed during observe; disabling auto-commit: {err}")
+                self.available = False
+                self.unavailable_reason = str(err)
+                try:
+                    if hasattr(self._iterator, "reset_states"):
+                        self._iterator.reset_states()
+                except Exception:
+                    pass
+                return False
+
+        now = time.time()
+
+        if speech_detected:
+            self._speech_started_at = self._speech_started_at or now
+            self._last_speech_at = now
+            self._armed = True
+            return False
+
+        # No speech detected in this chunk
+        if not self._armed:
+            return False
+
+        # Require a minimum utterance duration before triggering EOS
+        if self._speech_started_at and (now - self._speech_started_at) < self._min_utterance_secs:
+            return False
+
+        if self._last_speech_at and (now - self._last_speech_at) >= self._turn_stop_secs:
+            self._armed = False
+            self._speech_started_at = None
+            self._last_speech_at = None
+            self._last_trigger_at = now
+            try:
+                if hasattr(self._iterator, "reset_states"):
+                    self._iterator.reset_states()
+            except Exception:
+                pass
+            return True
+
+        return False
 
 
 class StreamingDiarizer:
@@ -618,6 +921,269 @@ class BaseStreamingTranscriber(ABC):
         }
 
 
+def _strip_parakeet_eou_token(text: str) -> str:
+    """
+    Remove the literal `<EOU>` token emitted by Parakeet-Realtime-EOU style
+    models from user-visible text.
+
+    This is a small, easily testable helper used by the RNNT streaming path
+    so that clients do not see end-of-utterance markers in transcripts while
+    still benefitting from the model's segmentation behaviour.
+    """
+    if not isinstance(text, str):
+        try:
+            text = str(text)
+        except Exception:
+            return ""
+    return text.replace("<EOU>", "").strip()
+
+
+class _ParakeetRNNTStreamer:
+    """
+    Lightweight adapter around Nemo RNNT streaming models (Parakeet TDT and
+    related checkpoints, including Parakeet-Realtime-EOU).
+
+    The implementation is generic over the underlying RNNT checkpoint name.
+    For models such as `nvidia/parakeet_realtime_eou_120m-v1` that emit a
+    special `<EOU>` token at the end of each utterance, the `push()` method
+    strips the literal token from user-visible text while preserving normal
+    streaming behaviour.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        *,
+        device: Optional[str],
+        left_context_s: float,
+        chunk_s: float,
+        right_context_s: float,
+        max_buffer_s: float,
+        batch_size: int = 1,
+    ) -> None:
+        if nemo_asr is None or RNNTDecodingConfig is None or batched_hyps_to_hypotheses is None or ContextSize is None:
+            raise RuntimeError("Nemo RNNT streaming requires nemo_toolkit[asr] and its dependencies")
+        if torch is None:
+            raise RuntimeError("PyTorch is required for Parakeet RNNT streaming")
+
+        self.device = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Avoid mutating global grad/precision state here; the streaming hot
+        # path runs under torch.inference_mode() and model parameters are
+        # frozen below. We only tune thread count for performance.
+        try:
+            torch.set_num_threads(max(1, torch.get_num_threads() or 1))
+        except Exception:
+            pass
+
+        self.model = (
+            nemo_asr.models.EncDecRNNTModel.from_pretrained(model_name)
+            .to(self.device)
+            .eval()
+        )
+        for p in self.model.parameters():
+            try:
+                p.requires_grad_(False)
+            except Exception:
+                pass
+
+        try:
+            if hasattr(self.model, "preprocessor") and hasattr(self.model.preprocessor, "featurizer"):
+                self.model.preprocessor.featurizer.dither = 0.0
+                self.model.preprocessor.featurizer.pad_to = 0
+        except Exception:
+            pass
+
+        dec_cfg = RNNTDecodingConfig(
+            strategy="greedy_batch",
+            fused_batch_size=-1,
+            compute_timestamps=False,
+        )
+        try:
+            dec_cfg.greedy.loop_labels = True
+            dec_cfg.greedy.preserve_alignments = False
+        except Exception:
+            pass
+        self.model.change_decoding_strategy(dec_cfg)
+        self._decoding_computer = self.model.decoding.decoding.decoding_computer
+
+        mcfg = copy.deepcopy(getattr(self.model, "_cfg", getattr(self.model, "cfg", None)))
+        if mcfg is None or not hasattr(mcfg, "preprocessor"):
+            raise RuntimeError("Unable to access Parakeet RNNT model config")
+
+        self.sample_rate: int = int(getattr(mcfg.preprocessor, "sample_rate", 16000))
+        window_stride: float = float(getattr(mcfg.preprocessor, "window_stride", 0.01) or 0.01)
+        self.frames_per_second: float = 1.0 / window_stride
+
+        if not hasattr(self.model, "encoder") or not hasattr(self.model.encoder, "subsampling_factor"):
+            raise RuntimeError("Parakeet RNNT encoder must expose subsampling_factor for streaming alignment")
+        self.subsampling: int = int(self.model.encoder.subsampling_factor)
+
+        feat_f2a = self._floor_multiple(int(self.sample_rate * window_stride), self.subsampling)
+        self.enc_f2a = feat_f2a * self.subsampling
+
+        self.ctx_enc = ContextSize(
+            left=int(left_context_s * self.frames_per_second / self.subsampling),
+            chunk=int(chunk_s * self.frames_per_second / self.subsampling),
+            right=int(right_context_s * self.frames_per_second / self.subsampling),
+        )
+        self.ctx_samp = ContextSize(
+            left=self.ctx_enc.left * self.subsampling * feat_f2a,
+            chunk=self.ctx_enc.chunk * self.subsampling * feat_f2a,
+            right=self.ctx_enc.right * self.subsampling * feat_f2a,
+        )
+
+        self.max_samples = int(max_buffer_s * self.sample_rate)
+        self.batch_size = batch_size
+
+        self._stream_np: Optional[np.ndarray] = None
+        self._buf: Optional[StreamingBatchedAudioBuffer] = None
+        self._prev_state = None
+        self._cur_hyps = None
+        self._l = 0
+        self._r = 0
+        self._resampler_cache = {}
+
+    @staticmethod
+    def _floor_multiple(a: int, b: int) -> int:
+        return (a // b) * b
+
+    @staticmethod
+    def _to_mono(x: np.ndarray) -> np.ndarray:
+        x = np.asarray(x)
+        if x.ndim == 2:
+            x = x.mean(axis=-1 if x.shape[-1] in (1, 2) else 1)
+        return x.astype(np.float32, copy=False)
+
+    def _resample_if_needed(self, x: np.ndarray, in_sr: int) -> np.ndarray:
+        if in_sr == self.sample_rate:
+            return x.astype(np.float32, copy=False)
+        in_sr = int(in_sr)
+        cache_key = (in_sr, self.sample_rate)
+        if torchaudio is not None:
+            if cache_key not in self._resampler_cache:
+                try:
+                    self._resampler_cache[cache_key] = torchaudio.transforms.Resample(
+                        orig_freq=in_sr, new_freq=self.sample_rate
+                    )
+                except Exception:
+                    self._resampler_cache[cache_key] = None
+            resampler = self._resampler_cache.get(cache_key)
+            if resampler is not None:
+                try:
+                    y = resampler(torch.from_numpy(x))
+                    return y.numpy().astype(np.float32, copy=False)
+                except Exception:
+                    pass
+        try:
+            return _resample_audio_if_needed(x, in_sr, target_sr=self.sample_rate)
+        except Exception:
+            # Naive linear fallback
+            ratio = float(self.sample_rate) / float(in_sr)
+            new_len = max(1, round(len(x) * ratio))
+            x_old = np.linspace(0.0, 1.0, num=len(x), endpoint=False)
+            x_new = np.linspace(0.0, 1.0, num=new_len, endpoint=False)
+            return np.interp(x_new, x_old, x).astype(np.float32, copy=False)
+
+    def reset(self) -> None:
+        self._stream_np = None
+        self._buf = None
+        self._prev_state = None
+        self._cur_hyps = None
+        self._l = 0
+        self._r = 0
+
+    def push(self, audio_np: np.ndarray, input_sr: int) -> str:
+        if audio_np is None or audio_np.size == 0:
+            return ""
+        if torch is None:
+            raise RuntimeError("PyTorch is required for Parakeet RNNT streaming")
+        y = self._to_mono(audio_np)
+        y = self._resample_if_needed(y, input_sr)
+
+        if self._stream_np is None or self._stream_np.size == 0:
+            self._stream_np = y
+        else:
+            self._stream_np = np.concatenate([self._stream_np, y])
+            if self._stream_np.size > self.max_samples:
+                drop = self._stream_np.size - self.max_samples
+                self._stream_np = self._stream_np[-self.max_samples:]
+                self._l = max(0, self._l - drop)
+                self._r = max(self.ctx_samp.chunk + self.ctx_samp.right, self._r - drop)
+
+        if self._buf is None:
+            self._buf = StreamingBatchedAudioBuffer(
+                batch_size=self.batch_size,
+                context_samples=self.ctx_samp,
+                dtype=torch.float32,
+                device=self.device,
+            )
+            self._l = 0
+            self._r = self.ctx_samp.chunk + self.ctx_samp.right
+
+        a = torch.from_numpy(self._stream_np).unsqueeze(0).to(torch.float32).to(self.device)
+
+        with torch.inference_mode():
+            while self._l < a.shape[1]:
+                if a.shape[1] < self._r:
+                    break
+                clen = int(self._r - self._l)
+                if clen <= 0:
+                    break
+
+                is_last_chunk = False
+                is_last_b = torch.tensor([False], dtype=torch.bool, device=self.device)
+                clen_b = torch.tensor([clen], dtype=torch.long, device=self.device)
+
+                self._buf.add_audio_batch_(
+                    a[:, self._l:self._r],
+                    audio_lengths=clen_b,
+                    is_last_chunk=is_last_chunk,
+                    is_last_chunk_batch=is_last_b,
+                )
+
+                enc, _ = self.model(
+                    input_signal=self._buf.samples,
+                    input_signal_length=self._buf.context_size_batch.total(),
+                )
+                enc = enc.transpose(1, 2)  # [B, T, C]
+
+                enc_ctx = self._buf.context_size.subsample(factor=self.enc_f2a)
+                enc_ctx_b = self._buf.context_size_batch.subsample(factor=self.enc_f2a)
+
+                enc = enc[:, enc_ctx.left:]
+
+                hyps, _, self._prev_state = self._decoding_computer(
+                    x=enc, out_len=enc_ctx_b.chunk, prev_batched_state=self._prev_state
+                )
+
+                if self._cur_hyps is None:
+                    self._cur_hyps = hyps
+                else:
+                    self._cur_hyps.merge_(hyps)
+
+                self._l = self._r
+                self._r = self._r + self.ctx_samp.chunk
+
+        outs = (
+            batched_hyps_to_hypotheses(self._cur_hyps, None, batch_size=self.batch_size)
+            if self._cur_hyps is not None
+            else []
+        )
+        for h in outs:
+            try:
+                h.text = self.model.tokenizer.ids_to_text(h.y_sequence.tolist())
+            except Exception:
+                pass
+        if not outs:
+            return ""
+
+        text = outs[0].text
+        # For Parakeet-Realtime-EOU style models, drop the literal "<EOU>"
+        # marker so clients see clean text while still benefiting from the
+        # model's end-of-utterance detection for segmentation.
+        return _strip_parakeet_eou_token(text)
+
+
 class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
     """
     Parakeet-specific streaming transcriber.
@@ -629,6 +1195,9 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
         """Load the Parakeet model based on configuration."""
         variant = self.config.model_variant
         logger.info(f"Loading Parakeet model (variant: {variant})")
+        self._rnnt_streamer: Optional[_ParakeetRNNTStreamer] = None
+        self._rnnt_last_partial: str = ""
+        self._rnnt_last_final: str = ""
 
         if variant == 'mlx':
             # MLX model is loaded on-demand in transcribe function
@@ -648,6 +1217,20 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 if self.model is None:
                     raise RuntimeError(f"Failed to load Parakeet {variant} model")
                 logger.info(f"Loaded Parakeet {variant} model")
+                if self.config.parakeet_use_rnnt_streamer:
+                    try:
+                        self._rnnt_streamer = _ParakeetRNNTStreamer(
+                            model_name=self.config.parakeet_rnnt_model_name,
+                            device=self.config.parakeet_rnnt_device,
+                            left_context_s=self.config.parakeet_rnnt_left_context_s,
+                            chunk_s=max(float(self.config.chunk_duration or 0.0), 0.1),
+                            right_context_s=max(float(self.config.overlap_duration or 0.0), 0.0),
+                            max_buffer_s=float(self.config.max_buffer_duration or 40.0),
+                            batch_size=1,
+                        )
+                        logger.info("Initialized Parakeet RNNT streaming backend")
+                    except Exception as rnnt_err:
+                        logger.warning(f"Parakeet RNNT streaming unavailable, using legacy chunking: {rnnt_err}")
             except ImportError as e:
                 if "nemo" in str(e).lower():
                     logger.warning(f"Nemo toolkit not installed, attempting to fallback to MLX variant")
@@ -660,10 +1243,24 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                         return  # Success with fallback
                     except ImportError:
                         logger.error("MLX fallback failed - MLX dependencies not available")
-                        raise RuntimeError(f"Nemo toolkit not installed for {variant} variant and MLX fallback unavailable. "
+                raise RuntimeError(f"Nemo toolkit not installed for {variant} variant and MLX fallback unavailable. "
                                          f"Install Nemo with: pip install nemo_toolkit[asr] "
                                          f"OR install MLX with: pip install mlx mlx-lm")
                 raise
+
+    def reset(self):
+        """Reset transcriber buffers and Parakeet RNNT streaming state."""
+        super().reset()
+        streamer = getattr(self, "_rnnt_streamer", None)
+        if streamer is not None:
+            try:
+                streamer.reset()
+            except Exception:
+                # Fail open: RNNT will rebuild state on next push if needed.
+                pass
+        # Clear RNNT-specific tracking so partial/final comparisons start fresh
+        self._rnnt_last_partial = ""
+        self._rnnt_last_final = ""
 
     async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
         """
@@ -684,6 +1281,67 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
         current_time = time.time()
         buffer_duration = self.buffer.get_duration()
 
+        # RNNT streaming path (standard/ONNX) avoids temp WAV I/O
+        if self._rnnt_streamer is not None:
+            try:
+                full_text = self._rnnt_streamer.push(audio_np, self.config.sample_rate)
+            except Exception as rnnt_err:
+                logger.warning(f"Parakeet RNNT streaming failed, falling back to legacy chunking: {rnnt_err}")
+                self._rnnt_streamer = None
+                full_text = ""
+
+            if full_text:
+                try:
+                    from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
+                    full_text = postprocess_text_if_enabled(full_text)
+                except Exception:
+                    pass
+
+            if (
+                self.config.enable_partial
+                and current_time - self.last_partial_time > self.config.partial_interval
+                and buffer_duration > max(self.config.min_partial_duration, 0.1)
+                and full_text
+                and full_text != self._rnnt_last_partial
+            ):
+                self._rnnt_last_partial = full_text
+                self.last_partial_time = current_time
+                metadata = self._prepare_partial_metadata(buffer_duration)
+                result = {
+                    "type": "partial",
+                    "text": full_text,
+                    "timestamp": current_time,
+                    "is_final": False,
+                    "model": f"parakeet-{self.config.model_variant}"
+                }
+                result.update(metadata)
+                return result
+
+            if buffer_duration >= self.config.chunk_duration:
+                audio_chunk = self.buffer.get_audio(self.config.chunk_duration)
+                if audio_chunk is not None:
+                    self.buffer.consume(
+                        self.config.chunk_duration,
+                        self.config.overlap_duration
+                    )
+                    if full_text and full_text != self._rnnt_last_final:
+                        self._rnnt_last_final = full_text
+                        chunk_duration = float(len(audio_chunk)) / float(self.config.sample_rate or 1)
+                        metadata = self._prepare_final_metadata(chunk_duration)
+                        self.transcription_history.append(full_text)
+                        result = {
+                            "type": "final",
+                            "text": full_text,
+                            "timestamp": current_time,
+                            "is_final": True,
+                            "model": f"parakeet-{self.config.model_variant}"
+                        }
+                        result.update(metadata)
+                        result["_audio_chunk"] = np.array(audio_chunk, copy=True)
+                        return result
+
+            return None
+
         # Check if we should send a partial result
         if (self.config.enable_partial and
             current_time - self.last_partial_time > self.config.partial_interval and
@@ -696,11 +1354,10 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 if self.config.model_variant == 'mlx':
                     # Use MLX implementation
                     from .Audio_Transcription_Parakeet_MLX import transcribe_with_parakeet_mlx
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                        import soundfile as sf
-                        sf.write(tmp_file.name, audio_for_partial, self.config.sample_rate)
-                        text = transcribe_with_parakeet_mlx(tmp_file.name)
-                        Path(tmp_file.name).unlink()
+                    text = transcribe_with_parakeet_mlx(
+                        audio_for_partial,
+                        sample_rate=self.config.sample_rate
+                    )
                 else:
                     # Use standard/ONNX implementation
                     text = transcribe_with_parakeet(
@@ -738,11 +1395,10 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 # Transcribe the chunk
                 if self.config.model_variant == 'mlx':
                     from .Audio_Transcription_Parakeet_MLX import transcribe_with_parakeet_mlx
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                        import soundfile as sf
-                        sf.write(tmp_file.name, audio_chunk, self.config.sample_rate)
-                        text = transcribe_with_parakeet_mlx(tmp_file.name)
-                        Path(tmp_file.name).unlink()
+                    text = transcribe_with_parakeet_mlx(
+                        audio_chunk,
+                        sample_rate=self.config.sample_rate
+                    )
                 else:
                     text = transcribe_with_parakeet(
                         audio_chunk,
@@ -795,9 +1451,12 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
             raise RuntimeError("Failed to load Canary model")
         logger.info("Loaded Canary model")
 
-        # Set default language if not specified
+        # Set default language/task if not specified. For Canary we support the
+        # same "transcribe" vs "translate" semantics as the offline helper.
         if not self.config.language:
             self.config.language = 'en'  # Default to English
+        if not getattr(self.config, "task", None):
+            self.config.task = "transcribe"
 
     async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
         """
@@ -826,11 +1485,14 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
             # Get audio for partial transcription
             audio_for_partial = self.buffer.get_audio()
             if audio_for_partial is not None and len(audio_for_partial) > 0:
-                # Transcribe partial audio
+                # Transcribe partial audio. When task='translate', we request
+                # English output to mirror the HTTP translation endpoint.
                 text = transcribe_with_canary(
                     audio_for_partial,
                     self.config.sample_rate,
-                    self.config.language
+                    self.config.language,
+                    task=self.config.task,
+                    target_language="en" if self.config.task == "translate" else None,
                 )
 
                 self.last_partial_time = current_time
@@ -866,11 +1528,13 @@ class CanaryStreamingTranscriber(BaseStreamingTranscriber):
             audio_chunk = self.buffer.get_audio(self.config.chunk_duration)
 
             if audio_chunk is not None:
-                # Transcribe the chunk
+                # Transcribe the chunk (same task/target semantics as partials)
                 text = transcribe_with_canary(
                     audio_chunk,
                     self.config.sample_rate,
-                    self.config.language
+                    self.config.language,
+                    task=self.config.task,
+                    target_language="en" if self.config.task == "translate" else None,
                 )
 
                 # Consume the buffer, keeping overlap
@@ -945,8 +1609,19 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
             import torch
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-            # Compute type is determined by the device, not a config parameter
-            compute_type = 'float16' if device == 'cuda' else 'int8'
+            # Compute type is primarily determined by device but may be
+            # overridden via [STT-Settings].whisper_compute_type when set to a
+            # non-empty value other than "auto", mirroring the offline
+            # speech_to_text path.
+            try:
+                from .Audio_Transcription_Lib import WHISPER_COMPUTE_TYPE_OVERRIDE as _ct_override  # type: ignore
+            except Exception:  # pragma: no cover - defensive; falls back to device-based default
+                _ct_override = ""  # type: ignore
+
+            if _ct_override and str(_ct_override).strip().lower() != "auto":
+                compute_type = str(_ct_override).strip()
+            else:
+                compute_type = 'float16' if device == 'cuda' else 'int8'
 
             logger.info(f"Loading Whisper model: {self.config.whisper_model_size} on {device} with compute_type: {compute_type}")
 
@@ -1079,41 +1754,29 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
             Transcribed text
         """
         try:
-            # Save audio to temporary file (Whisper needs file input)
-            import tempfile
-            import soundfile as sf
+            # Resample to Whisper expected rate when necessary and avoid disk I/O
+            audio_for_model = _resample_audio_if_needed(audio_np, self.config.sample_rate, target_sr=16000)
 
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                sf.write(tmp_file.name, audio_np, self.config.sample_rate)
+            segments_raw, info = self.model.transcribe(
+                audio_for_model,
+                **self.transcribe_options
+            )
 
-                # Transcribe using Whisper
-                segments_raw, info = self.model.transcribe(
-                    tmp_file.name,
-                    **self.transcribe_options
-                )
+            text_parts = []
+            for segment in segments_raw:
+                text_parts.append(segment.text.strip())
 
-                # Collect all text from segments
-                text_parts = []
-                for segment in segments_raw:
-                    text_parts.append(segment.text.strip())
+            text = " ".join(text_parts)
+            try:
+                from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
+                text = postprocess_text_if_enabled(text)
+            except Exception:
+                pass
 
-                # Clean up temp file
-                Path(tmp_file.name).unlink()
+            if self.config.auto_detect_language and hasattr(info, 'language'):
+                logger.debug(f"Detected language: {info.language} (confidence: {info.language_probability:.2f})")
 
-                # Join all text parts
-                text = " ".join(text_parts)
-                # Apply custom vocabulary post-replacements if enabled
-                try:
-                    from .Audio_Custom_Vocabulary import postprocess_text_if_enabled
-                    text = postprocess_text_if_enabled(text)
-                except Exception:
-                    pass
-
-                # Log detected language if auto-detecting
-                if self.config.auto_detect_language and hasattr(info, 'language'):
-                    logger.debug(f"Detected language: {info.language} (confidence: {info.language_probability:.2f})")
-
-                return text
+            return text
 
         except Exception as e:
             logger.error(f"Error during Whisper transcription: {e}")
@@ -1185,7 +1848,24 @@ __all__ = [
     'CanaryStreamingTranscriber',
     'ParakeetStreamingTranscriber',
     'UnifiedStreamingTranscriber',
+    'SileroTurnDetector',
 ]
+
+
+def _clamp_float(value: Any, default: float, min_value: float, max_value: float) -> float:
+    """Clamp a float-like value to the provided bounds with a safe fallback."""
+    try:
+        return max(min_value, min(max_value, float(value)))
+    except Exception:
+        return default
+
+
+def _clamp_int(value: Any, default: int, min_value: int, max_value: int) -> int:
+    """Clamp an int-like value to the provided bounds with a safe fallback."""
+    try:
+        return int(max(min_value, min(max_value, int(value))))
+    except Exception:
+        return default
 
 
 async def handle_unified_websocket(
@@ -1238,6 +1918,8 @@ async def handle_unified_websocket(
     insights_settings: Optional[LiveInsightSettings] = None
     insights_engine: Optional[LiveMeetingInsights] = None
     diarizer: Optional[StreamingDiarizer] = None
+    turn_detector: Optional[SileroTurnDetector] = None
+    vad_warning_sent = False
 
     try:
         # Always wait for configuration message from client
@@ -1269,7 +1951,43 @@ async def handle_unified_websocket(
                 config.chunk_duration = config_data.get("chunk_duration", 2.0)
                 config.enable_partial = config_data.get("enable_partial", True)
                 config.enable_vad = config_data.get("enable_vad", False)
-                config.vad_threshold = config_data.get("vad_threshold", 0.5)
+                config.vad_threshold = _clamp_float(
+                    config_data.get("vad_threshold", config.vad_threshold),
+                    default=config.vad_threshold,
+                    min_value=0.1,
+                    max_value=0.9,
+                )
+                config.vad_min_silence_ms = _clamp_int(
+                    config_data.get("min_silence_ms", config.vad_min_silence_ms),
+                    default=config.vad_min_silence_ms,
+                    min_value=150,
+                    max_value=1500,
+                )
+                config.vad_turn_stop_secs = _clamp_float(
+                    config_data.get("turn_stop_secs", config.vad_turn_stop_secs),
+                    default=config.vad_turn_stop_secs,
+                    min_value=0.1,
+                    max_value=0.75,
+                )
+                if "min_utterance_secs" in config_data:
+                    config.vad_min_utterance_secs = _clamp_float(
+                        config_data.get("min_utterance_secs", config.vad_min_utterance_secs),
+                        default=config.vad_min_utterance_secs,
+                        min_value=0.25,
+                        max_value=3.0,
+                    )
+                # High-level task hint used by Whisper and Canary; defaults to
+                # "transcribe" when not provided.
+                try:
+                    raw_task = str(config_data.get("task", config.task or "transcribe")).strip().lower()
+                except Exception:
+                    raw_task = "transcribe"
+                config.task = raw_task if raw_task in {"transcribe", "translate"} else "transcribe"
+                config.parakeet_use_rnnt_streamer = config_data.get("parakeet_use_rnnt_streamer", config.parakeet_use_rnnt_streamer)
+                config.parakeet_rnnt_model_name = config_data.get("parakeet_rnnt_model_name", config.parakeet_rnnt_model_name)
+                config.parakeet_rnnt_device = config_data.get("parakeet_rnnt_device", config.parakeet_rnnt_device)
+                config.parakeet_rnnt_left_context_s = float(config_data.get("parakeet_rnnt_left_context_s", config.parakeet_rnnt_left_context_s))
+                config.parakeet_rnnt_max_buffer_s = float(config_data.get("parakeet_rnnt_max_buffer_s", config.parakeet_rnnt_max_buffer_s))
                 # Optional partial emission tuning
                 try:
                     if "min_partial_duration" in config_data:
@@ -1366,6 +2084,21 @@ async def handle_unified_websocket(
                        f"sample_rate={config.sample_rate}, language={config.language}")
             transcriber.initialize()
             logger.info(f"Transcriber initialized successfully for model: {config.model}")
+            if config.enable_vad:
+                turn_detector = SileroTurnDetector(
+                    sample_rate=config.sample_rate,
+                    enabled=True,
+                    vad_threshold=config.vad_threshold,
+                    min_silence_ms=config.vad_min_silence_ms,
+                    turn_stop_secs=config.vad_turn_stop_secs,
+                    min_utterance_secs=config.vad_min_utterance_secs,
+                )
+                if not turn_detector.available and not vad_warning_sent:
+                    vad_warning_sent = True
+                    logger.warning(
+                        f"Silero VAD unavailable ({turn_detector.unavailable_reason}); continuing without auto-commit"
+                    )
+                    turn_detector = None
         except Exception as e:
             error_msg = f"Failed to initialize {config.model} model: {str(e)}"
             logger.error(error_msg, exc_info=True)
@@ -1388,17 +2121,33 @@ async def handle_unified_websocket(
             # Check if fallback to Whisper is enabled in config (module-level alias for test monkeypatching)
             comprehensive_config = load_comprehensive_config()
 
-            # ConfigParser returns a ConfigParser object, not a dict
-            fallback_enabled = False
+            # ConfigParser returns a ConfigParser object, not a dict.
+            # Default behavior: enable Whisper fallback when configuration is
+            # missing or unreadable so users with faster-whisper installed still
+            # get functional streaming without extra config.
+            fallback_enabled = True
             try:
                 if comprehensive_config.has_section('STT-Settings'):
-                    fallback_value = comprehensive_config.get('STT-Settings', 'streaming_fallback_to_whisper', fallback='false')
+                    fallback_value = comprehensive_config.get(
+                        'STT-Settings',
+                        'streaming_fallback_to_whisper',
+                        fallback='true',
+                    )
                     fallback_enabled = str(fallback_value).lower() == 'true'
-                    logger.info(f"Streaming fallback to Whisper enabled: {fallback_enabled}")
+                else:
+                    logger.info(
+                        "No [STT-Settings] section found in config; "
+                        "defaulting streaming_fallback_to_whisper=true. "
+                        "To disable, add [STT-Settings].streaming_fallback_to_whisper=false to config.txt."
+                    )
+                logger.info(f"Streaming fallback to Whisper enabled: {fallback_enabled}")
             except Exception as config_error:
-                logger.warning(f"Could not read streaming_fallback_to_whisper from config: {config_error}")
-                # Defer Whisper fallback unless explicitly configured
-                fallback_enabled = False
+                logger.warning(
+                    "Could not read streaming_fallback_to_whisper from config; "
+                    "defaulting to Whisper fallback enabled. "
+                    f"Error: {config_error}. To change, set [STT-Settings].streaming_fallback_to_whisper in config.txt."
+                )
+                fallback_enabled = True
 
             # Try to fall back to Whisper if enabled and not already using Whisper
             if fallback_enabled and config.model.lower() != 'whisper':
@@ -1519,6 +2268,98 @@ async def handle_unified_websocket(
 
         # Do not send a ready status frame to minimize protocol chatter
 
+        async def _emit_full_transcript(commit_received_at: Optional[float], *, auto_commit: bool = False) -> None:
+            """
+            Emit the full transcript and related artifacts, mirroring the manual commit path.
+
+            Args:
+                commit_received_at: Timestamp when the commit (manual or auto) was triggered.
+                auto_commit: Whether the emission was triggered by VAD turn detection.
+            """
+            if transcriber is None:
+                return
+            _commit_received_at = float(commit_received_at or time.time())
+            full_transcript = transcriber.get_full_transcript()
+            _final_emit_at = time.time()
+            payload = {
+                "type": "full_transcript",
+                "text": full_transcript,
+                "timestamp": _final_emit_at,
+                # Provide a voice-to-voice start timestamp clients can thread into downstream TTS
+                "voice_to_voice_start": _final_emit_at,
+            }
+            if auto_commit:
+                payload["auto_commit"] = True
+            await stream.send_json(payload)
+            # Record STT finalization latency metric (commit → final emit)
+            try:
+                from tldw_Server_API.app.core.Metrics import get_metrics_registry
+                reg = get_metrics_registry()
+                # Determine model/variant labels when available
+                _model = getattr(config, "model", None) or "parakeet"
+                _variant = getattr(config, "model_variant", None) or "standard"
+                reg.observe(
+                    "stt_final_latency_seconds",
+                    max(0.0, _final_emit_at - _commit_received_at),
+                    labels={"model": str(_model), "variant": str(_variant), "endpoint": "audio_unified_ws"},
+                )
+            except Exception:
+                pass
+            if insights_engine:
+                try:
+                    await insights_engine.on_commit(full_transcript)
+                except Exception as insight_err:
+                    logger.error(f"Live insights final summary failed: {insight_err}", exc_info=True)
+            if diarizer:
+                try:
+                    mapping, audio_path, speakers = await diarizer.finalize()
+                    if mapping or audio_path or speakers:
+                        speaker_map = [
+                            {
+                                "segment_id": seg_id,
+                                "speaker_id": info.get("speaker_id"),
+                                "speaker_label": info.get("speaker_label"),
+                            }
+                            for seg_id, info in sorted(mapping.items())
+                        ]
+                        await stream.send_json({
+                            "type": "diarization_summary",
+                            "speaker_map": speaker_map,
+                            "audio_path": audio_path,
+                            "speakers": speakers,
+                            "persistence_method": getattr(diarizer, "persistence_method", None),
+                        })
+                    # Emit structured warning when persistence requested but unavailable
+                    try:
+                        if (
+                            config.diarization_store_audio
+                            and (audio_path is None or not audio_path)
+                        ):
+                            await stream.send_json({
+                                "type": "warning",
+                                "warning_type": "audio_persistence_unavailable",
+                                "message": "Audio persistence was requested but is unavailable; continuing without persisted WAV",
+                            })
+                        # Emit detailed status for persistence state
+                        if config.diarization_store_audio:
+                            _method = getattr(diarizer, "persistence_method", None)
+                            if audio_path and _method and _method != "soundfile":
+                                await stream.send_json({
+                                    "type": "status",
+                                    "state": "diarization_persist_degraded",
+                                    "persistence_method": _method,
+                                })
+                            elif (not audio_path) or (_method is None):
+                                await stream.send_json({
+                                    "type": "status",
+                                    "state": "diarization_persist_disabled",
+                                    "persistence_method": _method,
+                                })
+                    except Exception:
+                        pass
+                except Exception as diar_err:
+                    logger.error(f"Diarization finalize failed: {diar_err}", exc_info=True)
+
         # Process messages
         while True:
             try:
@@ -1533,6 +2374,15 @@ async def handle_unified_websocket(
                     # Decode audio data
                     audio_base64 = data.get("data", "")
                     audio_bytes = base64.b64decode(audio_base64)
+                    auto_commit_triggered = False
+                    if turn_detector:
+                        auto_commit_triggered = turn_detector.observe(audio_bytes)
+                        if not turn_detector.available and not vad_warning_sent:
+                            vad_warning_sent = True
+                            logger.warning(
+                                f"Silero VAD disabled mid-stream ({turn_detector.unavailable_reason}); continuing without auto-commit"
+                            )
+                            turn_detector = None
                     # Optional callback to account for usage seconds before processing
                     if on_audio_seconds is not None:
                         # Compute seconds from byte length and configured sample rate
@@ -1553,6 +2403,22 @@ async def handle_unified_websocket(
                     result = await transcriber.process_audio_chunk(audio_bytes)
 
                     if result:
+                        # Detect STT error sentinels so they do not leak as user text.
+                        text_field = result.get("text")
+                        if isinstance(text_field, str) and _is_transcription_error_message(text_field):
+                            logger.error(f"Unified streaming STT error sentinel: {text_field}")
+                            await stream.error(
+                                "provider_error",
+                                "Transcription error from STT provider",
+                                data={
+                                    "model": getattr(config, "model", None),
+                                    "variant": getattr(config, "model_variant", None),
+                                    "language": getattr(config, "language", None),
+                                    "raw_error": text_field,
+                                },
+                            )
+                            return
+
                         audio_np = result.pop("_audio_chunk", None)
                         if audio_np is not None and diarizer:
                             try:
@@ -1581,85 +2447,14 @@ async def handle_unified_websocket(
                                 await insights_engine.on_transcript(result)
                             except Exception as insight_err:
                                 logger.error(f"Live insights failed to ingest segment: {insight_err}", exc_info=True)
+                    if auto_commit_triggered:
+                        await _emit_full_transcript(
+                            commit_received_at=getattr(turn_detector, "last_trigger_at", None),
+                            auto_commit=True,
+                        )
 
                 elif data.get("type") == "commit":
-                    # Measure latency from commit receipt to final transcript emission
-                    _commit_received_at = time.time()
-                    # Get final transcript
-                    full_transcript = transcriber.get_full_transcript()
-                    await stream.send_json({
-                        "type": "full_transcript",
-                        "text": full_transcript,
-                        "timestamp": time.time()
-                    })
-                    # Record STT finalization latency metric (commit → final emit)
-                    try:
-                        from tldw_Server_API.app.core.Metrics import get_metrics_registry
-                        reg = get_metrics_registry()
-                        # Determine model/variant labels when available
-                        _model = getattr(config, "model", None) or "parakeet"
-                        _variant = getattr(config, "model_variant", None) or "standard"
-                        reg.observe(
-                            "stt_final_latency_seconds",
-                            max(0.0, time.time() - _commit_received_at),
-                            labels={"model": str(_model), "variant": str(_variant), "endpoint": "audio_unified_ws"},
-                        )
-                    except Exception:
-                        pass
-                    if insights_engine:
-                        try:
-                            await insights_engine.on_commit(full_transcript)
-                        except Exception as insight_err:
-                            logger.error(f"Live insights final summary failed: {insight_err}", exc_info=True)
-                    if diarizer:
-                        try:
-                            mapping, audio_path, speakers = await diarizer.finalize()
-                            if mapping or audio_path or speakers:
-                                speaker_map = [
-                                    {
-                                        "segment_id": seg_id,
-                                        "speaker_id": info.get("speaker_id"),
-                                        "speaker_label": info.get("speaker_label"),
-                                    }
-                                    for seg_id, info in sorted(mapping.items())
-                                ]
-                                await stream.send_json({
-                                    "type": "diarization_summary",
-                                    "speaker_map": speaker_map,
-                                    "audio_path": audio_path,
-                                    "speakers": speakers,
-                                    "persistence_method": getattr(diarizer, "persistence_method", None),
-                                })
-                            # Emit structured warning when persistence requested but unavailable
-                            try:
-                                if (
-                                    config.diarization_store_audio
-                                    and (audio_path is None or not audio_path)
-                                ):
-                                    await stream.send_json({
-                                        "type": "warning",
-                                        "warning_type": "audio_persistence_unavailable",
-                                        "message": "Audio persistence was requested but is unavailable; continuing without persisted WAV",
-                                    })
-                                # Emit detailed status for persistence state
-                                if config.diarization_store_audio:
-                                    _method = getattr(diarizer, "persistence_method", None)
-                                    if audio_path and _method and _method != "soundfile":
-                                        await stream.send_json({
-                                            "type": "status",
-                                            "state": "diarization_persist_degraded",
-                                            "persistence_method": _method,
-                                        })
-                                    elif (not audio_path) or (_method is None):
-                                        await stream.send_json({
-                                            "type": "status",
-                                            "state": "diarization_persist_disabled",
-                                            "persistence_method": _method,
-                                        })
-                            except Exception:
-                                pass
-                        except Exception as diar_err:
-                            logger.error(f"Diarization finalize failed: {diar_err}", exc_info=True)
+                    await _emit_full_transcript(time.time(), auto_commit=False)
 
                 elif data.get("type") == "reset":
                     # Reset transcriber
@@ -1698,6 +2493,9 @@ async def handle_unified_websocket(
                     pass
                 return
             except Exception as e:
+                if isinstance(e, WebSocketDisconnect):
+                    # Let disconnect bubble to the outer handler for graceful shutdown
+                    raise
                 logger.error(f"Error processing message: {e}")
                 await stream.error("internal_error", f"Processing error: {str(e)}")
 
@@ -1739,5 +2537,6 @@ __all__ = [
     'CanaryStreamingTranscriber',
     'WhisperStreamingTranscriber',
     'UnifiedStreamingTranscriber',
+    'SileroTurnDetector',
     'handle_unified_websocket'
 ]

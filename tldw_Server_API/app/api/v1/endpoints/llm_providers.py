@@ -1,8 +1,10 @@
 # llm_providers.py
-# Description: API endpoints for managing LLM providers and models
-#
-# Imports
-from typing import Dict, List, Any, Optional
+import asyncio
+import time
+from functools import partial
+from typing import Dict, List, Any, Optional, Tuple
+from urllib.parse import urlparse, urljoin
+import requests
 from fastapi import APIRouter, HTTPException, Depends
 from loguru import logger
 from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -549,6 +551,152 @@ def parse_model_string(model_value: str) -> List[str]:
     # Single model
     return [model_value.strip()] if model_value.strip() else []
 
+
+# Local model discovery helpers (best-effort; cached to avoid hammering endpoints)
+LOCAL_MODEL_DISCOVERY_TIMEOUT = 3.0  # seconds
+LOCAL_MODEL_DISCOVERY_TTL = 300  # seconds
+_LOCAL_MODEL_CACHE: Dict[str, Tuple[float, List[str]]] = {}
+
+
+def _dedupe_preserve_order(values: List[str]) -> List[str]:
+    seen = set()
+    ordered: List[str] = []
+    for v in values:
+        if not v:
+            continue
+        if v not in seen:
+            seen.add(v)
+            ordered.append(v)
+    return ordered
+
+
+def _candidate_model_urls_for_openai_endpoint(endpoint_url: str) -> List[str]:
+    """Return likely /models endpoints for OpenAI-compatible servers."""
+    try:
+        parsed = urlparse(endpoint_url.strip())
+        if not parsed.scheme or not parsed.netloc:
+            return []
+
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        path = (parsed.path or "").rstrip("/")
+
+        candidates = [
+            urljoin(base, "/v1/models"),
+        ]
+
+        if path:
+            candidates.append(urljoin(base, f"{path}/models"))
+            # Remove common suffixes like /chat/completions
+            for suffix in ["/chat/completions", "/completions", "/v1/chat/completions", "/v1/completions"]:
+                if path.endswith(suffix):
+                    prefix = path[: -len(suffix)]
+                    candidates.append(urljoin(base, f"{prefix}/models"))
+                    candidates.append(urljoin(base, f"{prefix}/v1/models"))
+
+        return _dedupe_preserve_order([c.rstrip("/") for c in candidates if c])
+    except Exception:
+        return []
+
+
+def _candidate_model_urls_for_ollama_endpoint(endpoint_url: str) -> List[str]:
+    """Return likely endpoints for Ollama model listings."""
+    try:
+        parsed = urlparse(endpoint_url.strip())
+        if not parsed.scheme or not parsed.netloc:
+            return []
+
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        path = (parsed.path or "").rstrip("/")
+        candidates = [
+            urljoin(base, "/api/tags"),
+            urljoin(base, "/v1/models"),
+        ]
+        if path and path not in {"/"}:
+            candidates.append(urljoin(base, f"{path}/api/tags"))
+            candidates.append(urljoin(base, f"{path}/models"))
+
+        return _dedupe_preserve_order([c.rstrip("/") for c in candidates if c])
+    except Exception:
+        return []
+
+
+def _extract_models_from_response(payload: Any) -> List[str]:
+    """Normalize various model-list responses into a flat list of ids."""
+    models: List[str] = []
+    if isinstance(payload, dict):
+        data_section = payload.get("data")
+        if isinstance(data_section, list):
+            for item in data_section:
+                if isinstance(item, dict):
+                    candidate = item.get("id") or item.get("model") or item.get("name")
+                else:
+                    candidate = item
+                if isinstance(candidate, str) and candidate.strip():
+                    models.append(candidate.strip())
+
+        models_section = payload.get("models")
+        if isinstance(models_section, list):
+            for item in models_section:
+                if isinstance(item, dict):
+                    candidate = item.get("name") or item.get("model") or item.get("id")
+                else:
+                    candidate = item
+                if isinstance(candidate, str) and candidate.strip():
+                    models.append(candidate.strip())
+
+    return _dedupe_preserve_order(models)
+
+
+def discover_models_from_endpoint(
+    provider: str,
+    endpoint_url: str,
+    discovery_type: str = "openai",
+    api_key: Optional[str] = None,
+) -> List[str]:
+    """
+    Best-effort discovery of models from a configured local endpoint.
+
+    Tries common OpenAI-compatible /models endpoints (or Ollama tags),
+    uses a short timeout, and caches results to avoid noisy retries.
+    """
+    endpoint_url = (endpoint_url or "").strip()
+    if not endpoint_url:
+        return []
+
+    cache_key = f"{provider}:{endpoint_url}"
+    now = time.time()
+    cached = _LOCAL_MODEL_CACHE.get(cache_key)
+    if cached and (now - cached[0] < LOCAL_MODEL_DISCOVERY_TTL):
+        return cached[1]
+
+    discovery_type = (discovery_type or "openai").lower()
+    if discovery_type == "ollama":
+        candidates = _candidate_model_urls_for_ollama_endpoint(endpoint_url)
+    else:
+        candidates = _candidate_model_urls_for_openai_endpoint(endpoint_url)
+
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+
+    discovered: List[str] = []
+    for url in candidates:
+        try:
+            resp = requests.get(url, headers=headers, timeout=LOCAL_MODEL_DISCOVERY_TIMEOUT)
+            if resp.status_code >= 400:
+                logger.debug(f"[Model discovery] {provider}: {url} responded with {resp.status_code}")
+                continue
+            discovered = _extract_models_from_response(resp.json())
+            if discovered:
+                logger.info(f"[Model discovery] {provider}: found {len(discovered)} models via {url}")
+                break
+        except Exception as exc:
+            logger.debug(f"[Model discovery] {provider}: error querying {url}: {exc}")
+            continue
+
+    _LOCAL_MODEL_CACHE[cache_key] = (now, discovered)
+    return discovered
+
 def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]:
     """
     Get list of configured LLM providers with their models from the config file.
@@ -670,56 +818,64 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 'endpoint_field': 'llama_api_IP',
                 'model_field': None,  # No model field in config
                 'type': 'local',
-                'section': 'Local-API'
+                'section': 'Local-API',
+                'model_discovery': 'openai',
             },
             'kobold': {
                 'display_name': 'Kobold.cpp',
                 'endpoint_field': 'kobold_api_IP',
                 'model_field': None,  # No model field in config
                 'type': 'local',
-                'section': 'Local-API'
+                'section': 'Local-API',
+                'model_discovery': 'openai',
             },
             'ooba': {
                 'display_name': 'Oobabooga',
                 'endpoint_field': 'ooba_api_IP',
                 'model_field': None,  # No model field in config
                 'type': 'local',
-                'section': 'Local-API'
+                'section': 'Local-API',
+                'model_discovery': 'openai',
             },
             'tabby': {
                 'display_name': 'TabbyAPI',
                 'endpoint_field': 'tabby_api_IP',
                 'model_field': None,  # No model field in config
                 'type': 'local',
-                'section': 'Local-API'
+                'section': 'Local-API',
+                'model_discovery': 'openai',
             },
             'vllm': {
                 'display_name': 'vLLM',
                 'endpoint_field': 'vllm_api_IP',
                 'model_field': 'vllm_model',
                 'type': 'local',
-                'section': 'Local-API'
+                'section': 'Local-API',
+                'model_discovery': 'openai',
             },
             'ollama': {
                 'display_name': 'Ollama',
                 'endpoint_field': 'ollama_api_IP',
                 'model_field': 'ollama_model',
                 'type': 'local',
-                'section': 'Local-API'
+                'section': 'Local-API',
+                'model_discovery': 'ollama',
             },
             'aphrodite': {
                 'display_name': 'Aphrodite',
                 'endpoint_field': 'aphrodite_api_IP',
                 'model_field': 'aphrodite_model',
                 'type': 'local',
-                'section': 'Local-API'
+                'section': 'Local-API',
+                'model_discovery': 'openai',
             },
             'custom_openai_api': {
                 'display_name': 'Custom OpenAI API',
                 'endpoint_field': 'custom_openai_api_ip',
                 'model_field': 'custom_openai_api_model',
                 'type': 'local',
-                'section': 'API'
+                'section': 'API',
+                'model_discovery': 'openai',
             }
         }
 
@@ -742,6 +898,8 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
 
             # Check if provider is configured
             is_configured = False
+            endpoint_url: Optional[str] = None
+            api_key_value: Optional[str] = None
 
             if provider_info['type'] == 'commercial':
                 # Check for API key
@@ -751,6 +909,7 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                     # Check if API key is valid (not empty and not placeholder)
                     if api_key and not api_key.startswith('<') and not api_key.endswith('>'):
                         is_configured = True
+                        api_key_value = api_key
             else:
                 # Check for endpoint URL for local providers
                 endpoint_field = provider_info.get('endpoint_field')
@@ -758,6 +917,12 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                     endpoint_url = config_parser.get(section_name, endpoint_field, fallback='')
                     if endpoint_url and endpoint_url.strip() and not endpoint_url.startswith('<'):
                         is_configured = True
+                # Optional API key support for local endpoints that require it
+                api_key_field = provider_info.get('api_key_field')
+                if api_key_field and config_parser.has_option(section_name, api_key_field):
+                    val = config_parser.get(section_name, api_key_field, fallback='')
+                    if val and not val.startswith('<') and not val.endswith('>'):
+                        api_key_value = val
 
             # Always include the provider, but mark if it's configured
             # Get the models from config
@@ -783,6 +948,17 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                     seen = set(m.strip() for m in models)
                     extras = [m for m in pricing_models if m not in seen]
                     models = models + extras
+            else:
+                # For local endpoints, try to discover models if none were provided
+                if not models and is_configured and endpoint_url:
+                    discovered_models = discover_models_from_endpoint(
+                        provider_name,
+                        endpoint_url,
+                        provider_info.get('model_discovery', 'openai'),
+                        api_key_value,
+                    )
+                    if discovered_models:
+                        models = discovered_models
 
             # Build models and metadata
             models_info = [get_model_metadata(provider_name, m) for m in models]
@@ -792,6 +968,8 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 models_info = filtered
                 models = [mi['name'] for mi in models_info]
 
+            endpoint_only = provider_info['type'] == 'local' and is_configured and not models
+
             provider_data = {
                 'name': provider_name,
                 'display_name': provider_info['display_name'],
@@ -800,14 +978,18 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 'models_info': models_info,
                 'type': provider_info['type'],
                 'default_model': models[0] if models else None,
-                'is_configured': is_configured  # Add configuration status
+                'is_configured': is_configured,  # Add configuration status
+                'endpoint_only': endpoint_only
             }
 
             # Add endpoint for local providers
             if provider_info['type'] == 'local':
-                endpoint_field = provider_info.get('endpoint_field')
-                if endpoint_field and config_parser.has_option(section_name, endpoint_field):
-                    provider_data['endpoint'] = config_parser.get(section_name, endpoint_field, fallback='')
+                if endpoint_url:
+                    provider_data['endpoint'] = endpoint_url
+                else:
+                    endpoint_field = provider_info.get('endpoint_field')
+                    if endpoint_field and config_parser.has_option(section_name, endpoint_field):
+                        provider_data['endpoint'] = config_parser.get(section_name, endpoint_field, fallback='')
 
             # Add other useful config fields
             temp_field = f'{provider_name}_temperature'
@@ -874,6 +1056,15 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
         }
 
 
+async def get_configured_providers_async(include_deprecated: bool = False) -> Dict[str, Any]:
+    """Run provider discovery in a worker thread to avoid blocking the event loop."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        partial(get_configured_providers, include_deprecated=include_deprecated),
+    )
+
+
 def get_all_available_models() -> List[str]:
     """
     Get a flat list of all available models across all configured providers.
@@ -910,7 +1101,7 @@ async def get_llm_providers(include_deprecated: bool = False):
         - total_configured: Number of configured providers
     """
     try:
-        result = get_configured_providers(include_deprecated=include_deprecated)
+        result = await get_configured_providers_async(include_deprecated=include_deprecated)
 
         # Inject Diagnostics UI interval bounds from server config if available
         try:
@@ -965,7 +1156,7 @@ async def get_llm_providers(include_deprecated: bool = False):
     response_model=Dict[str, Any])
 async def get_models_metadata(include_deprecated: bool = False):
     try:
-        result = get_configured_providers(include_deprecated=include_deprecated)
+        result = await get_configured_providers_async(include_deprecated=include_deprecated)
         flattened: List[Dict[str, Any]] = []
         for provider in result.get('providers', []):
             for mi in provider.get('models_info', []):
@@ -999,7 +1190,7 @@ async def get_provider_details(provider_name: str, include_deprecated: bool = Fa
         Provider details including models and configuration
     """
     try:
-        result = get_configured_providers(include_deprecated=include_deprecated)
+        result = await get_configured_providers_async(include_deprecated=include_deprecated)
 
         # Find the specific provider
         for provider in result['providers']:
@@ -1034,7 +1225,7 @@ async def get_all_models(include_deprecated: bool = False):
         List of model names with provider prefix
     """
     try:
-        result = get_configured_providers(include_deprecated=include_deprecated)
+        result = await get_configured_providers_async(include_deprecated=include_deprecated)
         models: List[str] = []
         for provider in result.get('providers', []):
             for model in provider.get('models', []):

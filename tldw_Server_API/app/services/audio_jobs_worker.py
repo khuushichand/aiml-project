@@ -241,7 +241,7 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import speech_to_text
                     result = await asyncio.to_thread(
                         speech_to_text,
-                        audio_file_path=wav_path,
+                        wav_path,
                         whisper_model=model,
                         selected_source_lang=None,
                         vad_filter=False,

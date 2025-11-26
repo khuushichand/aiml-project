@@ -90,6 +90,13 @@ class ProviderLimits:
             "valid_formats": {"mp3", "wav"},
             "min_speed": 0.5,
             "max_speed": 2.0
+        },
+        "supertonic": {
+            "max_text_length": 15000,
+            "languages": ["en"],
+            "valid_formats": {"mp3", "wav"},
+            "min_speed": 0.9,
+            "max_speed": 1.5
         }
     }
 
@@ -183,6 +190,7 @@ class TTSInputValidator:
         "chatterbox": 10000,
         "vibevoice": 15000,
         "index_tts": 4000,
+        "supertonic": 15000,
         "default": 5000,
     }
 
@@ -195,7 +203,8 @@ class TTSInputValidator:
         "dia": {"en"},
         "chatterbox": {"en"},
         "vibevoice": {"en", "es", "fr", "de", "it", "pt", "ru", "ja", "ko", "zh", "ar", "hi"},
-        "index_tts": {"en", "zh"}
+        "index_tts": {"en", "zh"},
+        "supertonic": {"en"},
     }
 
     # Supported audio formats by provider
@@ -207,7 +216,8 @@ class TTSInputValidator:
         "dia": {AudioFormat.MP3, AudioFormat.WAV},
         "chatterbox": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.OPUS},
         "vibevoice": {AudioFormat.MP3, AudioFormat.WAV, AudioFormat.FLAC, AudioFormat.OPUS},
-        "index_tts": {AudioFormat.MP3, AudioFormat.WAV}
+        "index_tts": {AudioFormat.MP3, AudioFormat.WAV},
+        "supertonic": {AudioFormat.MP3, AudioFormat.WAV}
     }
 
     # Voice reference file validation

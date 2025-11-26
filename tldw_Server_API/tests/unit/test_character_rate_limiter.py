@@ -276,6 +276,8 @@ def test_get_character_rate_limiter_tolerates_invalid_numeric_overrides(monkeypa
     import importlib
     module = importlib.import_module("tldw_Server_API.app.core.Character_Chat.character_rate_limiter")
 
+    # Ensure test-mode bypass does not apply so we exercise config parsing
+    monkeypatch.delenv("TEST_MODE", raising=False)
     monkeypatch.setenv("CHARACTER_RATE_LIMIT_OPS", "not-a-number")
     clear_config_cache()
     module._rate_limiter = None

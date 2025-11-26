@@ -209,13 +209,13 @@ The Chat module powers the `/api/v1/chat/completions` endpoint, orchestrating re
 - Related Endpoints (examples)
   - POST `/api/v1/chat/completions` — tldw_Server_API/app/api/v1/endpoints/chat.py:590
   - Chat dictionaries CRUD (examples):
-    - POST `/api/v1/chat/dictionaries` — tldw_Server_API/app/api/v1/endpoints/chat.py:1688
-    - GET  `/api/v1/chat/dictionaries` — tldw_Server_API/app/api/v1/endpoints/chat.py:1723
-    - POST `/api/v1/chat/dictionaries/{dictionary_id}/entries` — tldw_Server_API/app/api/v1/endpoints/chat.py:1870
+    - POST `/api/v1/chat/dictionaries` — tldw_Server_API/app/api/v1/endpoints/chat_dictionaries.py
+    - GET  `/api/v1/chat/dictionaries` — tldw_Server_API/app/api/v1/endpoints/chat_dictionaries.py
+    - POST `/api/v1/chat/dictionaries/{dictionary_id}/entries` — tldw_Server_API/app/api/v1/endpoints/chat_dictionaries.py
   - Document generation (examples):
-    - POST `/api/v1/chat/documents/generate` — tldw_Server_API/app/api/v1/endpoints/chat.py:2354
-    - POST `/api/v1/chat/documents/bulk` — tldw_Server_API/app/api/v1/endpoints/chat.py:2930
-    - GET  `/api/v1/chat/documents/statistics` — tldw_Server_API/app/api/v1/endpoints/chat.py:2978
+    - POST `/api/v1/chat/documents/generate` — tldw_Server_API/app/api/v1/endpoints/chat_documents.py
+    - POST `/api/v1/chat/documents/bulk` — tldw_Server_API/app/api/v1/endpoints/chat_documents.py
+    - GET  `/api/v1/chat/documents/statistics` — tldw_Server_API/app/api/v1/endpoints/chat_documents.py
   - Queue diagnostics:
     - GET  `/api/v1/chat/queue/status` — tldw_Server_API/app/api/v1/endpoints/chat.py:3056
     - GET  `/api/v1/chat/queue/activity` — tldw_Server_API/app/api/v1/endpoints/chat.py:3096
@@ -239,6 +239,7 @@ The Chat module powers the `/api/v1/chat/completions` endpoint, orchestrating re
 
 - Configuration
   - Default provider via `DEFAULT_LLM_PROVIDER` (env); request-size/image limits via config/env; queued execution via `CHAT_QUEUED_EXECUTION`
+  - Slash commands via `CHAT_COMMANDS_ENABLED` (env) or `[Chat-Commands] commands_enabled = true` in `Config_Files/config.txt`
   - LLM budget enforcement via AuthNZ dependency
 
 - Concurrency & Performance
@@ -246,6 +247,22 @@ The Chat module powers the `/api/v1/chat/completions` endpoint, orchestrating re
 
 - Error Handling & Security
   - Custom exceptions; circuit breakers; RBAC rate limits and budget guard; strict validators for IDs/tools/images
+  - Non-streaming errors surface as HTTP status codes with JSON bodies; streaming errors are emitted as SSE `data: {"error": ...}` frames followed by `data: [DONE]`
+
+### Error Types (When to Use Which)
+- `chat_exceptions.ChatModuleException` and subclasses (preferred for new code)
+  - Use for chat-specific failures where you want structured logging, error codes (`ChatErrorCode`), and a safe user-facing message.
+  - Examples:
+    - `ChatValidationError` for request/body validation problems.
+    - `ChatDatabaseError` for ChaChaNotes DB operations.
+    - `ChatProviderError` for upstream LLM provider failures at the chat layer.
+    - `ChatRateLimitError` for logical/chat-layer rate limits (not provider 429s).
+- `Chat_Deps` exceptions (`ChatAPIError`, `ChatAuthenticationError`, etc.)
+  - Legacy provider-layer exceptions raised by the orchestrator and LLM call stack.
+  - New provider-related code should typically raise `ChatModuleException`-family errors or translate legacy `Chat_Deps` exceptions at the boundary.
+- `fastapi.HTTPException`
+  - Use only at the API boundary (endpoint handlers) when mapping chat exceptions to HTTP semantics.
+  - Inside core chat modules, prefer raising `ChatModuleException` subclasses and let the endpoint convert them.
 
 ## 3. Developer-Related/Relevant Information for Contributors
 

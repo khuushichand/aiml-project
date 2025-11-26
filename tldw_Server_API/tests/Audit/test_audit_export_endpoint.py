@@ -225,7 +225,7 @@ async def test_audit_export_streaming_json(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_audit_export_streaming_csv_rejected(monkeypatch):
+async def test_audit_export_streaming_csv_supported(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
         from tldw_Server_API.app.api.v1.API_Deps import auth_deps
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -237,12 +237,35 @@ async def test_audit_export_streaming_csv_rejected(monkeypatch):
             "is_verified": True,
         }
 
+        from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
+        captured = {"stream": None}
+
+        class _StubAudit:
+            async def export_events(self, **kwargs):
+                captured["stream"] = kwargs.get("stream")
+
+                async def _gen():
+                    yield "event_id,timestamp\n"
+                    yield "1,2025-01-01T00:00:00Z\n"
+
+                if kwargs.get("stream"):
+                    return _gen()
+                return "event_id,timestamp\n1,2025-01-01T00:00:00Z\n"
+
+        async def _get_stub_service():
+            return _StubAudit()
+
+        app.dependency_overrides[audit_deps.get_audit_service_for_user] = _get_stub_service
+
         r = await client.get(
             "/api/v1/audit/export?format=csv&stream=true",
             headers={"X-API-KEY": "test-api-key-12345"},
         )
-        assert r.status_code == 400
-        assert "Streaming is only supported for JSON" in r.text
+        assert r.status_code == 200
+        assert r.headers.get("content-type", "").startswith("text/csv")
+        assert "attachment" in r.headers.get("content-disposition", "").lower()
+        assert "event_id" in r.text
+        assert captured["stream"] is True
 
 
 @pytest.mark.asyncio
@@ -288,6 +311,48 @@ async def test_audit_export_jsonl_streaming(monkeypatch):
         assert r.headers.get("content-type", "").startswith("application/x-ndjson")
         assert "attachment" in r.headers.get("content-disposition", "").lower()
         assert r.text == '{"event_id": "1"}\n{"event_id": "2"}\n'
+
+
+@pytest.mark.asyncio
+async def test_audit_export_auto_streams_for_large_max_rows(monkeypatch):
+    async with _get_client(monkeypatch) as (client, app):
+        from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+
+        app.dependency_overrides[get_request_user] = lambda: User(id=1, username="admin", is_active=True)
+        app.dependency_overrides[auth_deps.require_admin] = lambda: {
+            "role": "admin",
+            "is_active": True,
+            "is_verified": True,
+        }
+
+        from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
+        captured = {"stream": None}
+
+        class _StubAudit:
+            async def export_events(self, **kwargs):
+                captured["stream"] = kwargs.get("stream")
+
+                async def _gen():
+                    yield "[]"
+
+                if kwargs.get("stream"):
+                    return _gen()
+                return "[]"
+
+        async def _get_stub_service():
+            return _StubAudit()
+
+        app.dependency_overrides[audit_deps.get_audit_service_for_user] = _get_stub_service
+
+        r = await client.get(
+            "/api/v1/audit/export?format=json&max_rows=100000",
+            headers={"X-API-KEY": "test-api-key-12345"},
+        )
+
+        assert r.status_code == 200
+        assert captured["stream"] is True
+        assert r.text.strip() == "[]"
 
 
 @pytest.mark.asyncio

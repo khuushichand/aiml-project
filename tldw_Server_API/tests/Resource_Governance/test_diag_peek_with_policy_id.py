@@ -14,6 +14,8 @@ async def test_diag_peek_with_policy_id(monkeypatch, tmp_path):
     # Run app in minimal mode and single_user to bypass heavy AuthNZ
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("AUTH_MODE", "single_user")
+    # Use deterministic single-user API key for auth
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-1234567890")
 
     # Minimal policy file (not strictly required for this test)
     yaml_path = tmp_path / "rg.yaml"
@@ -42,6 +44,7 @@ async def test_diag_peek_with_policy_id(monkeypatch, tmp_path):
         r = c.get(
             "/api/v1/resource-governor/diag/peek",
             params={"entity": "user:diag", "categories": "requests,tokens", "policy_id": "chat.default"},
+            headers={"X-API-KEY": "test-api-key-1234567890"},
         )
         assert r.status_code == 200
         data = r.json()

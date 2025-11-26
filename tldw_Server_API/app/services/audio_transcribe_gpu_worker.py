@@ -73,7 +73,7 @@ async def run_audio_transcribe_gpu_worker(stop_event: Optional[asyncio.Event] = 
             # Run STT (GPU-accelerated if available in environment/driver)
             result = await asyncio.to_thread(
                 speech_to_text,
-                audio_file_path=wav_path,
+                wav_path,
                 whisper_model=model,
                 selected_source_lang=None,
                 vad_filter=False,

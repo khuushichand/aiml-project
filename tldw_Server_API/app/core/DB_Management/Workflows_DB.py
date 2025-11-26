@@ -1290,18 +1290,24 @@ class WorkflowsDatabase:
                 raise
 
     def get_run(self, run_id: str) -> Optional[WorkflowRun]:
+        # Defensive conversion to avoid sqlite binding errors when callers pass UUID/None
+        run_id_param = "" if run_id is None else str(run_id)
         if self._using_backend():
             with self.backend.transaction() as conn:  # type: ignore[union-attr]
                 result = self._execute_backend(
                     "SELECT * FROM workflow_runs WHERE run_id = ?",
-                    (run_id,),
+                    (run_id_param,),
                     connection=conn,
                 )
             row = self._row_from_result(result)
             return WorkflowRun(**row.to_dict()) if row else None
 
-        row = self._conn.cursor().execute("SELECT * FROM workflow_runs WHERE run_id = ?", (run_id,)).fetchone()
-        return WorkflowRun(**dict(row)) if row else None
+        conn = self._acquire_sqlite()
+        try:
+            row = conn.cursor().execute("SELECT * FROM workflow_runs WHERE run_id = ?", (run_id_param,)).fetchone()
+            return WorkflowRun(**dict(row)) if row else None
+        finally:
+            self._release_sqlite(conn)
 
     def list_runs(
         self,

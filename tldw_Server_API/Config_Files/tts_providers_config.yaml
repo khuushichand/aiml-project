@@ -5,6 +5,7 @@
 provider_priority:
   - openai      # Reliable, high quality
   - kokoro      # Local, fast
+  - supertonic  # Local Supertonic ONNX (requires assets)
   - neutts      # Local, instant voice cloning (requires setup)
   - chatterbox  # Emotion control
   - dia         # Dialogue specialist
@@ -118,6 +119,22 @@ providers:
     # Streaming behavior
     stream_chunk_size: 0.25      # seconds
     stream_buffer_size: 4096
+
+  # Supertonic ONNX Configuration (local; user-supplied models)
+  supertonic:
+    enabled: false              # Disabled by default; enable after installing assets
+    model_path: "models/supertonic/onnx"        # ONNX directory
+    sample_rate: 24000
+    device: "cpu"                # Placeholder for future GPU support
+    extra_params:
+      voice_styles_dir: "models/supertonic/voice_styles"
+      default_voice: "supertonic_m1"
+      voice_files:
+        supertonic_m1: "M1.json"
+        supertonic_f1: "F1.json"
+      default_total_step: 5
+      default_speed: 1.05
+      n_test: 1
 
   # ElevenLabs Configuration (adapter implemented)
   elevenlabs:

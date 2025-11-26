@@ -2,15 +2,16 @@
 #########################################
 # Nemo Transcription Module
 # This module provides transcription using NVIDIA Nemo models:
-# - Canary-1b: Multilingual model supporting English, Spanish, German, and French
-# - Parakeet TDT: Efficient model with support for standard, ONNX, and MLX variants
+# - Canary-1b-v2: Multitask multilingual ASR/AST model supporting 25 European languages
+#   for both speech transcription (ASR) and speech translation (AST).
+# - Parakeet TDT: Efficient model with support for standard, ONNX, and MLX variants.
 #
 ####################
 # Function List
 #
-# 1. load_canary_model() - Load and cache Canary-1b model
+# 1. load_canary_model() - Load and cache Canary-1b-v2 model
 # 2. load_parakeet_model(variant='standard') - Load Parakeet model (standard/ONNX/MLX)
-# 3. transcribe_with_canary(audio_data, sample_rate) - Transcribe using Canary
+# 3. transcribe_with_canary(audio_data, sample_rate, language, *, task, target_language) - Canary ASR/AST helper
 # 4. transcribe_with_parakeet(audio_data, sample_rate, variant='standard') - Transcribe using Parakeet
 # 5. transcribe_with_nemo(audio_data, sample_rate, model='parakeet', variant='standard') - Unified entry point
 #
@@ -30,15 +31,112 @@ import torch
 from .numpy_compat import ensure_numpy_compatibility
 ensure_numpy_compatibility()
 
-# Import local config
-from tldw_Server_API.app.core.config import load_and_log_configs, loaded_config_data
+# Import local config helpers
+from tldw_Server_API.app.core.config import get_stt_config, loaded_config_data
 
 # Global model cache
 _model_cache: Dict[str, Any] = {}
 
+# Canonical language codes supported by Canary-1b-v2.
+# See: https://huggingface.co/nvidia/canary-1b-v2
+CANARY_SUPPORTED_LANG_CODES = {
+    "bg",  # Bulgarian
+    "hr",  # Croatian
+    "cs",  # Czech
+    "da",  # Danish
+    "nl",  # Dutch
+    "en",  # English
+    "et",  # Estonian
+    "fi",  # Finnish
+    "fr",  # French
+    "de",  # German
+    "el",  # Greek
+    "hu",  # Hungarian
+    "it",  # Italian
+    "lv",  # Latvian
+    "lt",  # Lithuanian
+    "mt",  # Maltese
+    "pl",  # Polish
+    "pt",  # Portuguese
+    "ro",  # Romanian
+    "sk",  # Slovak
+    "sl",  # Slovenian
+    "es",  # Spanish
+    "sv",  # Swedish
+    "ru",  # Russian
+    "uk",  # Ukrainian
+}
+
+CANARY_SUPPORTED_LANG_CODES_STR = ", ".join(sorted(CANARY_SUPPORTED_LANG_CODES))
+
+# Lightweight import probe for Nemo toolkit (used by streaming defaults and
+# health checks to decide whether Parakeet/Canary are even eligible).
+_nemo_import_checked: bool = False
+_nemo_available: bool = False
+
+
+def _temp_wav_from_numpy(audio_np: np.ndarray, sample_rate: int) -> str:
+    """Write NumPy audio to a temporary WAV file and return its path."""
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+        import soundfile as sf
+        sf.write(tmp_file.name, audio_np, sample_rate)
+        return tmp_file.name
+
+
+def is_nemo_available() -> bool:
+    """Return True if the core Nemo ASR toolkit appears importable.
+
+    This performs a lightweight import check (without loading any models) and
+    caches the result for subsequent calls. It does not guarantee that specific
+    models (Parakeet/Canary) are available, only that the `nemo.collections.asr`
+    package can be imported.
+    """
+    global _nemo_import_checked, _nemo_available
+    if _nemo_import_checked:
+        return _nemo_available
+
+    _nemo_import_checked = True
+    try:
+        import nemo.collections.asr  # type: ignore  # noqa: F401
+        _nemo_available = True
+    except Exception:
+        _nemo_available = False
+    return _nemo_available
+
 #######################################################################################################################
 # Model Loading Functions
 #
+
+
+def _normalize_canary_lang(code: Optional[str]) -> Optional[str]:
+    """
+    Normalize a language code for Canary-1b-v2.
+
+    Accepts BCP-47 style codes such as "en-US" or "de_DE" and normalizes them
+    to a two-letter ISO 639-1 code when possible. Returns None if the language
+    is not supported by Canary.
+    """
+    if not code:
+        return None
+
+    raw = str(code).strip().lower()
+    if not raw:
+        return None
+
+    # Accept simple locale-style codes like "en-US" or "de_DE"
+    if len(raw) >= 4 and raw[2] in {"-", "_"}:
+        raw = raw[:2]
+
+    if raw not in CANARY_SUPPORTED_LANG_CODES:
+        logging.warning(
+            "Canary received unsupported language code '%s'; "
+            "supported codes are: %s",
+            code,
+            CANARY_SUPPORTED_LANG_CODES_STR,
+        )
+        return None
+
+    return raw
 
 def _get_model_cache_key(model_name: str, variant: str = 'standard') -> str:
     """Generate a cache key for model storage."""
@@ -47,17 +145,11 @@ def _get_model_cache_key(model_name: str, variant: str = 'standard') -> str:
 
 def _get_cache_dir() -> Path:
     """Get the cache directory for Nemo models."""
-    cfg = loaded_config_data
     try:
-        config = cfg() if callable(cfg) else cfg
+        stt_cfg = get_stt_config()
     except Exception:
-        config = cfg
-    if not config:
-        config = load_and_log_configs()
-    if config and 'STT-Settings' in config:
-        cache_dir = config['STT-Settings'].get('nemo_cache_dir', './models/nemo')
-    else:
-        cache_dir = './models/nemo'
+        stt_cfg = {}
+    cache_dir = stt_cfg.get('nemo_cache_dir', './models/nemo')
 
     cache_path = Path(cache_dir)
     cache_path.mkdir(parents=True, exist_ok=True)
@@ -94,16 +186,12 @@ def load_canary_model():
         model = nemo_asr.models.EncDecMultiTaskModel.from_pretrained("nvidia/canary-1b-v2")
 
         # Configure device
-        cfg = loaded_config_data
-        try:
-            config = cfg() if callable(cfg) else cfg
-        except Exception:
-            config = cfg or load_and_log_configs()
-        if not config:
-            config = load_and_log_configs()
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        if config and 'STT-Settings' in config:
-            device = config['STT-Settings'].get('nemo_device', device)
+        try:
+            stt_cfg = get_stt_config()
+        except Exception:
+            stt_cfg = {}
+        device = stt_cfg.get('nemo_device', device)
 
         if device == 'cuda' and torch.cuda.is_available():
             model = model.cuda()
@@ -137,16 +225,12 @@ def load_parakeet_model(variant: str = 'standard'):
         logging.debug(f"Using cached Parakeet model (variant: {variant})")
         return _model_cache[cache_key]
 
-    cfg = loaded_config_data
-    try:
-        config = cfg() if callable(cfg) else cfg
-    except Exception:
-        config = cfg
-    if not config:
-        config = load_and_log_configs()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    if config and 'STT-Settings' in config:
-        device = config['STT-Settings'].get('nemo_device', device)
+    try:
+        stt_cfg = get_stt_config()
+    except Exception:
+        stt_cfg = {}
+    device = stt_cfg.get('nemo_device', device)
 
     try:
         if variant == 'onnx':
@@ -293,15 +377,32 @@ def _load_parakeet_mlx():
 def transcribe_with_canary(
     audio_data: Union[np.ndarray, str],
     sample_rate: int = 16000,
-    language: Optional[str] = None
+    language: Optional[str] = None,
+    *,
+    task: str = "transcribe",
+    target_language: Optional[str] = None,
 ) -> str:
     """
-    Transcribe audio using the Canary-1b model.
+    Transcribe or translate audio using the Canary-1b-v2 model.
+
+    This helper wraps NeMo's multitask ASR/AST interface and normalizes the
+    configuration used across the codebase.
 
     Args:
         audio_data: Either a numpy array of audio samples or path to audio file
         sample_rate: Sample rate of the audio
-        language: Target language (en, es, de, fr). If None, auto-detect.
+        language: Optional source language hint (ISO 639-1 code such as 'en',
+            'fr', 'de', 'es', or any of the 25 Canary-supported languages).
+            When provided and valid, it is passed as `source_lang` to NeMo.
+        task: High-level task, either "transcribe" (default) for same-language
+            ASR or "translate" for AST. Any other value is normalized to
+            "transcribe".
+        target_language: Optional target language code (ISO 639-1). When
+            omitted:
+              - For task="transcribe", Canary defaults to same-language output
+                (target_lang == source_lang when known).
+              - For task="translate", the default target is English ("en"),
+                matching OpenAI's /audio/translations semantics.
 
     Returns:
         Transcribed text string
@@ -310,61 +411,77 @@ def transcribe_with_canary(
     if model is None:
         return "[Error: Canary model could not be loaded]"
 
-    # Save audio to temporary file if needed
-    if isinstance(audio_data, np.ndarray):
-        import soundfile as sf
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-            sf.write(tmp_file.name, audio_data, sample_rate)
-            audio_path = tmp_file.name
-            cleanup_temp = True
+    # Normalize task
+    task_normalized = (task or "transcribe").strip().lower()
+    if task_normalized not in {"transcribe", "translate"}:
+        task_normalized = "transcribe"
+
+    # Normalize languages using the Canary-supported set
+    source_lang = _normalize_canary_lang(language)
+    normalized_target = _normalize_canary_lang(target_language) if target_language else None
+
+    if task_normalized == "transcribe":
+        # For pure ASR we keep source and target aligned when possible so the
+        # model performs same-language transcription.
+        target_lang = normalized_target or source_lang
     else:
-        audio_path = audio_data
-        cleanup_temp = False
+        # For AST we aim for cross-lingual output. If no explicit target is
+        # provided, we default to English to mirror Whisper's translate mode.
+        target_lang = normalized_target or "en"
+        # If caller accidentally requests translate-to-same-language, fall back
+        # to normal transcription semantics.
+        if source_lang and target_lang == source_lang:
+            task_normalized = "transcribe"
 
-    try:
-        # Prepare the transcription prompt
-        # Canary uses special tokens for language specification
-        if language:
-            lang_map = {'en': 'en', 'es': 'es', 'de': 'de', 'fr': 'fr'}
-            target_lang = lang_map.get(language, 'en')
-        else:
-            target_lang = 'en'  # Default to English
+    # Build language kwargs for NeMo; we only pass values that survived
+    # normalization to avoid raising on unsupported codes.
+    lang_kwargs: Dict[str, Any] = {}
+    if source_lang:
+        lang_kwargs["source_lang"] = source_lang
+    if target_lang:
+        lang_kwargs["target_lang"] = target_lang
 
-        # Transcribe with Canary
-        # The model expects specific prompt format
-        manifest = {
-            "audio_filepath": audio_path,
-            "duration": 1.0,  # Will be calculated by model
-            "taskname": "asr",
-            "source_lang": "en",  # Source language for transcription
-            "target_lang": target_lang,
-            "pnc": "yes",  # Punctuation and capitalization
-            "answer": "na"
-        }
+    cleanup_temp = False
+    audio_path: Optional[str] = None
+    audio_source: Union[np.ndarray, str] = audio_data
 
-        # Perform transcription
-        transcriptions = model.transcribe(
-            [audio_path],
-            batch_size=1
-        )
-
+    def _extract_result(transcriptions):
         if transcriptions and len(transcriptions) > 0:
             result = transcriptions[0]
-            # Handle Hypothesis objects from Nemo
             if hasattr(result, 'text'):
                 result = result.text
             elif not isinstance(result, str):
                 result = str(result)
         else:
             result = "[No transcription produced]"
-
         return result
+
+    if isinstance(audio_data, np.ndarray):
+        audio_np = np.asarray(audio_data, dtype=np.float32)
+        try:
+            transcriptions = model.transcribe([audio_np], batch_size=1, **lang_kwargs)
+            return _extract_result(transcriptions)
+        except Exception as direct_err:
+            logging.debug(f"Canary direct numpy transcription failed, falling back to temp file: {direct_err}")
+            audio_path = _temp_wav_from_numpy(audio_np, sample_rate)
+            audio_source = audio_path
+            cleanup_temp = True
+
+    try:
+        # Perform transcription/translation with language hints when available.
+        transcriptions = model.transcribe(
+            [audio_source],
+            batch_size=1,
+            **lang_kwargs,
+        )
+
+        return _extract_result(transcriptions)
 
     except Exception as e:
         logging.error(f"Error during Canary transcription: {e}")
         return f"[Transcription error: {str(e)}]"
     finally:
-        if cleanup_temp and os.path.exists(audio_path):
+        if cleanup_temp and audio_path and os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
             except Exception as rm_err:
@@ -395,30 +512,19 @@ def transcribe_with_parakeet(
     """
     # Get variant from config if not specified
     if variant == 'auto':
-        cfg = loaded_config_data
         try:
-            config = cfg() if callable(cfg) else cfg
+            stt_cfg = get_stt_config()
         except Exception:
-            config = cfg
-        if not config:
-            config = load_and_log_configs()
-        if config and 'STT-Settings' in config:
-            variant = config['STT-Settings'].get('nemo_model_variant', 'standard')
+            stt_cfg = {}
+        variant = stt_cfg.get('nemo_model_variant', 'standard')
 
     model = load_parakeet_model(variant)
     if model is None:
         return f"[Error: Parakeet model ({variant}) could not be loaded]"
 
-    # Save audio to temporary file if needed
-    if isinstance(audio_data, np.ndarray):
-        import soundfile as sf
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-            sf.write(tmp_file.name, audio_data, sample_rate)
-            audio_path = tmp_file.name
-            cleanup_temp = True
-    else:
-        audio_path = audio_data
-        cleanup_temp = False
+    cleanup_temp = False
+    audio_path: Optional[str] = None
+    audio_source: Union[np.ndarray, str] = audio_data
 
     try:
         # Perform transcription based on variant
@@ -428,24 +534,40 @@ def transcribe_with_parakeet(
                 transcribe_with_parakeet_mlx as mlx_transcribe
             )
             result = mlx_transcribe(
-                audio_path,
+                audio_source,
                 sample_rate=sample_rate,
                 chunk_duration=chunk_duration,
                 overlap_duration=overlap_duration,
                 chunk_callback=chunk_callback
             )
             transcriptions = [result] if result else ["[No transcription produced]"]
-        elif variant == 'onnx' and hasattr(model, 'transcribe'):
-            # ONNX model transcription with chunking support
+        elif isinstance(audio_source, np.ndarray):
+            audio_np = np.asarray(audio_source, dtype=np.float32)
+            try:
+                transcriptions = model.transcribe(
+                    audio_np,
+                    chunk_duration=chunk_duration,
+                    overlap_duration=overlap_duration,
+                    chunk_callback=chunk_callback
+                )
+            except Exception as direct_err:
+                logging.debug(f"Parakeet direct numpy transcription failed, falling back to temp file: {direct_err}")
+                audio_path = _temp_wav_from_numpy(audio_np, sample_rate)
+                audio_source = audio_path
+                cleanup_temp = True
+                transcriptions = model.transcribe(
+                    audio_source,
+                    chunk_duration=chunk_duration,
+                    overlap_duration=overlap_duration,
+                    chunk_callback=chunk_callback
+                )
+        else:
             transcriptions = model.transcribe(
-                audio_path,
+                audio_source,
                 chunk_duration=chunk_duration,
                 overlap_duration=overlap_duration,
                 chunk_callback=chunk_callback
             )
-        else:
-            # Standard Nemo model transcription
-            transcriptions = model.transcribe([audio_path], batch_size=1)
 
         if transcriptions and len(transcriptions) > 0:
             result = transcriptions[0]
@@ -463,7 +585,7 @@ def transcribe_with_parakeet(
         logging.error(f"Error during Parakeet transcription: {e}")
         return f"[Transcription error: {str(e)}]"
     finally:
-        if cleanup_temp and os.path.exists(audio_path):
+        if cleanup_temp and audio_path and os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
             except Exception as rm_err:
@@ -488,7 +610,9 @@ def transcribe_with_nemo(
         sample_rate: Sample rate of the audio
         model: Which model to use ('parakeet' or 'canary')
         variant: Model variant for Parakeet ('standard', 'onnx', 'mlx')
-        language: Target language for Canary (en, es, de, fr)
+        language: Source language hint for Canary (any Canary-supported ISO
+            639-1 code) or None to rely on model defaults. For Parakeet this
+            parameter is currently ignored.
         chunk_duration: Duration in seconds for chunking long audio (None = no chunking)
         overlap_duration: Overlap between chunks in seconds (default 15.0)
         chunk_callback: Callback function for chunk progress (current, total)

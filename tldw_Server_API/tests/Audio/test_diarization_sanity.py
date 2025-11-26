@@ -86,10 +86,14 @@ def test_agglomerative_metric_fallback(monkeypatch):
 
 def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
     # Import module under test
-    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib as vlib
+
+    # Reset global cache to ensure test isolation for VAD lazy import
+    monkeypatch.setattr(vlib, "_silero_vad_model", None)
+    monkeypatch.setattr(vlib, "_silero_vad_utils", None)
 
     # Force torch to be considered available
-    monkeypatch.setattr(dlib, "_torch_available", lambda: True)
+    monkeypatch.setattr(vlib, "_torch_available", lambda: True)
 
     # Provide a fake torch with hub API. set_dir should not crash; load should raise.
     class _FakeHub:
@@ -124,10 +128,10 @@ def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
             """
             self.hub = _FakeHub()
 
-    monkeypatch.setattr(dlib, "_lazy_import_torch", lambda: _FakeTorch())
+    monkeypatch.setattr(vlib, "_lazy_import_torch", lambda: _FakeTorch())
 
     # Call the lazy loader; it should catch the exception and return (None, None)
-    model, utils = dlib._lazy_import_silero_vad()
+    model, utils = vlib._lazy_import_silero_vad()
     assert model is None and utils is None
 
 
@@ -343,6 +347,5 @@ def test_detect_speech_fallback_when_hub_disabled(monkeypatch):
     assert len(segments) == 1
     assert segments[0]["start"] == 0.0
     assert pytest.approx(segments[0]["end"], rel=1e-6) == 1.0
-
 
 

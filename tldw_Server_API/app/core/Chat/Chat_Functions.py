@@ -2,9 +2,14 @@
 # Description: Chat functions for interacting with the LLMs as chatbots
 """
 This module now acts as a compatibility shim around the refactored chat stack.
-Prefer importing from `chat_orchestrator`, `chat_history`, `chat_dictionary`, or
-`chat_characters` directly. These exports are retained for legacy integrations
-and will be deprecated once downstream callers migrate.
+
+Usage guidance:
+- Prefer importing from `chat_orchestrator`, `chat_service`, `chat_history`,
+  `chat_dictionary`, or `chat_characters` directly for new features.
+- The `chat` and `chat_api_call` functions here are maintained for legacy
+  integrations and tests; they forward into the orchestrator and may be
+  removed once downstream callers migrate to the `/api/v1/chat/completions`
+  endpoint and the Chat service helpers.
 """
 #
 # Imports
@@ -145,7 +150,8 @@ def chat_api_call(
 
 DEFAULT_CHARACTER_NAME = _chat_history_module.DEFAULT_CHARACTER_NAME
 
-# Legacy compatibility shim: chat forwards to chat_orchestrator.chat.
+# Legacy compatibility shim: chat forwards to chat_orchestrator.chat, while
+# allowing tests to patch Chat_Functions.chat_api_call and config loading.
 def chat(
     message: str,
     history: List[Dict[str, Any]],
@@ -181,12 +187,30 @@ def chat(
     llm_tools: Optional[List[Dict[str, Any]]] = None,
     llm_tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
 ) -> Union[str, Any]:
-    """Compatibility shim that forwards to `chat_orchestrator.chat`."""
+    """Compatibility shim that forwards to `chat_orchestrator.chat`.
+
+    To preserve historical test seams, this function temporarily patches both
+    the sync and async provider dispatchers in `chat_orchestrator` so they
+    delegate through Chat_Functions.chat_api_call and Chat_Functions.load_and_log_configs.
+    """
     original_chat_api_call = _chat_orchestrator_module.chat_api_call
+    original_chat_api_call_async = getattr(_chat_orchestrator_module, "chat_api_call_async", None)
     original_load_and_log_configs = _chat_orchestrator_module.load_and_log_configs
+
+    async def _shim_chat_api_call_async(**kwargs):
+        # Reuse the sync shim inside an async context; this is only used when
+        # `chat` is invoked via the orchestrator wrapper and not by async callers.
+        return chat_api_call(**kwargs)
+
+    def _shim_chat_api_call_sync(**kwargs):
+        return chat_api_call(**kwargs)
+
     try:
-        if _chat_orchestrator_module.chat_api_call is not chat_api_call:
-            _chat_orchestrator_module.chat_api_call = chat_api_call
+        # Ensure orchestrator uses the Chat_Functions shims during this call.
+        if _chat_orchestrator_module.chat_api_call is not _shim_chat_api_call_sync:
+            _chat_orchestrator_module.chat_api_call = _shim_chat_api_call_sync
+        if original_chat_api_call_async is not None and _chat_orchestrator_module.chat_api_call_async is not _shim_chat_api_call_async:
+            _chat_orchestrator_module.chat_api_call_async = _shim_chat_api_call_async
         if _chat_orchestrator_module.load_and_log_configs is not load_and_log_configs:
             _chat_orchestrator_module.load_and_log_configs = load_and_log_configs
         return _orchestrator_chat(
@@ -226,6 +250,8 @@ def chat(
         )
     finally:
         _chat_orchestrator_module.chat_api_call = original_chat_api_call
+        if original_chat_api_call_async is not None:
+            _chat_orchestrator_module.chat_api_call_async = original_chat_api_call_async
         _chat_orchestrator_module.load_and_log_configs = original_load_and_log_configs
 
 

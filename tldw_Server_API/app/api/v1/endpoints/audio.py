@@ -7,19 +7,35 @@ import json
 import os
 import tempfile
 import io
+from functools import lru_cache
 from pathlib import Path as PathLib
 import sqlite3  # for DB-specific exception handling in limits endpoints
-from typing import AsyncGenerator, Optional, Dict, Any
+from typing import AsyncGenerator, Optional, Dict, Any, List
 import numpy as np
 import soundfile as sf
+
 #
 # Third-party libraries
-from fastapi import APIRouter, Depends, HTTPException, Request, Header, File, Form, UploadFile, WebSocket, WebSocketDisconnect, Path, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    Header,
+    File,
+    Form,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    Path,
+    Query,
+)
 from fastapi.responses import StreamingResponse, Response, JSONResponse
-from starlette import status # For status codes
+from starlette import status  # For status codes
 from slowapi.util import get_remote_address
 from fastapi import Request as _FastAPIRequest  # for rate limit key typing
 from loguru import logger
+
 #
 # Local imports
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
@@ -35,12 +51,13 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.config import AUTH_BEARER_PREFIX
 from tldw_Server_API.app.core.config import load_comprehensive_config
+
 # Auth utils no longer used here; authentication is enforced via get_request_user dependency
 
 # For WebSocket streaming transcription
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
     handle_unified_websocket,
-    UnifiedStreamingConfig
+    UnifiedStreamingConfig,
 )
 from tldw_Server_API.app.core.Usage.audio_quota import (
     can_start_stream,
@@ -49,6 +66,7 @@ from tldw_Server_API.app.core.Usage.audio_quota import (
     add_daily_minutes,
     bytes_to_seconds,
 )
+
 # Quota helpers for status/limits and TTL heartbeat
 try:
     from tldw_Server_API.app.core.Usage.audio_quota import (
@@ -125,9 +143,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
 )
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.Streaming.speech_chat_service import (
-    run_speech_chat_turn,
-)
+from tldw_Server_API.app.core.Streaming import speech_chat_service
 
 # Initialize rate limiter
 from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import (
@@ -157,6 +173,7 @@ def _rate_limit_key(request: _FastAPIRequest) -> str:
         logger.debug(f"rate_limit_key: failed to read user_id from request.state: error={e}")
     return get_remote_address(request)
 
+
 # Use central limiter instance; override key_func per-route where needed
 
 
@@ -165,7 +182,7 @@ router = APIRouter(
     responses={
         404: {"description": "Not found"},
         401: {"description": "Unauthorized"},
-        429: {"description": "Rate limit exceeded"}
+        429: {"description": "Rate limit exceeded"},
     },
 )
 
@@ -267,8 +284,53 @@ def _infer_tts_provider_from_model(model: Optional[str]) -> Optional[str]:
         return "elevenlabs"
     if m.startswith("index_tts") or m.startswith("indextts"):
         return "index_tts"
+    if m.startswith("supertonic") or m.startswith("tts-supertonic"):
+        return "supertonic"
     return None
 
+
+@lru_cache(maxsize=1)
+def _valid_whisper_model_sizes() -> set[str]:
+    """Cached lookup of known faster-whisper model sizes."""
+    try:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
+            WhisperModel as _WhisperModel,
+        )
+
+        return set(getattr(_WhisperModel, "valid_model_sizes", []))
+    except Exception:
+        # If the import fails (e.g., dependencies missing), fall back to empty set
+        return set()
+
+
+def _map_openai_audio_model_to_whisper(model: Optional[str]) -> str:
+    """Map OpenAI-style audio model ids to a faster-whisper model name.
+
+    - Known internal faster-whisper model ids (e.g., 'large-v3', 'distil-large-v3')
+      and Hugging Face ids are passed through unchanged.
+    - OpenAI aliases such as 'whisper-1' map to a configurable default
+      (currently 'large-v3' to preserve prior behavior).
+    - All unknown values fall back to 'large-v3'.
+    """
+    default_model = "large-v3"
+    if not model:
+        return default_model
+
+    raw = str(model).strip()
+    m = raw.lower()
+
+    valid_sizes = _valid_whisper_model_sizes()
+
+    # Pass through known internal sizes and HF ids
+    if raw in valid_sizes or m in valid_sizes or "/" in raw:
+        return raw
+
+    # OpenAI-compatible aliases
+    if m == "whisper-1":
+        return default_model
+
+    # Fallback to default
+    return default_model
 
 
 # V2 TTS Service handles all provider mapping internally
@@ -288,9 +350,11 @@ from tldw_Server_API.app.core.TTS.tts_validation import TTSInputValidator
 from tldw_Server_API.app.core.TTS.tts_config import get_tts_config
 from uuid import uuid4
 
+
 async def get_tts_service() -> TTSServiceV2:
     """Get the V2 TTS service instance."""
     return await get_tts_service_v2()
+
 
 # --- End of Placeholder ---
 
@@ -298,12 +362,14 @@ async def get_tts_service() -> TTSServiceV2:
 @router.post(
     "/speech",
     summary="Generates audio from text input.",
-    dependencies=[Depends(require_token_scope("any", require_if_present=False, endpoint_id="audio.speech", count_as="call"))],
+    dependencies=[
+        Depends(require_token_scope("any", require_if_present=False, endpoint_id="audio.speech", count_as="call"))
+    ],
 )
 @limiter.limit("10/minute", key_func=_rate_limit_key)  # Rate limit: 10 requests per minute per user/IP
 async def create_speech(
     request_data: OpenAISpeechRequest,  # FastAPI will parse JSON body into this
-    request: Request,                   # Required for rate limiter and to check for client disconnects
+    request: Request,  # Required for rate limiter and to check for client disconnects
     tts_service: TTSServiceV2 = Depends(get_tts_service),
     current_user: User = Depends(get_request_user),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
@@ -349,8 +415,7 @@ async def create_speech(
         # Check for empty input after sanitization
         if not sanitized_text or len(sanitized_text.strip()) == 0:
             raise TTSValidationError(
-                "Input text cannot be empty after sanitization",
-                details={"original_length": len(request_data.input)}
+                "Input text cannot be empty after sanitization", details={"original_length": len(request_data.input)}
             )
 
         # Update request with sanitized text
@@ -358,10 +423,7 @@ async def create_speech(
 
     except TTSValidationError as e:
         logger.warning(f"TTS validation error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     # Correlate via request id (header or generated)
     try:
         request_id = request.headers.get("x-request-id") or request.headers.get("X-Request-Id") or str(uuid4())
@@ -370,11 +432,29 @@ async def create_speech(
     logger.info(
         f"Received speech request: model={request_data.model}, voice={request_data.voice}, format={request_data.response_format}, request_id={request_id}"
     )
+    voice_to_voice_start: Optional[float] = None
+    try:
+        raw_v2v = request.headers.get("x-voice-to-voice-start") or request.headers.get("X-Voice-To-Voice-Start")
+    except Exception:
+        raw_v2v = None
+    if raw_v2v:
+        try:
+            ts = float(raw_v2v)
+            if ts > 0:
+                voice_to_voice_start = ts
+        except (TypeError, ValueError):
+            logger.debug(f"Invalid X-Voice-To-Voice-Start header: {raw_v2v}")
+    try:
+        state_ts = getattr(request.state, "voice_to_voice_start", None)
+        if voice_to_voice_start is None and isinstance(state_ts, (int, float)):
+            voice_to_voice_start = float(state_ts)
+    except Exception:
+        pass
     try:
         usage_log.log_event(
             "audio.tts",
             tags=[str(request_data.model or ""), str(request_data.voice or "")],
-            metadata={"stream": bool(getattr(request_data, 'stream', False)), "format": request_data.response_format},
+            metadata={"stream": bool(getattr(request_data, "stream", False)), "format": request_data.response_format},
         )
     except Exception as e:
         logger.debug(f"usage_log audio.tts failed: error={e}")
@@ -389,7 +469,7 @@ async def create_speech(
         "aac": "audio/aac",
         "flac": "audio/flac",
         "wav": "audio/wav",
-        "pcm": "audio/L16; rate=24000; channels=1", # Example for raw PCM
+        "pcm": "audio/L16; rate=24000; channels=1",  # Example for raw PCM
     }
     content_type = content_type_map.get(request_data.response_format)
     if not content_type:
@@ -406,37 +486,30 @@ async def create_speech(
         if isinstance(exc, TTSProviderNotConfiguredError):
             logger.error(f"TTS provider not configured: {exc}")
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"TTS service unavailable: {str(exc)}"
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"TTS service unavailable: {str(exc)}"
             )
         if isinstance(exc, TTSAuthenticationError):
             logger.error(f"TTS authentication error: {exc}")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="TTS provider authentication failed"
-            )
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="TTS provider authentication failed")
         if isinstance(exc, TTSRateLimitError):
             logger.warning(f"TTS rate limit exceeded: {exc}")
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="TTS provider rate limit exceeded. Please try again later."
+                detail="TTS provider rate limit exceeded. Please try again later.",
             )
         if isinstance(exc, TTSQuotaExceededError):
             logger.warning(f"TTS quota exceeded: {exc}")
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail="TTS quota exceeded. Please review your plan or quota."
+                detail="TTS quota exceeded. Please review your plan or quota.",
             )
         if isinstance(exc, TTSError):
             logger.error(f"TTS error: {exc}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"TTS error: {str(exc)}"
-            )
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"TTS error: {str(exc)}")
         logger.error(f"Unexpected error during audio generation: {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred during audio generation"
+            detail="An unexpected error occurred during audio generation",
         )
 
     try:
@@ -444,6 +517,8 @@ async def create_speech(
             request_data,
             provider=None,
             fallback=True,
+            voice_to_voice_start=voice_to_voice_start,
+            voice_to_voice_route="audio.speech",
         )
     except Exception as exc:
         _raise_for_tts_error(exc)
@@ -488,7 +563,7 @@ async def create_speech(
             media_type=content_type,
             headers={
                 "Content-Disposition": f"attachment; filename=speech.{request_data.response_format}",
-                "X-Accel-Buffering": "no", # Useful for Nginx
+                "X-Accel-Buffering": "no",  # Useful for Nginx
                 "Cache-Control": "no-cache",
                 "X-Request-Id": request_id,
             },
@@ -513,8 +588,7 @@ async def create_speech(
     if not all_audio_bytes:
         logger.error("Non-streaming generation resulted in empty audio data.")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Audio generation failed to produce data."
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Audio generation failed to produce data."
         )
 
     return Response(
@@ -531,7 +605,11 @@ async def create_speech(
 @router.post(
     "/transcriptions",
     summary="Transcribes audio into text (OpenAI Compatible)",
-    dependencies=[Depends(require_token_scope("any", require_if_present=False, endpoint_id="audio.transcriptions", count_as="call"))],
+    dependencies=[
+        Depends(
+            require_token_scope("any", require_if_present=False, endpoint_id="audio.transcriptions", count_as="call")
+        )
+    ],
 )
 @limiter.limit("20/minute", key_func=_rate_limit_key)  # Rate limit: 20 requests per minute
 async def create_transcription(
@@ -542,9 +620,18 @@ async def create_transcription(
     prompt: Optional[str] = Form(default=None, description="Optional text to guide the model's style"),
     response_format: str = Form(default="json", description="Format of the transcript output"),
     temperature: float = Form(default=0.0, ge=0.0, le=1.0, description="Sampling temperature"),
-    timestamp_granularities: Optional[str] = Form(default="segment", description="Timestamp granularities: 'segment', 'word' (comma-separated or JSON array)"),
+    task: str = Form(
+        default="transcribe",
+        description="Task for Whisper models: 'transcribe' (default) or 'translate'. "
+        "For non-Whisper providers this is ignored.",
+    ),
+    timestamp_granularities: Optional[str] = Form(
+        default="segment", description="Timestamp granularities: 'segment', 'word' (comma-separated or JSON array)"
+    ),
     # Auto-segmentation options
-    segment: bool = Form(default=False, description="If true and JSON response, also run transcript segmentation (TreeSeg)"),
+    segment: bool = Form(
+        default=False, description="If true and JSON response, also run transcript segmentation (TreeSeg)"
+    ),
     seg_K: int = Form(default=6, description="Max segments for TreeSeg (if segment=true)"),
     seg_min_segment_size: int = Form(default=5, description="Min items per segment for TreeSeg"),
     seg_lambda_balance: float = Form(default=0.01, description="Balance penalty for TreeSeg"),
@@ -582,10 +669,7 @@ async def create_transcription(
 
     # Validate file presence
     if not file:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No audio file provided"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No audio file provided")
     # Content-Type whitelist
     allowed_types = {
         "audio/wav",
@@ -603,14 +687,13 @@ async def create_transcription(
     ctype = (file.content_type or "").lower()
     if ctype and ctype not in allowed_types:
         raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"Unsupported media type: {file.content_type}"
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=f"Unsupported media type: {file.content_type}"
         )
 
     # Resolve per-tier file size limit
     rid = None
     try:
-        if request is not None and hasattr(request, 'state') and getattr(request.state, 'request_id', None):
+        if request is not None and hasattr(request, "state") and getattr(request.state, "request_id", None):
             rid = str(request.state.request_id)
     except Exception:
         rid = None
@@ -637,7 +720,7 @@ async def create_transcription(
     if len(contents) > max_file_size:
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            detail=f"File size exceeds maximum of {int(max_file_size/1024/1024)}MB"
+            detail=f"File size exceeds maximum of {int(max_file_size/1024/1024)}MB",
         )
 
     # Before any heavy work, enforce concurrent jobs cap per user
@@ -651,9 +734,7 @@ async def create_transcription(
         await increment_jobs_started(current_user.id)
         acquired_job_slot = True
     except EXPECTED_DB_EXC as e:
-        logger.exception(
-            f"Failed to increment jobs started: user_id={current_user.id}, error={e}; request_id={rid}"
-        )
+        logger.exception(f"Failed to increment jobs started: user_id={current_user.id}, error={e}; request_id={rid}")
 
     # Save uploaded file to temporary location and proceed with processing
     temp_audio_path = None
@@ -666,7 +747,10 @@ async def create_transcription(
 
         # Convert to canonical 16k mono WAV for consistent processing
         try:
-            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import convert_to_wav as _convert_to_wav
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+                convert_to_wav as _convert_to_wav,
+            )
+
             canonical_path = _convert_to_wav(temp_audio_path, offset=0, overwrite=False)
         except Exception as e:
             logger.debug(f"convert_to_wav failed; using original temp file: path={temp_audio_path}, error={e}")
@@ -693,7 +777,7 @@ async def create_transcription(
                         granularity_tokens = {str(x).strip().lower() for x in arr}
                 else:
                     # Comma-separated string
-                    granularity_tokens = {t.strip().lower() for t in s.split(',') if t.strip()}
+                    granularity_tokens = {t.strip().lower() for t in s.split(",") if t.strip()}
         except Exception as e:
             # Non-fatal: default to {'segment'}
             logger.debug(f"Failed to parse timestamp_granularities; defaulting to 'segment': error={e}")
@@ -701,26 +785,53 @@ async def create_transcription(
         if not granularity_tokens:
             granularity_tokens = {"segment"}
 
-        # Map OpenAI model names to our providers
+        # Normalize task for Whisper providers; other providers treat this as a no-op.
+        task_normalized = (task or "transcribe").strip().lower()
+        if task_normalized not in {"transcribe", "translate"}:
+            task_normalized = "transcribe"
+
+        # Determine provider from requested model name.
+        # We reuse the core STT parser so that HTTP models like
+        # "parakeet-mlx", "parakeet-onnx", "qwen2audio-*" route
+        # consistently with the transcription library.
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+            transcribe_audio,
+            speech_to_text as fw_speech_to_text,
+            strip_whisper_metadata_header,
+            is_transcription_error_message as _is_transcription_error_message,
+            parse_transcription_model,
+        )
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import (
+            Audio_Files as audio_files,
+        )
+
+        model_lower = (model or "").strip().lower()
+        # Preserve legacy aliases first (e.g., "qwen" → "qwen2audio")
+        if model_lower == "qwen":
+            provider_raw = "qwen2audio"
+        else:
+            provider_raw, _, _ = parse_transcription_model(model)
+
         provider_map = {
-            "whisper-1": "faster-whisper",
             "whisper": "faster-whisper",
             "parakeet": "parakeet",
             "canary": "canary",
             "qwen2audio": "qwen2audio",
-            "qwen": "qwen2audio"
         }
+        provider = provider_map.get(provider_raw, "faster-whisper")
 
-        provider = provider_map.get(model.lower(), "faster-whisper")
+        def _raise_on_transcription_error(text: Any) -> None:
+            if _is_transcription_error_message(text):
+                logger.error(f"Transcription failed: {text}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Transcription failed. Please try again or use a different model.",
+                )
 
-        # Import transcription functions
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-            transcribe_audio,
-            speech_to_text as fw_speech_to_text,
-        )
-
+        # Import transcription functions and helpers (already imported above)
         # Get configuration for Nemo models
         from tldw_Server_API.app.core.config import load_and_log_configs
+
         config = load_and_log_configs()
 
         # Prepare quotas and transcription now that we hold the slot
@@ -744,25 +855,64 @@ async def create_transcription(
                     f"Failed to release job slot after quota denial: user_id={current_user.id}, error={e}; request_id={rid}"
                 )
             raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail="Transcription quota exceeded (daily minutes)"
+                status_code=status.HTTP_402_PAYMENT_REQUIRED, detail="Transcription quota exceeded (daily minutes)"
             )
         detected_language: Optional[str] = None
+        segments_for_timing: Optional[List[Dict[str, Any]]] = None
+        whisper_model_name = _map_openai_audio_model_to_whisper(model)
         # Wrap the heavy work to ensure we always release the job slot
         try:
             if provider == "faster-whisper":
-                # For Whisper, support word-level timestamps and language detection
+                # Preflight check for Whisper model readiness. When the
+                # underlying faster-whisper model is not yet available
+                # locally, surface a structured 503 instead of returning a
+                # pseudo-transcript so HTTP clients do not persist "[MODEL STATUS]"
+                # text as real content. The inner finally below will still
+                # release the job slot.
                 try:
-                    # Use best model by default (consistent with prior behavior)
-                    whisper_model_name = "large-v3"
+                    model_status = audio_files.check_transcription_model_status(whisper_model_name)
+                    if not model_status.get("available", False):
+                        detail_payload: Dict[str, Any] = {
+                            "status": "model_downloading",
+                            "message": model_status.get("message")
+                            or "Requested transcription model is not available locally yet.",
+                            "model": model_status.get("model", whisper_model_name),
+                        }
+                        estimated_size = model_status.get("estimated_size")
+                        if estimated_size:
+                            detail_payload["estimated_size"] = estimated_size
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail=detail_payload,
+                        )
+                except HTTPException:
+                    # Preserve the structured 503 (or any other HTTPException) path.
+                    raise
+                except Exception as preflight_exc:  # pragma: no cover - defensive
+                    # If the preflight check itself fails, log and continue with
+                    # normal transcription behavior rather than failing the call.
+                    logger.debug(f"Whisper model preflight check failed; proceeding without it: {preflight_exc}")
+                # For Whisper, support word-level timestamps, language detection,
+                # and optional translate task.
+                try:
+                    # Determine how we pass language into STT:
+                    #  - transcribe: honor explicit language when provided
+                    #  - translate: let the backend auto-detect source language
+                    if task_normalized == "translate":
+                        selected_lang_for_stt: Optional[str] = None
+                    else:
+                        selected_lang_for_stt = language if language else None
+
                     result = fw_speech_to_text(
                         canonical_path,
                         whisper_model=whisper_model_name,
-                        selected_source_lang=language if language else None,
+                        selected_source_lang=selected_lang_for_stt,
                         vad_filter=False,
                         diarize=False,
                         word_timestamps=("word" in granularity_tokens),
                         return_language=True,
+                        initial_prompt=prompt,
+                        task=task_normalized,
                     )
                     if isinstance(result, tuple) and len(result) == 2:
                         segments_list, detected_language = result
@@ -770,26 +920,58 @@ async def create_transcription(
                         # Fallback: handle as plain segments list
                         segments_list, detected_language = result, None
 
+                    # For API-facing responses, strip Whisper metadata header from
+                    # the first segment's Text so clients see only user content.
+                    segments_list = strip_whisper_metadata_header(segments_list)
+                    segments_for_timing = segments_list
                     # Merge text
-                    transcribed_text = " ".join(seg.get("Text", "").strip() for seg in segments_list if isinstance(seg, dict))
+                    transcribed_text = " ".join(
+                        seg.get("Text", "").strip() for seg in segments_list if isinstance(seg, dict)
+                    )
                 except Exception as e:
                     logger.error(f"Whisper transcription failed: {e}")
                     raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Whisper transcription failed"
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Whisper transcription failed"
                     )
             elif provider == "parakeet" and config:
-                variant = config.get('STT-Settings', {}).get('nemo_model_variant', 'standard')
+                variant = config.get("STT-Settings", {}).get("nemo_model_variant", "standard")
                 # For Parakeet, we need to use the Nemo module directly
                 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                    transcribe_with_parakeet
+                    transcribe_with_parakeet,
                 )
+
                 transcribed_text = transcribe_with_parakeet(audio_data, sample_rate, variant)
             elif provider == "canary":
                 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                    transcribe_with_canary
+                    transcribe_with_canary,
+                    CANARY_SUPPORTED_LANG_CODES,
+                    CANARY_SUPPORTED_LANG_CODES_STR,
                 )
-                transcribed_text = transcribe_with_canary(audio_data, sample_rate, language)
+
+                # Validate Canary language against the full supported set when provided.
+                canary_lang: Optional[str] = None
+                if language:
+                    raw_lang = str(language).strip().lower()
+                    # Accept simple locale forms like "en-US" → "en"
+                    if len(raw_lang) >= 4 and raw_lang[2] in {"-", "_"}:
+                        raw_lang = raw_lang[:2]
+                    if raw_lang not in CANARY_SUPPORTED_LANG_CODES:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=("Canary provider language must be one of: " f"{CANARY_SUPPORTED_LANG_CODES_STR}."),
+                        )
+                    canary_lang = raw_lang
+
+                # For Canary, respect the requested task: in "transcribe" mode we
+                # perform same-language ASR; in "translate" mode we request
+                # translation to English to mirror Whisper's translate semantics.
+                transcribed_text = transcribe_with_canary(
+                    audio_data,
+                    sample_rate,
+                    canary_lang,
+                    task=task_normalized,
+                    target_language="en" if task_normalized == "translate" else None,
+                )
             else:
                 # Use the general transcribe_audio function
                 transcribe_params = {
@@ -809,33 +991,15 @@ async def create_transcription(
                     f"Failed to release job slot in finally: user_id={current_user.id}, error={e}; request_id={rid}"
                 )
 
-        # Helper: detect various error messages
-        def is_transcription_error(msg: str) -> bool:
-            lower_msg = msg.lower()
-            return (
-                lower_msg.startswith("[error")
-                or lower_msg.startswith("[transcription error")
-                or lower_msg.startswith("canary transcription error")
-                or lower_msg.startswith("parakeet transcription error")
-                or lower_msg.startswith("external provider transcription error")
-                or lower_msg.startswith("nemo transcription module not available")
-                or lower_msg.startswith("failed to import nemo")
-                or lower_msg.startswith("failed to import external provider")
-            )
-
         # Check for errors in transcription
-        if is_transcription_error(transcribed_text):
-            logger.error(f"Transcription failed: {transcribed_text}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Transcription failed. Please try again or use a different model."
-            )
+        _raise_on_transcription_error(transcribed_text)
 
         # Apply custom vocabulary post-replacements (all providers)
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Custom_Vocabulary import (
                 postprocess_text_if_enabled as _cv_post,
             )
+
             transcribed_text = _cv_post(transcribed_text)
         except Exception:
             pass
@@ -844,40 +1008,94 @@ async def create_transcription(
         try:
             await add_daily_minutes(current_user.id, minutes_est)
         except EXPECTED_DB_EXC as e:
-            logger.exception(
-                f"Failed to record daily minutes: user_id={current_user.id}, error={e}; request_id={rid}"
-            )
+            logger.exception(f"Failed to record daily minutes: user_id={current_user.id}, error={e}; request_id={rid}")
 
         # Format response based on requested format
-            if is_transcription_error(transcribed_text):
-                logger.error(f"Transcription failed: {transcribed_text}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Transcription failed. Please try again or use a different model."
-                )
         if response_format == "text":
             return Response(content=transcribed_text, media_type="text/plain")
 
         elif response_format == "srt":
-            if is_transcription_error(transcribed_text):
-                logger.error(f"Transcription failed: {transcribed_text}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Transcription failed. Please try again or use a different model."
-                )
-            # Simple SRT format (would need proper timing for real implementation)
-            srt_content = f"1\n00:00:00,000 --> 00:00:10,000\n{transcribed_text}\n"
+            _raise_on_transcription_error(transcribed_text)
+            # Prefer real segment timings for Whisper; otherwise fall back to a
+            # simple single-chunk SRT block.
+            if provider == "faster-whisper" and segments_for_timing:
+                lines: List[str] = []
+
+                def _fmt_srt_timestamp(total_seconds: float) -> str:
+                    try:
+                        if total_seconds is None:
+                            total_seconds = 0.0
+                        total_ms = int(round(max(float(total_seconds), 0.0) * 1000))
+                    except Exception:
+                        total_ms = 0
+                    seconds, ms = divmod(total_ms, 1000)
+                    hours, seconds = divmod(seconds, 3600)
+                    minutes, seconds = divmod(seconds, 60)
+                    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{ms:03d}"
+
+                idx = 1
+                for seg in segments_for_timing:
+                    if not isinstance(seg, dict):
+                        continue
+                    text_seg = str(seg.get("Text", "")).strip()
+                    if not text_seg:
+                        continue
+                    start = seg.get("start_seconds", 0.0)
+                    end = seg.get("end_seconds", start)
+                    start_ts = _fmt_srt_timestamp(start)
+                    end_ts = _fmt_srt_timestamp(end)
+                    lines.append(str(idx))
+                    lines.append(f"{start_ts} --> {end_ts}")
+                    lines.append(text_seg)
+                    lines.append("")
+                    idx += 1
+
+                if lines:
+                    srt_content = "\n".join(lines).rstrip() + "\n"
+                else:
+                    srt_content = f"1\n00:00:00,000 --> 00:00:10,000\n{transcribed_text}\n"
+            else:
+                # Simple SRT format fallback when timing information is unavailable
+                srt_content = f"1\n00:00:00,000 --> 00:00:10,000\n{transcribed_text}\n"
             return Response(content=srt_content, media_type="text/plain")
 
         elif response_format == "vtt":
-            if is_transcription_error(transcribed_text):
-                logger.error(f"Transcription failed: {transcribed_text}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Transcription failed. Please try again or use a different model."
-                )
-            # Simple VTT format
-            vtt_content = f"WEBVTT\n\n00:00:00.000 --> 00:00:10.000\n{transcribed_text}\n"
+            _raise_on_transcription_error(transcribed_text)
+            # Prefer real segment timings for Whisper; otherwise use a simple
+            # single-chunk VTT block.
+            if provider == "faster-whisper" and segments_for_timing:
+                lines_vtt: List[str] = ["WEBVTT", ""]
+
+                def _fmt_vtt_timestamp(total_seconds: float) -> str:
+                    try:
+                        if total_seconds is None:
+                            total_seconds = 0.0
+                        total_ms = int(round(max(float(total_seconds), 0.0) * 1000))
+                    except Exception:
+                        total_ms = 0
+                    seconds, ms = divmod(total_ms, 1000)
+                    hours, seconds = divmod(seconds, 3600)
+                    minutes, seconds = divmod(seconds, 60)
+                    return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{ms:03d}"
+
+                for seg in segments_for_timing:
+                    if not isinstance(seg, dict):
+                        continue
+                    text_seg = str(seg.get("Text", "")).strip()
+                    if not text_seg:
+                        continue
+                    start = seg.get("start_seconds", 0.0)
+                    end = seg.get("end_seconds", start)
+                    start_ts = _fmt_vtt_timestamp(start)
+                    end_ts = _fmt_vtt_timestamp(end)
+                    lines_vtt.append(f"{start_ts} --> {end_ts}")
+                    lines_vtt.append(text_seg)
+                    lines_vtt.append("")
+
+                vtt_content = "\n".join(lines_vtt).rstrip() + "\n"
+            else:
+                # Simple VTT fallback when timing information is unavailable
+                vtt_content = f"WEBVTT\n\n00:00:00.000 --> 00:00:10.000\n{transcribed_text}\n"
             return Response(content=vtt_content, media_type="text/vtt")
 
         else:  # json or verbose_json
@@ -895,7 +1113,12 @@ async def create_transcription(
 
             # Segments (prefer real segments when Whisper used)
             if "segment" in granularity_tokens:
-                if provider == "faster-whisper" and 'segments_list' in locals() and isinstance(segments_list, list) and segments_list:
+                if (
+                    provider == "faster-whisper"
+                    and "segments_list" in locals()
+                    and isinstance(segments_list, list)
+                    and segments_list
+                ):
                     segs = []
                     for i, seg in enumerate(segments_list):
                         start = float(seg.get("start_seconds", 0.0))
@@ -913,13 +1136,15 @@ async def create_transcription(
                     response_data["segments"] = segs
                 else:
                     # Fallback single segment
-                    response_data["segments"] = [{
-                        "id": 0,
-                        "seek": 0,
-                        "start": 0.0,
-                        "end": duration,
-                        "text": transcribed_text,
-                    }]
+                    response_data["segments"] = [
+                        {
+                            "id": 0,
+                            "seek": 0,
+                            "start": 0.0,
+                            "end": duration,
+                            "text": transcribed_text,
+                        }
+                    ]
 
             # Optional: auto-run segmentation in JSON responses
             if segment:
@@ -959,7 +1184,7 @@ async def create_transcription(
                     logger.warning(f"Auto-segmentation failed: {seg_err}")
 
             if response_format == "verbose_json":
-                response_data["task"] = "transcribe"
+                response_data["task"] = task_normalized
                 response_data["duration"] = duration
 
             return JSONResponse(content=response_data)
@@ -968,10 +1193,7 @@ async def create_transcription(
         raise
     except Exception as e:
         logger.error(f"Error during transcription: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Transcription failed: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Transcription failed: {str(e)}")
     finally:
         # Clean up temporary file
         if temp_audio_path and os.path.exists(temp_audio_path):
@@ -980,7 +1202,9 @@ async def create_transcription(
             except OSError as e:
                 logger.warning(f"Failed to remove temp audio file: path={temp_audio_path}, error={e}")
                 try:
-                    increment_counter("app_warning_events_total", labels={"component": "audio", "event": "tempfile_remove_failed"})
+                    increment_counter(
+                        "app_warning_events_total", labels={"component": "audio", "event": "tempfile_remove_failed"}
+                    )
                 except Exception as m_err:
                     logger.debug(f"metrics increment failed (audio tempfile_remove_failed): error={m_err}")
 
@@ -988,7 +1212,9 @@ async def create_transcription(
 @router.post(
     "/translations",
     summary="Translates audio into English (OpenAI Compatible)",
-    dependencies=[Depends(require_token_scope("any", require_if_present=False, endpoint_id="audio.translations", count_as="call"))],
+    dependencies=[
+        Depends(require_token_scope("any", require_if_present=False, endpoint_id="audio.translations", count_as="call"))
+    ],
 )
 @limiter.limit("20/minute", key_func=_rate_limit_key)
 async def create_translation(
@@ -1016,7 +1242,7 @@ async def create_translation(
         usage_log.log_event(
             "audio.transcriptions",
             tags=[str(model or "")],
-            metadata={"filename": getattr(file, 'filename', None), "language": "en"},
+            metadata={"filename": getattr(file, "filename", None), "language": "en"},
         )
     except Exception as e:
         logger.debug(f"usage_log audio.transcriptions failed: error={e}")
@@ -1024,15 +1250,19 @@ async def create_translation(
     # and then translate if needed (simplified implementation)
     # In a full implementation, you would use a translation model
 
-    # Call transcription with English as target
+    # Call transcription in translate mode. For Whisper providers this uses
+    # the "translate" task (source-language auto-detect, English output).
+    # For non-Whisper providers, the task hint is ignored and a normal
+    # transcription is performed.
     return await create_transcription(
         request=request,
         file=file,
         model=model,
-        language="en",  # Force English output
+        language=None,  # Allow backend to auto-detect source language
         prompt=prompt,
         response_format=response_format,
         temperature=temperature,
+        task="translate",
         timestamp_granularities="segment",
         current_user=current_user,
     )
@@ -1088,7 +1318,7 @@ async def audio_chat_turn(
         logger.debug(f"usage_log audio.chat failed: error={e}; request_id={rid}")
 
     try:
-        return await run_speech_chat_turn(
+        return await speech_chat_service.run_speech_chat_turn(
             request_data=request_data,
             current_user=current_user,
             chat_db=chat_db,
@@ -1133,7 +1363,7 @@ async def segment_transcript(
             "MIN_SEGMENT_SIZE": req.min_segment_size,
             "LAMBDA_BALANCE": req.lambda_balance,
             "UTTERANCE_EXPANSION_WIDTH": req.utterance_expansion_width,
-            "MIN_IMPROVEMENT_RATIO": getattr(req, 'min_improvement_ratio', 0.0),
+            "MIN_IMPROVEMENT_RATIO": getattr(req, "min_improvement_ratio", 0.0),
         }
         if req.embeddings_provider:
             configs["EMBEDDINGS_PROVIDER"] = req.embeddings_provider
@@ -1163,16 +1393,11 @@ async def segment_transcript(
         raise
     except Exception as e:
         logger.error(f"Transcript segmentation error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Transcript segmentation failed"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Transcript segmentation failed")
 
 
 @router.get("/health")
-async def get_tts_health(
-    tts_service: TTSServiceV2 = Depends(get_tts_service)
-):
+async def get_tts_health(tts_service: TTSServiceV2 = Depends(get_tts_service)):
     """
     Get health status of TTS providers.
 
@@ -1207,54 +1432,128 @@ async def get_tts_health(
             "providers": {
                 "total": total_providers,
                 "available": available_providers,
-                "details": status.get("providers", {})
+                "details": status.get("providers", {}),
             },
             "circuit_breakers": status.get("circuit_breakers", {}),
             "capabilities": capabilities,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }
 
         # Add Kokoro adapter details if available
         try:
             from tldw_Server_API.app.core.TTS.adapter_registry import get_tts_factory, TTSProvider
+
             factory = await get_tts_factory()
             adapter = await factory.registry.get_adapter(TTSProvider.KOKORO)
             if adapter:
-                backend = 'onnx' if getattr(adapter, 'use_onnx', True) else 'pytorch'
+                backend = "onnx" if getattr(adapter, "use_onnx", True) else "pytorch"
                 kokoro_info = {
-                    'backend': backend,
-                    'device': str(getattr(adapter, 'device', 'unknown')),
-                    'model_path': getattr(adapter, 'model_path', None),
-                    'voices_json': getattr(adapter, 'voices_json', None)
+                    "backend": backend,
+                    "device": str(getattr(adapter, "device", "unknown")),
+                    "model_path": getattr(adapter, "model_path", None),
+                    "voices_json": getattr(adapter, "voices_json", None),
                 }
                 # Espeak library hint for phonemizer-backed flows
                 try:
-                    es_env = os.getenv('PHONEMIZER_ESPEAK_LIBRARY')
-                    kokoro_info['espeak_lib_env'] = es_env
+                    es_env = os.getenv("PHONEMIZER_ESPEAK_LIBRARY")
+                    kokoro_info["espeak_lib_env"] = es_env
                     if es_env:
-                        kokoro_info['espeak_lib_exists'] = bool(os.path.exists(es_env))
+                        kokoro_info["espeak_lib_exists"] = bool(os.path.exists(es_env))
                     else:
-                        kokoro_info['espeak_lib_exists'] = False
+                        kokoro_info["espeak_lib_exists"] = False
                 except Exception:
                     pass
-                health['providers']['kokoro'] = kokoro_info
+                health["providers"]["kokoro"] = kokoro_info
         except Exception as e:
             logger.debug(f"Kokoro health enrichment failed: {e}")
 
         return health
     except Exception as e:
         logger.error(f"Error getting TTS health: {e}")
-        return {
-            "status": "error",
-            "error": str(e),
-            "timestamp": datetime.utcnow().isoformat()
+        return {"status": "error", "error": str(e), "timestamp": datetime.utcnow().isoformat()}
+
+
+@router.get("/transcriptions/health", summary="Check STT transcription model health")
+async def get_stt_health(
+    model: Optional[str] = Query(
+        default="whisper-1",
+        description="Transcription model to check (OpenAI-style id or internal STT model name).",
+    ),
+    warm: bool = Query(
+        default=False,
+        description="If true and the provider is Whisper, eagerly load the model to verify it can be initialized.",
+    ),
+):
+    """
+    Lightweight health/readiness endpoint for STT models.
+
+    - Resolves the requested model to an internal STT provider and model id.
+    - Uses `Audio_Files.check_transcription_model_status` to report availability
+      and estimated download size.
+    - When `warm=true` and the provider is Whisper, attempts to initialize the
+      faster-whisper model via `get_whisper_model` so operators can exercise
+      the cache and surface initialization errors before production traffic.
+    """
+    from datetime import datetime
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as stt_lib
+
+    raw_model = model or "whisper-1"
+    # Determine provider using the same parser as the main STT pipeline.
+    provider_raw, _, _ = stt_lib.parse_transcription_model(raw_model)
+
+    # For Whisper providers, map OpenAI-style ids (e.g. "whisper-1") to an
+    # internal faster-whisper model name so health checks align with /transcriptions.
+    if provider_raw == "whisper":
+        resolved_model = _map_openai_audio_model_to_whisper(raw_model)
+    else:
+        resolved_model = raw_model
+
+    # Base status from cached/downloaded model presence.
+    try:
+        status_info = audio_files.check_transcription_model_status(resolved_model)
+    except Exception:
+        logger.exception("STT health: check_transcription_model_status failed")
+        status_info = {
+            "available": False,
+            "message": "Failed to check model status.",
+            "model": resolved_model,
         }
+
+    health: Dict[str, Any] = {
+        "provider": provider_raw,
+        "alias": raw_model,
+        "model": status_info.get("model", resolved_model),
+        "available": bool(status_info.get("available", False)),
+        "message": status_info.get("message"),
+        "estimated_size": status_info.get("estimated_size"),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    # Optional warmup: try to instantiate the Whisper model to ensure the
+    # configured device/compute_type settings are compatible with this runtime.
+    warm_info: Dict[str, Any] = {}
+    if warm and provider_raw == "whisper":
+        device = getattr(stt_lib, "processing_choice", "cpu")
+        try:
+            stt_lib.get_whisper_model(resolved_model, device, check_download_status=False)
+            warm_info = {"ok": True, "device": device}
+        except Exception:
+            logger.exception(f"STT health warm-up failed for model={resolved_model}, device={device}")
+            warm_info = {
+                "ok": False,
+                "device": device,
+                "error": "Model initialization failed.",
+            }
+
+    if warm_info:
+        health["warm"] = warm_info
+
+    return health
 
 
 @router.get("/providers")
-async def list_tts_providers(
-    tts_service: TTSServiceV2 = Depends(get_tts_service)
-):
+async def list_tts_providers(tts_service: TTSServiceV2 = Depends(get_tts_service)):
     """
     List all available TTS providers and their capabilities.
     """
@@ -1264,23 +1563,18 @@ async def list_tts_providers(
         capabilities = await tts_service.get_capabilities()
         voices = await tts_service.list_voices()
 
-        return {
-            "providers": capabilities,
-            "voices": voices,
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        return {"providers": capabilities, "voices": voices, "timestamp": datetime.utcnow().isoformat()}
     except Exception as e:
         logger.error(f"Error listing TTS providers: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list providers: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to list providers: {str(e)}"
         )
 
 
 @router.get("/voices/catalog", summary="List available TTS voices across providers")
 async def list_tts_voices(
     provider: Optional[str] = Query(None, description="Optional provider filter, e.g., 'elevenlabs' or 'openai'"),
-    tts_service: TTSServiceV2 = Depends(get_tts_service)
+    tts_service: TTSServiceV2 = Depends(get_tts_service),
 ):
     """
     List available voices from TTS providers.
@@ -1298,17 +1592,16 @@ async def list_tts_voices(
             if key in all_voices:
                 return {key: all_voices[key]}
             from fastapi import HTTPException
+
             raise HTTPException(status_code=404, detail=f"Provider '{provider}' not found or unavailable")
         return all_voices
     except Exception as e:
         logger.error(f"Error listing TTS voices: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list voices: {str(e)}")
 
+
 @router.post("/reset-metrics")
-async def reset_tts_metrics(
-    provider: Optional[str] = None,
-    tts_service: TTSServiceV2 = Depends(get_tts_service)
-):
+async def reset_tts_metrics(provider: Optional[str] = None, tts_service: TTSServiceV2 = Depends(get_tts_service)):
     """
     Reset TTS metrics.
 
@@ -1316,7 +1609,7 @@ async def reset_tts_metrics(
         provider: Optional provider name to reset metrics for. If not provided, resets all metrics.
     """
     try:
-        if hasattr(tts_service, 'metrics'):
+        if hasattr(tts_service, "metrics"):
             if provider:
                 # Reset specific provider metrics
                 logger.info(f"Resetting metrics for provider: {provider}")
@@ -1331,9 +1624,9 @@ async def reset_tts_metrics(
     except Exception as e:
         logger.error(f"Error resetting metrics: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to reset metrics: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to reset metrics: {str(e)}"
         )
+
 
 ######################################################################################################################
 # WebSocket Router Creation
@@ -1342,10 +1635,10 @@ async def reset_tts_metrics(
 # Create a separate router for WebSocket endpoints to avoid authentication conflicts
 ws_router = APIRouter()
 
+
 @ws_router.websocket("/stream/transcribe")
 async def websocket_transcribe(
-    websocket: WebSocket,
-    token: Optional[str] = Query(None)  # Get token from query parameter
+    websocket: WebSocket, token: Optional[str] = Query(None)  # Get token from query parameter
 ):
     """
     Handle a WebSocket connection to perform real-time streaming audio transcription.
@@ -1368,6 +1661,7 @@ async def websocket_transcribe(
     _outer_stream = None
     try:
         from tldw_Server_API.app.core.Streaming.streams import WebSocketStream as _WSStream
+
         _outer_stream = _WSStream(
             websocket,
             heartbeat_interval_s=0,
@@ -1382,7 +1676,12 @@ async def websocket_transcribe(
     # Correlate via request id (header or generated)
     try:
         _hdrs = websocket.headers or {}
-        request_id = _hdrs.get("x-request-id") or _hdrs.get("X-Request-Id") or (websocket.query_params.get("request_id") if hasattr(websocket, "query_params") else None) or str(uuid4())
+        request_id = (
+            _hdrs.get("x-request-id")
+            or _hdrs.get("X-Request-Id")
+            or (websocket.query_params.get("request_id") if hasattr(websocket, "query_params") else None)
+            or str(uuid4())
+        )
     except Exception:
         request_id = str(uuid4())
     try:
@@ -1399,6 +1698,7 @@ async def websocket_transcribe(
 
     # Authentication
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
     settings = get_settings()
     expected_key = settings.SINGLE_USER_API_KEY
 
@@ -1416,6 +1716,7 @@ async def websocket_transcribe(
                 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
                 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
                 from tldw_Server_API.app.core.AuthNZ.quotas import increment_and_check_api_key_quota
+
                 api_mgr = await get_api_key_manager()
                 client_ip = getattr(websocket.client, "host", None)
                 info = await api_mgr.validate_api_key(api_key=x_api_key, ip_address=client_ip)
@@ -1430,6 +1731,7 @@ async def websocket_transcribe(
                     allowed_eps = info.get("llm_allowed_endpoints")
                     if isinstance(allowed_eps, str):
                         import json as _json
+
                         try:
                             allowed_eps = _json.loads(allowed_eps)
                         except Exception:
@@ -1438,13 +1740,16 @@ async def websocket_transcribe(
                     if isinstance(allowed_eps, list) and allowed_eps:
                         if endpoint_id not in [str(x) for x in allowed_eps]:
                             if _outer_stream:
-                                await _outer_stream.send_json({"type": "error", "message": "Endpoint not permitted for API key"})
+                                await _outer_stream.send_json(
+                                    {"type": "error", "message": "Endpoint not permitted for API key"}
+                                )
                             await websocket.close(code=4403)
                             return
                     # Path allowlist via metadata
                     meta = info.get("metadata")
                     if isinstance(meta, str):
                         import json as _json
+
                         try:
                             meta = _json.loads(meta)
                         except Exception:
@@ -1456,7 +1761,9 @@ async def websocket_transcribe(
                             ws_path = "/api/v1/audio/stream/transcribe"
                             if not any(str(ws_path).startswith(str(pfx)) for pfx in ap):
                                 if _outer_stream:
-                                    await _outer_stream.send_json({"type": "error", "message": "Path not permitted for API key"})
+                                    await _outer_stream.send_json(
+                                        {"type": "error", "message": "Path not permitted for API key"}
+                                    )
                                 await websocket.close(code=4403)
                                 return
                         # Quota enforcement (DB-backed)
@@ -1469,6 +1776,7 @@ async def websocket_transcribe(
                             per = meta.get("period")
                             if isinstance(per, str) and per.lower() == "day":
                                 from datetime import datetime, timezone
+
                                 bucket = datetime.now(timezone.utc).date().isoformat()
                             db_pool = await get_db_pool()
                             ok, _cnt = await increment_and_check_api_key_quota(
@@ -1480,7 +1788,9 @@ async def websocket_transcribe(
                             )
                             if not ok:
                                 if _outer_stream:
-                                    await _outer_stream.send_json({"type": "error", "message": "API key quota exceeded"})
+                                    await _outer_stream.send_json(
+                                        {"type": "error", "message": "API key quota exceeded"}
+                                    )
                                 await websocket.close(code=4403)
                                 return
                 authenticated = True
@@ -1536,7 +1846,9 @@ async def websocket_transcribe(
                         allowed_eps = payload.get("allowed_endpoints")
                         if isinstance(allowed_eps, list) and allowed_eps:
                             if endpoint_id not in [str(x) for x in allowed_eps]:
-                                await websocket.send_json({"type": "error", "message": "Endpoint not permitted for token"})
+                                await websocket.send_json(
+                                    {"type": "error", "message": "Endpoint not permitted for token"}
+                                )
                                 await websocket.close(code=4403)
                                 return
                         # Optional path prefix allowlist
@@ -1554,11 +1866,13 @@ async def websocket_transcribe(
                         if isinstance(max_calls, int) and max_calls >= 0:
                             from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
                             from tldw_Server_API.app.core.AuthNZ.quotas import increment_and_check_jwt_quota
+
                             # Optional daily bucket
                             bucket = None
                             per = payload.get("period")
                             if isinstance(per, str) and per.lower() == "day":
                                 from datetime import datetime, timezone
+
                                 bucket = datetime.now(timezone.utc).date().isoformat()
                             db_pool = await get_db_pool()
                             ok, _cnt = await increment_and_check_jwt_quota(
@@ -1588,10 +1902,12 @@ async def websocket_transcribe(
                 first_message = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
                 auth_data = json.loads(first_message)
                 if auth_data.get("type") != "auth" or not auth_data.get("token"):
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "Authentication required: Authorization: Bearer <JWT> or auth message"
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Authentication required: Authorization: Bearer <JWT> or auth message",
+                        }
+                    )
                     await websocket.close(code=4401)
                     return
             except Exception as e:
@@ -1604,6 +1920,7 @@ async def websocket_transcribe(
                     from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
                     from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
                     from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user_by_id
+
                     jwt_service = get_jwt_service()
                     payload = jwt_service.decode_access_token(auth_data.get("token"))
                     uid = payload.get("user_id") or payload.get("sub")
@@ -1632,6 +1949,7 @@ async def websocket_transcribe(
             client_ip = getattr(websocket.client, "host", None)
         except Exception:
             client_ip = None
+
         def _ip_allowed_single_user(ip: Optional[str]) -> bool:
             try:
                 allowed = [s.strip() for s in (settings.SINGLE_USER_ALLOWED_IPS or []) if str(s).strip()]
@@ -1640,10 +1958,11 @@ async def websocket_transcribe(
                 if not ip:
                     return False
                 import ipaddress as _ip
+
                 pip = _ip.ip_address(ip)
                 for entry in allowed:
                     try:
-                        if '/' in entry:
+                        if "/" in entry:
                             if pip in _ip.ip_network(entry, strict=False):
                                 return True
                         else:
@@ -1662,7 +1981,11 @@ async def websocket_transcribe(
         if auth_header and auth_header.lower().startswith("bearer "):
             header_bearer = auth_header.split(" ", 1)[1].strip()
 
-        if (header_api_key and header_api_key == expected_key) or (header_bearer and header_bearer == expected_key) or (token and token == expected_key):
+        if (
+            (header_api_key and header_api_key == expected_key)
+            or (header_bearer and header_bearer == expected_key)
+            or (token and token == expected_key)
+        ):
             if not _ip_allowed_single_user(client_ip):
                 if _outer_stream:
                     await _outer_stream.send_json({"type": "error", "message": "IP not allowed"})
@@ -1681,10 +2004,12 @@ async def websocket_transcribe(
                 auth_data = json.loads(first_message)
                 if auth_data.get("type") != "auth" or auth_data.get("token") != expected_key:
                     if _outer_stream:
-                        await _outer_stream.send_json({
-                        "type": "error",
-                        "message": "Authentication required. Send {\"type\": \"auth\", \"token\": \"YOUR_API_KEY\"}"
-                    })
+                        await _outer_stream.send_json(
+                            {
+                                "type": "error",
+                                "message": 'Authentication required. Send {"type": "auth", "token": "YOUR_API_KEY"}',
+                            }
+                        )
                     await websocket.close()
                     return
                 if not _ip_allowed_single_user(client_ip):
@@ -1695,18 +2020,16 @@ async def websocket_transcribe(
                 authenticated = True
             except asyncio.TimeoutError:
                 if _outer_stream:
-                    await _outer_stream.send_json({
-                    "type": "error",
-                    "message": "Authentication timeout. Send auth message within 5 seconds."
-                })
+                    await _outer_stream.send_json(
+                        {"type": "error", "message": "Authentication timeout. Send auth message within 5 seconds."}
+                    )
                 await websocket.close()
                 return
             except json.JSONDecodeError:
                 if _outer_stream:
-                    await _outer_stream.send_json({
-                    "type": "error",
-                    "message": "Invalid JSON in authentication message"
-                })
+                    await _outer_stream.send_json(
+                        {"type": "error", "message": "Invalid JSON in authentication message"}
+                    )
                 await websocket.close()
                 return
 
@@ -1720,15 +2043,29 @@ async def websocket_transcribe(
         # Default configuration - prefer server config for variant/model
         # This ensures alignment with configured STT defaults even if the
         # client configuration message arrives late.
-        default_model = 'parakeet'
-        default_variant = 'standard'
+        default_model = "parakeet"
+        default_variant = "standard"
         try:
             cfg = load_comprehensive_config()
-            if cfg.has_section('STT-Settings'):
+            if cfg.has_section("STT-Settings"):
                 # Nemo model variant (standard|onnx|mlx)
-                default_variant = cfg.get('STT-Settings', 'nemo_model_variant', fallback='standard').strip().lower()
+                default_variant = cfg.get("STT-Settings", "nemo_model_variant", fallback="standard").strip().lower()
         except Exception as e:
             logger.warning(f"Could not read STT-Settings from config: {e}")
+
+        # If Nemo toolkit is unavailable in this environment, prefer Whisper
+        # as the initial streaming model so we avoid repeated initialization
+        # failures before falling back.
+        try:
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (  # type: ignore
+                is_nemo_available as _is_nemo_available,
+            )
+
+            nemo_ok = _is_nemo_available()
+        except Exception:
+            nemo_ok = False
+        if not nemo_ok:
+            default_model = "whisper"
 
         config = UnifiedStreamingConfig(
             model=default_model,
@@ -1738,10 +2075,12 @@ async def websocket_transcribe(
             overlap_duration=0.5,
             enable_partial=True,
             partial_interval=0.5,
-            language='en'  # Default language for Canary
+            language="en",  # Default language for Canary
         )
 
-        logger.info(f"WebSocket authenticated, calling handle_unified_websocket with default config: model={config.model}, variant={config.model_variant}")
+        logger.info(
+            f"WebSocket authenticated, calling handle_unified_websocket with default config: model={config.model}, variant={config.model_variant}"
+        )
 
         # Enforce per-user streaming quotas and daily minutes during streaming
         # Resolve user id for quotas (JWT in multi-user; fixed id in single-user)
@@ -1749,6 +2088,7 @@ async def websocket_transcribe(
             user_id_for_usage = int(jwt_user_id)
         else:
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+
             _s = _get_settings()
             user_id_for_usage = getattr(_s, "SINGLE_USER_FIXED_ID", 1)
 
@@ -1790,19 +2130,25 @@ async def websocket_transcribe(
                     ip = getattr(websocket.client, "host", None) or "unknown"
                     entity = f"ip:{ip}"
                 dec, hid = await gov.reserve(
-                    RGRequest(entity=entity, categories={"streams": {"units": 1}}, tags={"policy_id": policy_id, "endpoint": ws_path}),
-                    op_id=f"audio-ws:{entity}:{ws_path}"
+                    RGRequest(
+                        entity=entity,
+                        categories={"streams": {"units": 1}},
+                        tags={"policy_id": policy_id, "endpoint": ws_path},
+                    ),
+                    op_id=f"audio-ws:{entity}:{ws_path}",
                 )
                 if not dec.allowed:
                     try:
                         if _outer_stream:
-                            await _outer_stream.send_json({
-                                "type": "error",
-                                "error_type": "rate_limited",
-                                "quota": "streams",
-                                "retry_after": int(dec.retry_after or 0),
-                                "message": "Too many concurrent streams"
-                            })
+                            await _outer_stream.send_json(
+                                {
+                                    "type": "error",
+                                    "error_type": "rate_limited",
+                                    "quota": "streams",
+                                    "retry_after": int(dec.retry_after or 0),
+                                    "message": "Too many concurrent streams",
+                                }
+                            )
                     except Exception:
                         pass
                     try:
@@ -1821,17 +2167,15 @@ async def websocket_transcribe(
         FAIL_OPEN_CAP_MINUTES = _get_failopen_cap_minutes()
         failopen_remaining = FAIL_OPEN_CAP_MINUTES
 
-        def _on_audio(seconds: float, sr: int) -> None:
-            nonlocal used_minutes
-            # Check allowance before processing
-            minutes_chunk = float(seconds) / 60.0
-            # Note: async check in sync callback not ideal; fast path uses last known remaining
-            # For MVP, perform a quick synchronous budget check using a cached remaining
-            used_minutes += minutes_chunk
+        # Local snapshot of remaining minutes for this connection; when None,
+        # the next chunk will trigger a DB refresh.
+        remaining_minutes_snapshot: Optional[float] = None
 
         try:
             # Use shared exception class so inner handler can bubble it up
-            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import QuotaExceeded as _QuotaExceeded
+            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+                QuotaExceeded as _QuotaExceeded,
+            )
 
             async def _on_audio_quota(seconds: float, sr: int) -> None:
                 """
@@ -1848,11 +2192,22 @@ async def websocket_transcribe(
                     - Checks whether the user's remaining daily minutes allow this chunk; if allowed, increments the nonlocal
                       `used_minutes` counter and records the minutes via `add_daily_minutes`.
                 """
-                nonlocal used_minutes, failopen_remaining
+                nonlocal used_minutes, failopen_remaining, remaining_minutes_snapshot
                 minutes_chunk = float(seconds) / 60.0
                 deducted = False
+                allow = False
+                # Fast-path local check: if we have a remaining snapshot and this
+                # chunk would exceed it, raise immediately without a DB round-trip.
+                if remaining_minutes_snapshot is not None and minutes_chunk > remaining_minutes_snapshot:
+                    raise _QuotaExceeded("daily_minutes")
+
+                # Refresh remaining snapshot periodically by asking the DB for this
+                # chunk; on success, we treat the returned "remaining_after" value
+                # as the new snapshot.
                 try:
-                    allow, _ = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
+                    allow, remaining_after = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
+                    if allow and remaining_after is not None:
+                        remaining_minutes_snapshot = float(remaining_after)
                 except EXPECTED_DB_EXC as e:
                     # Backing store failed; allow temporarily but deduct from bounded fail-open budget
                     logger.warning(
@@ -1870,9 +2225,7 @@ async def websocket_transcribe(
                     deducted = True
                     if failopen_remaining <= 0:
                         try:
-                            increment_counter(
-                                "audio_failopen_cap_exhausted_total", labels={"reason": "db_check"}
-                            )
+                            increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_check"})
                         except Exception:
                             pass
                         raise _QuotaExceeded("daily_minutes")
@@ -1880,6 +2233,11 @@ async def websocket_transcribe(
                     # Raise structured signal to outer scope
                     raise _QuotaExceeded("daily_minutes")
                 used_minutes += minutes_chunk
+                # Reduce the local snapshot so subsequent chunks can be checked
+                # without hitting the DB until it is exhausted or refreshed on
+                # the next successful check.
+                if remaining_minutes_snapshot is not None:
+                    remaining_minutes_snapshot = max(0.0, remaining_minutes_snapshot - minutes_chunk)
                 try:
                     await add_daily_minutes(user_id_for_usage, minutes_chunk)
                 except EXPECTED_DB_EXC as e:
@@ -1891,21 +2249,22 @@ async def websocket_transcribe(
                         failopen_remaining -= minutes_chunk
                         try:
                             increment_counter(
-                                "audio_failopen_minutes_total", value=float(minutes_chunk), labels={"reason": "db_record"}
+                                "audio_failopen_minutes_total",
+                                value=float(minutes_chunk),
+                                labels={"reason": "db_record"},
                             )
                             increment_counter("audio_failopen_events_total", labels={"reason": "db_record"})
                         except Exception:
                             pass
                         if failopen_remaining <= 0:
                             try:
-                                increment_counter(
-                                    "audio_failopen_cap_exhausted_total", labels={"reason": "db_record"}
-                                )
+                                increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_record"})
                             except Exception:
                                 pass
                             raise _QuotaExceeded("daily_minutes")
 
             try:
+
                 async def _on_heartbeat() -> None:
                     """
                     Send a heartbeat to update streaming quota/timestamp for the current user.
@@ -1948,12 +2307,14 @@ async def websocket_transcribe(
                 # Send structured error and close with application-defined code
                 try:
                     if _outer_stream:
-                        await _outer_stream.send_json({
-                            "type": "error",
-                            "error_type": "quota_exceeded",
-                            "quota": qe.quota,
-                            "message": "Streaming transcription quota exceeded (daily minutes)"
-                        })
+                        await _outer_stream.send_json(
+                            {
+                                "type": "error",
+                                "error_type": "quota_exceeded",
+                                "quota": qe.quota,
+                                "message": "Streaming transcription quota exceeded (daily minutes)",
+                            }
+                        )
                 except Exception as e:
                     logger.debug(f"WebSocket send_json quota error failed: error={e}")
                 try:
@@ -1983,19 +2344,24 @@ async def websocket_transcribe(
             if quota_name:
                 try:
                     if _outer_stream:
-                        await _outer_stream.send_json({
-                            "type": "error",
-                            "error_type": "quota_exceeded",
-                            "quota": quota_name,
-                            "message": "Streaming transcription quota exceeded"
-                        })
+                        await _outer_stream.send_json(
+                            {
+                                "type": "error",
+                                "error_type": "quota_exceeded",
+                                "quota": quota_name,
+                                "message": "Streaming transcription quota exceeded",
+                            }
+                        )
                 finally:
                     try:
                         await websocket.close(code=_policy_close_code(), reason="quota_exceeded")
                     except Exception as e:
                         logger.warning(f"WebSocket close after quota exceeded failed: error={e}")
                         try:
-                            increment_counter("app_warning_events_total", labels={"component": "audio", "event": "ws_close_quota_failed"})
+                            increment_counter(
+                                "app_warning_events_total",
+                                labels={"component": "audio", "event": "ws_close_quota_failed"},
+                            )
                         except Exception as m_err:
                             logger.debug(f"metrics increment failed (audio ws_close_quota_failed): error={m_err}")
             else:
@@ -2005,7 +2371,9 @@ async def websocket_transcribe(
         except Exception as e:
             logger.warning(f"Streaming transcription outer handler swallowed error: {e}")
             try:
-                increment_counter("app_warning_events_total", labels={"component": "audio", "event": "stream_outer_handler_error"})
+                increment_counter(
+                    "app_warning_events_total", labels={"component": "audio", "event": "stream_outer_handler_error"}
+                )
             except Exception as m_err:
                 logger.debug(f"metrics increment failed (audio stream_outer_handler_error): error={m_err}")
     finally:
@@ -2038,8 +2406,9 @@ async def streaming_status():
         # Check for MLX variant
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
-                transcribe_with_parakeet_mlx
+                transcribe_with_parakeet_mlx,
             )
+
             available_models.append("parakeet-mlx")
         except ImportError:
             pass
@@ -2047,8 +2416,9 @@ async def streaming_status():
         # Check for standard variant (NeMo)
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                load_parakeet_model
+                load_parakeet_model,
             )
+
             available_models.append("parakeet-standard")
         except ImportError:
             pass
@@ -2057,37 +2427,38 @@ async def streaming_status():
         try:
             import onnxruntime
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
-                load_parakeet_onnx_model
+                load_parakeet_onnx_model,
             )
+
             available_models.append("parakeet-onnx")
         except ImportError:
             pass
 
-        return JSONResponse({
-            "status": "available" if available_models else "unavailable",
-            "available_models": available_models,
-            "websocket_endpoint": "/api/v1/audio/stream/transcribe",
-            "supported_features": {
-                "partial_results": True,
-                "multiple_languages": True,
-                "concurrent_streams": True,
-                "segment_metadata": True,
-                "live_insights": True,
-                "meeting_notes": True,
-                "speaker_diarization": True,
-                "audio_persistence": True
+        return JSONResponse(
+            {
+                "status": "available" if available_models else "unavailable",
+                "available_models": available_models,
+                "websocket_endpoint": "/api/v1/audio/stream/transcribe",
+                "supported_features": {
+                    "partial_results": True,
+                    "multiple_languages": True,
+                    "concurrent_streams": True,
+                    "segment_metadata": True,
+                    "live_insights": True,
+                    "meeting_notes": True,
+                    "speaker_diarization": True,
+                    "audio_persistence": True,
+                },
             }
-        })
+        )
 
     except Exception as e:
         import traceback
+
         logger.error(f"Error checking streaming status: {e}\n{traceback.format_exc()}")
         return JSONResponse(
             status_code=500,
-            content={
-                "status": "error",
-                "message": "An internal error occurred. Please try again later."
-            }
+            content={"status": "error", "message": "An internal error occurred. Please try again later."},
         )
 
 
@@ -2164,15 +2535,18 @@ async def streaming_limits(
         )
         max_streams = 0
     can_start = (max_streams == 0) or (active_streams < max_streams)
-    return JSONResponse({
-        "user_id": current_user.id,
-        "tier": tier,
-        "limits": limits,
-        "used_today_minutes": used_minutes,
-        "remaining_minutes": remaining_minutes,
-        "active_streams": active_streams,
-        "can_start_stream": can_start,
-    })
+    return JSONResponse(
+        {
+            "user_id": current_user.id,
+            "tier": tier,
+            "limits": limits,
+            "used_today_minutes": used_minutes,
+            "remaining_minutes": remaining_minutes,
+            "active_streams": active_streams,
+            "can_start_stream": can_start,
+        }
+    )
+
 
 @router.post("/stream/test", summary="Test streaming transcription setup")
 async def test_streaming():
@@ -2193,32 +2567,35 @@ async def test_streaming():
             - "message": Error message describing the failure
     """
     try:
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
-            ParakeetStreamingTranscriber,
-            StreamingConfig
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+            UnifiedStreamingTranscriber,
+            UnifiedStreamingConfig,
         )
         import base64
 
         # Try to initialize transcriber
-        config = StreamingConfig(model_variant='mlx')
-        transcriber = ParakeetStreamingTranscriber(config)
+        config = UnifiedStreamingConfig(model="parakeet", model_variant="mlx")
+        transcriber = UnifiedStreamingTranscriber(config)
+        transcriber.initialize()
 
         # Generate test audio
         sample_rate = 16000
         duration = 0.5
         t = np.linspace(0, duration, int(sample_rate * duration))
         audio = (0.5 * np.sin(440 * 2 * np.pi * t)).astype(np.float32)
-        encoded = base64.b64encode(audio.tobytes()).decode('utf-8')
+        encoded = base64.b64encode(audio.tobytes()).decode("utf-8")
 
         # Try processing
-        result = await transcriber.process_audio_chunk(encoded)
+        result = await transcriber.process_audio_chunk(base64.b64decode(encoded))
 
-        return JSONResponse({
-            "status": "success",
-            "test_passed": True,
-            "message": "Streaming transcription is working",
-            "test_result": result if result else "Buffer accumulating"
-        })
+        return JSONResponse(
+            {
+                "status": "success",
+                "test_passed": True,
+                "message": "Streaming transcription is working",
+                "test_result": result if result else "Buffer accumulating",
+            }
+        )
 
     except Exception as e:
         logger.error(f"Streaming test failed: {e}")
@@ -2227,14 +2604,16 @@ async def test_streaming():
             content={
                 "status": "error",
                 "test_passed": False,
-                "message": "An internal error occurred during the streaming test. Please contact support if the problem persists."
-            }
+                "message": "An internal error occurred during the streaming test. Please contact support if the problem persists.",
+            },
         )
+
 
 #######################################################################################################################
 #
 # Voice Management Endpoints
 #
+
 
 @router.post("/voices/upload", summary="Upload a custom voice sample")
 @limiter.limit("5/hour", key_func=_rate_limit_key)  # Rate limit: 5 uploads per hour
@@ -2244,7 +2623,7 @@ async def upload_voice(
     name: str = Form(..., description="Name for the voice"),
     description: Optional[str] = Form(None, description="Description of the voice"),
     provider: str = Form(default="vibevoice", description="Target TTS provider"),
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     """
     Upload a custom voice sample for use with TTS.
@@ -2261,8 +2640,9 @@ async def upload_voice(
             get_voice_manager,
             VoiceUploadRequest,
             VoiceProcessingError,
-            VoiceQuotaExceededError
+            VoiceQuotaExceededError,
         )
+
         # Get voice manager
         voice_manager = get_voice_manager()
 
@@ -2270,18 +2650,11 @@ async def upload_voice(
         file_content = await file.read()
 
         # Create upload request
-        upload_request = VoiceUploadRequest(
-            name=name,
-            description=description,
-            provider=provider
-        )
+        upload_request = VoiceUploadRequest(name=name, description=description, provider=provider)
 
         # Process upload
         result = await voice_manager.upload_voice(
-            user_id=current_user.id,
-            file_content=file_content,
-            filename=file.filename,
-            request=upload_request
+            user_id=current_user.id, file_content=file_content, filename=file.filename, request=upload_request
         )
 
         return result.model_dump()
@@ -2289,32 +2662,19 @@ async def upload_voice(
     except ImportError as e:
         # Placeholder response when voice management is not available
         raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Custom voice upload is not available in this build"
+            status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Custom voice upload is not available in this build"
         )
     except VoiceQuotaExceededError as e:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
     except VoiceProcessingError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         logger.error(f"Voice upload error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to upload voice sample"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upload voice sample")
 
 
 @router.get("/voices", summary="List user's custom voices")
-async def list_voices(
-    request: Request,
-    current_user: User = Depends(get_request_user)
-):
+async def list_voices(request: Request, current_user: User = Depends(get_request_user)):
     """
     List all custom voice samples uploaded by the user.
 
@@ -2326,67 +2686,52 @@ async def list_voices(
     """
     try:
         from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
+
         voice_manager = get_voice_manager()
         voices = await voice_manager.list_user_voices(current_user.id)
 
-        return {
-            "voices": [voice.model_dump() for voice in voices],
-            "count": len(voices)
-        }
+        return {"voices": [voice.model_dump() for voice in voices], "count": len(voices)}
 
     except ImportError:
         # Placeholder response when voice management is not available
         return {"voices": [], "count": 0}
     except Exception as e:
         logger.error(f"Error listing voices: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to list voices"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list voices")
 
 
 @router.get("/voices/{voice_id}", summary="Get voice details")
 async def get_voice_details(
-    request: Request,
-    voice_id: str = Path(..., description="Voice ID"),
-    current_user: User = Depends(get_request_user)
+    request: Request, voice_id: str = Path(..., description="Voice ID"), current_user: User = Depends(get_request_user)
 ):
     """
     Get detailed information about a specific voice.
     """
     try:
         from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
+
         voice_manager = get_voice_manager()
         voice = await voice_manager.registry.get_voice(current_user.id, voice_id)
 
         if not voice:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Voice not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Voice not found")
 
         return voice.model_dump()
 
     except HTTPException:
         raise
     except ImportError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Custom voice management not available"
-        )
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Custom voice management not available")
     except Exception as e:
         logger.error(f"Error getting voice details: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get voice details"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to get voice details")
 
 
 @router.delete("/voices/{voice_id}", summary="Delete a custom voice")
 async def delete_voice(
     request: Request,
     voice_id: str = Path(..., description="Voice ID to delete"),
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     """
     Delete a custom voice sample.
@@ -2395,30 +2740,22 @@ async def delete_voice(
     """
     try:
         from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
+
         voice_manager = get_voice_manager()
         deleted = await voice_manager.delete_voice(current_user.id, voice_id)
 
         if not deleted:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Voice not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Voice not found")
 
         return {"message": "Voice deleted successfully", "voice_id": voice_id}
 
     except HTTPException:
         raise
     except ImportError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Custom voice management not available"
-        )
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Custom voice management not available")
     except Exception as e:
         logger.error(f"Error deleting voice: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete voice"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete voice")
 
 
 @router.post("/voices/{voice_id}/preview", summary="Generate voice preview")
@@ -2428,7 +2765,7 @@ async def preview_voice(
     voice_id: str = Path(..., description="Voice ID to preview"),
     text: str = Form(default="Hello, this is a preview of your custom voice.", description="Text to speak"),
     current_user: User = Depends(get_request_user),
-    tts_service: TTSServiceV2 = Depends(get_tts_service)
+    tts_service: TTSServiceV2 = Depends(get_tts_service),
 ):
     """
     Generate a short preview of a custom voice.
@@ -2438,15 +2775,13 @@ async def preview_voice(
     """
     try:
         from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
+
         # Validate voice exists
         voice_manager = get_voice_manager()
         voice = await voice_manager.registry.get_voice(current_user.id, voice_id)
 
         if not voice:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Voice not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Voice not found")
 
         # Limit preview text length
         if len(text) > 100:
@@ -2454,11 +2789,7 @@ async def preview_voice(
 
         # Create TTS request with custom voice and stream generator directly
         preview_request = OpenAISpeechRequest(
-            model=voice.provider,
-            input=text,
-            voice=f"custom:{voice_id}",
-            response_format="mp3",
-            stream=True
+            model=voice.provider, input=text, voice=f"custom:{voice_id}", response_format="mp3", stream=True
         )
 
         audio_stream = tts_service.generate_speech(preview_request, provider=None, fallback=True)
@@ -2466,25 +2797,19 @@ async def preview_voice(
         return StreamingResponse(
             audio_stream,
             media_type="audio/mpeg",
-            headers={
-                "Content-Disposition": f"inline; filename=preview_{voice_id}.mp3",
-                "X-Voice-Name": voice.name
-            }
+            headers={"Content-Disposition": f"inline; filename=preview_{voice_id}.mp3", "X-Voice-Name": voice.name},
         )
 
     except HTTPException:
         raise
     except ImportError:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Custom voice preview not available"
-        )
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Custom voice preview not available")
     except Exception as e:
         logger.error(f"Voice preview error: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate voice preview"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to generate voice preview"
         )
+
 
 #
 # End of audio.py

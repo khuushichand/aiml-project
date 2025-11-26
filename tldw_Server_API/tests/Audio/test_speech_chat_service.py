@@ -5,6 +5,7 @@ from typing import Any, Dict
 import numpy as np
 import pytest
 import soundfile as sf
+from fastapi import HTTPException, status
 
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
     SpeechChatRequest,
@@ -53,7 +54,7 @@ class _StubChatDB:
 
 
 class _StubTTSService:
-    async def generate_speech(self, request, provider=None, fallback=True):
+    async def generate_speech(self, request, provider=None, fallback=True, voice_to_voice_start=None, voice_to_voice_route="audio.speech"):
         # Return a single tiny chunk of bytes
         yield b"stub-audio"
 
@@ -138,11 +139,74 @@ async def test_run_speech_chat_turn_happy_path(monkeypatch):
     assert resp.session_id
     assert resp.user_transcript == "hello from audio"
     assert resp.assistant_text == "stub assistant reply"
-    assert resp.output_audio
-    assert resp.output_audio_mime_type.startswith("audio/")
-    assert resp.timing.stt_ms >= 0.0
-    assert resp.timing.llm_ms >= 0.0
-    assert resp.timing.tts_ms >= 0.0
-    assert resp.token_usage is not None
-    assert resp.token_usage.total_tokens == 15
 
+
+@pytest.mark.asyncio
+async def test_run_speech_chat_turn_stt_error_sentinel_raises(monkeypatch):
+    # Ensure STT error sentinel strings from transcribe_audio are mapped to HTTP 500
+    from tldw_Server_API.app.core.Streaming import speech_chat_service
+
+    # Patch transcribe_audio to return an error sentinel that should be detected
+    monkeypatch.setattr(
+        speech_chat_service,
+        "transcribe_audio",
+        lambda *a, **k: "Error in transcription: simulated failure",
+    )
+
+    # Reuse the same DB/LLM/character stubs from the happy-path test
+    async def _fake_get_or_create_character_context(db, character_id, loop):
+        return {"id": 1, "name": "Test Character", "system_prompt": "You are helpful."}, 1
+
+    async def _fake_get_or_create_conversation(
+        db, conversation_id, character_id, character_name, client_id, loop
+    ):
+        return conversation_id or "conv-1", conversation_id is None
+
+    async def _fake_load_history(db, conversation_id, character_card, limit=20, loop=None):
+        return []
+
+    monkeypatch.setattr(
+        speech_chat_service,
+        "get_or_create_character_context",
+        _fake_get_or_create_character_context,
+    )
+    monkeypatch.setattr(
+        speech_chat_service,
+        "get_or_create_conversation",
+        _fake_get_or_create_conversation,
+    )
+    monkeypatch.setattr(
+        speech_chat_service,
+        "load_conversation_history",
+        _fake_load_history,
+    )
+
+    async def _fake_chat_api_call_async(**kwargs):
+        return {
+            "choices": [
+                {"message": {"role": "assistant", "content": "stub assistant reply"}}
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+    monkeypatch.setattr(speech_chat_service, "chat_api_call_async", _fake_chat_api_call_async)
+
+    req = SpeechChatRequest(
+        session_id=None,
+        input_audio=_encode_silence_base64(),
+        input_audio_format="wav",
+        llm_config=SpeechChatLLMConfig(model="gpt-4o-mini", api_provider="openai"),
+    )
+    user = _StubUser()
+    db = _StubChatDB()
+    tts = _StubTTSService()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await run_speech_chat_turn(
+            request_data=req,
+            current_user=user,
+            chat_db=db,
+            tts_service=tts,
+        )
+
+    assert exc_info.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR

@@ -14,7 +14,8 @@ Features:
 - Configurable retention and rotation policies
 - Export capabilities for compliance
 """
-
+#
+# Imports
 import asyncio
 import csv
 import hashlib
@@ -31,10 +32,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Union
 from uuid import uuid4
-
+#
+# 3rd-Party Imports
 import aiosqlite
-
+from io import StringIO
 from loguru import logger
+#
+# Local Imports
 try:
     # Prefer dict-like project settings if available
     from tldw_Server_API.app.core.config import settings as _app_settings  # type: ignore
@@ -46,6 +50,21 @@ try:
     HIGH_RISK_SCORE = int(os.getenv("AUDIT_HIGH_RISK_SCORE", "70"))
 except Exception:
     HIGH_RISK_SCORE = 70
+try:
+    DEFAULT_NON_STREAM_MAX_ROWS = int(os.getenv("AUDIT_EXPORT_MAX_ROWS", "10000"))
+except Exception:
+    DEFAULT_NON_STREAM_MAX_ROWS = 10000
+
+
+def _hash_api_key(value: Optional[str]) -> Optional[str]:
+    """Return a stable hash for API keys; avoid storing raw secrets."""
+    if not value:
+        return value
+    val = str(value).strip()
+    # Heuristic: if already a 64-char hex string, assume hashed.
+    if len(val) == 64 and all(c in "0123456789abcdef" for c in val.lower()):
+        return val
+    return hashlib.sha256(val.encode("utf-8")).hexdigest()
 
 
 def _normalize_json_value(value: Any) -> Any:
@@ -671,6 +690,7 @@ class UnifiedAuditService:
         self.enable_risk_scoring = enable_risk_scoring
         self.buffer_size = buffer_size
         self.flush_interval = flush_interval
+        self.non_stream_max_rows = DEFAULT_NON_STREAM_MAX_ROWS
         self.max_db_mb = max_db_mb
         self._owner_loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -717,10 +737,14 @@ class UnifiedAuditService:
         # Event buffer
         self.event_buffer: List[AuditEvent] = []
         self.buffer_lock = asyncio.Lock()
+        # Protect fallback queue file from concurrent read/write/unlink races
+        self._fallback_lock = asyncio.Lock()
 
         # Background tasks
         self._flush_task: Optional[asyncio.Task] = None
         self._cleanup_task: Optional[asyncio.Task] = None
+        self._replay_task: Optional[asyncio.Task] = None
+        self._replay_interval_s = 300  # 5 minutes
 
         # Connection pool
         self._db_pool: Optional[aiosqlite.Connection] = None
@@ -875,6 +899,8 @@ class UnifiedAuditService:
             self._flush_task = asyncio.create_task(self._flush_loop())
         if not self._cleanup_task:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+        if not self._replay_task:
+            self._replay_task = asyncio.create_task(self._replay_fallback_loop())
 
     async def stop(self):
         """Stop background tasks and flush remaining events"""
@@ -899,6 +925,12 @@ class UnifiedAuditService:
             self._cleanup_task.cancel()
             try:
                 await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+        if self._replay_task:
+            self._replay_task.cancel()
+            try:
+                await self._replay_task
             except asyncio.CancelledError:
                 pass
 
@@ -960,6 +992,24 @@ class UnifiedAuditService:
             except Exception as e:
                 logger.error(f"Error in audit cleanup loop: {e}")
 
+    async def _replay_fallback_loop(self):
+        """Background task to replay fallback queue events back into the DB."""
+        # Run once immediately, then on an interval.
+        try:
+            await self.replay_fallback_queue()
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            logger.error(f"Error during initial audit fallback replay: {e}")
+        while True:
+            try:
+                await asyncio.sleep(self._replay_interval_s)
+                await self.replay_fallback_queue()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in audit fallback replay loop: {e}")
+
     async def log_event(
         self,
         event_type: AuditEventType,
@@ -994,6 +1044,12 @@ class UnifiedAuditService:
         # Create context if not provided
         if context is None:
             context = AuditContext()
+
+        # Normalize API key hash to avoid storing raw secrets
+        try:
+            context.api_key_hash = _hash_api_key(context.api_key_hash)
+        except Exception:
+            context.api_key_hash = None
 
         # Create event
         event = AuditEvent(
@@ -1225,10 +1281,11 @@ class UnifiedAuditService:
                     # Persist dropped events to a fallback JSONL queue for durability
                     try:
                         fb_path = self.db_path.parent / "audit_fallback_queue.jsonl"
-                        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-                        with fb_path.open("a", encoding="utf-8") as fb:
-                            for ev in combined[max_buffer:]:
-                                fb.write(json.dumps(ev.to_dict(), ensure_ascii=False) + "\n")
+                        async with self._fallback_lock:
+                            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+                            await asyncio.to_thread(
+                                self._append_events_to_fallback, fb_path, combined[max_buffer:]
+                            )
                         logger.warning(
                             f"Audit flush failure: {dropped} events persisted to fallback queue at {fb_path}"
                         )
@@ -1237,6 +1294,12 @@ class UnifiedAuditService:
                 else:
                     logger.warning("Audit flush failure: events re-buffered (no drop)")
                 self.event_buffer = combined[:max_buffer]
+
+    def _append_events_to_fallback(self, fb_path: Path, events: List[AuditEvent]) -> None:
+        """Write events to the fallback JSONL file."""
+        with fb_path.open("a", encoding="utf-8") as fb:
+            for ev in events:
+                fb.write(json.dumps(ev.to_dict(), ensure_ascii=False) + "\n")
 
     async def _update_daily_stats(self, db: aiosqlite.Connection, events: List[AuditEvent]):
         """Update daily statistics"""
@@ -1357,6 +1420,234 @@ class UnifiedAuditService:
 
         except Exception as e:
             logger.error(f"Failed to cleanup old audit logs: {e}")
+
+    async def replay_fallback_queue(self, max_batch: int = 5000) -> int:
+        """Replay events from the fallback queue back into the main audit table."""
+        fb_path = self.db_path.parent / "audit_fallback_queue.jsonl"
+        async with self._fallback_lock:
+            if not fb_path.exists():
+                return 0
+
+            # Helpers for parsing and flushing
+            def _parse_timestamp(val: Any) -> Optional[datetime]:
+                if isinstance(val, datetime):
+                    if val.tzinfo is None:
+                        return val.replace(tzinfo=timezone.utc)
+                    return val
+                if val is None:
+                    return None
+                try:
+                    s = str(val).strip()
+                    if not s:
+                        return None
+                    if s.endswith("Z"):
+                        s = s[:-1] + "+00:00"
+                    dt_val = datetime.fromisoformat(s)
+                    if dt_val.tzinfo is None:
+                        dt_val = dt_val.replace(tzinfo=timezone.utc)
+                    return dt_val
+                except Exception:
+                    return None
+
+            def _safe_int(val: Any, default: Optional[int] = None) -> Optional[int]:
+                try:
+                    if val is None:
+                        return default
+                    s = str(val).strip()
+                    if s == "":
+                        return default
+                    return int(s)
+                except Exception:
+                    return default
+
+            def _safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
+                try:
+                    if val is None:
+                        return default
+                    s = str(val).strip()
+                    if s == "":
+                        return default
+                    return float(s)
+                except Exception:
+                    return default
+
+            def _as_category(val: Any) -> AuditEventCategory:
+                try:
+                    if isinstance(val, AuditEventCategory):
+                        return val
+                    return AuditEventCategory(val)
+                except Exception:
+                    try:
+                        return AuditEventCategory[str(val)]
+                    except Exception:
+                        return AuditEventCategory.SYSTEM
+
+            def _as_event_type(val: Any) -> AuditEventType:
+                try:
+                    if isinstance(val, AuditEventType):
+                        return val
+                    return AuditEventType(val)
+                except Exception:
+                    try:
+                        return AuditEventType[str(val)]
+                    except Exception:
+                        return AuditEventType.SYSTEM_START
+
+            def _as_severity(val: Any) -> AuditSeverity:
+                try:
+                    if isinstance(val, AuditSeverity):
+                        return val
+                    return AuditSeverity(val)
+                except Exception:
+                    try:
+                        return AuditSeverity[str(val)]
+                    except Exception:
+                        return AuditSeverity.INFO
+
+            def _record_to_event(record: Dict[str, Any]) -> Optional[AuditEvent]:
+                ts = _parse_timestamp(record.get("timestamp"))
+                if ts is None:
+                    return None
+                return AuditEvent(
+                    event_id=str(record.get("event_id") or uuid4()),
+                    timestamp=ts,
+                    category=_as_category(record.get("category")),
+                    event_type=_as_event_type(record.get("event_type")),
+                    severity=_as_severity(record.get("severity")),
+                    resource_type=record.get("resource_type"),
+                    resource_id=record.get("resource_id"),
+                    action=record.get("action"),
+                    result=str(record.get("result", "success")),
+                    error_message=record.get("error_message"),
+                    duration_ms=_safe_float(record.get("duration_ms")),
+                    tokens_used=_safe_int(record.get("tokens_used")),
+                    estimated_cost=_safe_float(record.get("estimated_cost")),
+                    result_count=_safe_int(record.get("result_count")),
+                    risk_score=_safe_int(record.get("risk_score"), 0) or 0,
+                    pii_detected=bool(record.get("pii_detected") or False),
+                    compliance_flags=[],
+                    metadata={},
+                )
+
+            async def _flush_chunk(
+                db: aiosqlite.Connection,
+                records_chunk: List[Dict[str, Any]],
+                stats_events: List[AuditEvent],
+                use_db_lock: bool,
+            ) -> int:
+                if not records_chunk:
+                    return 0
+
+                async def _do_write() -> None:
+                    await db.executemany(
+                        """
+                        INSERT OR IGNORE INTO audit_events (
+                            event_id, timestamp, category, event_type, severity,
+                            context_request_id, context_correlation_id, context_session_id,
+                            context_user_id, context_api_key_hash, context_ip_address,
+                            context_user_agent, context_endpoint, context_method,
+                            resource_type, resource_id, action, result, error_message,
+                            duration_ms, tokens_used, estimated_cost, result_count,
+                            risk_score, pii_detected, compliance_flags, metadata
+                        ) VALUES (
+                            :event_id, :timestamp, :category, :event_type, :severity,
+                            :context_request_id, :context_correlation_id, :context_session_id,
+                            :context_user_id, :context_api_key_hash, :context_ip_address,
+                            :context_user_agent, :context_endpoint, :context_method,
+                            :resource_type, :resource_id, :action, :result, :error_message,
+                            :duration_ms, :tokens_used, :estimated_cost, :result_count,
+                            :risk_score, :pii_detected, :compliance_flags, :metadata
+                        )
+                        """,
+                        records_chunk,
+                    )
+                    if stats_events:
+                        await self._update_daily_stats(db, stats_events)
+                    await db.commit()
+
+                if use_db_lock:
+                    async with self._db_lock:
+                        await _do_write()
+                else:
+                    await _do_write()
+                return len(records_chunk)
+
+            async def _replay_stream(
+                db: aiosqlite.Connection,
+                fb_file,
+                use_db_lock: bool,
+            ) -> int:
+                total_inserted = 0
+                records_chunk: List[Dict[str, Any]] = []
+                stats_events: List[AuditEvent] = []
+
+                while True:
+                    line = await asyncio.to_thread(fb_file.readline)
+                    if not line:
+                        break
+                    try:
+                        data = json.loads(line)
+                    except Exception:
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    records_chunk.append(data)
+                    ev = _record_to_event(data)
+                    if ev:
+                        stats_events.append(ev)
+                    if len(records_chunk) >= max_batch:
+                        chunk_records = list(records_chunk)
+                        chunk_events = list(stats_events)
+                        records_chunk.clear()
+                        stats_events.clear()
+                        total_inserted += await _flush_chunk(db, chunk_records, chunk_events, use_db_lock)
+
+                if records_chunk:
+                    total_inserted += await _flush_chunk(
+                        db, list(records_chunk), list(stats_events), use_db_lock
+                    )
+
+                return total_inserted
+
+            inserted = 0
+            had_error = False
+            fb_file = None
+            try:
+                fb_file = await asyncio.to_thread(lambda: fb_path.open("r", encoding="utf-8"))
+            except Exception as e:
+                logger.error(f"Failed to read audit fallback queue: {e}")
+                return 0
+
+            try:
+                if self._test_mode:
+                    async with aiosqlite.connect(self.db_path) as db:
+                        db.row_factory = aiosqlite.Row
+                        inserted = await _replay_stream(db, fb_file, use_db_lock=False)
+                else:
+                    db = await self._ensure_db_pool()
+                    inserted = await _replay_stream(db, fb_file, use_db_lock=True)
+            except asyncio.CancelledError:
+                had_error = True
+                raise
+            except Exception as e:
+                had_error = True
+                logger.error(f"Failed to replay audit fallback queue: {e}")
+            finally:
+                if fb_file:
+                    try:
+                        await asyncio.to_thread(fb_file.close)
+                    except Exception:
+                        pass
+
+            if not had_error:
+                try:
+                    fb_path.unlink()
+                except Exception:
+                    pass
+
+            if inserted and not had_error:
+                logger.info(f"Replayed {inserted} audit events from fallback queue")
+            return inserted
 
     async def query_events(
         self,
@@ -1535,7 +1826,7 @@ class UnifiedAuditService:
         format: str = "json",
         file_path: Optional[Union[str, Path]] = None,
         chunk_size: int = 5000,
-        stream: bool = False,
+        stream: bool = True,
         max_rows: Optional[int] = None,
     ) -> Union[str, int, AsyncGenerator[str, None]]:
         """
@@ -1561,6 +1852,10 @@ class UnifiedAuditService:
         fmt = (format or "json").lower()
         if fmt not in {"json", "csv", "jsonl"}:
             raise ValueError("format must be 'json', 'csv', or 'jsonl'")
+
+        # When not streaming, enforce a capped row limit to avoid unbounded memory usage.
+        if not stream and max_rows is None:
+            max_rows = self.non_stream_max_rows
 
         # Fixed CSV header schema for consistency across export paths
         CSV_HEADERS: List[str] = [
@@ -1611,6 +1906,47 @@ class UnifiedAuditService:
                         break
                     offset += chunk_size
             return rows_written
+
+        # Streaming CSV directly to the caller (no prefetch) when requested
+        if fmt == "csv" and file_path is None and stream:
+            async def _csv_streamer():
+                yield ",".join(CSV_HEADERS) + "\n"
+                offset = 0
+                written = 0
+                while True:
+                    rows = await self.query_events(
+                        start_time=start_time,
+                        end_time=end_time,
+                        event_types=event_types,
+                        categories=categories,
+                        user_id=user_id,
+                        request_id=request_id,
+                        correlation_id=correlation_id,
+                        ip_address=ip_address,
+                        session_id=session_id,
+                        endpoint=endpoint,
+                        method=method,
+                        min_risk_score=min_risk_score,
+                        limit=chunk_size,
+                        offset=offset,
+                    )
+                    if not rows:
+                        break
+                    buf = StringIO()
+                    writer = csv.DictWriter(buf, fieldnames=CSV_HEADERS, extrasaction="ignore")
+                    for r in rows:
+                        if max_rows is not None and written >= max_rows:
+                            break
+                        writer.writerow(r)
+                        written += 1
+                    chunk_str = buf.getvalue()
+                    if chunk_str:
+                        yield chunk_str
+                    if len(rows) < chunk_size or (max_rows is not None and written >= max_rows):
+                        break
+                    offset += chunk_size
+                    await asyncio.sleep(0)
+            return _csv_streamer()
 
         # Streaming JSON/JSONL response to the caller when requested (no prefetch)
         if fmt in {"json", "jsonl"} and file_path is None and stream:

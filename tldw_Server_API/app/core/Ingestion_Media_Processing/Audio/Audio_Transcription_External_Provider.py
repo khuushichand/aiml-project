@@ -16,7 +16,7 @@
 
 import os
 from loguru import logger
-import tempfile
+import io
 from typing import Optional, Dict, Any, Union, Tuple
 from pathlib import Path
 from dataclasses import dataclass
@@ -158,7 +158,17 @@ async def transcribe_with_external_provider_async(
         **kwargs: Additional parameters to pass to the API
 
     Returns:
-        Transcribed text or error message
+        Transcribed text or error message.
+
+    Notes:
+        - ``config.base_url`` is interpreted as either:
+          * a bare API base such as ``https://api.openai.com`` (the standard
+            ``/v1/audio/transcriptions`` path will be appended), or
+          * a full audio transcription endpoint such as
+            ``https://api.example.com/v1/audio/transcriptions`` (used as-is).
+        - Intermediate paths (for example a proxy prefix without the final
+          ``/v1/audio/transcriptions`` suffix) are not automatically supported;
+          in those cases, configure ``base_url`` with the full endpoint URL.
     """
     # Load configuration
     if config is None:
@@ -171,24 +181,29 @@ async def transcribe_with_external_provider_async(
     if not is_valid:
         return f"[Error: Invalid configuration - {error_msg}]"
 
-    # Prepare audio file
-    audio_file_path = None
-    temp_file = None
+    # Prepare audio file/stream
+    file_handle = None
 
     try:
         if isinstance(audio_data, (str, Path)):
             audio_file_path = str(audio_data)
+            file_handle = open(audio_file_path, "rb")
         else:
-            # Save audio to temporary file
-            temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-            sf.write(temp_file.name, audio_data, sample_rate)
-            audio_file_path = temp_file.name
+            buffer = io.BytesIO()
+            sf.write(buffer, audio_data, sample_rate, format="WAV")
+            buffer.seek(0)
+            file_handle = buffer
 
-        # Prepare the request
-        endpoint = urljoin(config.base_url, "/v1/audio/transcriptions")
-        if not endpoint.startswith(config.base_url):
-            # Handle cases where base_url already includes the full path
+        # Prepare the request endpoint:
+        # - If base_url already points at the full audio endpoint
+        #   (.../v1/audio/transcriptions), use it as-is.
+        # - Otherwise, treat base_url as an API root and append the standard
+        #   OpenAI-compatible audio transcription path.
+        parsed = urlparse(config.base_url)
+        if parsed.path.rstrip("/").endswith("/v1/audio/transcriptions"):
             endpoint = config.base_url
+        else:
+            endpoint = urljoin(config.base_url.rstrip("/") + "/", "v1/audio/transcriptions")
 
         # Prepare headers
         headers = {}
@@ -198,9 +213,12 @@ async def transcribe_with_external_provider_async(
             headers.update(config.custom_headers)
 
         # Prepare form data
-        with open(audio_file_path, 'rb') as audio_file:
+        if file_handle is None:
+            return "[Error: No audio input provided]"
+
+        with file_handle:
             files = {
-                'file': ('audio.wav', audio_file, 'audio/wav')
+                'file': ('audio.wav', file_handle, 'audio/wav')
             }
 
             data = {
@@ -226,7 +244,7 @@ async def transcribe_with_external_provider_async(
                     try:
                         # Ensure file pointer is at beginning for each retry
                         try:
-                            audio_file.seek(0)
+                            file_handle.seek(0)
                         except Exception:
                             pass
 
@@ -288,12 +306,7 @@ async def transcribe_with_external_provider_async(
         return f"[Error: {str(e)}]"
 
     finally:
-        # Clean up temporary file
-        if temp_file and os.path.exists(temp_file.name):
-            try:
-                os.remove(temp_file.name)
-            except Exception as rm_err:
-                logger.debug(f"Failed to remove temp file for external provider: path={temp_file.name}, error={rm_err}")
+        pass
 
 
 def transcribe_with_external_provider(

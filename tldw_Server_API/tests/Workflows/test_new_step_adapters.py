@@ -158,7 +158,10 @@ def test_stt_transcribe_with_mock(monkeypatch, tmp_path, client_with_wf: TestCli
 
     # Patch speech_to_text to avoid heavy deps
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as ATL
-    def _fake_stt(path, whisper_model='large-v3', selected_source_lang='en', vad_filter=False, diarize=False, *, word_timestamps=False, return_language=False):
+    def _fake_stt(path, whisper_model='large-v3', selected_source_lang=None, vad_filter=False, diarize=False, *, word_timestamps=False, return_language=False):
+        # Workflow adapter should pass None when language is omitted,
+        # allowing the STT backend to auto-detect.
+        assert selected_source_lang is None
         segments = [{"Text": "hello world", "start_seconds": 0.0, "end_seconds": 1.0}]
         return (segments, 'en') if return_language else segments
     monkeypatch.setattr(ATL, "speech_to_text", _fake_stt)

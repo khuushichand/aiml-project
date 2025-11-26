@@ -1706,9 +1706,10 @@ class SessionManager:
 
                 if not table_exists:
                     logger.debug("Sessions table does not exist, skipping cleanup")
-                    return
+                    return 0
 
                 # Proceed with cleanup if table exists
+                deleted = 0
                 if hasattr(conn, 'fetchval'):
                     # PostgreSQL
                     rows = await conn.fetch(
@@ -1739,8 +1740,11 @@ class SessionManager:
                 if self.redis_client:
                     await self._cleanup_redis_cache()
 
+                return int(deleted or 0)
+
         except Exception as e:
             logger.error(f"Session cleanup failed: {e}")
+            return 0
 
     # Redis cache helpers
     async def _fetch_session_record(

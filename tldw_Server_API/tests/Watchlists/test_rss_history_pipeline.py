@@ -51,7 +51,7 @@ def test_history_atom_ingests_across_pages(monkeypatch, client_user):
     # Create RSS source
     r = c.post(
         "/api/v1/watchlists/sources",
-        json={"name": "Feed", "url": "https://feed.example.com/atom", "source_type": "rss"},
+        json={"name": "Feed", "url": "https://rss.arxiv.org/atom/cs", "source_type": "rss"},
     )
     assert r.status_code == 200
     src = r.json()

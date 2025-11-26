@@ -14,13 +14,23 @@
 - Standard limits apply; heavy operations (streaming, tool calls) count toward per-user RPM/TPM.
 - If authentication is required and missing/invalid, the endpoint returns `401`.
 
+Slash commands:
+- When enabled, user messages starting with `/command` are intercepted and
+  processed by the Chat command router before reaching the LLM.
+- Global enable/disable:
+  - Env: `CHAT_COMMANDS_ENABLED=1`
+  - Config: `[Chat-Commands] commands_enabled = true` in `Config_Files/config.txt`
+- Per-request behavior can be adjusted via `slash_command_injection_mode` on
+  the request (`system`, `preface`, or `replace`).
+
 ## Request
 Follows OpenAI-style chat payload with extensions.
 
 Key fields:
 - `model` (string): Target model. May be prefixed as `provider/model` (e.g., `anthropic/claude-sonnet-4.5`).
 - `messages` (array): Conversation turns. Supports roles `system`, `user`, `assistant`, `tool`.
-  - User message `content` may be a string or a list of parts: text and base64 data URI `image_url`.
+  - User message `content` may be a string or a list of parts: text and base64 data URI `image_url`
+    using `data:image/...;base64,...` only (HTTP/HTTPS image URLs are not accepted).
 - `stream` (bool): If true, returns Server-Sent Events (SSE) for streaming.
 - `api_provider` (string, optional): Overrides provider selection. Server default used if omitted.
 - `prompt_template_name` (string, optional): Apply a named prompt template (alphanumeric, `_`, `-`).
@@ -178,7 +188,8 @@ Note: Stream chunks follow OpenAI-style `choices[].delta.content` for maximum cl
 
 
 ## Validation & Limits
-- Images: Accepts `image/png`, `image/jpeg`, `image/webp`. Base64 data URI validation; default max base64 payload ≈ 3MB.
+- Images: Accepts `image/png`, `image/jpeg`, `image/webp`. Images must be supplied as base64 `data:image/...;base64,...`
+  URIs; external HTTP/HTTPS image URLs are not supported for chat messages. Default max base64 payload ≈ 3MB.
 - Messages: Default max messages per request: 1000.
 - Text: Default per-message text limit: 400,000 characters.
 - Images per request: Default max: 10.
@@ -196,13 +207,24 @@ Image message example:
 ```
 
 ## Errors
+
+### Non-streaming (`stream = false`)
 - `400` Invalid request (schema, limits, bad params)
 - `401` Missing/invalid authentication
 - `404` Resource not found (e.g., invalid character reference)
 - `409` Conflict while persisting
-- `429` Rate limit exceeded
+- `413` Request payload too large (e.g., too many messages/images, text too long)
+- `429` Rate limit exceeded (endpoint or upstream)
+- `500` Internal server error (unexpected failure)
 - `502`/`504` Upstream provider error/timeout
-- `503` Service/configuration issue (e.g., missing API key)
+- `503` Service/configuration issue (e.g., missing API key, busy queue)
+
+### Streaming (`stream = true`)
+- HTTP status is usually `200` for successful connection establishment.
+- Provider or validation errors are surfaced as SSE frames:
+  - `data: {"error": {"message": "...", "type": "<ErrorClass>"}}`
+  - followed by `data: [DONE]`
+- Catastrophic failures before streaming starts (e.g., auth, grossly invalid body) still return HTTP errors as above.
 
 ## Rate Limiting
 Configurable under `[Chat-Module]` in `Config_Files/config.txt`:

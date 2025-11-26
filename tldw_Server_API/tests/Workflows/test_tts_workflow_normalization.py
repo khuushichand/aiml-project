@@ -17,7 +17,7 @@ async def test_run_tts_adapter_post_process_normalization(monkeypatch, tmp_path)
     from tldw_Server_API.app.core.TTS import tts_service_v2 as tts_mod
 
     class _FakeTTSService:
-        async def generate_speech(self, request, provider=None, fallback=True):
+        async def generate_speech(self, request, provider=None, fallback=True, voice_to_voice_start=None, voice_to_voice_route="audio.speech"):
             # Yield a small, deterministic "audio" payload
             yield b"fake-audio-bytes"
 

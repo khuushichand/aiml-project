@@ -14,32 +14,48 @@ and this project adheres to Some kind of Versioning
 ### Fixed
 
 
-## [0.1.7] - 2025-11-22
+
+## [0.1.8] - 2025-11-22
+
+### Added
+- Auto-streaming for large audit exports exceeding configured threshold
+- CSV streaming support for audit exports
+- Model discovery for local LLM endpoints
+- Audit event replay mechanism for failed exports
+- Enhanced HTTP error handling for DNS resolution failures
+- SuperSonicTTS support + setup script
+- STT:
+  - `get_stt_config()` helper in `config.py` to centralize resolution of `[STT-Settings]` for all STT modules.
+  - Documentation for `speech_to_text(...)` (segment-based) and `transcribe_audio(...)` (waveform-based) as the two canonical STT entrypoints, including guidance on error sentinel handling.
 
 ### Changed
-- Modularized `/api/v1/media` endpoints into `tldw_Server_API.app.api.v1.endpoints.media.*` while keeping response shapes and status codes backward compatible. The legacy monolith `_legacy_media.py` now acts as a compatibility shim that forwards to core helpers and modular routers.
-- Added `TLDW_DISABLE_LEGACY_MEDIA` flag to allow running the server in a legacy-free media mode where `/api/v1/media` behavior is owned entirely by the modular endpoints and core ingestion/persistence helpers.
-- NeuTTS TTS provider is now shipped disabled by default and must be explicitly re-enabled via `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` (`enabled: true`) and a service restart. Disabled providers are filtered by the provider manager via `is_provider_enabled()`, so legacy configs that reference NeuTTS will be ignored until you opt in again.
+- Audio:
+  - Replace Parakeet-specific transcriber/config usage with unified UnifiedStreamingTranscriber/UnifiedStreamingConfig; add _LegacyWebSocketAdapter to adapt legacy WS to unified handler; defer imports and update tests to use unified stubs.
+  - Move desktop/live audio helpers (LiveAudioStreamer, system-audio utilities) into `Audio/ARCHIVE/Desktop_Live_Audio_Samples.py` so core STT modules no longer depend on optional PyAudio/sounddevice at import time.
+- Audit:
+  - Add config-driven auto-stream threshold, support streaming for json/jsonl/csv, force streaming when max_rows exceeds threshold; CSV streaming generator; non-stream export caps; API-key hashing; fallback JSONL queue with background replay task; tests for streaming and replay.
+- LLM:
+  - Add local model discovery (short timeouts, TTL cache, candidate endpoints), get_configured_providers_async and integrate async provider loading into startup and web UI config; provider payloads include is_configured and endpoint_only.
+- TTS
+  - WAV output now buffered and deferred until finalize with in-memory threshold and disk spill; StreamingAudioWriter.__init__ adds max_in_memory_bytes; tests validate spill and finalize behavior.
+- Web Scraping
+  - Use defusedxml, broaden sitemap parse error handling, add test-mode egress bypass, add conditional process_web_scraping_task import/export, and preserve HTTPException semantics in ingestion endpoint.
+- Tests
+  - Extensive test updates (unified WS stub, fake HTTP client for RSS, env snapshot/restore, admin override fixtures, watchlists full-app fixture, connectors pre-mounting); CI embedding cache key changed to a static key.
+  - STT unit tests for Parakeet/Qwen2Audio `return_language` branches now exercise the provider branches directly and avoid unintended Whisper fallbacks by normalizing file-path arguments.
 
 ### Removed
-- Deleted unused legacy-only helpers from `_legacy_media.py` (`parse_advanced_query`, `_claims_extraction_enabled`, `_resolve_claims_parameters`, `_prepare_claims_chunks`, `_single_pdf_worker`) after auditing that no modular endpoints, core ingestion helpers, or tests import them directly.
-- Retired legacy-only implementations `_legacy_media._process_batch_media` and `_legacy_media._add_media_impl`; these names now resolve to thin shims that delegate to core ingestion/persistence helpers and the modular `/api/v1/media` endpoints.
-- Removed the remaining `_process_batch_media` / `_add_media_impl` aliases from `_legacy_media.py`; callers must use core persistence helpers and modular endpoints.
+- Hopes, Dreams.
 
 ### Deprecated
-- Character Chat legacy completion endpoint `POST /api/v1/chats/{chat_id}/complete` is deprecated.
-  - The request body is no longer supported. Non-empty bodies now return `422 Unprocessable Entity`.
-  - The route is marked `deprecated` in the OpenAPI schema and returns deprecation headers (`Deprecation: true`, `Sunset`, `Link` to successor endpoint).
-  - Successor endpoints:
-    - `POST /api/v1/chats/{chat_id}/complete-v2` for execution (with optional persistence/streaming).
-    - `POST /api/v1/chats/{chat_id}/completions` to prepare messages for `/api/v1/chat/completions`.
+- Efficiency.
 
 ### Fixed
-- Kokoro double output bug.
-
-### Notes for Operators
-- If clients still post bodies to the legacy endpoint, they will start receiving `422` after this change. Migrate clients to the successor endpoints above.
-- If you previously used NeuTTS, search your configuration (for example `config.txt`, environment variables, or overrides) for `neutts` / `neutts-air`, update references as needed, then set `enabled: true` for the NeuTTS entry in `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` and restart the server to restore NeuTTS behavior.
+- Improved WebSocket disconnect handling
+- Consistent error handling in session cleanup and web ingestion
+- Better network error resilience with graceful fallbacks
+- Add _is_dns_resolution_error detection and mark DNS resolution errors non-retriable (DNSResolutionError signal); tests verify DNS errors are not retried while other network errors follow retry policy.
+- My life.
 
 
 ## [0.1.6] - 2025-11-14

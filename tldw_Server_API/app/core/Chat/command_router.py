@@ -189,82 +189,11 @@ def _acquire_bucket(user_id: str, command: str) -> TokenBucket:
 
 
 def dispatch_command(ctx: CommandContext, command: str, args: Optional[str]) -> CommandResult:
-    cmd = command.lower()
-    spec = _registry.get(cmd)
-    if not spec:
-        return CommandResult(ok=False, command=cmd, content=f"Unknown command: /{cmd}", metadata={"error": "unknown_command"})
-
-    # RBAC: optional enforcement via env flag
-    rbac_enforced = _cfg_bool("CHAT_COMMANDS_REQUIRE_PERMISSIONS", "require_permissions", False)
-    if rbac_enforced and spec.required_permission:
-        permitted = False
-        details = {"checked": True, "required_permission": spec.required_permission}
-        try:
-            if is_single_user_mode():
-                permitted = True
-            else:
-                if ctx.auth_user_id is not None:
-                    permitted = bool(_user_has_permission(int(ctx.auth_user_id), spec.required_permission))
-                else:
-                    permitted = False
-        except Exception:
-            permitted = False
-        if not permitted:
-            log_counter("chat_command_error", labels={"command": cmd, "reason": "permission_denied"})
-            try:
-                increment_counter("chat_command_errors_total", labels={"command": cmd, "reason": "permission_denied"})
-                increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "denied"})
-            except Exception:
-                pass
-            details.update({"permitted": False})
-            return CommandResult(
-                ok=False,
-                command=cmd,
-                content=f"Permission denied for /{cmd}",
-                metadata={"error": "permission_denied", **details},
-            )
-
-    # Per-user per-command rate limiting
-    bucket = _acquire_bucket(ctx.user_id, cmd)
-    # Implement synchronous token check using underlying fields
-    now = time.time()
-    elapsed = max(0.0, now - getattr(bucket, "last_refill", now))
-    bucket.tokens = min(bucket.capacity, bucket.tokens + elapsed * bucket.refill_rate)
-    bucket.last_refill = now
-    if bucket.tokens >= 1:
-        bucket.tokens -= 1
-    else:
-        log_counter("chat_command_error", labels={"command": cmd, "reason": "rate_limited"})
-        try:
-            increment_counter("chat_command_errors_total", labels={"command": cmd, "reason": "rate_limited"})
-            increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "rate_limited"})
-        except Exception:
-            pass
-        return CommandResult(ok=False, command=cmd, content=f"Command /{cmd} is rate limited. Please try again shortly.", metadata={"error": "rate_limited"})
-
-    try:
-        res = spec.handler(ctx, args)
-        # annotate result metadata with RBAC info when applicable
-        if rbac_enforced and spec.required_permission:
-            try:
-                res.metadata = {**(res.metadata or {}), "rbac": {"checked": True, "required_permission": spec.required_permission, "permitted": True}}
-            except Exception:
-                pass
-        log_counter("chat_command_invoked", labels={"command": cmd})
-        try:
-            increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "success"})
-        except Exception:
-            pass
-        return res
-    except Exception as e:
-        logger.error(f"Error executing /{cmd}: {e}", exc_info=True)
-        log_counter("chat_command_error", labels={"command": cmd, "reason": "exception"})
-        try:
-            increment_counter("chat_command_errors_total", labels={"command": cmd, "reason": "exception"})
-            increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "error"})
-        except Exception:
-            pass
-        return CommandResult(ok=False, command=cmd, content=f"Command /{cmd} failed: {e}", metadata={"error": "exception"})
+    raise RuntimeError(
+        "command_router.dispatch_command has been removed. "
+        "Use async_dispatch_command(...) or the chat orchestrator "
+        "(achat or its sync wrapper) instead."
+    )
 
 
 async def async_dispatch_command(ctx: CommandContext, command: str, args: Optional[str]) -> CommandResult:

@@ -478,6 +478,46 @@ def _validate_proxies_or_raise(proxies: Optional[Union[str, Dict[str, str]]]) ->
             raise EgressPolicyError(f"Proxy host not in allowlist: {h}")
 
 
+def _is_dns_resolution_error(exc: Exception) -> bool:
+    """Best-effort detection of DNS resolution / unknown-host failures.
+
+    Looks for socket.gaierror in the exception chain and for common
+    platform-specific substrings in the message, including the explicit
+    sentinel used by this module ("DNSResolutionError").
+    """
+    try:
+        if getattr(exc, "_tldw_dns_resolution", False):
+            return True
+    except Exception:
+        pass
+    try:
+        import socket as _socket
+
+        markers = (
+            "nodename nor servname provided",
+            "Name or service not known",
+            "Temporary failure in name resolution",
+            "Host could not be resolved",
+            "DNSResolutionError",
+        )
+        seen_ids: set[int] = set()
+        cur: Optional[BaseException] = exc
+        while cur is not None and id(cur) not in seen_ids:
+            seen_ids.add(id(cur))
+            if isinstance(cur, _socket.gaierror):
+                return True
+            msg = str(cur)
+            if any(m in msg for m in markers):
+                return True
+            next_exc = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+            if not isinstance(next_exc, BaseException):
+                break
+            cur = next_exc
+    except Exception:
+        return False
+    return False
+
+
 def _decorrelated_jitter_sleep(prev: float, base_ms: int, cap_s: int) -> float:
     base = max(0.001, base_ms / 1000.0)
     cap = max(base, float(cap_s))
@@ -491,7 +531,13 @@ def _decorrelated_jitter_sleep(prev: float, base_ms: int, cap_s: int) -> float:
 def _should_retry(method: str, status: Optional[int], exc: Optional[Exception], policy: RetryPolicy) -> Tuple[bool, str]:
     m = method.upper()
     if exc is not None:
-        # Network-level exceptions always retriable
+        # Treat DNS resolution / unknown-host failures as permanent.
+        try:
+            if _is_dns_resolution_error(exc):
+                return False, exc.__class__.__name__
+        except Exception:
+            pass
+        # Other network-level exceptions remain retriable.
         return True, exc.__class__.__name__
     if status is None:
         return False, "no_status"
@@ -917,6 +963,17 @@ async def afetch(
                 # If httpx cannot be resolved for some reason, fall back to
                 # treating the error as a generic network failure.
                 pass
+            # Classify DNS resolution errors explicitly so that retry logic
+            # can treat them as permanent failures.
+            try:
+                if _is_dns_resolution_error(e):
+                    try:
+                        setattr(e, "_tldw_dns_resolution", True)
+                    except Exception:
+                        pass
+                    return None, "DNSResolutionError"
+            except Exception:
+                pass
             return None, e.__class__.__name__
 
     # Create ephemeral client if none provided
@@ -1003,6 +1060,13 @@ async def afetch(
                                     pass
                         # network exception occurred (no HEAD fallback succeeded)
                         last_exc = NetworkError(reason)
+                        try:
+                            if reason == "DNSResolutionError":
+                                setattr(last_exc, "_tldw_dns_resolution", True)
+                        except Exception:
+                            pass
+                        # Exit redirect loop; retry/backoff handled after loop
+                        break
                     else:
                         # Handle redirects explicitly to enforce per-hop egress
                         if allow_redirects and resp.status_code in (301, 302, 303, 307, 308):
@@ -1262,6 +1326,13 @@ def _fetch_httpx_response(
             )
             return r, "ok"
         except Exception as e:
+            # Classify DNS resolution errors explicitly so that retry logic
+            # can treat them as permanent failures.
+            try:
+                if _is_dns_resolution_error(e):
+                    return None, "DNSResolutionError"
+            except Exception:
+                pass
             return None, e.__class__.__name__
 
     need_close = False

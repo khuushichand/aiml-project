@@ -443,7 +443,9 @@ def execute_install_plan(plan_payload: Dict[str, Any]) -> None:
         status.complete()
 
 def _install_stt(plan: InstallPlan, status: InstallationStatus, errors: List[str]) -> None:
+    any_stt = False
     for entry in plan.stt:
+        any_stt = True
         step_name = f"stt:{entry.engine}"
         status.step(step_name, 'in_progress')
         try:
@@ -467,6 +469,22 @@ def _install_stt(plan: InstallPlan, status: InstallationStatus, errors: List[str
             logger.exception("STT install failed for %s", entry.engine)
             status.step(step_name, 'failed', str(exc))
             errors.append(f"{entry.engine}: {exc}")
+
+    # Install Silero VAD once when any STT engine is selected so unified streaming
+    # turn detection has its dependency ready by default.
+    if any_stt:
+        step_name = "stt:silero_vad"
+        status.step(step_name, "in_progress")
+        try:
+            _install_silero_vad()
+            status.step(step_name, "completed")
+        except DownloadBlockedError as exc:
+            logger.info("Skipping Silero VAD install: %s", exc)
+            status.step(step_name, "skipped", str(exc))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Silero VAD install failed")
+            status.step(step_name, "failed", str(exc))
+            errors.append(f"silero_vad: {exc}")
 
 def _install_tts(plan: InstallPlan, status: InstallationStatus, errors: List[str]) -> None:
     for entry in plan.tts:
@@ -537,6 +555,30 @@ def _install_faster_whisper(models: List[str]) -> None:
             if _is_httpx_network_error(exc):
                 raise DownloadBlockedError(f'Network unavailable while downloading {model_name}.') from exc
             raise
+
+
+def _install_silero_vad() -> None:
+    """
+    Install Silero VAD model assets used for streaming turn detection.
+
+    This leverages the existing `_lazy_import_silero_vad` helper, which is responsible
+    for configuring the cache directory (under `models/torch_home` when available),
+    calling `torch.hub.load('snakers4/silero-vad', 'silero_vad', ...)` or a locally
+    checked-out repo, and validating the returned `(model, utils)` tuple.
+
+    Downloads are gated by TLDW_SETUP_SKIP_DOWNLOADS in the same way as other model
+    installers; when disabled, this step is marked as skipped.
+    """
+    _ensure_downloads_allowed("Silero VAD model")
+    try:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib import _lazy_import_silero_vad
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("Silero VAD helper not available; ensure audio dependencies are installed.") from exc
+
+    model, utils = _lazy_import_silero_vad()
+    if not model or not utils:
+        # Defer to outer handler to log/mark as skipped vs failed
+        raise DownloadBlockedError("Silero VAD model could not be loaded; check network or torch hub configuration.")
 
 
 def _install_qwen2_audio() -> None:

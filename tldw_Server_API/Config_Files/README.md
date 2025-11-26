@@ -45,6 +45,9 @@ How to apply changes
    - If the socket peer is in this list, the server uses the leftmost X-Forwarded-For IP as the client.
    - Env override: `TLDW_TRUSTED_PROXIES="10.0.0.0/8,192.168.0.0/16,127.0.0.1"`
 
+## [Audit]
+- `export_stream_auto_max_rows` (int): Auto-switch audit exports to streaming when `max_rows` is above this value (env: `AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS`). Keeps large CSV/JSON/JSONL exports from buffering entirely in memory.
+
 ## [Processing]
 - `processing_choice` (str): Hardware backend, e.g., `cuda|cpu` for ML pipelines.
 
@@ -243,6 +246,14 @@ Common: `max_tokens`, `local_api_timeout`, `local_api_retries`, `local_api_retry
 - `streaming_fallback_to_whisper` (bool)
 - `mlx_chunk_duration|mlx_overlap_duration|buffered_chunk_duration|buffered_total_buffer` (sec)
 - `buffered_merge_algo` (str): e.g., `lcs`.
+- `whisper_compute_type` (str): Optional faster-whisper compute type override; when unset or `"auto"` the server uses `float16` on CUDA and `int8` on CPU; examples: `float16`, `int8`, `int8_float16`.
+- Transcript cache toggles:
+  - `disable_transcript_cache` (bool): When true, do not write `.segments.json` transcript cache files at all.
+  - `disable_transcript_cache_pruning` (bool): When true, keep writing cache files but skip age/size-based pruning (cache may grow without bound).
+  - `transcript_cache_max_files_per_source` (int): Max cached transcript files per base source; newest files are kept first. Leave empty for defaults or set 0/negative to disable this limit.
+  - `transcript_cache_max_age_days` (int): Delete cached transcripts older than this many days. Leave empty for defaults or set 0/negative to disable.
+  - `transcript_cache_max_total_mb` (float): Cap total transcript cache size (MB) per directory; oldest files are evicted when exceeded. Leave empty for defaults or set 0/negative to disable.
+- `skip_audio_prevalidation` (bool): When true, skip `ffprobe`-based audio validation and rely on `ffmpeg` + STT to surface bad files (useful for high-throughput deployments).
 
 ## [external_providers]
 - Reserved for plugging in external providers (YAML/INI sub-configs).

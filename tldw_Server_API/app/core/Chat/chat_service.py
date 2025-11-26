@@ -387,6 +387,164 @@ def normalize_request_provider_and_model(
     return provider
 
 
+def resolve_provider_and_model(
+    request_data: Any,
+    metrics_default_provider: str,
+    normalize_default_provider: str,
+) -> Tuple[str, str, str, str, Dict[str, Any]]:
+    """Resolve provider/model for metrics and execution and record the decision path.
+
+    Returns a 5-tuple:
+        (metrics_provider, metrics_model, selected_provider, selected_model, debug_info)
+
+    - metrics_provider/metrics_model mirror the legacy behavior of
+      `parse_provider_model_for_metrics` (used for request-level metrics and audit).
+    - selected_provider/selected_model reflect the normalized provider/model that
+      downstream logic should use (after alias resolution and inline prefixes).
+    - debug_info is a JSON-serializable dict describing the decision path.
+
+    The function may update `request_data.model` in-place via
+    `normalize_request_provider_and_model`, matching existing behavior.
+    """
+    raw_model = getattr(request_data, "model", None)
+    raw_api_provider = getattr(request_data, "api_provider", None)
+
+    # Step 1: derive metrics-facing provider/model without mutating the request
+    metrics_provider, metrics_model = parse_provider_model_for_metrics(
+        request_data, metrics_default_provider
+    )
+
+    selected_provider = metrics_provider
+    selected_model = metrics_model
+
+    # Step 2: normalize provider/model for execution (may mutate request_data.model)
+    try:
+        normalized_provider = normalize_request_provider_and_model(
+            request_data, normalize_default_provider
+        )
+        selected_provider = normalized_provider
+        new_model = getattr(request_data, "model", None)
+        if new_model:
+            selected_model = new_model
+    except Exception as exc:
+        # Do not block the request if normalization fails; fall back to metrics values.
+        logger.debug(
+            "resolve_provider_and_model: normalization failed, "
+            "falling back to metrics provider/model. Error={}",
+            exc,
+        )
+
+    debug_info: Dict[str, Any] = {
+        "raw": {
+            "api_provider": raw_api_provider,
+            "model": raw_model,
+        },
+        "metrics": {
+            "default_provider": metrics_default_provider,
+            "provider": metrics_provider,
+            "model": metrics_model,
+        },
+        "normalized": {
+            "default_provider": normalize_default_provider,
+            "provider": selected_provider,
+            "model": selected_model,
+        },
+        "changed": {
+            "provider_changed": metrics_provider != selected_provider,
+            "model_changed": metrics_model != selected_model,
+        },
+    }
+
+    return metrics_provider, metrics_model, selected_provider, selected_model, debug_info
+
+
+def resolve_provider_api_key(
+    provider: str,
+    *,
+    prefer_module_keys_in_tests: bool = True,
+) -> Tuple[Optional[str], Dict[str, Any]]:
+    """
+    Resolve the API key for a provider using env/config first, with optional test overrides.
+
+    Resolution order:
+    1) In test contexts (PYTEST_CURRENT_TEST or TEST_MODE) and when prefer_module_keys_in_tests=True,
+       use module-level API_KEYS (schemas first, then endpoint) if present for the provider.
+    2) Otherwise, return the dynamic key from get_api_keys() (env/config/dotenv).
+    Returns (normalized_key, debug_info).
+    """
+    provider_key = (provider or "").strip().lower()
+    debug_info: Dict[str, Any] = {
+        "provider": provider_key or provider,
+        "selected_source": "missing",
+        "module_sources": [],
+        "test_flags": {},
+        "raw_value_provided": False,
+        "raw_value_was_empty": False,
+        "dynamic_value_present": False,
+    }
+
+    try:
+        is_pytest = bool(os.getenv("PYTEST_CURRENT_TEST"))
+    except Exception:
+        is_pytest = False
+    is_test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+    use_module_overrides = prefer_module_keys_in_tests and (is_pytest or is_test_mode)
+    debug_info["test_flags"] = {"pytest": is_pytest, "test_mode": is_test_mode}
+
+    try:
+        from tldw_Server_API.app.api.v1.schemas import chat_request_schemas as _schemas_mod  # type: ignore
+
+        dynamic_keys = _schemas_mod.get_api_keys() or {}
+    except Exception as _err:
+        logger.debug(f"resolve_provider_api_key failed to load dynamic keys: {_err}")
+        dynamic_keys = {}
+
+    module_keys: Dict[str, Optional[str]] = {}
+    if use_module_overrides:
+        try:
+            schema_keys = getattr(_schemas_mod, "API_KEYS", None)
+            if isinstance(schema_keys, dict) and schema_keys:
+                module_keys.update(schema_keys)
+                debug_info["module_sources"].append("chat_request_schemas")
+        except Exception as _schema_err:
+            logger.debug(f"resolve_provider_api_key skipped schema module keys: {_schema_err}")
+        try:
+            from tldw_Server_API.app.api.v1.endpoints import chat as _chat_mod  # type: ignore
+
+            endpoint_keys = getattr(_chat_mod, "API_KEYS", None)
+            if isinstance(endpoint_keys, dict) and endpoint_keys:
+                # Endpoint-level patches override schema-level for tests.
+                module_keys.update(endpoint_keys)
+                debug_info["module_sources"].append("chat_endpoint")
+        except Exception as _chat_err:
+            logger.debug(f"resolve_provider_api_key skipped endpoint module keys: {_chat_err}")
+
+    dynamic_value = dynamic_keys.get(provider_key)
+    debug_info["dynamic_value_present"] = dynamic_value is not None
+
+    def _normalize(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
+    raw_value = dynamic_value
+    if use_module_overrides and module_keys and provider_key in module_keys:
+        raw_value = module_keys.get(provider_key)
+        debug_info["selected_source"] = "module_override"
+    elif raw_value is not None:
+        env_var = f"{provider_key.upper().replace('.', '_')}_API_KEY" if provider_key else None
+        debug_info["selected_source"] = "env" if env_var and os.getenv(env_var) is not None else "config"
+    else:
+        debug_info["selected_source"] = "missing"
+
+    debug_info["raw_value_provided"] = raw_value is not None
+    debug_info["raw_value_was_empty"] = isinstance(raw_value, str) and raw_value.strip() == ""
+    normalized_value = _normalize(raw_value)
+    return normalized_value, debug_info
+
+
 def merge_api_keys_for_provider(
     provider: str,
     module_keys: Optional[Dict[str, Optional[str]]],

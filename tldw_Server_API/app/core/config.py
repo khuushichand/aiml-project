@@ -258,32 +258,46 @@ RAG_SERVICE_CONFIG = {
     }
 }
 
-# Configuration for speaker diarization
+# Configuration for speaker diarization (config-level defaults)
 DIARIZATION_CONFIG = {
     # VAD (Voice Activity Detection) settings
+    "vad_backend": "silero_hub",  # silero_hub | onnx_silero
     "vad_threshold": 0.5,  # Silero VAD confidence threshold
-    "segment_duration": 30,  # Maximum segment duration in seconds
+    "vad_min_speech_duration": 0.25,  # seconds
+    "vad_min_silence_duration": 0.25,  # seconds
+    "allow_vad_fallback": True,
+    "enable_torch_hub_fetch": True,
     "speech_pad_ms": 400,  # Padding around speech segments in milliseconds
+    "onnx_model_path": "models/silero_vad/silero_vad_v6.onnx",
+
+    # Segmentation settings
+    "segment_duration": 30.0,  # Maximum segment duration in seconds
+    "segment_overlap": 0.5,
+    "min_segment_duration": 1.0,
+    "max_segment_duration": 3.0,
 
     # Embedding model settings
     "embedding_model": "speechbrain/spkrec-ecapa-voxceleb",
     "embedding_batch_size": 32,
     "embedding_device": "auto",  # auto, cpu, cuda, or cuda:0
+    "embedding_local_only": False,
 
     # Clustering settings
     "clustering_method": "spectral",  # spectral or agglomerative
-    "num_speakers": None,  # None for automatic detection
+    "similarity_threshold": 0.85,
     "min_speakers": 1,
     "max_speakers": 10,
 
     # Post-processing settings
-    "min_segment_duration": 0.5,  # Minimum segment duration in seconds
     "merge_threshold": 0.5,  # Threshold for merging adjacent segments
-    "overlap_detection": True,  # Enable overlap detection
+    "min_speaker_duration": 3.0,  # Minimum total speaker duration in seconds
+    "detect_overlapping_speech": False,
     "overlap_confidence_threshold": 0.7,
 
-    # Performance settings
+    # Performance / memory settings
     "num_threads": 4,  # Number of threads for processing
+    "memory_efficient": False,
+    "max_memory_mb": 2048,
     "use_auth_token": None,  # HuggingFace auth token if needed
     "cache_dir": None,  # Directory for model cache
 
@@ -301,8 +315,18 @@ def load_tts_config() -> Dict[str, Any]:
         Dictionary containing TTS configuration
     """
     current_file_path = Path(__file__).resolve()
-    # Navigate to TTS config file: .../tldw_Server_API/app/core/TTS/tts_providers_config.yaml
-    tts_config_path = current_file_path.parent / 'TTS' / 'tts_providers_config.yaml'
+    candidate_paths = [
+        current_file_path.parent / 'TTS' / 'tts_providers_config.yaml',
+        current_file_path.parent.parent / 'Config_Files' / 'tts_providers_config.yaml',
+        Path.cwd() / 'tldw_Server_API' / 'Config_Files' / 'tts_providers_config.yaml',
+    ]
+    tts_config_path = None
+    for p in candidate_paths:
+        if p.exists():
+            tts_config_path = p
+            break
+    if tts_config_path is None:
+        tts_config_path = candidate_paths[0]
 
     _log_info(f"Loading TTS configuration from: {tts_config_path}")
 
@@ -494,6 +518,17 @@ def load_settings():
             return default
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
+    def _safe_int(value: object, default: int) -> int:
+        try:
+            if value is None:
+                return default
+            s = str(value).strip()
+            if not s:
+                return default
+            return int(s)
+        except Exception:
+            return default
+
     # Load from comprehensive config first, allowing env overrides
     redis_host = os.getenv("REDIS_HOST") or _redis_section_get('redis_host', 'localhost') or 'localhost'
     redis_port_raw = os.getenv("REDIS_PORT") or _redis_section_get('redis_port', '6379') or '6379'
@@ -551,6 +586,25 @@ def load_settings():
 
     users_db_configured = os.getenv("USERS_DB_ENABLED", "false").lower() == "true"
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+
+    # Audit export streaming threshold (env overrides config.txt [Audit])
+    audit_stream_env_raw = os.getenv("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS")
+    audit_stream_cfg_raw: Optional[str] = None
+    if audit_stream_env_raw is None:
+        try:
+            _audit_parser = load_comprehensive_config()
+        except Exception:
+            _audit_parser = None
+        if _audit_parser is not None:
+            try:
+                if hasattr(_audit_parser, "has_section") and _audit_parser.has_section("Audit"):
+                    audit_stream_cfg_raw = _audit_parser.get("Audit", "export_stream_auto_max_rows", fallback=None)
+            except Exception:
+                audit_stream_cfg_raw = None
+    audit_stream_auto_max_rows = _safe_int(
+        audit_stream_env_raw if audit_stream_env_raw is not None else audit_stream_cfg_raw,
+        5000,
+    )
 
     # Load comprehensive configurations (API keys, embedding settings, etc.)
     # If SINGLE_USER_API_KEY wasn't present before, try reading again now that configs/.env may be loaded
@@ -873,6 +927,8 @@ def load_settings():
         "OPENAI_API_KEY": comprehensive_config.get("openai_api", {}).get("api_key", os.getenv("OPENAI_API_KEY")),
         # You can continue to merge other specific keys or whole sections
         "COMPREHENSIVE_CONFIG_RAW": comprehensive_config, # Store the raw one if needed elsewhere
+        # Audit export streaming threshold (opt-in via env/config.txt)
+        "AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS": audit_stream_auto_max_rows,
 
         # Ephemeral cleanup worker (evals/rag pipeline ephemeral collections)
         "EPHEMERAL_CLEANUP_ENABLED": os.getenv("EPHEMERAL_CLEANUP_ENABLED", "false").lower() == "true",
@@ -1862,12 +1918,14 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             "scheduler",
             "mcp-unified",
             "mcp-catalogs",
+            "tools",
             "jobs",
             "personalization",
             "evaluations",
             # Ensure experimental connectors endpoints are available in tests
             # to avoid 404s when the app is imported before ROUTES_ENABLE is set.
             "connectors",
+            "llamacpp",
         }
         if (_test_mode or _pytest_active) and key in _force_in_tests:
             return True
@@ -2421,8 +2479,28 @@ def load_and_log_configs():
         local_api_timeout = config_parser_object.get('Local-API', 'local_api_timeout', fallback='90')
 
         # STT Settings
-        default_stt_provider = config_parser_object.get('STT-Settings', 'default_stt_provider', fallback='faster_whisper')
-        default_transcriber = config_parser_object.get('STT-Settings', 'default_transcriber', fallback='faster-whisper')
+        raw_default_stt_provider = config_parser_object.get('STT-Settings', 'default_stt_provider', fallback='faster-whisper')
+        raw_default_transcriber = config_parser_object.get('STT-Settings', 'default_transcriber', fallback='')
+
+        def _normalize_stt_provider_name(name: str) -> str:
+            """
+            Normalize STT provider/transcriber identifiers from config.
+
+            - Accepts both 'faster_whisper' and 'faster-whisper' and normalizes to 'faster-whisper'.
+            - Returns lower-cased identifiers for consistency.
+            """
+            name = (name or "").strip()
+            if not name:
+                return ""
+            lowered = name.lower()
+            if lowered in ("faster-whisper", "faster_whisper"):
+                return "faster-whisper"
+            return lowered
+
+        default_stt_provider = _normalize_stt_provider_name(raw_default_stt_provider)
+        tmp_default_transcriber = _normalize_stt_provider_name(raw_default_transcriber)
+        # If default_transcriber is not set explicitly, fall back to default_stt_provider
+        default_transcriber = tmp_default_transcriber or default_stt_provider
         nemo_model_variant = config_parser_object.get('STT-Settings', 'nemo_model_variant', fallback='standard')
         nemo_device = config_parser_object.get('STT-Settings', 'nemo_device', fallback='cuda')
         nemo_cache_dir = config_parser_object.get('STT-Settings', 'nemo_cache_dir', fallback='./models/nemo')
@@ -2433,6 +2511,90 @@ def load_and_log_configs():
         stt_custom_vocab_postprocess_enable = config_parser_object.get('STT-Settings', 'custom_vocab_postprocess_enable', fallback='True')
         stt_custom_vocab_prompt_template = config_parser_object.get('STT-Settings', 'custom_vocab_prompt_template', fallback='')
         stt_custom_vocab_case_sensitive = config_parser_object.get('STT-Settings', 'custom_vocab_case_sensitive', fallback='False')
+
+        # Diarization Settings (optional; overrides DIARIZATION_CONFIG when present)
+        def _get_bool(section: str, key: str, default: bool) -> bool:
+            try:
+                raw = config_parser_object.get(section, key, fallback=None)
+            except Exception:
+                return default
+            if raw is None:
+                return default
+            s = str(raw).strip().lower()
+            if s in {"1", "true", "yes", "y", "on"}:
+                return True
+            if s in {"0", "false", "no", "n", "off"}:
+                return False
+            return default
+
+        def _get_float(section: str, key: str, default: float) -> float:
+            try:
+                raw = config_parser_object.get(section, key, fallback=None)
+            except Exception:
+                return default
+            if raw is None or str(raw).strip() == "":
+                return default
+            try:
+                return float(str(raw).strip())
+            except Exception:
+                return default
+
+        def _get_int(section: str, key: str, default: int) -> int:
+            try:
+                raw = config_parser_object.get(section, key, fallback=None)
+            except Exception:
+                return default
+            if raw is None or str(raw).strip() == "":
+                return default
+            try:
+                return int(str(raw).strip())
+            except Exception:
+                return default
+
+        def _get_str(section: str, key: str, default: str | None) -> str | None:
+            try:
+                raw = config_parser_object.get(section, key, fallback=None)
+            except Exception:
+                return default
+            if raw is None:
+                return default
+            s = str(raw).strip()
+            return s if s != "" else default
+
+        diarization_config = dict(DIARIZATION_CONFIG)
+        if config_parser_object.has_section('Diarization'):
+            # Backend and VAD behavior
+            diarization_config['vad_backend'] = _get_str('Diarization', 'vad_backend', diarization_config.get('vad_backend')) or diarization_config.get('vad_backend')
+            diarization_config['vad_threshold'] = _get_float('Diarization', 'vad_threshold', diarization_config.get('vad_threshold', 0.5))
+            diarization_config['vad_min_speech_duration'] = _get_float('Diarization', 'vad_min_speech_duration', diarization_config.get('vad_min_speech_duration', 0.25))
+            diarization_config['vad_min_silence_duration'] = _get_float('Diarization', 'vad_min_silence_duration', diarization_config.get('vad_min_silence_duration', 0.25))
+            diarization_config['allow_vad_fallback'] = _get_bool('Diarization', 'allow_vad_fallback', diarization_config.get('allow_vad_fallback', True))
+            diarization_config['enable_torch_hub_fetch'] = _get_bool('Diarization', 'enable_torch_hub_fetch', diarization_config.get('enable_torch_hub_fetch', True))
+            diarization_config['onnx_model_path'] = _get_str('Diarization', 'onnx_model_path', diarization_config.get('onnx_model_path'))
+
+            # Segmentation
+            diarization_config['segment_duration'] = _get_float('Diarization', 'segment_duration', diarization_config.get('segment_duration', 30.0))
+            diarization_config['segment_overlap'] = _get_float('Diarization', 'segment_overlap', diarization_config.get('segment_overlap', 0.5))
+            diarization_config['min_segment_duration'] = _get_float('Diarization', 'min_segment_duration', diarization_config.get('min_segment_duration', 1.0))
+            diarization_config['max_segment_duration'] = _get_float('Diarization', 'max_segment_duration', diarization_config.get('max_segment_duration', 3.0))
+
+            # Embeddings & clustering
+            diarization_config['embedding_model'] = _get_str('Diarization', 'embedding_model', diarization_config.get('embedding_model')) or diarization_config.get('embedding_model')
+            diarization_config['embedding_device'] = _get_str('Diarization', 'embedding_device', diarization_config.get('embedding_device')) or diarization_config.get('embedding_device')
+            diarization_config['embedding_local_only'] = _get_bool('Diarization', 'embedding_local_only', diarization_config.get('embedding_local_only', False))
+            diarization_config['embedding_batch_size'] = _get_int('Diarization', 'embedding_batch_size', diarization_config.get('embedding_batch_size', 32))
+            diarization_config['clustering_method'] = _get_str('Diarization', 'clustering_method', diarization_config.get('clustering_method')) or diarization_config.get('clustering_method')
+            diarization_config['similarity_threshold'] = _get_float('Diarization', 'similarity_threshold', diarization_config.get('similarity_threshold', 0.85))
+            diarization_config['min_speakers'] = _get_int('Diarization', 'min_speakers', diarization_config.get('min_speakers', 1))
+            diarization_config['max_speakers'] = _get_int('Diarization', 'max_speakers', diarization_config.get('max_speakers', 10))
+
+            # Post-processing and memory
+            diarization_config['merge_threshold'] = _get_float('Diarization', 'merge_threshold', diarization_config.get('merge_threshold', 0.5))
+            diarization_config['min_speaker_duration'] = _get_float('Diarization', 'min_speaker_duration', diarization_config.get('min_speaker_duration', 3.0))
+            diarization_config['detect_overlapping_speech'] = _get_bool('Diarization', 'detect_overlapping_speech', diarization_config.get('detect_overlapping_speech', False))
+            diarization_config['overlap_confidence_threshold'] = _get_float('Diarization', 'overlap_confidence_threshold', diarization_config.get('overlap_confidence_threshold', 0.7))
+            diarization_config['memory_efficient'] = _get_bool('Diarization', 'memory_efficient', diarization_config.get('memory_efficient', False))
+            diarization_config['max_memory_mb'] = _get_int('Diarization', 'max_memory_mb', diarization_config.get('max_memory_mb', 2048))
 
         # TTS Settings
         # FIXME
@@ -3038,6 +3200,7 @@ def load_and_log_configs():
                 'custom_vocab_prompt_template': stt_custom_vocab_prompt_template,
                 'custom_vocab_case_sensitive': stt_custom_vocab_case_sensitive,
             },
+            'diarization': diarization_config,
             'tts_settings': {
                 'default_tts_provider': default_tts_provider,
                 'tts_voice': tts_voice,
@@ -3214,7 +3377,7 @@ def load_and_log_configs():
 
         return return_dict
     except Exception as e:
-        logging.error(f"Error loading config: {str(e)}")
+        logger.error(f"Error loading config: {e!s}")
         return None
 
 
@@ -3353,6 +3516,32 @@ def _config_loader():
 settings = LazySettings(_settings_loader)
 config = settings
 loaded_config_data = LazyConfigData(_config_loader)
+
+def get_stt_config() -> Dict[str, Any]:
+    """
+    Return the `[STT-Settings]` section as a plain dict.
+
+    This helper centralizes resolution of STT-related settings so callers do
+    not need to worry about whether `loaded_config_data` is a lazy wrapper,
+    a plain dict, or needs to be loaded via `load_and_log_configs()`.
+    """
+    cfg: Any = loaded_config_data
+    try:
+        cfg = cfg() if callable(cfg) else cfg
+    except Exception:
+        cfg = None
+
+    if not cfg:
+        try:
+            cfg = load_and_log_configs() or {}
+        except Exception:
+            cfg = {}
+
+    if not isinstance(cfg, MutableMapping):
+        return {}
+
+    stt_section = cfg.get("STT-Settings", {})
+    return dict(stt_section) if isinstance(stt_section, MutableMapping) else {}
 
 _LOGGER_READY = True
 _flush_startup_logs()

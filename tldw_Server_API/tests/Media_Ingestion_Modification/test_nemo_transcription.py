@@ -157,6 +157,36 @@ class TestNemoTranscription:
         assert result == "This is a test transcription in English"
         mock_load_model.assert_called_once()
 
+    @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.load_canary_model')
+    def test_transcribe_with_canary_translate_uses_language_kwargs(self, mock_load_model, sample_audio):
+        """Canary translate task should pass source/target language to NeMo."""
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
+            transcribe_with_canary,
+        )
+
+        audio_data, sample_rate = sample_audio
+
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = ["Translated text"]
+        mock_load_model.return_value = mock_model
+
+        result = transcribe_with_canary(
+            audio_data,
+            sample_rate,
+            "fr",
+            task="translate",
+            target_language="en",
+        )
+
+        assert result == "Translated text"
+        mock_model.transcribe.assert_called_once()
+        args, kwargs = mock_model.transcribe.call_args
+        # Audio is passed as a single-element list
+        assert isinstance(args[0], list)
+        # Language hints should be forwarded for AST
+        assert kwargs.get("source_lang") == "fr"
+        assert kwargs.get("target_lang") == "en"
+
     def test_transcribe_with_nemo_unified(self, sample_audio):
         """Test unified Nemo transcription entry point."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
@@ -244,12 +274,8 @@ class TestAudioTranscriptionLibIntegration:
             transcribe_audio
         )
 
-        mock_config.return_value = {
-            'STT-Settings': {
-                'default_transcriber': 'parakeet',
-                'nemo_model_variant': 'standard'
-            }
-        }
+        # loaded_config_data is lazy in production; for this test we rely on the
+        # explicit transcription_provider argument rather than config defaults.
 
         mock_transcribe_parakeet.return_value = "Transcribed text from Parakeet"
 
@@ -271,11 +297,7 @@ class TestAudioTranscriptionLibIntegration:
             transcribe_audio
         )
 
-        mock_config.return_value = {
-            'STT-Settings': {
-                'default_transcriber': 'canary'
-            }
-        }
+        # As above, rely on explicit provider rather than config defaults.
 
         mock_transcribe_canary.return_value = "Transcribed text from Canary"
 

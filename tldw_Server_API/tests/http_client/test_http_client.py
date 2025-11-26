@@ -281,6 +281,70 @@ async def test_mixed_host_redirect_egress_denied(monkeypatch):
 
 @requires_httpx
 @pytest.mark.asyncio
+async def test_dns_resolution_error_not_retried():
+    """
+    Ensure DNS/unknown-host style errors are treated as permanent and not retried.
+
+    We simulate this by raising a socket.gaierror from the transport handler
+    and assert that afetch only invokes the handler once.
+    """
+    import httpx
+    import socket
+    from tldw_Server_API.app.core.http_client import afetch, create_async_client, RetryPolicy
+    from tldw_Server_API.app.core.exceptions import NetworkError
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        # Simulate OS-level DNS resolution failure
+        raise socket.gaierror(8, "nodename nor servname provided, or not known")
+
+    transport = httpx.MockTransport(handler)
+    client = create_async_client(transport=transport)
+    try:
+        policy = RetryPolicy(attempts=3)
+        with pytest.raises(NetworkError):
+            await afetch(method="GET", url="http://does-not-resolve.invalid/", client=client, retry=policy)
+        # Handler should be called exactly once; no retries on DNS failures
+        assert calls["n"] == 1
+    finally:
+        await client.aclose()
+
+
+@requires_httpx
+@pytest.mark.asyncio
+async def test_non_dns_network_error_is_retried():
+    """
+    Ensure non-DNS network errors (e.g., generic connect failures) still honor
+    the retry policy and attempt the request multiple times.
+    """
+    import httpx
+    from tldw_Server_API.app.core.http_client import afetch, create_async_client, RetryPolicy
+    from tldw_Server_API.app.core.exceptions import NetworkError
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        # Simulate a generic connection failure that is not a DNS error
+        raise httpx.ConnectError("connect failed", request=request)
+
+    transport = httpx.MockTransport(handler)
+    client = create_async_client(transport=transport)
+    try:
+        policy = RetryPolicy(attempts=3)
+        # After exhausting attempts, afetch should raise NetworkError
+        with pytest.raises(NetworkError):
+            await afetch(method="GET", url="http://93.184.216.34/non_dns", client=client, retry=policy)
+        # Handler should be invoked once per attempt
+        assert calls["n"] == 3
+    finally:
+        await client.aclose()
+
+
+@requires_httpx
+@pytest.mark.asyncio
 async def test_retry_on_unsafe_default_no_retry():
     import httpx
     from tldw_Server_API.app.core.http_client import afetch, create_async_client, RetryPolicy

@@ -45,9 +45,10 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
     InputError,
-    ConflictError
+    ConflictError,
 )
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+
 
 def _is_unique_violation(error: Exception) -> bool:
     """Best-effort detection of unique constraint/duplicate key violations across backends."""
@@ -57,6 +58,7 @@ def _is_unique_violation(error: Exception) -> bool:
 
 class TokenBudgetExceededWarning(Warning):
     """Custom warning for token budget issues"""
+
     pass
 
 
@@ -138,16 +140,16 @@ class ChatDictionaryEntry:
             last_slash_idx = key_str.rfind("/")
             if last_slash_idx > 0:
                 pattern_to_compile = key_str[1:last_slash_idx]
-                flag_chars = key_str[last_slash_idx+1:]
+                flag_chars = key_str[last_slash_idx + 1 :]
 
                 # Parse regex flags
-                if 'i' in flag_chars:
+                if "i" in flag_chars:
                     self.key_flags |= re.IGNORECASE
-                if 'm' in flag_chars:
+                if "m" in flag_chars:
                     self.key_flags |= re.MULTILINE
-                if 's' in flag_chars:
+                if "s" in flag_chars:
                     self.key_flags |= re.DOTALL
-                if 'x' in flag_chars:
+                if "x" in flag_chars:
                     self.key_flags |= re.VERBOSE
 
                 self.is_regex = True
@@ -184,18 +186,18 @@ class ChatDictionaryEntry:
         now = datetime.utcnow()
         if self.last_triggered:
             # Cooldown check
-            cooldown = self.timed_effects.get('cooldown', 0)
+            cooldown = self.timed_effects.get("cooldown", 0)
             if cooldown > 0:
                 if (now - self.last_triggered) < timedelta(seconds=cooldown):
                     return False
 
             # Delay check (initial delay before first trigger)
-            delay = self.timed_effects.get('delay', 0)
+            delay = self.timed_effects.get("delay", 0)
             if delay > 0 and self.trigger_count == 0:
                 if (now - self.last_triggered) < timedelta(seconds=delay):
                     return False
         else:
-            delay = self.timed_effects.get('delay', 0)
+            delay = self.timed_effects.get("delay", 0)
             if delay > 0 and self.trigger_count == 0:
                 reference_ts = self._loaded_at
                 if reference_ts and (now - reference_ts) < timedelta(seconds=delay):
@@ -240,7 +242,7 @@ class ChatDictionaryEntry:
                                 replacements_to_make -= 1
                             else:
                                 result.append(self.raw_key)
-                    text = ''.join(result)
+                    text = "".join(result)
 
         if replacement_count > 0:
             self.last_triggered = datetime.utcnow()
@@ -251,39 +253,39 @@ class ChatDictionaryEntry:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for database storage."""
         return {
-            'id': self.entry_id,
-            'pattern': self.raw_key,
-            'replacement': self.content,
-            'probability': float(self.probability),
-            'group': self.group,
-            'timed_effects': json.dumps(self.timed_effects),
-            'max_replacements': int(self.max_replacements),
-            'type': 'regex' if self.is_regex else 'literal',
-            'enabled': int(self.enabled),
-            'case_sensitive': int(self.case_sensitive),
+            "id": self.entry_id,
+            "pattern": self.raw_key,
+            "replacement": self.content,
+            "probability": float(self.probability),
+            "group": self.group,
+            "timed_effects": json.dumps(self.timed_effects),
+            "max_replacements": int(self.max_replacements),
+            "type": "regex" if self.is_regex else "literal",
+            "enabled": int(self.enabled),
+            "case_sensitive": int(self.case_sensitive),
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'ChatDictionaryEntry':
+    def from_dict(cls, data: Dict[str, Any]) -> "ChatDictionaryEntry":
         """Create instance from database dictionary."""
-        timed_effects = data.get('timed_effects')
+        timed_effects = data.get("timed_effects")
         if isinstance(timed_effects, str):
             timed_effects = json.loads(timed_effects)
 
         entry = cls(
-            key=data.get('key') or data.get('pattern', ''),
-            content=data.get('content') or data.get('replacement', ''),
-            probability=data.get('probability', 1.0),
-            group=data.get('group') or data.get('group_name'),
+            key=data.get("key") or data.get("pattern", ""),
+            content=data.get("content") or data.get("replacement", ""),
+            probability=data.get("probability", 1.0),
+            group=data.get("group") or data.get("group_name"),
             timed_effects=timed_effects,
-            max_replacements=int(data.get('max_replacements', 0)),
-            entry_id=data.get('id'),
-            enabled=bool(data.get('enabled', data.get('is_enabled', 1))),
-            case_sensitive=bool(data.get('case_sensitive', data.get('is_case_sensitive', 1))),
+            max_replacements=int(data.get("max_replacements", 0)),
+            entry_id=data.get("id"),
+            enabled=bool(data.get("enabled", data.get("is_enabled", 1))),
+            case_sensitive=bool(data.get("case_sensitive", data.get("is_case_sensitive", 1))),
         )
         # Respect persisted is_regex flag if present
-        if 'is_regex' in data:
-            entry.is_regex = bool(data['is_regex'])
+        if "is_regex" in data:
+            entry.is_regex = bool(data["is_regex"])
             if entry.is_regex and not isinstance(entry.key, re.Pattern) and entry.raw_key:
                 try:
                     entry.key = re.compile(entry.raw_key)
@@ -348,7 +350,8 @@ class ChatDictionaryService:
                             version INTEGER DEFAULT 1,
                             deleted BOOLEAN DEFAULT FALSE
                         )
-                        """)
+                        """
+                    )
 
                     conn.execute(
                         """
@@ -368,9 +371,11 @@ class ChatDictionaryService:
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             FOREIGN KEY (dictionary_id) REFERENCES chat_dictionaries(id) ON DELETE CASCADE
                         )
-                        """)
+                        """
+                    )
                 else:
-                    conn.execute("""
+                    conn.execute(
+                        """
                         CREATE TABLE IF NOT EXISTS chat_dictionaries (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             name TEXT NOT NULL UNIQUE,
@@ -381,7 +386,8 @@ class ChatDictionaryService:
                             version INTEGER DEFAULT 1,
                             deleted BOOLEAN DEFAULT 0
                         )
-                    """)
+                    """
+                    )
 
                     conn.execute(
                         """
@@ -468,7 +474,9 @@ class ChatDictionaryService:
             logger.error(f"Database error creating dictionary: {e}")
             raise CharactersRAGDBError(f"Database error creating dictionary: {e}") from e
 
-    def get_dictionary(self, dictionary_id: Optional[int] = None, name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_dictionary(
+        self, dictionary_id: Optional[int] = None, name: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Get a dictionary by ID or name.
 
@@ -483,13 +491,11 @@ class ChatDictionaryService:
             with self.db.get_connection() as conn:
                 if dictionary_id:
                     cursor = conn.execute(
-                        "SELECT * FROM chat_dictionaries WHERE id = ? AND deleted = ?",
-                        (dictionary_id, False)
+                        "SELECT * FROM chat_dictionaries WHERE id = ? AND deleted = ?", (dictionary_id, False)
                     )
                 elif name:
                     cursor = conn.execute(
-                        "SELECT * FROM chat_dictionaries WHERE name = ? AND deleted = ?",
-                        (name, False)
+                        "SELECT * FROM chat_dictionaries WHERE name = ? AND deleted = ?", (name, False)
                     )
                 else:
                     return None
@@ -529,13 +535,47 @@ class ChatDictionaryService:
             logger.error(f"Error listing dictionaries: {e}")
             raise CharactersRAGDBError(f"Error listing dictionaries: {e}")
 
+    def list_dictionaries_with_entry_counts(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
+        """
+        List dictionaries with precomputed entry counts in a single query.
+
+        Returns:
+            List of dictionary data including an `entry_count` key per dictionary.
+        """
+        try:
+            with self.db.get_connection() as conn:
+                query = """
+                    SELECT
+                        d.*,
+                        COALESCE(cnt.entry_count, 0) AS entry_count
+                    FROM chat_dictionaries AS d
+                    LEFT JOIN (
+                        SELECT dictionary_id, COUNT(*) AS entry_count
+                        FROM dictionary_entries
+                        GROUP BY dictionary_id
+                    ) AS cnt
+                    ON d.id = cnt.dictionary_id
+                    WHERE d.deleted = ?
+                """
+                params: List[Any] = [False]
+                if not include_inactive:
+                    query += " AND d.is_active = ?"
+                    params.append(True)
+                query += " ORDER BY d.name"
+
+                cursor = conn.execute(query, tuple(params))
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Error listing dictionaries with counts: {e}")
+            raise CharactersRAGDBError(f"Error listing dictionaries with counts: {e}")
+
     def update_dictionary(
         self,
         dictionary_id: Optional[int] = None,
         name: Optional[str] = None,
         description: Optional[str] = None,
         is_active: Optional[bool] = None,
-        **kwargs
+        **kwargs,
     ) -> bool:
         """
         Update a dictionary's metadata.
@@ -578,8 +618,7 @@ class ChatDictionaryService:
 
             with self.db.get_connection() as conn:
                 cursor = conn.execute(
-                    f"UPDATE chat_dictionaries SET {', '.join(updates)} WHERE id = ? AND deleted = ?",
-                    tuple(params)
+                    f"UPDATE chat_dictionaries SET {', '.join(updates)} WHERE id = ? AND deleted = ?", tuple(params)
                 )
                 conn.commit()
 
@@ -612,14 +651,11 @@ class ChatDictionaryService:
         try:
             with self.db.get_connection() as conn:
                 if hard_delete:
-                    cursor = conn.execute(
-                        "DELETE FROM chat_dictionaries WHERE id = ?",
-                        (dictionary_id,)
-                    )
+                    cursor = conn.execute("DELETE FROM chat_dictionaries WHERE id = ?", (dictionary_id,))
                 else:
                     cursor = conn.execute(
                         "UPDATE chat_dictionaries SET deleted = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (True, dictionary_id)
+                        (True, dictionary_id),
                     )
                 conn.commit()
 
@@ -644,7 +680,7 @@ class ChatDictionaryService:
         group: Optional[str] = None,
         timed_effects: Optional[Dict[str, int]] = None,
         max_replacements: Optional[int] = None,
-        **kwargs
+        **kwargs,
     ) -> int:
         """
         Add an entry to a dictionary.
@@ -663,11 +699,11 @@ class ChatDictionaryService:
         """
         try:
             # Accept new-style params
-            pattern = kwargs.get('pattern', key)
-            replacement = kwargs.get('replacement', content)
-            entry_type = kwargs.get('type')
-            enabled = kwargs.get('enabled', True)
-            case_sensitive = kwargs.get('case_sensitive', True)
+            pattern = kwargs.get("pattern", key)
+            replacement = kwargs.get("replacement", content)
+            entry_type = kwargs.get("type")
+            enabled = kwargs.get("enabled", True)
+            case_sensitive = kwargs.get("case_sensitive", True)
 
             if pattern is None or pattern == "":
                 raise ValueError("Pattern cannot be empty")
@@ -698,11 +734,11 @@ class ChatDictionaryService:
                     timed_effects,
                     0 if max_replacements is None else int(max_replacements),
                     enabled=bool(enabled),
-                    case_sensitive=bool(case_sensitive)
+                    case_sensitive=bool(case_sensitive),
                 )
                 # Override regex decision if type provided
                 if entry_type is not None:
-                    entry.is_regex = (entry_type == 'regex')
+                    entry.is_regex = entry_type == "regex"
                     if entry.is_regex and not isinstance(entry.key, re.Pattern):
                         entry.key = re.compile(entry.raw_key)
             except re.error:
@@ -857,7 +893,7 @@ class ChatDictionaryService:
                     self._entry_cache = entries
                     self._cache_timestamp = datetime.now()
                 # Legacy fallback: some tests stub execute_query instead of connection
-                if not entries and hasattr(self.db, 'execute_query'):
+                if not entries and hasattr(self.db, "execute_query"):
                     try:
                         # Consume potential dict list (ignored), then load entries
                         _ = self.db.execute_query("active_dictionaries")
@@ -880,7 +916,7 @@ class ChatDictionaryService:
         group: Optional[str] = None,
         timed_effects: Optional[Dict[str, int]] = None,
         max_replacements: Optional[int] = None,
-        **kwargs
+        **kwargs,
     ) -> bool:
         """
         Update a dictionary entry.
@@ -896,16 +932,16 @@ class ChatDictionaryService:
             updates: List[str] = []
             params: List[Any] = []
 
-            pattern = kwargs.get('pattern', key)
-            replacement = kwargs.get('replacement', content)
-            entry_type = kwargs.get('type')
-            enabled = kwargs.get('enabled')
-            case_sensitive = kwargs.get('case_sensitive')
+            pattern = kwargs.get("pattern", key)
+            replacement = kwargs.get("replacement", content)
+            entry_type = kwargs.get("type")
+            enabled = kwargs.get("enabled")
+            case_sensitive = kwargs.get("case_sensitive")
 
             if pattern is not None:
                 entry = ChatDictionaryEntry(pattern, "test")
                 if entry_type is not None:
-                    entry.is_regex = (entry_type == 'regex')
+                    entry.is_regex = entry_type == "regex"
                 updates.append("key = ?")
                 updates.append("is_regex = ?")
                 params.extend([pattern, bool(entry.is_regex)])
@@ -953,10 +989,7 @@ class ChatDictionaryService:
             params.append(entry_id)
 
             with self.db.get_connection() as conn:
-                cursor = conn.execute(
-                    f"UPDATE dictionary_entries SET {', '.join(updates)} WHERE id = ?",
-                    tuple(params)
-                )
+                cursor = conn.execute(f"UPDATE dictionary_entries SET {', '.join(updates)} WHERE id = ?", tuple(params))
                 conn.commit()
 
                 if cursor.rowcount > 0:
@@ -981,10 +1014,7 @@ class ChatDictionaryService:
         """
         try:
             with self.db.get_connection() as conn:
-                cursor = conn.execute(
-                    "DELETE FROM dictionary_entries WHERE id = ?",
-                    (entry_id,)
-                )
+                cursor = conn.execute("DELETE FROM dictionary_entries WHERE id = ?", (entry_id,))
                 conn.commit()
 
                 if cursor.rowcount > 0:
@@ -1007,7 +1037,7 @@ class ChatDictionaryService:
         max_iterations: int = 5,
         token_budget: Optional[int] = None,
         return_stats: bool = False,
-        **kwargs
+        **kwargs,
     ) -> Union[str, Tuple[str, Dict[str, Any]]]:
         """
         Process text through dictionary replacements.
@@ -1026,8 +1056,8 @@ class ChatDictionaryService:
               mapping-like access for legacy tests (e.g. result['processed_text']).
         """
         # Support alias max_tokens
-        if token_budget is None and 'max_tokens' in kwargs:
-            token_budget = kwargs.get('max_tokens')
+        if token_budget is None and "max_tokens" in kwargs:
+            token_budget = kwargs.get("max_tokens")
 
         # Get applicable entries as objects
         entries = self.get_entry_objects(dictionary_id, group, active_only=True)
@@ -1041,19 +1071,17 @@ class ChatDictionaryService:
                     "token_budget_exceeded": False,
                 }
             # Return a string-like result that also supports ['processed_text'] access
-            return _ProcessedTextResult(text, {
-                "replacements": 0,
-                "iterations": 0,
-                "entries_used": [],
-                "token_budget_exceeded": False,
-            })
+            return _ProcessedTextResult(
+                text,
+                {
+                    "replacements": 0,
+                    "iterations": 0,
+                    "entries_used": [],
+                    "token_budget_exceeded": False,
+                },
+            )
 
-        stats = {
-            "replacements": 0,
-            "iterations": 0,
-            "entries_used": [],
-            "token_budget_exceeded": False
-        }
+        stats = {"replacements": 0, "iterations": 0, "entries_used": [], "token_budget_exceeded": False}
 
         # Track usage (in-memory)
         if dictionary_id is not None:
@@ -1088,7 +1116,7 @@ class ChatDictionaryService:
                         if token_budget and self.count_tokens(text) > token_budget:
                             warnings.warn(
                                 f"Token budget ({token_budget}) exceeded after {stats['replacements']} replacements",
-                                TokenBudgetExceededWarning
+                                TokenBudgetExceededWarning,
                             )
                             stats["token_budget_exceeded"] = True
                             if return_stats:
@@ -1131,9 +1159,11 @@ class ChatDictionaryService:
         """
         # Determine if argument is a file path or raw markdown content
         content: Optional[str] = None
-        if isinstance(markdown_or_path, Path) or (isinstance(markdown_or_path, str) and '\n' not in markdown_or_path and Path(str(markdown_or_path)).exists()):
+        if isinstance(markdown_or_path, Path) or (
+            isinstance(markdown_or_path, str) and "\n" not in markdown_or_path and Path(str(markdown_or_path)).exists()
+        ):
             fp = Path(markdown_or_path)
-            with open(fp, 'r', encoding='utf-8') as f:
+            with open(fp, "r", encoding="utf-8") as f:
                 content = f.read()
             if dictionary_name is None:
                 dictionary_name = fp.stem
@@ -1161,14 +1191,14 @@ class ChatDictionaryService:
                 if current_entry_name is None:
                     return
                 block_text = "\n".join(current_block_lines)
-                type_val = (self._extract_md_field(block_text, 'Type') or 'literal').lower()
+                type_val = (self._extract_md_field(block_text, "Type") or "literal").lower()
                 # If a Pattern field exists, use it; else use entry name as pattern
-                pattern_val = self._extract_md_field(block_text, 'Pattern') or current_entry_name
-                replacement_val = self._extract_md_field(block_text, 'Replacement') or ''
-                prob_str = self._extract_md_field(block_text, 'Probability')
-                enabled_str = self._extract_md_field(block_text, 'Enabled')
+                pattern_val = self._extract_md_field(block_text, "Pattern") or current_entry_name
+                replacement_val = self._extract_md_field(block_text, "Replacement") or ""
+                prob_str = self._extract_md_field(block_text, "Probability")
+                enabled_str = self._extract_md_field(block_text, "Enabled")
                 prob_val = self._normalize_probability_input(prob_str) if prob_str is not None else None
-                enabled_val = True if enabled_str is None else enabled_str.lower() == 'true'
+                enabled_val = True if enabled_str is None else enabled_str.lower() == "true"
                 if pattern_val:
                     self.add_entry(
                         dict_id,
@@ -1180,11 +1210,11 @@ class ChatDictionaryService:
                     )
 
             for line in lines:
-                if line.startswith('## Entry:'):
+                if line.startswith("## Entry:"):
                     # flush previous
                     flush_block()
                     # start new block
-                    current_entry_name = line.split(':', 1)[1].strip()
+                    current_entry_name = line.split(":", 1)[1].strip()
                     current_block_lines = []
                 else:
                     current_block_lines.append(line)
@@ -1195,10 +1225,10 @@ class ChatDictionaryService:
             if current_entry_name is None:
                 for line in lines:
                     s = line.strip()
-                    if not s or s.startswith('#'):
+                    if not s or s.startswith("#"):
                         continue
-                    if ':' in s:
-                        k, v = s.split(':', 1)
+                    if ":" in s:
+                        k, v = s.split(":", 1)
                         self.add_entry(dict_id, pattern=k.strip(), replacement=v.strip())
 
             return dict_id
@@ -1227,17 +1257,17 @@ class ChatDictionaryService:
         lines: List[str] = []
         lines.append(f"# {dict_info['name']}")
         lines.append("")
-        if dict_info.get('description'):
-            lines.append(str(dict_info['description']))
+        if dict_info.get("description"):
+            lines.append(str(dict_info["description"]))
             lines.append("")
 
         for e in entries:
             lines.append(f"## Entry: {e['pattern']}")
             lines.append(f"- **Type**: {e.get('type', 'literal')}")
-            if e.get('type') == 'regex':
+            if e.get("type") == "regex":
                 lines.append(f"- **Pattern**: {e['pattern']}")
             lines.append(f"- **Replacement**: {e['replacement']}")
-            if e.get('probability') is not None:
+            if e.get("probability") is not None:
                 lines.append(f"- **Probability**: {float(e['probability'])}")
             lines.append(f"- **Enabled**: {str(bool(e.get('enabled', 1))).lower()}")
             lines.append("")
@@ -1249,7 +1279,7 @@ class ChatDictionaryService:
 
         fp = Path(file_path)
         try:
-            with open(fp, 'w', encoding='utf-8') as f:
+            with open(fp, "w", encoding="utf-8") as f:
                 f.write(content)
             return True
         except Exception as e:
@@ -1267,14 +1297,19 @@ class ChatDictionaryService:
         """Get the dictionary ID for an entry."""
         try:
             with self.db.get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT dictionary_id FROM dictionary_entries WHERE id = ?",
-                    (entry_id,)
-                )
+                cursor = conn.execute("SELECT dictionary_id FROM dictionary_entries WHERE id = ?", (entry_id,))
                 row = cursor.fetchone()
-                return row['dictionary_id'] if row else None
+                return row["dictionary_id"] if row else None
         except Exception:
             return None
+
+    def get_entry_dictionary_id(self, entry_id: int) -> Optional[int]:
+        """
+        Public wrapper to fetch the dictionary ID for a given entry.
+
+        Exposes the lookup used by API handlers without coupling to the private helper.
+        """
+        return self._get_entry_dict_id(entry_id)
 
     def _estimate_tokens(self, text: str) -> int:
         """Deprecated: use count_tokens instead."""
@@ -1293,7 +1328,7 @@ class ChatDictionaryService:
         """
         if is_active is None:
             info = self.get_dictionary(dictionary_id)
-            current = bool(info.get('is_active', True)) if info else True
+            current = bool(info.get("is_active", True)) if info else True
             is_active = not current
         return self.update_dictionary(dictionary_id, is_active=is_active)
 
@@ -1317,8 +1352,8 @@ class ChatDictionaryService:
                         (False,),
                     ).fetchone()
                     if isinstance(row, dict):
-                        total_dicts = int(row.get('total_dictionaries', 0))
-                        active_dicts = int(row.get('active_dictionaries', 0))
+                        total_dicts = int(row.get("total_dictionaries", 0))
+                        active_dicts = int(row.get("active_dictionaries", 0))
                     else:
                         # Tuple-like
                         total_dicts = int(row[0]) if row else 0
@@ -1335,10 +1370,10 @@ class ChatDictionaryService:
                         """,
                     ).fetchone()
                     if isinstance(row2, dict):
-                        total_entries = int(row2.get('total_entries', 0))
-                        regex_entries = int(row2.get('regex_entries', 0))
-                        literal_entries = int(row2.get('literal_entries', 0))
-                        probabilistic_entries = int(row2.get('probabilistic_entries', 0))
+                        total_entries = int(row2.get("total_entries", 0))
+                        regex_entries = int(row2.get("regex_entries", 0))
+                        literal_entries = int(row2.get("literal_entries", 0))
+                        probabilistic_entries = int(row2.get("probabilistic_entries", 0))
                     else:
                         total_entries = int(row2[0]) if row2 else 0
                         regex_entries = int(row2[1]) if row2 and len(row2) > 1 else 0
@@ -1369,10 +1404,10 @@ class ChatDictionaryService:
                         (dictionary_id,),
                     ).fetchone()
                     if isinstance(row, dict):
-                        total_entries = int(row.get('total_entries', 0))
-                        regex_entries = int(row.get('regex_entries', 0))
-                        literal_entries = int(row.get('literal_entries', 0))
-                        probabilistic_entries = int(row.get('probabilistic_entries', 0))
+                        total_entries = int(row.get("total_entries", 0))
+                        regex_entries = int(row.get("regex_entries", 0))
+                        literal_entries = int(row.get("literal_entries", 0))
+                        probabilistic_entries = int(row.get("probabilistic_entries", 0))
                     else:
                         total_entries = int(row[0]) if row else 0
                         regex_entries = int(row[1]) if row and len(row) > 1 else 0
@@ -1388,11 +1423,7 @@ class ChatDictionaryService:
             logger.error(f"Error getting statistics: {e}")
             raise CharactersRAGDBError(f"Error getting statistics: {e}")
 
-    def bulk_add_entries(
-        self,
-        dictionary_id: int,
-        entries: List[Dict[str, Any]]
-    ) -> Any:
+    def bulk_add_entries(self, dictionary_id: int, entries: List[Dict[str, Any]]) -> Any:
         """
         Add multiple entries at once.
 
@@ -1407,23 +1438,23 @@ class ChatDictionaryService:
             added_count = 0
             with self.db.get_connection() as conn:
                 for e in entries:
-                    pattern = e.get('pattern') or e.get('key')
-                    replacement = e.get('replacement') or e.get('content', '')
+                    pattern = e.get("pattern") or e.get("key")
+                    replacement = e.get("replacement") or e.get("content", "")
                     if not pattern:
                         continue
-                    entry_type = e.get('type', 'literal')
-                    probability = e.get('probability', 1.0)
+                    entry_type = e.get("type", "literal")
+                    probability = e.get("probability", 1.0)
                     if isinstance(probability, int):
                         probability = probability / 100.0
-                    group = e.get('group') or e.get('group_name')
-                    timed_effects = e.get('timed_effects', {"sticky": 0, "cooldown": 0, "delay": 0})
-                    max_replacements = int(e.get('max_replacements', 0))
-                    enabled = bool(e.get('enabled', 1))
-                    case_sensitive = bool(e.get('case_sensitive', 1))
+                    group = e.get("group") or e.get("group_name")
+                    timed_effects = e.get("timed_effects", {"sticky": 0, "cooldown": 0, "delay": 0})
+                    max_replacements = int(e.get("max_replacements", 0))
+                    enabled = bool(e.get("enabled", 1))
+                    case_sensitive = bool(e.get("case_sensitive", 1))
 
                     # Validate pattern
                     test_entry = ChatDictionaryEntry(pattern, replacement)
-                    is_regex = True if entry_type == 'regex' else bool(test_entry.is_regex)
+                    is_regex = True if entry_type == "regex" else bool(test_entry.is_regex)
                     timed_effects_json = json.dumps(timed_effects)
                     conn.execute(
                         """
@@ -1447,25 +1478,32 @@ class ChatDictionaryService:
                     added_count += 1
                 conn.commit()
             self._invalidate_cache()
+
             class _BulkAddResult:
                 def __init__(self, n: int):
                     self.added = n
+
                 def __getitem__(self, key):
-                    if key == 'added':
+                    if key == "added":
                         return self.added
                     raise KeyError(key)
+
                 def get(self, key, default=None):
-                    return self.added if key == 'added' else default
+                    return self.added if key == "added" else default
+
                 def __int__(self):
                     return int(self.added)
+
                 def __eq__(self, other):
                     if isinstance(other, int):
                         return self.added == other
                     if isinstance(other, dict):
-                        return other.get('added') == self.added
+                        return other.get("added") == self.added
                     return False
+
                 def __repr__(self):
                     return f"BulkAddResult(added={self.added})"
+
             return _BulkAddResult(added_count)
 
         except Exception as e:
@@ -1504,10 +1542,10 @@ class ChatDictionaryService:
                     entry = ChatDictionaryEntry.from_dict(rd)
                     d = entry.to_dict()
                     # Legacy-friendly aliases
-                    d['key'] = d.get('pattern')
-                    d['content'] = d.get('replacement')
-                    if 'dictionary_name' in rd:
-                        d['dictionary_name'] = rd['dictionary_name']
+                    d["key"] = d.get("pattern")
+                    d["content"] = d.get("replacement")
+                    if "dictionary_name" in rd:
+                        d["dictionary_name"] = rd["dictionary_name"]
                     results.append(d)
                 return results
 
@@ -1639,10 +1677,7 @@ class ChatDictionaryService:
                 raise InputError(f"Source dictionary {source_dict_id} not found")
 
             # Create new dictionary
-            new_dict_id = self.create_dictionary(
-                name=new_name,
-                description=f"Cloned from {source_dict['name']}"
-            )
+            new_dict_id = self.create_dictionary(name=new_name, description=f"Cloned from {source_dict['name']}")
 
             # Get all entries from source dictionary (include inactive)
             entries = self.get_entries(source_dict_id, active_only=False)
@@ -1651,7 +1686,9 @@ class ChatDictionaryService:
             if entries:
                 with self.db.get_connection() as conn:
                     for e in entries:
-                        timed_effects_json = json.dumps(e.get('timed_effects', {"sticky": 0, "cooldown": 0, "delay": 0}))
+                        timed_effects_json = json.dumps(
+                            e.get("timed_effects", {"sticky": 0, "cooldown": 0, "delay": 0})
+                        )
                         conn.execute(
                             """
                             INSERT INTO dictionary_entries
@@ -1660,20 +1697,22 @@ class ChatDictionaryService:
                             """,
                             (
                                 new_dict_id,
-                                e['pattern'],
-                                e['replacement'],
-                                bool(e.get('type', 'literal') == 'regex'),
-                                float(e.get('probability', 1.0)),
-                                int(e.get('max_replacements', 0)),
-                                e.get('group'),
+                                e["pattern"],
+                                e["replacement"],
+                                bool(e.get("type", "literal") == "regex"),
+                                float(e.get("probability", 1.0)),
+                                int(e.get("max_replacements", 0)),
+                                e.get("group"),
                                 timed_effects_json,
-                                bool(e.get('enabled', 1)),
-                                bool(e.get('case_sensitive', 1))
-                            )
+                                bool(e.get("enabled", 1)),
+                                bool(e.get("case_sensitive", 1)),
+                            ),
                         )
                     conn.commit()
 
-            logger.info(f"Cloned dictionary {source_dict_id} to new dictionary {new_dict_id} with {len(entries)} entries")
+            logger.info(
+                f"Cloned dictionary {source_dict_id} to new dictionary {new_dict_id} with {len(entries)} entries"
+            )
             self._invalidate_cache()
             return new_dict_id
 
@@ -1686,8 +1725,12 @@ class ChatDictionaryService:
     def get_usage_statistics(self, dictionary_id: int) -> Dict[str, Any]:
         """Return simple usage statistics based on in-memory counters."""
         return {
-            'times_used': int(self._usage_counts.get(dictionary_id, 0)) if hasattr(self, '_usage_counts') else 0,
-            'last_used_at': self._last_used_at.get(dictionary_id).isoformat() if hasattr(self, '_last_used_at') and self._last_used_at.get(dictionary_id) else None
+            "times_used": int(self._usage_counts.get(dictionary_id, 0)) if hasattr(self, "_usage_counts") else 0,
+            "last_used_at": (
+                self._last_used_at.get(dictionary_id).isoformat()
+                if hasattr(self, "_last_used_at") and self._last_used_at.get(dictionary_id)
+                else None
+            ),
         }
 
     def close(self):
@@ -1732,14 +1775,16 @@ class _ProcessedTextResult(str):
 
     def __contains__(self, item) -> bool:
         # Allow legacy tests like 'replacements' in result
-        if isinstance(item, str) and item in {"processed_text", "replacements", "iterations", "entries_used", "token_budget_exceeded"}:
+        if isinstance(item, str) and item in {
+            "processed_text",
+            "replacements",
+            "iterations",
+            "entries_used",
+            "token_budget_exceeded",
+        }:
             return True
         return super().__contains__(item)
 
 
 # Import handling to prevent breaking changes
-__all__ = [
-    'ChatDictionaryEntry',
-    'ChatDictionaryService',
-    'TokenBudgetExceededWarning'
-]
+__all__ = ["ChatDictionaryEntry", "ChatDictionaryService", "TokenBudgetExceededWarning"]

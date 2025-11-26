@@ -424,6 +424,21 @@ class TestUnifiedAuditService:
         assert events[0]["event_type"] == AuditEventType.DATA_READ.value
 
     @pytest.mark.asyncio
+    async def test_replay_fallback_queue(self, audit_service, temp_db_path):
+        """Replay should ingest fallback JSONL events and remove the queue file."""
+        fallback_path = audit_service.db_path.parent / "audit_fallback_queue.jsonl"
+        ev = AuditEvent(event_type=AuditEventType.SYSTEM_START)
+        fallback_path.write_text(json.dumps(ev.to_dict()) + "\n", encoding="utf-8")
+
+        inserted = await audit_service.replay_fallback_queue()
+        assert inserted == 1
+        # Event is now in the DB
+        events = await audit_service.query_events()
+        assert any(row.get("event_id") == ev.event_id for row in events)
+        # Fallback file cleaned up
+        assert not fallback_path.exists()
+
+    @pytest.mark.asyncio
     async def test_export_events_json_and_csv(self, audit_service):
         """Test exporting events to JSON and CSV formats"""
         # Log a few events

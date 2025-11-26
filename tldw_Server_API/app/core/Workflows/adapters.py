@@ -1509,7 +1509,16 @@ async def run_stt_transcribe_adapter(config: Dict[str, Any], context: Dict[str, 
     word_ts = bool(config.get("word_timestamps", False))
     try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import speech_to_text
-        segs_or_pair = speech_to_text(path, whisper_model=model, selected_source_lang=language or 'en', vad_filter=False, diarize=diarize, word_timestamps=word_ts, return_language=True)
+        # When language is None, allow the STT backend to auto-detect.
+        segs_or_pair = speech_to_text(
+            path,
+            whisper_model=model,
+            selected_source_lang=language,
+            vad_filter=False,
+            diarize=diarize,
+            word_timestamps=word_ts,
+            return_language=True,
+        )
         if isinstance(segs_or_pair, tuple) and len(segs_or_pair) == 2:
             segments, lang = segs_or_pair
         else:

@@ -1,18 +1,41 @@
+import os
 import json
 import pytest
 from fastapi.testclient import TestClient
 from types import SimpleNamespace
 
 from tldw_Server_API.app.main import app
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
 
 
 @pytest.fixture(scope="module")
 def client():
-    settings = get_settings()
-    headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
-    with TestClient(app, headers=headers) as c:
-        yield c
+    # Ensure a consistent single-user auth configuration for this module,
+    # regardless of prior AuthNZ tests that may have switched modes.
+    prev_auth_mode = os.environ.get("AUTH_MODE")
+    prev_single_key = os.environ.get("SINGLE_USER_API_KEY")
+    try:
+        os.environ["AUTH_MODE"] = "single_user"
+        os.environ["SINGLE_USER_API_KEY"] = os.getenv(
+            "SINGLE_USER_TEST_API_KEY", "test-api-key-12345"
+        )
+        reset_settings()
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        with TestClient(app, headers=headers) as c:
+            yield c
+    finally:
+        # Restore previous environment and reset settings so other tests see
+        # their expected configuration.
+        if prev_auth_mode is None:
+            os.environ.pop("AUTH_MODE", None)
+        else:
+            os.environ["AUTH_MODE"] = prev_auth_mode
+        if prev_single_key is None:
+            os.environ.pop("SINGLE_USER_API_KEY", None)
+        else:
+            os.environ["SINGLE_USER_API_KEY"] = prev_single_key
+        reset_settings()
 
 
 class _FakeProc:

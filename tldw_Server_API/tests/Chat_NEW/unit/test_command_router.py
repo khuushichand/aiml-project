@@ -1,38 +1,42 @@
 import os
 from typing import Optional
 
+import asyncio
 import pytest
 
 from tldw_Server_API.app.core.Chat import command_router
 
 
-def test_parse_and_dispatch_time(monkeypatch):
+@pytest.mark.asyncio
+async def test_parse_and_dispatch_time(monkeypatch):
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
     parsed = command_router.parse_slash_command("/time")
     assert parsed is not None
     name, args = parsed
     assert name == "time"
     ctx = command_router.CommandContext(user_id="u1")
-    res = command_router.dispatch_command(ctx, name, args)
+    res = await command_router.async_dispatch_command(ctx, name, args)
     assert res.ok
     assert "Current time" in res.content
 
 
-def test_rate_limit_per_user_per_command(monkeypatch):
+@pytest.mark.asyncio
+async def test_rate_limit_per_user_per_command(monkeypatch):
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
     monkeypatch.setenv("CHAT_COMMANDS_RATE_LIMIT", "1")
     # Ensure a fresh process bucket by using a unique user id
     ctx = command_router.CommandContext(user_id="rl_user")
     # First call allowed
-    res1 = command_router.dispatch_command(ctx, "time", None)
+    res1 = await command_router.async_dispatch_command(ctx, "time", None)
     assert res1.ok
     # Second call immediately after should be rate-limited
-    res2 = command_router.dispatch_command(ctx, "time", None)
+    res2 = await command_router.async_dispatch_command(ctx, "time", None)
     assert not res2.ok
     assert "rate limited" in res2.content.lower()
 
 
-def test_weather_stub(monkeypatch):
+@pytest.mark.asyncio
+async def test_weather_stub(monkeypatch):
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
 
     class OkClient:
@@ -50,12 +54,13 @@ def test_weather_stub(monkeypatch):
     monkeypatch.setattr(weather_providers, "get_weather_client", lambda: OkClient())
 
     ctx = command_router.CommandContext(user_id="u2")
-    res = command_router.dispatch_command(ctx, "weather", "Boston")
+    res = await command_router.async_dispatch_command(ctx, "weather", "Boston")
     assert res.ok
     assert "Sunny" in res.content
 
 
-def test_rbac_enforcement(monkeypatch):
+@pytest.mark.asyncio
+async def test_rbac_enforcement(monkeypatch):
     # Enable commands and RBAC enforcement
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
     monkeypatch.setenv("CHAT_COMMANDS_REQUIRE_PERMISSIONS", "1")
@@ -65,12 +70,38 @@ def test_rbac_enforcement(monkeypatch):
 
     # Without auth_user_id, permission should be denied for a command requiring permission
     ctx = command_router.CommandContext(user_id="anon", auth_user_id=None)
-    denied = command_router.dispatch_command(ctx, "time", None)
+    denied = await command_router.async_dispatch_command(ctx, "time", None)
     assert not denied.ok
     assert denied.metadata.get("error") == "permission_denied"
 
     # With auth_user_id and granted permission, should pass
     monkeypatch.setattr(command_router, "_user_has_permission", lambda uid, perm: True)
     ctx2 = command_router.CommandContext(user_id="u", auth_user_id=42)
-    allowed = command_router.dispatch_command(ctx2, "time", None)
+    allowed = await command_router.async_dispatch_command(ctx2, "time", None)
     assert allowed.ok
+
+
+def test_dispatch_command_removed_raises():
+    ctx = command_router.CommandContext(user_id="legacy")
+    with pytest.raises(RuntimeError):
+        command_router.dispatch_command(ctx, "time", None)
+
+
+@pytest.mark.asyncio
+async def test_async_dispatch_command_concurrent_respects_rate_limit(monkeypatch):
+    monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
+    monkeypatch.setenv("CHAT_COMMANDS_RATE_LIMIT", "5")
+
+    ctx = command_router.CommandContext(user_id="async_rl_user")
+
+    async def call():
+        return await command_router.async_dispatch_command(ctx, "time", None)
+
+    results = await asyncio.gather(*[call() for _ in range(10)])
+    ok = [r for r in results if r.ok]
+    limited = [r for r in results if not r.ok and "rate limited" in r.content.lower()]
+
+    # At most the configured limit should be allowed.
+    assert len(ok) <= 5
+    # Under concurrent load, we should see some rate-limited responses.
+    assert len(limited) >= 1

@@ -28,11 +28,12 @@ from pathlib import Path
 # Import transcription functions
 from .Audio_Transcription_Nemo import (
     transcribe_with_parakeet,
-    load_parakeet_model
+    load_parakeet_model,
 )
 from .Audio_Transcription_Parakeet_MLX import (
-    transcribe_with_parakeet_mlx
+    transcribe_with_parakeet_mlx,
 )
+from .Audio_Transcription_Lib import is_transcription_error_message
 
 logger = logger
 
@@ -202,7 +203,9 @@ class ParakeetStreamingTranscriber:
                     # Transcribe
                     text = await self._transcribe_chunk(audio_chunk)
 
-                    if text and not text.startswith("["):
+                    if isinstance(text, str) and is_transcription_error_message(text):
+                        logger.error(f"ParakeetStreamingTranscriber STT error sentinel: {text}")
+                    elif text:
                         # Consume buffer with overlap
                         self.buffer.consume(
                             self.config.chunk_duration,
@@ -226,7 +229,9 @@ class ParakeetStreamingTranscriber:
                     partial_audio = self.buffer.get_audio()
                     if partial_audio is not None and len(partial_audio) > 0:
                         partial_text = await self._transcribe_chunk(partial_audio)
-                        if partial_text and not partial_text.startswith("["):
+                        if isinstance(partial_text, str) and is_transcription_error_message(partial_text):
+                            logger.error(f"ParakeetStreamingTranscriber STT error sentinel (partial): {partial_text}")
+                        elif partial_text:
                             self.last_partial_time = now
                             result = {
                                 "type": "partial",
@@ -283,7 +288,9 @@ class ParakeetStreamingTranscriber:
                 text = await self._transcribe_chunk(audio)
                 self.buffer.clear()
 
-                if text and not text.startswith("["):
+                if isinstance(text, str) and is_transcription_error_message(text):
+                    logger.error(f"ParakeetStreamingTranscriber STT error sentinel on flush: {text}")
+                elif text:
                     self.transcription_history.append(text)
                     return {
                         "type": "final",
@@ -309,91 +316,75 @@ async def handle_websocket_transcription(
     config: Optional[StreamingConfig] = None
 ):
     """
-    Handle WebSocket connection for real-time transcription.
+    Compatibility wrapper that routes legacy Parakeet websocket traffic through the unified streaming handler.
 
     Args:
-        websocket: WebSocket connection
-        config: Streaming configuration
+        websocket: WebSocket connection (legacy interface with recv/send is supported)
+        config: Streaming configuration (mapped to UnifiedStreamingConfig with model='parakeet')
     """
-    transcriber = ParakeetStreamingTranscriber(config)
-    init_res = transcriber.initialize()
-    if hasattr(init_res, "__await__"):
-        try:
-            await init_res
-        except TypeError:
-            pass
-
     try:
-        while True:
+        # Defer imports to avoid circular dependencies during module import
+        from .Audio_Streaming_Unified import UnifiedStreamingConfig, handle_unified_websocket
+    except Exception as import_err:
+        logger.error(f"Failed to import unified streaming handler: {import_err}")
+        raise
+
+    # Map legacy StreamingConfig to UnifiedStreamingConfig
+    base_cfg = config or StreamingConfig()
+    unified_cfg = UnifiedStreamingConfig(
+        model='parakeet',
+        model_variant=base_cfg.model_variant,
+        sample_rate=base_cfg.sample_rate,
+        chunk_duration=base_cfg.chunk_duration,
+        overlap_duration=base_cfg.overlap_duration,
+        max_buffer_duration=base_cfg.max_buffer_duration,
+        enable_partial=base_cfg.enable_partial,
+        partial_interval=base_cfg.partial_interval,
+        language=getattr(base_cfg, "language", None)
+    )
+
+    class _LegacyWebSocketAdapter:
+        """Adapts a legacy recv/send websocket to the unified receive_text/send_json API."""
+
+        def __init__(self, ws):
+            self._ws = ws
+            # Preserve common attributes for downstream checks
+            self.closed = getattr(ws, "closed", False)
+
+        async def receive_text(self):
+            raw = await self._ws.recv()
             try:
-                message = await websocket.recv()
-            except Exception as e:
-                logger.error(f"WebSocket receive error: {e}")
-                break
+                payload = json.loads(raw)
+            except Exception:
+                return raw
 
-            try:
-                data = json.loads(message)
+            # Translate legacy "start" message into unified "config"
+            if payload.get("type") == "start":
+                cfg = payload.get("config") or {}
+                payload = {
+                    "type": "config",
+                    **cfg
+                }
+            return json.dumps(payload)
 
-                msg_type = data.get("type")
-                if msg_type == "start":
-                    cfg = data.get("config") or {}
-                    if isinstance(cfg, dict):
-                        transcriber.config.sample_rate = cfg.get("sample_rate", transcriber.config.sample_rate)
-                        transcriber.config.chunk_duration = cfg.get("chunk_duration", transcriber.config.chunk_duration)
-                        transcriber.config.overlap_duration = cfg.get("overlap_duration", transcriber.config.overlap_duration)
-                        transcriber.config.model_variant = cfg.get("model_variant", transcriber.config.model_variant)
-                    init_res = transcriber.initialize()
-                    if hasattr(init_res, "__await__"):
-                        try:
-                            await init_res
-                        except TypeError:
-                            pass
-                    await websocket.send(json.dumps({"type": "started"}))
+        async def send_json(self, payload):
+            if hasattr(self._ws, "send_json"):
+                return await self._ws.send_json(payload)
+            return await self._ws.send(json.dumps(payload))
 
-                elif msg_type == "audio":
-                    result = await transcriber.process_audio_chunk(data.get("data"))
-                    if result:
-                        await websocket.send(json.dumps(result))
-
-                elif msg_type in ("commit", "stop"):
-                    result = await transcriber.flush()
-                    if result:
-                        await websocket.send(json.dumps(result))
-
-                    full_transcript = transcriber.get_full_transcript()
-                    await websocket.send(json.dumps({
-                        "type": "full_transcript",
-                        "text": full_transcript,
-                        "timestamp": time.time()
-                    }))
-                    transcriber.reset()
-
-                elif msg_type == "ping":
-                    await websocket.send(json.dumps({"type": "pong"}))
-                else:
-                    await websocket.send(json.dumps({"type": "error", "message": "Unknown message type"}))
-
-            except json.JSONDecodeError:
-                await websocket.send(json.dumps({
-                    "type": "error",
-                    "message": "Invalid JSON"
-                }))
-            except Exception as e:
-                logger.error(f"Error handling message: {e}")
+        async def close(self, code: int | None = None, reason: str | None = None):
+            if hasattr(self._ws, "close"):
                 try:
-                    await websocket.send(json.dumps({
-                        "type": "error",
-                        "message": str(e)
-                    }))
-                except Exception:
-                    pass
-    finally:
-        try:
-            final_result = await transcriber.flush()
-            if final_result:
-                await websocket.send(json.dumps(final_result))
-        except Exception:
-            pass
+                    return await self._ws.close(code, reason)
+                except TypeError:
+                    # websockets' close signature differs
+                    return await self._ws.close()
+
+    # Wrap legacy websocket interface when needed
+    if not hasattr(websocket, "receive_text") and hasattr(websocket, "recv"):
+        websocket = _LegacyWebSocketAdapter(websocket)
+
+    await handle_unified_websocket(websocket, config=unified_cfg)
 
 
 def create_streaming_generator(

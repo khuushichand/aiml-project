@@ -23,15 +23,30 @@ except Exception:
 pytestmark = pytest.mark.unit
 
 
-# Provide a module-level websocket fixture so tests in multiple classes can reuse it
-@pytest.fixture
-def mock_websocket():
-    ws = AsyncMock()
-    ws.send = AsyncMock()
-    ws.recv = AsyncMock()
-    ws.close = AsyncMock()
-    ws.closed = False
-    return ws
+class _UnifiedDummyWebSocket:
+    """
+    Minimal websocket stub implementing the unified receive_text/send_json interface.
+    """
+
+    def __init__(self, frames, empty_exception: Optional[Exception] = None):
+        self._frames = list(frames)
+        self._empty_exception = empty_exception or asyncio.TimeoutError()
+        self.sent = []
+        self.closed = False
+        self.close_args = None
+
+    async def receive_text(self):
+        if not self._frames:
+            await asyncio.sleep(0)
+            raise self._empty_exception
+        return self._frames.pop(0)
+
+    async def send_json(self, payload):
+        self.sent.append(payload)
+
+    async def close(self, code: int | None = None, reason: str | None = None):
+        self.closed = True
+        self.close_args = (code, reason)
 
 
 class TestStreamingTranscription:
@@ -45,16 +60,6 @@ class TestStreamingTranscription:
         t = np.linspace(0, duration, int(sample_rate * duration), False)
         audio = (0.5 * np.sin(440 * 2 * np.pi * t)).astype(np.float32)
         return audio.tobytes(), sample_rate
-
-    @pytest.fixture
-    def mock_websocket(self):
-        """Create mock WebSocket connection."""
-        ws = AsyncMock()
-        ws.send = AsyncMock()
-        ws.recv = AsyncMock()
-        ws.close = AsyncMock()
-        ws.closed = False
-        return ws
 
     def test_import_module(self):
         """Test that streaming module can be imported."""
@@ -214,37 +219,40 @@ class TestStreamingTranscription:
         assert is_speech_speech == True
 
     @pytest.mark.asyncio
-    async def test_websocket_handler(self, mock_websocket):
+    async def test_websocket_handler(self):
         """Test WebSocket connection handler."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
             handle_websocket_transcription
         )
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Streaming_Unified as unified
 
         # Mock receive messages
         messages = [
-            json.dumps({'type': 'start', 'config': {'sample_rate': 16000}}),
-            json.dumps({'type': 'audio', 'data': 'base64audiodata'}),
+            json.dumps({'type': 'config', 'model': 'parakeet', 'sample_rate': 16000}),
+            json.dumps({'type': 'audio', 'data': base64.b64encode(b'audiochunk').decode('utf-8')}),
             json.dumps({'type': 'stop'})
         ]
-        mock_websocket.recv.side_effect = messages + [WSConnectionClosed(None, None)]
+        ws = _UnifiedDummyWebSocket(messages)
 
-        with patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet.ParakeetStreamingTranscriber') as mock_transcriber_class:
-            mock_transcriber = AsyncMock()
-            mock_transcriber.initialize = AsyncMock()
-            mock_transcriber.process_audio_chunk = AsyncMock(return_value={
-                'type': 'transcription',
-                'text': 'Test',
-                'is_final': True
-            })
-            mock_transcriber.finalize = AsyncMock(return_value="Final transcription")
-            mock_transcriber_class.return_value = mock_transcriber
+        with patch.object(unified, "_ParakeetCoreAdapter", None):
+            with patch.object(unified, 'ParakeetStreamingTranscriber') as mock_transcriber_class:
+                mock_transcriber = AsyncMock()
+                mock_transcriber.initialize = MagicMock()
+                mock_transcriber.process_audio_chunk = AsyncMock(return_value={
+                    'type': 'transcription',
+                    'text': 'Test',
+                    'is_final': True
+                })
+                mock_transcriber.get_full_transcript = MagicMock(return_value="Final transcription")
+                mock_transcriber.cleanup = MagicMock()
+                mock_transcriber_class.return_value = mock_transcriber
 
-            await handle_websocket_transcription(mock_websocket)
+                await handle_websocket_transcription(ws)
 
-            # Verify WebSocket interactions
-            assert mock_websocket.send.called
-            assert mock_transcriber.initialize.called
-            assert mock_transcriber.process_audio_chunk.called
+                # Verify WebSocket interactions
+                assert ws.sent
+                assert mock_transcriber.initialize.called
+                assert mock_transcriber.process_audio_chunk.called
 
     @pytest.mark.asyncio
     async def test_streaming_with_buffer_accumulation(self):
@@ -315,7 +323,7 @@ class TestStreamingTranscription:
             assert len(transcriber.buffer.data) == 0  # Buffer should be cleared
 
     @pytest.mark.asyncio
-    async def test_error_handling(self, mock_websocket):
+    async def test_error_handling(self):
         """Test error handling in streaming."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
             ParakeetStreamingTranscriber,
@@ -409,23 +417,34 @@ class TestStreamingErrorScenarios:
         assert transcriber_large is not None
 
     @pytest.mark.asyncio
-    async def test_websocket_disconnection(self, mock_websocket):
+    async def test_websocket_disconnection(self):
         """Test handling of WebSocket disconnection during streaming."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
             handle_websocket_transcription
         )
+        from fastapi import WebSocketDisconnect
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Streaming_Unified as unified
 
         # Simulate disconnection after first message
-        mock_websocket.recv.side_effect = [
-            json.dumps({'type': 'start', 'config': {'sample_rate': 16000}}),
-            WSConnectionClosed(None, None)
-        ]
+        ws = _UnifiedDummyWebSocket(
+            [json.dumps({'type': 'config', 'model': 'parakeet', 'sample_rate': 16000})],
+            empty_exception=WebSocketDisconnect()
+        )
 
         # Should handle gracefully without raising
-        try:
-            await handle_websocket_transcription(mock_websocket)
-        except Exception as e:
-            pytest.fail(f"WebSocket disconnection not handled gracefully: {e}")
+        with patch.object(unified, "_ParakeetCoreAdapter", None):
+            with patch.object(unified, 'ParakeetStreamingTranscriber') as mock_transcriber_class:
+                mock_transcriber = AsyncMock()
+                mock_transcriber.initialize = MagicMock()
+                mock_transcriber.process_audio_chunk = AsyncMock(return_value=None)
+                mock_transcriber.get_full_transcript = MagicMock(return_value="")
+                mock_transcriber.cleanup = MagicMock()
+                mock_transcriber_class.return_value = mock_transcriber
+
+                try:
+                    await handle_websocket_transcription(ws)
+                except Exception as e:
+                    pytest.fail(f"WebSocket disconnection not handled gracefully: {e}")
 
     @pytest.mark.asyncio
     async def test_invalid_audio_format(self):
@@ -481,35 +500,39 @@ class TestStreamingIntegration:
     """Integration tests for streaming transcription."""
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(
-        not os.path.exists('/path/to/model'),  # Skip if model not available
-        reason="Requires actual Parakeet model"
-    )
-    async def test_full_streaming_session(self):
-        """Test complete streaming session with real model."""
-        pytest.skip("Integration test requires actual model setup")
-
+    async def test_full_streaming_session(self, monkeypatch):
+        """Exercise the Parakeet streaming pipeline end-to-end with a mocked model."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
             ParakeetStreamingTranscriber,
             StreamingConfig
         )
 
-        # Use real model configuration
+        # Patch model loader to avoid real Nemo/MLX dependencies
+        class _DummyModel:
+            def transcribe(self, audio_chunk):
+                result = MagicMock()
+                result.text = f"chunk_{len(audio_chunk)}"
+                return result
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.load_parakeet_model",
+            lambda variant: _DummyModel(),
+        )
+
         config = StreamingConfig(
-            model_variant='mlx',  # or 'standard', 'onnx'
+            model_variant='standard',
             sample_rate=16000,
-            chunk_duration=2.0,
-            overlap_duration=0.5
+            chunk_duration=0.5,
+            overlap_duration=0.1
         )
 
         transcriber = ParakeetStreamingTranscriber(config)
         transcriber.initialize()
 
         # Generate realistic test audio (sine wave at speech frequency)
-        duration = 5.0
+        duration = 2.0
         sample_rate = 16000
         t = np.linspace(0, duration, int(sample_rate * duration))
-        # Mix of frequencies common in speech (100-1000 Hz)
         audio = (
             0.3 * np.sin(2 * np.pi * 200 * t) +
             0.2 * np.sin(2 * np.pi * 400 * t) +
@@ -517,7 +540,7 @@ class TestStreamingIntegration:
         ).astype(np.float32)
 
         # Process in chunks
-        chunk_size = int(sample_rate * 0.5)  # 0.5 second chunks
+        chunk_size = int(sample_rate * 0.25)  # 0.25 second chunks
         transcriptions = []
 
         for i in range(0, len(audio), chunk_size):
@@ -537,38 +560,103 @@ class TestStreamingIntegration:
         assert len(transcriptions) > 0
 
     @pytest.mark.asyncio
-    async def test_websocket_server_integration(self):
-        """Test WebSocket server integration."""
-        pytest.skip("Requires WebSocket server to be running")
+    async def test_websocket_server_integration(self, monkeypatch):
+        """Exercise the unified websocket handler with a stubbed Parakeet engine."""
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+            handle_unified_websocket,
+            UnifiedStreamingConfig,
+        )
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Streaming_Unified as unified
 
-        import websockets
+        # Stub the Parakeet engine to avoid real model dependencies
+        class _StubTranscriber:
+            def __init__(self, cfg):
+                self.cfg = cfg
+                self._transcripts = []
 
-        # This would connect to actual running server
-        uri = "ws://localhost:8000/ws/transcribe"
+            def initialize(self):
+                return None
 
-        async with websockets.connect(uri) as websocket:
-            # Send configuration
-            await websocket.send(json.dumps({
-                'type': 'config',
-                'sample_rate': 16000,
-                'language': 'en'
-            }))
+            async def process_audio_chunk(self, audio_bytes: bytes):
+                text = f"stub-{len(audio_bytes)}"
+                self._transcripts.append(text)
+                return {"type": "transcription", "text": text, "is_final": True}
 
-            # Generate and send test audio
-            audio = np.random.randn(16000).astype(np.float32)
-            encoded = base64.b64encode(audio.tobytes()).decode('utf-8')
+            def get_full_transcript(self):
+                return " ".join(self._transcripts)
 
-            await websocket.send(json.dumps({
-                'type': 'audio',
-                'data': encoded
-            }))
+            def reset(self):
+                self._transcripts.clear()
 
-            # Receive transcription
-            response = await websocket.recv()
-            result = json.loads(response)
+            def cleanup(self):
+                self._transcripts.clear()
 
-            assert 'type' in result
-            assert result['type'] in ['transcription', 'partial', 'error']
+        monkeypatch.setattr(unified, "_ParakeetCoreAdapter", None)
+        monkeypatch.setattr(unified, "ParakeetStreamingTranscriber", _StubTranscriber)
+
+        # Prepare websocket frames
+        frames = [
+            json.dumps({'type': 'config', 'model': 'parakeet', 'sample_rate': 16000}),
+            json.dumps({'type': 'audio', 'data': base64.b64encode(b'\x00' * 8).decode('utf-8')}),
+            json.dumps({'type': 'stop'})
+        ]
+        ws = _UnifiedDummyWebSocket(frames, empty_exception=asyncio.TimeoutError())
+
+        await handle_unified_websocket(ws, UnifiedStreamingConfig())
+
+        # Ensure at least one transcription frame was emitted
+        assert any(m.get("type") == "transcription" for m in ws.sent)
+
+    @pytest.mark.asyncio
+    async def test_ws_transcription_error_sentinel_maps_to_error_frame(self, monkeypatch):
+        """Ensure STT error sentinel strings are converted into structured error frames on the unified WS."""
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+            handle_unified_websocket,
+            UnifiedStreamingConfig,
+        )
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Streaming_Unified as unified
+
+        class _ErrorStubTranscriber:
+            def __init__(self, cfg):
+                self.cfg = cfg
+
+            def initialize(self):
+                return None
+
+            async def process_audio_chunk(self, audio_bytes: bytes):
+                # Simulate provider-level STT sentinel string
+                return {
+                    "type": "transcription",
+                    "text": "[Transcription error] Nemo model unavailable",
+                    "is_final": True,
+                }
+
+            def get_full_transcript(self):
+                return ""
+
+            def reset(self):
+                return None
+
+            def cleanup(self):
+                return None
+
+        monkeypatch.setattr(unified, "_ParakeetCoreAdapter", None)
+        monkeypatch.setattr(unified, "ParakeetStreamingTranscriber", _ErrorStubTranscriber)
+
+        frames = [
+            json.dumps({"type": "config", "model": "parakeet", "sample_rate": 16000}),
+            json.dumps({"type": "audio", "data": base64.b64encode(b"\x00" * 8).decode("utf-8")}),
+        ]
+        ws = _UnifiedDummyWebSocket(frames, empty_exception=asyncio.TimeoutError())
+
+        await handle_unified_websocket(ws, UnifiedStreamingConfig())
+
+        # The handler should send a structured error frame and close the websocket.
+        assert ws.closed is True
+        assert any(
+            (m.get("type") == "error" and m.get("code") == "provider_error")
+            for m in ws.sent
+        )
 
 
 @pytest.mark.performance

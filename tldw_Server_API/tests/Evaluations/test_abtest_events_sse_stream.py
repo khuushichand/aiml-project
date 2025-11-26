@@ -11,21 +11,32 @@ from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
 def _auth_headers(client: TestClient):
-    # In TEST_MODE + single_user, any token works; include CSRF token if present
+    # Use the actual API key from settings for single_user mode
+    settings = get_settings()
     csrf = getattr(client, "csrf_token", "")
-    return {"X-API-KEY": "test-token", "X-CSRF-Token": csrf}
+    return {"X-API-KEY": settings.SINGLE_USER_API_KEY, "X-CSRF-Token": csrf}
 
 
 @pytest.mark.unit
 def test_embeddings_abtest_events_sse_smoke_heartbeat_and_done(monkeypatch):
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
     # Use a per-test DB file for Evaluations to avoid cross-test interference
     with tempfile.NamedTemporaryFile(suffix="_evals.db", delete=False) as f:
         eval_db_path = f.name
 
     try:
+        # Force single-user auth mode for this test and reset settings so
+        # Evaluations auth uses X-API-KEY as expected even if prior tests
+        # switched to multi-user.
+        prev_auth_mode = os.environ.get("AUTH_MODE")
+        os.environ["AUTH_MODE"] = "single_user"
+        reset_settings()
+
         # Configure fast heartbeats in data mode for reliable detection
         os.environ.setdefault("TEST_MODE", "1")
         monkeypatch.setenv("STREAM_HEARTBEAT_MODE", "data")
@@ -88,6 +99,16 @@ def test_embeddings_abtest_events_sse_smoke_heartbeat_and_done(monkeypatch):
             assert done_seen, f"No [DONE] frame found in SSE lines: {lines[-10:]}"
 
     finally:
+        # Restore auth mode and reset settings for subsequent tests
+        try:
+            if prev_auth_mode is None:
+                os.environ.pop("AUTH_MODE", None)
+            else:
+                os.environ["AUTH_MODE"] = prev_auth_mode
+            reset_settings()
+        except Exception:
+            pass
+
         try:
             os.unlink(eval_db_path)
         except Exception:

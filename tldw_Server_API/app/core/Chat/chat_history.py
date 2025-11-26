@@ -3,6 +3,14 @@
 """
 Utility functions for persisting chat history, exporting conversations, and
 preparing media content for chat interactions.
+
+Note:
+  - The primary chat persistence path for `/api/v1/chat/completions` now lives in
+    the Chat service module (`chat_service.build_context_and_messages` and
+    related helpers).
+  - `save_chat_history_to_db_wrapper` is retained for legacy callers and
+    Character Chat utilities; new code should prefer the chat module's unified
+    conversation/message persistence pipeline.
 """
 
 from __future__ import annotations
@@ -42,6 +50,11 @@ def save_chat_history_to_db_wrapper(
 ) -> Tuple[Optional[str], str]:
     """
     Persist a chat history into the ChaChaNotes database, creating or updating a conversation record.
+
+    This function is maintained for legacy integrations and Character Chat
+    utilities. For new features built on `/api/v1/chat/completions`, prefer
+    using the Chat module's conversation/message persistence via
+    `chat_service.build_context_and_messages` and `_save_message_turn_to_db`.
     """
     log_counter("save_chat_history_to_db_attempt")
     start_time = time.time()
@@ -116,9 +129,7 @@ def save_chat_history_to_db_wrapper(
                 return conversation_id, f"DB error finding '{DEFAULT_CHARACTER_NAME}': {exc}"
 
         if associated_character_id is None:
-            logging.critical(
-                "Logic error: associated_character_id is None after character lookup. Chat save aborted."
-            )
+            logging.critical("Logic error: associated_character_id is None after character lookup. Chat save aborted.")
             return conversation_id, "Critical internal error: Could not determine character for chat."
 
         current_conversation_id = conversation_id
@@ -148,28 +159,58 @@ def save_chat_history_to_db_wrapper(
                 logging.error("Error creating new conversation: %s", exc, exc_info=True)
                 return None, f"Error creating conversation: {exc}"
         else:
-            logging.info("Resaving history for existing conv ID: %s. Char context ID: %s ('%s')", current_conversation_id, associated_character_id, final_character_name_for_title)
+            logging.info(
+                "Resaving history for existing conv ID: %s. Char context ID: %s ('%s')",
+                current_conversation_id,
+                associated_character_id,
+                final_character_name_for_title,
+            )
             try:
                 with db.transaction():
                     existing_conv_details = db.get_conversation_by_id(current_conversation_id)
                     if not existing_conv_details:
                         logging.error("Cannot resave: Conversation %s not found.", current_conversation_id)
-                        return current_conversation_id, f"Error: Conversation {current_conversation_id} not found for resaving."
+                        return (
+                            current_conversation_id,
+                            f"Error: Conversation {current_conversation_id} not found for resaving.",
+                        )
 
                     if existing_conv_details.get("character_id") != associated_character_id:
                         existing_char = db.get_character_card_by_id(existing_conv_details.get("character_id"))
-                        existing_char_name = existing_char.get("name") if existing_char else f"ID {existing_conv_details.get('character_id')}"
-                        logging.error("Cannot resave: Conversation %s (for char '%s') does not match current character context '%s' (ID: %s).", current_conversation_id, existing_char_name, final_character_name_for_title, associated_character_id)
-                        return current_conversation_id, "Error: Mismatch in character association for resaving chat. The conversation belongs to a different character."
+                        existing_char_name = (
+                            existing_char.get("name")
+                            if existing_char
+                            else f"ID {existing_conv_details.get('character_id')}"
+                        )
+                        logging.error(
+                            "Cannot resave: Conversation %s (for char '%s') does not match current character context '%s' (ID: %s).",
+                            current_conversation_id,
+                            existing_char_name,
+                            final_character_name_for_title,
+                            associated_character_id,
+                        )
+                        return (
+                            current_conversation_id,
+                            "Error: Mismatch in character association for resaving chat. The conversation belongs to a different character.",
+                        )
 
                     existing_messages = db.get_messages_for_conversation(
                         current_conversation_id, limit=10000, order_by_timestamp="ASC"
                     )
-                    logging.info("Found %s existing messages to soft-delete for conv %s.", len(existing_messages), current_conversation_id)
+                    logging.info(
+                        "Found %s existing messages to soft-delete for conv %s.",
+                        len(existing_messages),
+                        current_conversation_id,
+                    )
                     for msg in existing_messages:
                         db.soft_delete_message(msg["id"], msg["version"])
             except (InputError, ConflictError, CharactersRAGDBError) as exc:
-                logging.error("Error preparing existing conversation %s for resave: %s", current_conversation_id, exc, exc_info=True)
+                logging.error(
+                    "Error preparing existing conversation %s for resave: %s",
+                    current_conversation_id,
+                    exc,
+                    exc_info=True,
+                )
                 return current_conversation_id, f"Error during resave prep: {exc}"
 
         try:
@@ -203,9 +244,7 @@ def save_chat_history_to_db_wrapper(
                                 if url_str.startswith("data:") and ";base64," in url_str:
                                     try:
                                         header, b64_data = url_str.split(";base64,", 1)
-                                        image_mime_type_str = (
-                                            header.split("data:", 1)[1] if "data:" in header else None
-                                        )
+                                        image_mime_type_str = header.split("data:", 1)[1] if "data:" in header else None
                                         if image_mime_type_str:
                                             image_data_bytes = base64.b64decode(b64_data)
                                             logging.debug(
@@ -218,7 +257,12 @@ def save_chat_history_to_db_wrapper(
                                         else:
                                             logging.warning("Could not parse MIME type from data URI: %s", url_str[:60])
                                     except Exception as exc:
-                                        logging.warning("Failed to decode Base64 image at index %s for conv %s: %s", index, current_conversation_id, exc)
+                                        logging.warning(
+                                            "Failed to decode Base64 image at index %s for conv %s: %s",
+                                            index,
+                                            current_conversation_id,
+                                            exc,
+                                        )
                                 elif url_str:
                                     logging.debug("Storing non-data image URL as text: %s", url_str)
                                     text_content_parts.append(f"<Image URL: {url_str}>")
@@ -228,7 +272,11 @@ def save_chat_history_to_db_wrapper(
 
                     final_text_content = "\n".join(text_content_parts).strip()
                     if not final_text_content and not image_data_bytes:
-                        logging.warning("Skipping empty message (no text or decodable image) at index %s for conv %s", index, current_conversation_id)
+                        logging.warning(
+                            "Skipping empty message (no text or decodable image) at index %s for conv %s",
+                            index,
+                            current_conversation_id,
+                        )
                         continue
 
                     db.add_message(
@@ -242,7 +290,9 @@ def save_chat_history_to_db_wrapper(
                         }
                     )
                     message_save_count += 1
-                logging.info("Successfully saved %s messages to conversation %s.", message_save_count, current_conversation_id)
+                logging.info(
+                    "Successfully saved %s messages to conversation %s.", message_save_count, current_conversation_id
+                )
 
                 if not is_new_conversation:
                     conv_details_for_update = db.get_conversation_by_id(current_conversation_id)
@@ -253,7 +303,10 @@ def save_chat_history_to_db_wrapper(
                             conv_details_for_update["version"],
                         )
                     else:
-                        logging.error("Conversation %s disappeared before final metadata update during resave.", current_conversation_id)
+                        logging.error(
+                            "Conversation %s disappeared before final metadata update during resave.",
+                            current_conversation_id,
+                        )
 
         except (InputError, ConflictError, CharactersRAGDBError) as exc:
             logging.error("Error saving messages to conversation %s: %s", current_conversation_id, exc, exc_info=True)
@@ -405,11 +458,7 @@ def extract_media_name(media_content: MediaContent) -> Optional[str]:
         if name:
             return name
 
-    name_top_level = (
-        media_content.get("title")
-        or media_content.get("name")
-        or media_content.get("media_title")
-    )
+    name_top_level = media_content.get("title") or media_content.get("name") or media_content.get("media_title")
     if name_top_level:
         return name_top_level
 
@@ -494,9 +543,7 @@ def update_chat_content(
                     output_media_content_for_chat["content"] = fallback_text
                     selected_parts_names.append("content")
         else:
-            logging.warning(
-                "No note data found for selected item '%s' (note id: %s).", selected_item, note_id
-            )
+            logging.warning("No note data found for selected item '%s' (note id: %s).", selected_item, note_id)
     else:
         logging.warning("Selected item missing or not present in mapping: %s", selected_item)
         log_counter(
@@ -506,9 +553,7 @@ def update_chat_content(
 
     update_duration = time.time() - start_time
     log_histogram("update_chat_content_duration", update_duration)
-    log_counter(
-        "update_chat_content_success" if selected_parts_names else "update_chat_content_noop"
-    )
+    log_counter("update_chat_content_success" if selected_parts_names else "update_chat_content_noop")
 
     return output_media_content_for_chat, selected_parts_names
 

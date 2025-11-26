@@ -68,6 +68,22 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 - **Languages**: Multiple languages
 - **Best For**: Complex audio understanding tasks
 
+#### Model ID patterns (HTTP + ingestion)
+
+The `model` string for `/api/v1/audio/transcriptions` is parsed via the same logic as the ingestion pipeline (`parse_transcription_model` in `Audio_Transcription_Lib.py`), so the following patterns are accepted:
+
+- **Whisper / faster-whisper**  
+  - `whisper-1`, `whisper` (aliases for the default faster-whisper Whisper model)  
+  - Raw faster-whisper ids such as `large-v3`, `distil-whisper-large-v3`, or full HF ids (e.g. `openai/whisper-large-v3`).
+- **NVIDIA NeMo Parakeet**  
+  - `parakeet`, `parakeet-standard`, `parakeet-onnx`, `parakeet-mlx`  
+  - Any string that `parse_transcription_model` resolves to provider `"parakeet"` (e.g., some `nemo-parakeet-*` ids).
+- **NVIDIA NeMo Canary**  
+  - `canary` (and related aliases whose provider resolves to `"canary"`).
+- **Qwen2Audio**  
+  - `qwen2audio`, `qwen2audio-*` (all map to provider `"qwen2audio"`)  
+  - Convenience alias `qwen` also maps to `qwen2audio` in the HTTP API.
+
 ## API Endpoints
 
 Authentication
@@ -86,11 +102,12 @@ Transcribe audio into text.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | file | file | Yes | The audio file to transcribe (default max 25MB; actual limit may vary by quota tier) |
-| model | string | No | Model to use: `whisper-1` (`whisper` alias), `parakeet`, `canary`, `qwen2audio` (default: `whisper-1`) |
-| language | string | No | Language code in ISO-639-1 format (e.g., 'en', 'es') |
+| model | string | No | Model to use. Supported examples: `whisper-1` (`whisper` alias), raw faster-whisper ids like `large-v3` or `distil-whisper-large-v3`; NVIDIA variants such as `parakeet`, `parakeet-onnx`, `parakeet-mlx`; Canary via `canary`; Qwen via `qwen2audio` or `qwen2audio-*` (default: `whisper-1`). |
+| language | string | No | Language code in ISO-639-1 format (e.g., 'en', 'es'). When omitted, Whisper models auto-detect the language and the detected code is included in the JSON response. |
 | prompt | string | No | Optional text to guide the model's style |
 | response_format | string | No | Output format: `json`, `text`, `srt`, `vtt`, `verbose_json` (default: `json`) |
 | temperature | float | No | Sampling temperature 0-1 (default: 0) |
+| task | string | No | For Whisper-based models, decoding task: `transcribe` (default) or `translate`. For non-Whisper providers this hint is ignored and a plain transcription is performed. |
 | timestamp_granularities | string | No | Comma-separated values or JSON array. Supported tokens: `segment`, `word` |
 | segment | boolean | No | If true and JSON response, also run transcript segmentation (TreeSeg) and include `segmentation` in the JSON |
 | seg_K | integer | No | Max segments for TreeSeg (default 6) |
@@ -133,6 +150,11 @@ Unsupported types return 415.
 Notes:
 - For `response_format: text|srt|vtt` responses, outputs are simple best-effort formats; precise per-segment timings require JSON.
 - For `response_format: verbose_json`, the response includes `task` and `duration` fields.
+- For Whisper-based models, the underlying `speech_to_text(...)` helper prepends a metadata header (model + detected language) to the first segment. The HTTP API always calls `strip_whisper_metadata_header(...)` before returning JSON/text so clients see only user content. If you use `speech_to_text` directly (e.g., in workflows or custom tools), call `strip_whisper_metadata_header` on segment lists, or `_strip_whisper_metadata_header_from_text` (speech chat) before presenting text to end users.
+
+Internal STT helpers:
+- `speech_to_text(...)` (file or NumPy input) is the canonical segment-based helper used by media ingestion and offline workers; it returns a list of segments (or `(segments, language)` when requested).
+- `transcribe_audio(...)` (NumPy waveform input) is the canonical plain-text helper used by this HTTP endpoint, speech-chat, and streaming sinks; it routes to the configured provider and returns a single transcript string. Provider failures are surfaced as error sentinel strings (for example, `"[Transcription error] Qwen2Audio ..."`), which HTTP handlers detect via `is_transcription_error_message(...)` and map to appropriate HTTP error responses rather than returning the sentinel text as user content.
 
 ### Word-level Timestamps Example (Whisper only)
 
@@ -171,6 +193,11 @@ Translate audio into English.
 | prompt | string | No | Optional text to guide the model's style |
 | response_format | string | No | Output format (default: `json`) |
 | temperature | float | No | Sampling temperature 0-1 |
+
+For Whisper models, this endpoint internally calls the transcription endpoint
+with `task=translate` and no explicit `language`, allowing the backend to
+auto-detect the source language and return English output. Non-Whisper
+providers treat `task` as a no-op and perform a regular transcription.
 
 ## Configuration
 
@@ -267,6 +294,17 @@ Examples (wscat)
 wscat -c "ws://localhost:8000/api/v1/audio/stream/transcribe?token=$API_KEY"
 wscat -H "Authorization: Bearer $JWT" -c "ws://localhost:8000/api/v1/audio/stream/transcribe"
 ```
+
+For multilingual Nemo streaming with Canary:
+
+- Use `model: "canary"` in the initial config message.
+- Set `"task": "transcribe"` for same-language ASR, or `"task": "translate"` to request English translations (mirrors the `/audio/translations` HTTP endpoint semantics).
+
+For low-latency English-only streaming with NVIDIA Parakeet-Realtime-EOU:
+
+- Keep `model: "parakeet"` and enable the RNNT backend with `"parakeet_use_rnnt_streamer": true`.
+- Set `"parakeet_rnnt_model_name": "nvidia/parakeet_realtime_eou_120m-v1"` in the config message to use the new realtime EOU model.
+- The server strips the literal `<EOU>` token from transcripts while still using it internally as an utterance boundary hint.
 
 #### Live Insights Configuration (Granola-style Notes)
 
@@ -589,11 +627,11 @@ with open("audio.wav", "rb") as f:
 ### Live Transcription Example
 
 ```python
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-    LiveAudioStreamer
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.ARCHIVE.Desktop_Live_Audio_Samples import (
+    LiveAudioStreamer,
 )
 
-# Configure for Parakeet with ONNX
+# Configure for Parakeet with ONNX (desktop sample)
 streamer = LiveAudioStreamer(
     transcription_provider='parakeet',
     nemo_variant='onnx',
@@ -608,7 +646,7 @@ def handle_text(text):
 
 streamer.handle_transcribed_text = handle_text
 
-# Start live transcription
+# Start live transcription (desktop-only sample)
 streamer.start()
 print("Listening... Press Ctrl+C to stop")
 
