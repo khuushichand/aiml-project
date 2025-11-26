@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime
-import json
 import time
 import warnings
 from typing import Any, Dict, List, Optional
@@ -10,14 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
-    CharactersRAGDB,
-    CharactersRAGDBError,
-    ConflictError,
-    InputError,
-)
 from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
-    TimedEffects,
     ChatDictionaryCreate,
     ChatDictionaryUpdate,
     ChatDictionaryResponse,
@@ -36,53 +28,19 @@ from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
     EntryListResponse,
     DictionaryStatistics,
 )
+from tldw_Server_API.app.api.v1.utils.datetime_utils import coerce_datetime, parse_timed_effects
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
 from tldw_Server_API.app.core.Character_Chat.chat_dictionary import (
     ChatDictionaryService,
     TokenBudgetExceededWarning,
 )
 
 router = APIRouter()
-
-
-def _coerce_datetime(value: Any) -> datetime.datetime:
-    if isinstance(value, datetime.datetime):
-        return value
-    if isinstance(value, str):
-        for fmt in (
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%dT%H:%M:%S",
-            "%Y-%m-%d %H:%M:%S.%f",
-            "%Y-%m-%dT%H:%M:%S.%f",
-        ):
-            try:
-                return datetime.datetime.strptime(value, fmt)
-            except ValueError:
-                continue
-        try:
-            return datetime.datetime.fromisoformat(value)
-        except Exception:
-            pass
-    return datetime.datetime.utcnow()
-
-
-def _parse_timed_effects(value: Any) -> Optional[TimedEffects]:
-    if value is None:
-        return None
-    if isinstance(value, TimedEffects):
-        return value
-    if isinstance(value, dict):
-        try:
-            return TimedEffects(**value)
-        except Exception:
-            return None
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-            if isinstance(parsed, dict):
-                return TimedEffects(**parsed)
-        except Exception:
-            return None
-    return None
 
 
 def _entry_dict_to_response(
@@ -124,13 +82,13 @@ def _entry_dict_to_response(
         replacement=replacement,
         probability=probability,
         group=entry_data.get("group") or entry_data.get("group_name"),
-        timed_effects=_parse_timed_effects(entry_data.get("timed_effects")),
+        timed_effects=parse_timed_effects(entry_data.get("timed_effects")),
         max_replacements=max_replacements,
         type=entry_type,
         enabled=enabled,
         case_sensitive=case_sensitive,
-        created_at=_coerce_datetime(entry_data.get("created_at")),
-        updated_at=_coerce_datetime(entry_data.get("updated_at")),
+        created_at=coerce_datetime(entry_data.get("created_at")),
+        updated_at=coerce_datetime(entry_data.get("updated_at")),
     )
 
 
@@ -185,11 +143,7 @@ async def list_chat_dictionaries(
     """List all chat dictionaries for the current user."""
     try:
         service = ChatDictionaryService(db)
-        dictionaries = service.list_dictionaries(include_inactive=include_inactive)
-
-        for dict_data in dictionaries:
-            entries = service.get_entries(dictionary_id=dict_data["id"], active_only=False)
-            dict_data["entry_count"] = len(entries)
+        dictionaries = service.list_dictionaries_with_entry_counts(include_inactive=include_inactive)
 
         active_count = sum(1 for d in dictionaries if d.get("is_active", True))
         inactive_count = len(dictionaries) - active_count
@@ -363,8 +317,8 @@ async def add_dictionary_entry(
                 "type": entry.type,
                 "enabled": entry.enabled,
                 "case_sensitive": entry.case_sensitive,
-                "created_at": datetime.datetime.utcnow(),
-                "updated_at": datetime.datetime.utcnow(),
+                "created_at": datetime.datetime.now(datetime.timezone.utc),
+                "updated_at": datetime.datetime.now(datetime.timezone.utc),
             }
 
         return _entry_dict_to_response(entry_data, fallback_dictionary_id=dictionary_id)
@@ -450,7 +404,7 @@ async def update_dictionary_entry(
         if not success:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
 
-        dictionary_id_for_entry = service._get_entry_dict_id(entry_id)
+        dictionary_id_for_entry = service.get_entry_dictionary_id(entry_id)
         if dictionary_id_for_entry is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
 
@@ -525,9 +479,7 @@ async def process_text_with_dictionaries(
                 return_stats=True,
             )
 
-            token_budget_exceeded = any(
-                issubclass(warning.category, TokenBudgetExceededWarning) for warning in caught
-            )
+            token_budget_exceeded = any(issubclass(warning.category, TokenBudgetExceededWarning) for warning in caught)
             if token_budget_exceeded:
                 stats["token_budget_exceeded"] = True
 
@@ -716,9 +668,7 @@ async def get_dictionary_statistics(
         total_entries = int(stats.get("total_entries", len(entries)))
         literal_count = int(stats.get("literal_entries", total_entries - regex_count))
         groups = list({e.get("group") for e in entries if e.get("group")})
-        avg_probability = (
-            sum(float(e.get("probability", 1.0)) for e in entries) / len(entries) if entries else 0.0
-        )
+        avg_probability = sum(float(e.get("probability", 1.0)) for e in entries) / len(entries) if entries else 0.0
 
         return DictionaryStatistics(
             dictionary_id=dictionary_id,
@@ -736,4 +686,3 @@ async def get_dictionary_statistics(
     except Exception as e:
         logger.error(f"Error getting dictionary statistics: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-

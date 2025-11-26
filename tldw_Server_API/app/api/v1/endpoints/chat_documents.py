@@ -13,8 +13,7 @@ from starlette.responses import StreamingResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, InputError
-from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys, API_KEYS as SCHEMAS_API_KEYS
-from tldw_Server_API.app.core.Chat.chat_service import merge_api_keys_for_provider
+from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.api.v1.schemas.document_generator_schemas import (
     DocumentType as DocType,
     GenerationStatus,
@@ -40,9 +39,6 @@ from tldw_Server_API.app.core.Chat.document_generator import (
 
 router = APIRouter()
 
-# Backward-compatibility for tests that patch API_KEYS directly (in schemas module).
-API_KEYS = SCHEMAS_API_KEYS
-
 
 @router.post(
     "/documents/generate",
@@ -66,31 +62,7 @@ async def generate_document(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Provider is required")
         provider_key = provider_name.lower()
 
-        schema_keys: Optional[Dict[str, str]] = None
-        try:
-            from tldw_Server_API.app.api.v1.schemas import chat_request_schemas as _schemas_mod  # type: ignore
-
-            _schema_keys = getattr(_schemas_mod, "API_KEYS", None)
-            if isinstance(_schema_keys, dict) and _schema_keys:
-                schema_keys = dict(_schema_keys)
-        except Exception:
-            schema_keys = None
-
-        local_module_keys = API_KEYS if isinstance(API_KEYS, dict) and API_KEYS else None
-        if isinstance(schema_keys, dict) and isinstance(local_module_keys, dict):
-            module_keys: Optional[Dict[str, str]] = {**schema_keys, **local_module_keys}
-        elif isinstance(schema_keys, dict):
-            module_keys = schema_keys
-        elif isinstance(local_module_keys, dict):
-            module_keys = dict(local_module_keys)
-        else:
-            module_keys = None
-
-        dynamic_keys = get_api_keys()
-        explicit_key = (request.api_key or "").strip() if request.api_key else None
-        _raw_key = explicit_key
-        provider_api_key = explicit_key
-
+        # Resolve provider key requirements
         try:
             from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
         except Exception:
@@ -102,17 +74,21 @@ async def generate_document(
             _is_pytest = False
         _is_test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
 
-        if not provider_api_key:
-            dyn_for_merge = dynamic_keys
-            if (_is_pytest or _is_test_mode) and isinstance(module_keys, dict) and (provider_key in module_keys):
-                dyn_for_merge = {k: v for k, v in dynamic_keys.items() if k != provider_key}
+        explicit_key = (request.api_key or "").strip() if request.api_key else None
+        provider_api_key = explicit_key
+        resolver_debug: Dict[str, Any] = {}
 
-            _raw_key, provider_api_key = merge_api_keys_for_provider(
+        # When no explicit key is provided, reuse chat's centralized resolver so env/config
+        # and test-time overrides stay in sync with /chat/completions.
+        if not provider_api_key:
+            provider_api_key, resolver_debug = resolve_provider_api_key(
                 provider_key,
-                module_keys,
-                dyn_for_merge,
-                PROVIDER_REQUIRES_KEY,
+                prefer_module_keys_in_tests=True,
             )
+            try:
+                logger.debug("Document generator provider key resolution: {}", resolver_debug)
+            except Exception as log_err:  # pragma: no cover - defensive
+                logger.debug("Document generator provider key resolution logging skipped: {}", log_err)
 
         if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key:
             if (_is_pytest or _is_test_mode) and bool(request.stream):
@@ -144,7 +120,7 @@ async def generate_document(
                 status=GenStatus.PENDING,
                 conversation_id=request.conversation_id,
                 document_type=request.document_type,
-                created_at=datetime.datetime.utcnow(),
+                created_at=datetime.datetime.now(datetime.timezone.utc),
                 message="Document generation job created",
             )
 
@@ -207,9 +183,7 @@ async def generate_document(
                     async for chunk in streaming_source:  # type: ignore[attr-defined]
                         yield chunk
                     return
-                if hasattr(streaming_source, "__iter__") and not isinstance(
-                    streaming_source, (str, bytes, bytearray)
-                ):
+                if hasattr(streaming_source, "__iter__") and not isinstance(streaming_source, (str, bytes, bytearray)):
                     iterator = iter(streaming_source)  # type: ignore[arg-type]
                     while True:
                         try:
@@ -235,7 +209,7 @@ async def generate_document(
                             if not payload:
                                 continue
                             collected_chunks.append(payload)
-                            for line in (payload.splitlines() or [""]):
+                            for line in payload.splitlines() or [""]:
                                 if line.strip().lower() == "[done]":
                                     continue
                                 await stream.send_raw_sse_line(f"data: {line}")
@@ -367,7 +341,7 @@ async def generate_document(
 
     except InputError as e:
         logger.warning(f"Input error generating document: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except ChatAPIError as e:
         logger.error(f"API error generating document: {e}")
         raise HTTPException(
@@ -623,8 +597,8 @@ async def save_prompt_config(
             temperature=config.temperature,
             max_tokens=config.max_tokens,
             is_custom=True,
-            created_at=datetime.datetime.utcnow(),
-            updated_at=datetime.datetime.utcnow(),
+            created_at=datetime.datetime.now(datetime.timezone.utc),
+            updated_at=datetime.datetime.now(datetime.timezone.utc),
         )
     except HTTPException:
         raise
@@ -793,4 +767,3 @@ async def get_generation_statistics(
     except Exception as e:
         logger.error(f"Error getting generation statistics: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-

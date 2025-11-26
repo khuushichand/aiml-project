@@ -117,7 +117,9 @@ class PartialTranscriptionThread(threading.Thread):
             self.exception_encountered = exc
 
 
-def record_audio_to_disk(device_id: int, output_file_path: str, stop_event: threading.Event, audio_queue: "queue.Queue[bytes]") -> None:
+def record_audio_to_disk(
+    device_id: int, output_file_path: str, stop_event: threading.Event, audio_queue: "queue.Queue[bytes]"
+) -> None:
     """
     Record audio from a PyAudio device to disk while feeding a queue.
 
@@ -351,9 +353,10 @@ class LiveAudioStreamer:
         Hook/callback for handling transcribed text.
         Override this in your script to process user speech.
         """
-        #print(f"USER SAID: {text}")
+        # print(f"USER SAID: {text}")
         # Only print a safe fixed message. If you need to log text, sanitize it first!
         print("Speech received (text not shown for privacy/security).")
+
 
 def test_device_availability(device_id: Optional[int]) -> bool:
     """
@@ -424,7 +427,9 @@ def record_audio(duration: float, sample_rate: int = 16000, chunk_size: int = 10
 
 
 @timeit
-def stop_recording_infinite(p, stream, audio_queue: "queue.Queue[bytes]", stop_recording_event: threading.Event, audio_thread: threading.Thread) -> bytes:
+def stop_recording_infinite(
+    p, stream, audio_queue: "queue.Queue[bytes]", stop_recording_event: threading.Event, audio_thread: threading.Thread
+) -> bytes:
     """
     Stop an ongoing \"infinite\" audio recording and return concatenated frames.
     """
@@ -515,8 +520,7 @@ def get_system_audio_devices() -> List[Dict[str, Any]]:
                 devices.append(
                     {
                         "id": device_index,
-                        "name": f"{device['name']} ({api_name})"
-                        + (" [SYSTEM AUDIO]" if is_likely_loopback else ""),
+                        "name": f"{device['name']} ({api_name})" + (" [SYSTEM AUDIO]" if is_likely_loopback else ""),
                         "hostapi": device["hostapi"],
                         "max_input_channels": device["max_input_channels"],
                         "max_output_channels": device["max_output_channels"],
@@ -545,6 +549,7 @@ def record_system_audio(
         raise RuntimeError("sounddevice/wave are not available; install them to use record_system_audio.")
 
     temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    temp_file.close()  # Immediately close handle; only path is needed
 
     try:
         device_info = sd.query_devices(device_id)
@@ -575,11 +580,5 @@ def record_system_audio(
         logging.info(f"Recording saved to {temp_file.name}")
         return temp_file.name
     except Exception as e:
-        temp_file.close()
         Path(temp_file.name).unlink(missing_ok=True)
-        raise RuntimeError(f"Recording failed: {str(e)}")
-    finally:
-        try:
-            temp_file.close()
-        except Exception:
-            pass
+        raise RuntimeError(f"Recording failed: {str(e)}") from e

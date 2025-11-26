@@ -841,9 +841,8 @@ async def create_chat_completion(
 
     try:
         logger.debug("Provider/model resolution: {}", provider_debug)
-    except Exception:
-        # Debug logging should never interfere with request handling
-        pass
+    except Exception as log_err:  # pragma: no cover - defensive
+        logger.debug("Provider/model resolution logging skipped: {}", log_err)
 
     client_id = getattr(chat_db, 'client_id', 'unknown_client')
 
