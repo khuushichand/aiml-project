@@ -229,10 +229,19 @@ try:
 except Exception:
     QUEUED_EXECUTION = False
 
-# Default persistence behavior for chats
 def _to_bool(val: str) -> bool:
     return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
 
+# Optional flag: allow auto-switch from 'local-llm' to 'openai' when an
+# OpenAI key is present. Intended primarily for tests; disabled by default.
+_env_autoswitch = os.getenv("ALLOW_AUTOSWITCH_TO_OPENAI")
+if _env_autoswitch is not None:
+    ALLOW_AUTOSWITCH_TO_OPENAI: bool = _to_bool(_env_autoswitch)
+else:
+    _cfg_autoswitch = _chat_config.get("allow_autoswitch_to_openai") if _chat_config else None
+    ALLOW_AUTOSWITCH_TO_OPENAI = _to_bool(_cfg_autoswitch) if _cfg_autoswitch is not None else False
+
+# Default persistence behavior for chats
 # Priority: env > Chat-Module.chat_save_default/default_save_to_db > Auto-Save.save_character_chats > False
 _env_default_save = os.getenv("CHAT_SAVE_DEFAULT") or os.getenv("DEFAULT_CHAT_SAVE")
 if _env_default_save is not None:
@@ -1318,12 +1327,15 @@ async def create_chat_completion(
         final_character_db_id: Optional[int] = None # Initialize
 
         try:
-            import os as _os_keys
-            # If default provider resolved to 'local-llm' but an explicit provider key exists
-            # (e.g., 'openai') in env/config or module overrides, prefer that provider to satisfy
-            # integration tests that expect config-driven defaults in test mode.
+            # In TEST_MODE or when explicitly enabled via config/env, allow
+            # auto-switching from 'local-llm' to 'openai' if an OpenAI key
+            # is present. This is primarily to satisfy integration tests that
+            # expect config-driven defaults.
+            _test_mode_flag = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+            _autoswitch_enabled = ALLOW_AUTOSWITCH_TO_OPENAI or _test_mode_flag
             if (
-                provider == "local-llm"
+                _autoswitch_enabled
+                and provider == "local-llm"
                 and getattr(request_data, "api_provider", None) in (None, "")
             ):
                 openai_key, _openai_debug = resolve_provider_api_key(
@@ -1346,14 +1358,12 @@ async def create_chat_completion(
                 PROVIDER_REQUIRES_KEY = {}
             # Allow explicit mock forcing in tests even if provider key is absent
             _force_mock = os.getenv("CHAT_FORCE_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}
-            _test_mode_flag = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
             _auto_mock_family = target_api_provider in {"openai", "groq", "mistral"}
             if PROVIDER_REQUIRES_KEY.get(target_api_provider, False) and not provider_api_key and not (_force_mock or (_test_mode_flag and _auto_mock_family)):
                 logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Service for '{target_api_provider}' is not configured (key missing).")
             # Additional deterministic behavior for tests: if a clearly invalid key is provided, fail fast with 401.
             # This avoids depending on external network calls in CI and matches integration test expectations.
-            _test_mode_flag = _os_keys.getenv("TEST_MODE", "").lower() == "true"
             if _test_mode_flag and provider_api_key and PROVIDER_REQUIRES_KEY.get(target_api_provider, False):
                 # Treat keys with obvious invalid patterns as authentication failures in test mode.
                 invalid_patterns = ("invalid-", "test-invalid-", "bad-key-", "dummy-invalid-")

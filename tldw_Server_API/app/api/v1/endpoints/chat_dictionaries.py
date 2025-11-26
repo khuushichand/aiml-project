@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 import time
 import warnings
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
@@ -11,41 +11,40 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
     ChatDictionaryCreate,
-    ChatDictionaryUpdate,
     ChatDictionaryResponse,
+    ChatDictionaryUpdate,
     ChatDictionaryWithEntries,
     DictionaryEntryCreate,
-    DictionaryEntryUpdate,
     DictionaryEntryResponse,
-    ProcessTextRequest,
-    ProcessTextResponse,
-    ImportDictionaryRequest,
-    ImportDictionaryResponse,
+    DictionaryEntryUpdate,
+    DictionaryListResponse,
+    DictionaryStatistics,
+    EntryListResponse,
+    ExportDictionaryJSONResponse,
     ExportDictionaryResponse,
     ImportDictionaryJSONRequest,
-    ExportDictionaryJSONResponse,
-    DictionaryListResponse,
-    EntryListResponse,
-    DictionaryStatistics,
+    ImportDictionaryRequest,
+    ImportDictionaryResponse,
+    ProcessTextRequest,
+    ProcessTextResponse,
 )
 from tldw_Server_API.app.api.v1.utils.datetime_utils import coerce_datetime, parse_timed_effects
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
-    CharactersRAGDB,
-    CharactersRAGDBError,
-    ConflictError,
-    InputError,
-)
 from tldw_Server_API.app.core.Character_Chat.chat_dictionary import (
     ChatDictionaryService,
     TokenBudgetExceededWarning,
+)
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    ConflictError,
+    InputError,
 )
 
 router = APIRouter()
 
 
 def _entry_dict_to_response(
-    entry_data: Dict[str, Any],
-    fallback_dictionary_id: Optional[int] = None,
+    entry_data: dict[str, Any],
+    fallback_dictionary_id: int | None = None,
 ) -> DictionaryEntryResponse:
     dictionary_id = entry_data.get("dictionary_id") or fallback_dictionary_id
     if dictionary_id is None:
@@ -107,26 +106,25 @@ async def create_chat_dictionary(
     """
     Create a new chat dictionary for pattern-based text replacements.
     """
+    service = ChatDictionaryService(db)
     try:
-        service = ChatDictionaryService(db)
         dict_id = service.create_dictionary(dictionary.name, dictionary.description)
-
         dict_data = service.get_dictionary(dict_id)
-        if not dict_data:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Dictionary created but could not be retrieved",
-            )
-
-        entries = service.get_entries(dictionary_id=dict_id)
-        dict_data["entry_count"] = len(entries)
-
-        return ChatDictionaryResponse(**dict_data)
+        entries = service.get_entries(dictionary_id=dict_id) if dict_data else []
     except ConflictError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error creating dictionary: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+    if not dict_data:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Dictionary created but could not be retrieved",
+        )
+
+    dict_data["entry_count"] = len(entries)
+    return ChatDictionaryResponse(**dict_data)
 
 
 @router.get(
@@ -158,7 +156,7 @@ async def list_chat_dictionaries(
         )
     except Exception as e:
         logger.error(f"Error listing dictionaries: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
 @router.get(
@@ -173,29 +171,29 @@ async def get_chat_dictionary(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> ChatDictionaryWithEntries:
     """Get a specific dictionary with all its entries."""
+    service = ChatDictionaryService(db)
     try:
-        service = ChatDictionaryService(db)
-
         dict_data = service.get_dictionary(dictionary_id)
-        if not dict_data:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
-
-        entries = service.get_entries(dictionary_id=dictionary_id, active_only=False)
-        dict_data["entry_count"] = len(entries)
-
-        entry_responses = [
-            _entry_dict_to_response(entry_dict, fallback_dictionary_id=dictionary_id) for entry_dict in entries
-        ]
-
-        return ChatDictionaryWithEntries(
-            **dict_data,
-            entries=entry_responses,
-        )
+        entries = service.get_entries(dictionary_id=dictionary_id, active_only=False) if dict_data else []
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting dictionary: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+    if not dict_data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
+
+    dict_data["entry_count"] = len(entries)
+
+    entry_responses = [
+        _entry_dict_to_response(entry_dict, fallback_dictionary_id=dictionary_id) for entry_dict in entries
+    ]
+
+    return ChatDictionaryWithEntries(
+        **dict_data,
+        entries=entry_responses,
+    )
 
 
 @router.put(
@@ -211,9 +209,8 @@ async def update_chat_dictionary(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> ChatDictionaryResponse:
     """Update a dictionary's metadata."""
+    service = ChatDictionaryService(db)
     try:
-        service = ChatDictionaryService(db)
-
         success = service.update_dictionary(
             dictionary_id,
             name=update.name,
@@ -221,21 +218,22 @@ async def update_chat_dictionary(
             is_active=update.is_active,
         )
 
-        if not success:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
-
-        dict_data = service.get_dictionary(dictionary_id)
-        entries = service.get_entries(dictionary_id=dictionary_id)
-        dict_data["entry_count"] = len(entries)
-
-        return ChatDictionaryResponse(**dict_data)
+        dict_data = service.get_dictionary(dictionary_id) if success else None
+        entries = service.get_entries(dictionary_id=dictionary_id) if success else []
     except ConflictError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error updating dictionary: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+    if not success or not dict_data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
+
+    dict_data["entry_count"] = len(entries)
+
+    return ChatDictionaryResponse(**dict_data)
 
 
 @router.delete(
@@ -251,17 +249,17 @@ async def delete_chat_dictionary(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> None:
     """Delete a dictionary (soft delete by default)."""
+    service = ChatDictionaryService(db)
     try:
-        service = ChatDictionaryService(db)
         success = service.delete_dictionary(dictionary_id, hard_delete=hard_delete)
-
-        if not success:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error deleting dictionary: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+    if not success:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
 
 
 @router.post(
@@ -280,15 +278,19 @@ async def add_dictionary_entry(
     """
     Add a new entry to a dictionary.
     """
+    service = ChatDictionaryService(db)
     try:
-        service = ChatDictionaryService(db)
-
         dict_data = service.get_dictionary(dictionary_id)
-        if not dict_data:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
+    except Exception as e:
+        logger.error(f"Error retrieving dictionary before adding entry: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
-        timed_effects_dict = entry.timed_effects.model_dump() if entry.timed_effects else None
+    if not dict_data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
 
+    timed_effects_dict = entry.timed_effects.model_dump() if entry.timed_effects else None
+
+    try:
         entry_id = service.add_entry(
             dictionary_id,
             pattern=entry.pattern,
@@ -304,31 +306,30 @@ async def add_dictionary_entry(
 
         created_entries = service.get_entries(dictionary_id=dictionary_id, active_only=False)
         entry_data = next((item for item in created_entries if item.get("id") == entry_id), None)
-        if not entry_data:
-            entry_data = {
-                "id": entry_id,
-                "dictionary_id": dictionary_id,
-                "pattern": entry.pattern,
-                "replacement": entry.replacement,
-                "probability": entry.probability,
-                "group": entry.group,
-                "timed_effects": entry.timed_effects.model_dump() if entry.timed_effects else None,
-                "max_replacements": entry.max_replacements,
-                "type": entry.type,
-                "enabled": entry.enabled,
-                "case_sensitive": entry.case_sensitive,
-                "created_at": datetime.datetime.now(datetime.timezone.utc),
-                "updated_at": datetime.datetime.now(datetime.timezone.utc),
-            }
-
-        return _entry_dict_to_response(entry_data, fallback_dictionary_id=dictionary_id)
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except HTTPException:
-        raise
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error adding dictionary entry: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+    if not entry_data:
+        entry_data = {
+            "id": entry_id,
+            "dictionary_id": dictionary_id,
+            "pattern": entry.pattern,
+            "replacement": entry.replacement,
+            "probability": entry.probability,
+            "group": entry.group,
+            "timed_effects": entry.timed_effects.model_dump() if entry.timed_effects else None,
+            "max_replacements": entry.max_replacements,
+            "type": entry.type,
+            "enabled": entry.enabled,
+            "case_sensitive": entry.case_sensitive,
+            "created_at": datetime.datetime.now(datetime.timezone.utc),
+            "updated_at": datetime.datetime.now(datetime.timezone.utc),
+        }
+
+    return _entry_dict_to_response(entry_data, fallback_dictionary_id=dictionary_id)
 
 
 @router.get(
@@ -340,34 +341,33 @@ async def add_dictionary_entry(
 )
 async def list_dictionary_entries(
     dictionary_id: int,
-    group: Optional[str] = Query(None, description="Filter by group"),
+    group: str | None = Query(None, description="Filter by group"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> EntryListResponse:
     """List all entries in a dictionary, optionally filtered by group."""
+    service = ChatDictionaryService(db)
     try:
-        service = ChatDictionaryService(db)
-
         dict_data = service.get_dictionary(dictionary_id)
-        if not dict_data:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
-
-        entries = service.get_entries(dictionary_id=dictionary_id, group=group, active_only=False)
-
-        entry_responses = [
-            _entry_dict_to_response(entry_dict, fallback_dictionary_id=dictionary_id) for entry_dict in entries
-        ]
-
-        return EntryListResponse(
-            entries=entry_responses,
-            total=len(entries),
-            dictionary_id=dictionary_id,
-            group=group,
-        )
+        entries = service.get_entries(dictionary_id=dictionary_id, group=group, active_only=False) if dict_data else []
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error listing dictionary entries: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+    if not dict_data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
+
+    entry_responses = [
+        _entry_dict_to_response(entry_dict, fallback_dictionary_id=dictionary_id) for entry_dict in entries
+    ]
+
+    return EntryListResponse(
+        entries=entry_responses,
+        total=len(entries),
+        dictionary_id=dictionary_id,
+        group=group,
+    )
 
 
 @router.put(
@@ -383,11 +383,9 @@ async def update_dictionary_entry(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> DictionaryEntryResponse:
     """Update a dictionary entry."""
+    service = ChatDictionaryService(db)
+    timed_effects_dict = update.timed_effects.model_dump() if update.timed_effects else None
     try:
-        service = ChatDictionaryService(db)
-
-        timed_effects_dict = update.timed_effects.model_dump() if update.timed_effects else None
-
         success = service.update_entry(
             entry_id,
             pattern=update.pattern,
@@ -401,26 +399,23 @@ async def update_dictionary_entry(
             case_sensitive=update.case_sensitive,
         )
 
-        if not success:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
-
-        dictionary_id_for_entry = service.get_entry_dictionary_id(entry_id)
-        if dictionary_id_for_entry is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
-
-        refreshed_entries = service.get_entries(dictionary_id=dictionary_id_for_entry, active_only=False)
+        dictionary_id_for_entry = service.get_entry_dictionary_id(entry_id) if success else None
+        refreshed_entries = (
+            service.get_entries(dictionary_id=dictionary_id_for_entry, active_only=False)
+            if dictionary_id_for_entry is not None
+            else []
+        )
         updated_entry = next((item for item in refreshed_entries if item.get("id") == entry_id), None)
-        if not updated_entry:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
-
-        return _entry_dict_to_response(updated_entry, fallback_dictionary_id=dictionary_id_for_entry)
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except HTTPException:
-        raise
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error updating dictionary entry: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+    if not success or dictionary_id_for_entry is None or not updated_entry:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
+
+    return _entry_dict_to_response(updated_entry, fallback_dictionary_id=dictionary_id_for_entry)
 
 
 @router.delete(
@@ -435,17 +430,17 @@ async def delete_dictionary_entry(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> None:
     """Delete a dictionary entry."""
+    service = ChatDictionaryService(db)
     try:
-        service = ChatDictionaryService(db)
         success = service.delete_entry(entry_id)
-
-        if not success:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error deleting dictionary entry: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+    if not success:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entry not found")
 
 
 @router.post(
@@ -487,11 +482,7 @@ async def process_text_with_dictionaries(
 
         return ProcessTextResponse(
             original_text=request.text,
-            processed_text=(
-                processed_text
-                if isinstance(processed_text, str)
-                else processed_text.get("processed_text", request.text)
-            ),
+            processed_text=processed_text,
             replacements=stats.get("replacements", 0),
             iterations=stats.get("iterations", 0),
             entries_used=stats.get("entries_used", []),
@@ -500,7 +491,7 @@ async def process_text_with_dictionaries(
         )
     except Exception as e:
         logger.error(f"Error processing text: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
 @router.post(
@@ -536,12 +527,12 @@ async def import_dictionary(
             groups_created=groups,
         )
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except ConflictError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error importing dictionary: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
 @router.get(
@@ -556,31 +547,30 @@ async def export_dictionary(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> ExportDictionaryResponse:
     """Export a dictionary to markdown format."""
+    service = ChatDictionaryService(db)
     try:
-        service = ChatDictionaryService(db)
-
         dict_data = service.get_dictionary(dictionary_id)
-        if not dict_data:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
-
-        content = service.export_to_markdown(dictionary_id)
-
-        entries = service.get_entries(dictionary_id=dictionary_id, active_only=False)
-        groups = list({e.get("group") for e in entries if e.get("group")})
-
-        return ExportDictionaryResponse(
-            name=dict_data["name"],
-            content=content if isinstance(content, str) else str(content),
-            entry_count=len(entries),
-            group_count=len(groups),
-        )
+        content = service.export_to_markdown(dictionary_id) if dict_data else None
+        entries = service.get_entries(dictionary_id=dictionary_id, active_only=False) if dict_data else []
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error exporting dictionary: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+    if not dict_data or content is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
+
+    groups = list({e.get("group") for e in entries if e.get("group")})
+
+    return ExportDictionaryResponse(
+        name=dict_data["name"],
+        content=content,
+        entry_count=len(entries),
+        group_count=len(groups),
+    )
 
 
 @router.get(
@@ -600,12 +590,12 @@ async def export_dictionary_json(
         data = service.export_to_json(dictionary_id)
         return ExportDictionaryJSONResponse(**data)
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error exporting dictionary JSON: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
 @router.post(
@@ -635,12 +625,12 @@ async def import_dictionary_json(
             groups_created=list({e.get("group") for e in entries if e.get("group")}),
         )
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except ConflictError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Error importing dictionary JSON: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
 @router.get(
@@ -655,34 +645,35 @@ async def get_dictionary_statistics(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ) -> DictionaryStatistics:
     """Get statistics for a dictionary."""
+    service = ChatDictionaryService(db)
     try:
-        service = ChatDictionaryService(db)
-
         dict_data = service.get_dictionary(dictionary_id)
-        if not dict_data:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
-
-        stats = service.get_statistics(dictionary_id)
-        entries = service.get_entries(dictionary_id=dictionary_id, active_only=False)
-        regex_count = int(stats.get("regex_entries", 0))
-        total_entries = int(stats.get("total_entries", len(entries)))
-        literal_count = int(stats.get("literal_entries", total_entries - regex_count))
-        groups = list({e.get("group") for e in entries if e.get("group")})
-        avg_probability = sum(float(e.get("probability", 1.0)) for e in entries) / len(entries) if entries else 0.0
-
-        return DictionaryStatistics(
-            dictionary_id=dictionary_id,
-            name=dict_data["name"],
-            total_entries=total_entries,
-            regex_entries=regex_count,
-            literal_entries=literal_count,
-            groups=groups,
-            average_probability=avg_probability,
-            total_usage_count=service.get_usage_statistics(dictionary_id).get("times_used"),
-            last_used=None,
-        )
+        stats = service.get_statistics(dictionary_id) if dict_data else {}
+        entries = service.get_entries(dictionary_id=dictionary_id, active_only=False) if dict_data else []
+        usage_stats = service.get_usage_statistics(dictionary_id) if dict_data else {}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting dictionary statistics: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+
+    if not dict_data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dictionary not found")
+
+    regex_count = int(stats.get("regex_entries", 0))
+    total_entries = int(stats.get("total_entries", len(entries)))
+    literal_count = int(stats.get("literal_entries", total_entries - regex_count))
+    groups = list({e.get("group") for e in entries if e.get("group")})
+    avg_probability = sum(float(e.get("probability", 1.0)) for e in entries) / len(entries) if entries else 0.0
+
+    return DictionaryStatistics(
+        dictionary_id=dictionary_id,
+        name=dict_data["name"],
+        total_entries=total_entries,
+        regex_entries=regex_count,
+        literal_entries=literal_count,
+        groups=groups,
+        average_probability=avg_probability,
+        total_usage_count=usage_stats.get("times_used"),
+        last_used=None,
+    )
