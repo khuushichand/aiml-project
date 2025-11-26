@@ -27,9 +27,8 @@ import argparse
 import os
 import shutil
 import sys
-from pathlib import Path
-
 import urllib.request
+from pathlib import Path
 from urllib.error import URLError
 
 DEFAULT_SILERO_VAD_URL = (

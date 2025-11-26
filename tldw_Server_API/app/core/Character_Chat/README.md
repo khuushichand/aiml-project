@@ -133,7 +133,7 @@ The Character Chat module is consumed across several FastAPI routers:
 - `characters_endpoint.py` - card CRUD, import/export, world book management.
 - `character_chat_sessions.py` - conversation creation & metadata updates.
 - `character_messages.py` - message history, edits, ranking, search.
-- `chat.py` - dictionary CRUD, world book context injection during completions, placeholder utilities.
+- `chat_dictionaries.py` - dictionary CRUD and validation used during completions.
 
 Each endpoint resolves the per-user `CharactersRAGDB` via `get_chacha_db_for_user` and ensures the correct AuthNZ dependencies (`get_request_user`) before calling into this module.
 
@@ -187,7 +187,7 @@ Most tests rely on fixtures that stub `CharactersRAGDB` and set `TEST_MODE=1` to
   - Delete message: tldw_Server_API/app/api/v1/endpoints/character_messages.py:669
   - Search messages: tldw_Server_API/app/api/v1/endpoints/character_messages.py:735
 - Chat Dictionaries (mounted under `/api/v1/chat`):
-  - Create/list/export/import/statistics endpoints begin at: tldw_Server_API/app/api/v1/endpoints/chat.py:1681
+  - Create/list/export/import/statistics endpoints: tldw_Server_API/app/api/v1/endpoints/chat_dictionaries.py
 
 Note: Line numbers reflect the current repository state and may change after refactors.
 

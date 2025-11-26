@@ -35,7 +35,8 @@ See also: `tldw_Server_API/app/core/Character_Chat/README.md` for a focused modu
 - Characters (cards + world books): `tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py`
 - Chat Sessions: `tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py`
 - Messages: `tldw_Server_API/app/api/v1/endpoints/character_messages.py`
-- Chat (OpenAI-compatible) + dictionary tooling: `tldw_Server_API/app/api/v1/endpoints/chat.py`
+- Chat (OpenAI-compatible) core: `tldw_Server_API/app/api/v1/endpoints/chat.py`
+- Chat dictionary tooling: `tldw_Server_API/app/api/v1/endpoints/chat_dictionaries.py`
 
 Each router resolves the per-user DB via `get_chacha_db_for_user` and the authenticated user via `get_request_user`.
 
@@ -146,7 +147,7 @@ GET /api/v1/characters/filter?tags=wizard&tags=fantasy&match_all=false
 - Stats/Export/Import available under the same router.
 
 8) Chat dictionary basics
-- Manage groups/entries under `chat.py` endpoints (create/list/export/import/statistics)
+- Manage groups/entries under `chat_dictionaries.py` endpoints (create/list/export/import/statistics)
 - Pre-generation application occurs in the Chat module path (`/api/v1/chat/completions`). The Character Chat `/complete-v2` flow does not apply dictionaries by default; use the Chat endpoint if you need dictionary processing before provider calls.
 
 ## API Examples (curl/httpx)
@@ -294,7 +295,7 @@ python -m pytest tldw_Server_API/tests/Character_Chat_NEW -v
 - Characters: list/create/update/delete/import/filter, world books sub-routes — `tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py`
 - Chat Sessions: create/get/prepare/completions (v2)/list/update/delete/export — `tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py`
 - Messages: create/list/search/get/update/delete — `tldw_Server_API/app/api/v1/endpoints/character_messages.py`
-- Chat Dictionaries: group/entry CRUD + import/export/stats — `tldw_Server_API/app/api/v1/endpoints/chat.py`
+- Chat Dictionaries: group/entry CRUD + import/export/stats — `tldw_Server_API/app/api/v1/endpoints/chat_dictionaries.py`
 
 ---
 

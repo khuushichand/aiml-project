@@ -351,8 +351,9 @@ class LiveAudioStreamer:
         Hook/callback for handling transcribed text.
         Override this in your script to process user speech.
         """
-        print(f"USER SAID: {text}")
-
+        #print(f"USER SAID: {text}")
+        # Only print a safe fixed message. If you need to log text, sanitize it first!
+        print("Speech received (text not shown for privacy/security).")
 
 def test_device_availability(device_id: Optional[int]) -> bool:
     """
