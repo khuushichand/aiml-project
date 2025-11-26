@@ -1,0 +1,417 @@
+from __future__ import annotations
+
+"""
+MLX-backed local LLM provider (Apple Silicon first).
+
+This adapter mirrors other Chat/Embeddings providers while delegating lifecycle
+to an in-process session registry. It keeps a single active model by default,
+enforces a small concurrency cap, and provides optional compile/warmup on load
+to avoid first-token stalls.
+"""
+
+import contextlib
+import importlib
+import os
+import threading
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, AsyncIterator, Dict, Iterable, Optional
+
+from loguru import logger
+
+from .base import ChatProvider, EmbeddingsProvider
+from tldw_Server_API.app.core.Chat.Chat_Deps import (
+    ChatBadRequestError,
+    ChatProviderError,
+    ChatRateLimitError,
+)
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    finalize_stream,
+    openai_delta_chunk,
+)
+
+
+def _truthy(val: Optional[str], default: bool = False) -> bool:
+    if val is None:
+        return default
+    return str(val).lower() in {"1", "true", "yes", "on"}
+
+
+def _coerce_int(val: Optional[str], default: Optional[int] = None) -> Optional[int]:
+    try:
+        if val is None:
+            return default
+        return int(val)
+    except Exception:
+        return default
+
+
+def _default_settings() -> Dict[str, Any]:
+    """Load MLX defaults from env/config shape (env-first)."""
+    return {
+        "model_path": os.getenv("MLX_MODEL_PATH"),
+        "max_seq_len": _coerce_int(os.getenv("MLX_MAX_SEQ_LEN")),
+        "max_batch_size": _coerce_int(os.getenv("MLX_MAX_BATCH_SIZE")),
+        "device": os.getenv("MLX_DEVICE", "auto"),
+        "dtype": os.getenv("MLX_DTYPE"),
+        "quantization": os.getenv("MLX_QUANTIZATION"),
+        "compile": _truthy(os.getenv("MLX_COMPILE"), default=True),
+        "prompt_template": os.getenv("MLX_PROMPT_TEMPLATE"),
+        "revision": os.getenv("MLX_REVISION"),
+        "trust_remote_code": _truthy(os.getenv("MLX_TRUST_REMOTE_CODE"), default=False),
+        "tokenizer": os.getenv("MLX_TOKENIZER"),
+        "adapter": os.getenv("MLX_ADAPTER"),
+        "adapter_weights": os.getenv("MLX_ADAPTER_WEIGHTS"),
+        "max_kv_cache_size": _coerce_int(os.getenv("MLX_MAX_KV_CACHE_SIZE")),
+        "max_concurrent": max(1, _coerce_int(os.getenv("MLX_MAX_CONCURRENT"), default=1) or 1),
+        "warmup": _truthy(os.getenv("MLX_WARMUP"), default=True),
+    }
+
+
+@dataclass
+class MLXSession:
+    model_id: str
+    model: Any
+    tokenizer: Any
+    generate_fn: Any
+    generate_stream_fn: Any
+    embed_fn: Any
+    supports_embeddings: bool
+    config: Dict[str, Any]
+    loaded_at: float = field(default_factory=time.time)
+    warmup_completed: bool = False
+
+
+class MLXSessionRegistry:
+    """Singleton-ish registry holding the active MLX model/session."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._sema = threading.BoundedSemaphore(1)
+        self._session: Optional[MLXSession] = None
+
+    def _set_concurrency(self, max_concurrent: int) -> None:
+        max_concurrent = max(1, int(max_concurrent))
+        self._sema = threading.BoundedSemaphore(max_concurrent)
+
+    def _import_mlx(self):
+        try:
+            return importlib.import_module("mlx_lm")
+        except ImportError as exc:  # pragma: no cover - env/optional
+            raise ChatProviderError(provider="mlx", message="mlx-lm is not installed") from exc
+
+    def load(self, *, model_path: Optional[str], overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Load or swap the active model. Keeps previous model on failure."""
+        if not model_path:
+            raise ChatBadRequestError(provider="mlx", message="model_path is required")
+        settings = _default_settings()
+        if overrides:
+            for k, v in overrides.items():
+                if v is not None:
+                    settings[k] = v
+
+        prev_session: Optional[MLXSession] = None
+        with self._lock:
+            prev_session = self._session
+
+        mlx_mod = self._import_mlx()
+        load_fn = getattr(mlx_mod, "load", None)
+        if not callable(load_fn):
+            raise ChatProviderError(provider="mlx", message="mlx_lm.load not available")
+        generate_fn = getattr(mlx_mod, "generate", None)
+        generate_stream_fn = getattr(mlx_mod, "generate_stream", None)
+        embed_fn = getattr(mlx_mod, "embed", None)
+
+        try:
+            # Pass only supported kwargs conservatively
+            load_kwargs = {}
+            for key in ("max_seq_len", "max_batch_size", "device", "dtype", "revision", "trust_remote_code"):
+                if settings.get(key) is not None:
+                    load_kwargs[key] = settings[key]
+            if settings.get("tokenizer"):
+                load_kwargs["tokenizer"] = settings["tokenizer"]
+            if settings.get("adapter"):
+                load_kwargs["adapter"] = settings["adapter"]
+            if settings.get("adapter_weights"):
+                load_kwargs["adapter_weights"] = settings["adapter_weights"]
+            model, tokenizer = load_fn(model_path, **load_kwargs)
+            session = MLXSession(
+                model_id=model_path,
+                model=model,
+                tokenizer=tokenizer,
+                generate_fn=generate_fn,
+                generate_stream_fn=generate_stream_fn,
+                embed_fn=embed_fn,
+                supports_embeddings=callable(embed_fn),
+                config=settings,
+            )
+
+            if settings.get("compile", True) or settings.get("warmup", True):
+                try:
+                    self._warmup(session)
+                    session.warmup_completed = True
+                except Exception as warm_err:
+                    logger.warning(f"MLX warmup failed: {warm_err}")
+                    # On warmup failure, keep previous model and surface error
+                    raise
+
+            with self._lock:
+                self._session = session
+                self._set_concurrency(settings.get("max_concurrent", 1))
+            return self.status()
+        except Exception as exc:
+            # Restore prior session on failure
+            with self._lock:
+                self._session = prev_session
+            if isinstance(exc, ChatProviderError):
+                raise
+            raise ChatProviderError(provider="mlx", message=str(exc)) from exc
+
+    def _warmup(self, session: MLXSession) -> None:
+        """Best-effort warmup/compile to avoid first-token stalls."""
+        if not callable(session.generate_fn):
+            return
+        prompt = "Hello"
+        try:
+            session.generate_fn(session.model, session.tokenizer, prompt, max_tokens=1, temp=0.1, verbose=False)
+        except TypeError:
+            # Fallback without kwargs if the signature differs
+            session.generate_fn(session.model, session.tokenizer, prompt)
+
+    def unload(self) -> Dict[str, Any]:
+        with self._lock:
+            self._session = None
+        return {"status": "unloaded"}
+
+    @contextlib.contextmanager
+    def session_scope(self) -> Iterable[MLXSession]:
+        acquired = self._sema.acquire(blocking=False)
+        if not acquired:
+            raise ChatRateLimitError(provider="mlx", message="MLX busy (max concurrency reached)")
+        try:
+            with self._lock:
+                if not self._session:
+                    raise ChatBadRequestError(provider="mlx", message="No active MLX model; load one first")
+                session = self._session
+            yield session
+        finally:
+            try:
+                self._sema.release()
+            except Exception:
+                pass
+
+    def status(self) -> Dict[str, Any]:
+        with self._lock:
+            if not self._session:
+                return {
+                    "active": False,
+                    "model": None,
+                    "loaded_at": None,
+                    "supports_embeddings": False,
+                    "warmup_completed": False,
+                    "max_concurrent": getattr(self._sema, "_initial_value", 1),
+                }
+            s = self._session
+            return {
+                "active": True,
+                "model": s.model_id,
+                "loaded_at": s.loaded_at,
+                "supports_embeddings": s.supports_embeddings,
+                "warmup_completed": s.warmup_completed,
+                "max_concurrent": getattr(self._sema, "_initial_value", 1),
+                "config": {
+                    "device": s.config.get("device"),
+                    "dtype": s.config.get("dtype"),
+                    "compile": bool(s.config.get("compile", True)),
+                    "warmup": bool(s.config.get("warmup", True)),
+                    "max_seq_len": s.config.get("max_seq_len"),
+                    "max_batch_size": s.config.get("max_batch_size"),
+                },
+            }
+
+
+_registry: Optional[MLXSessionRegistry] = None
+
+
+def get_mlx_registry() -> MLXSessionRegistry:
+    global _registry
+    if _registry is None:
+        _registry = MLXSessionRegistry()
+    return _registry
+
+
+def _messages_to_prompt(messages: Any, tokenizer: Any, system_message: Optional[str], template_override: Optional[str]) -> str:
+    """Convert OpenAI-style messages to a prompt string using tokenizer chat template when available."""
+    msgs = messages or []
+    if system_message:
+        msgs = [{"role": "system", "content": system_message}] + list(msgs)
+    try:
+        if hasattr(tokenizer, "apply_chat_template"):
+            if template_override and hasattr(tokenizer, "chat_template"):
+                original_template = getattr(tokenizer, "chat_template", None)
+                try:
+                    tokenizer.chat_template = template_override
+                    return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+                finally:
+                    try:
+                        tokenizer.chat_template = original_template
+                    except Exception:
+                        pass
+            return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+    except Exception as exc:
+        logger.debug(f"MLX chat template application failed; falling back: {exc}")
+    # Fallback: naive concatenation
+    parts = []
+    for m in msgs:
+        role = m.get("role") or "user"
+        content = m.get("content") or ""
+        parts.append(f"[{role}] {content}")
+    return "\n".join(parts)
+
+
+class MLXChatAdapter(ChatProvider):
+    name = "mlx"
+
+    def __init__(self) -> None:
+        self.registry = get_mlx_registry()
+
+    def capabilities(self) -> Dict[str, Any]:
+        status = self.registry.status()
+        return {
+            "supports_streaming": True,
+            "supports_tools": False,
+            "default_timeout_seconds": 120,
+            "max_output_tokens_default": status.get("config", {}).get("max_seq_len"),
+            "supports_embeddings": status.get("supports_embeddings", False),
+        }
+
+    def _generate_kwargs(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        for k in ("max_tokens",):
+            if request.get(k) is not None:
+                out[k] = request[k]
+        temp = request.get("temperature") or request.get("temp")
+        if temp is not None:
+            out["temp"] = temp
+        top_p = request.get("top_p") or request.get("topp")
+        if top_p is not None:
+            out["top_p"] = top_p
+        top_k = request.get("top_k") or request.get("topk")
+        if top_k is not None:
+            out["top_k"] = top_k
+        return out
+
+    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        with self.registry.session_scope() as session:
+            prompt = _messages_to_prompt(
+                request.get("messages"),
+                session.tokenizer,
+                request.get("system_message"),
+                request.get("prompt_template") or session.config.get("prompt_template"),
+            )
+            generate_kwargs = self._generate_kwargs(request)
+            try:
+                output = session.generate_fn(
+                    session.model,
+                    session.tokenizer,
+                    prompt,
+                    stream=False,
+                    verbose=False,
+                    **generate_kwargs,
+                )
+            except TypeError:
+                output = session.generate_fn(session.model, session.tokenizer, prompt)
+            content = output if isinstance(output, str) else str(output)
+            created = int(time.time())
+            return {
+                "id": f"chatcmpl-{uuid.uuid4()}",
+                "object": "chat.completion",
+                "created": created,
+                "model": session.model_id,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": content},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+
+    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        with self.registry.session_scope() as session:
+            prompt = _messages_to_prompt(
+                request.get("messages"),
+                session.tokenizer,
+                request.get("system_message"),
+                request.get("prompt_template") or session.config.get("prompt_template"),
+            )
+            generate_kwargs = self._generate_kwargs(request)
+            if callable(session.generate_stream_fn):
+                try:
+                    stream = session.generate_stream_fn(
+                        session.model,
+                        session.tokenizer,
+                        prompt,
+                        verbose=False,
+                        **generate_kwargs,
+                    )
+                except TypeError:
+                    stream = session.generate_stream_fn(session.model, session.tokenizer, prompt)
+                try:
+                    for chunk in stream:
+                        if chunk:
+                            yield openai_delta_chunk(str(chunk))
+                    yield from finalize_stream(None)
+                    return
+                except Exception as exc:
+                    logger.error(f"MLX streaming failed, falling back to non-stream: {exc}")
+            # Fallback to single-shot if streaming not available
+            result = self.chat(request, timeout=timeout)
+            content = result["choices"][0]["message"]["content"]
+            yield openai_delta_chunk(content)
+            yield from finalize_stream(None)
+
+
+class MLXEmbeddingsAdapter(EmbeddingsProvider):
+    name = "mlx-embeddings"
+
+    def __init__(self) -> None:
+        self.registry = get_mlx_registry()
+
+    def capabilities(self) -> Dict[str, Any]:
+        status = self.registry.status()
+        return {
+            "dimensions_default": None,
+            "max_batch_size": status.get("config", {}).get("max_batch_size"),
+            "default_timeout_seconds": 60,
+            "supports_embeddings": status.get("supports_embeddings", False),
+        }
+
+    def embed(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        inputs = request.get("input")
+        if inputs is None:
+            raise ChatBadRequestError(provider="mlx", message="'input' is required for embeddings")
+        with self.registry.session_scope() as session:
+            if not session.supports_embeddings or not callable(session.embed_fn):
+                raise ChatBadRequestError(
+                    provider="mlx",
+                    message="Active MLX model does not support embeddings",
+                )
+            try:
+                if isinstance(inputs, list):
+                    vectors = [session.embed_fn(session.model, session.tokenizer, text) for text in inputs]
+                else:
+                    vectors = session.embed_fn(session.model, session.tokenizer, inputs)
+            except Exception as exc:
+                raise ChatProviderError(provider="mlx", message=str(exc)) from exc
+
+        # Normalize to OpenAI-like response shape
+        if isinstance(inputs, list):
+            data = [{"index": i, "embedding": vec} for i, vec in enumerate(vectors)]  # type: ignore[arg-type]
+        else:
+            data = [{"index": 0, "embedding": vectors}]  # type: ignore[list-item]
+        return {"data": data, "object": "list", "model": request.get("model")}
+
+
+__all__ = ["MLXChatAdapter", "MLXEmbeddingsAdapter", "get_mlx_registry", "MLXSessionRegistry"]

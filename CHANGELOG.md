@@ -7,16 +7,22 @@ and this project adheres to Some kind of Versioning
     
 ## [Unreleased]
 
-### Changed
+### Added
+- ChaChaNotes health snapshot surfaced in `/api/v1/health` to monitor init attempts/failures and cache state.
 
-### Removed
+### Changed
 
 ### Fixed
 
 
 ## [0.1.9]
 
+### Added
+- ChaChaNotes health snapshot surfaced in `/api/v1/health` to monitor init attempts/failures and cache state.
+
 ### Changed
+- ChaChaNotes dependency now initializes in a dedicated executor with WAL/busy-timeout tuning and background default-character creation; request path reduced to cache lookup + health probe.
+- Startup warms the single-user ChaChaNotes instance to avoid first-request blocking; shutdown now closes cached instances and stops the ChaChaNotes executor to prevent lingering threads.
 
 ### Removed
 

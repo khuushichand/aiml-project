@@ -24,6 +24,7 @@ router = APIRouter()
 
 def _utcnow_iso() -> str:
     import datetime as _dt
+
     return _dt.datetime.utcnow().isoformat()
 
 
@@ -79,7 +80,9 @@ async def readyz():
     except Exception:
         stats = {"queue_depth": None, "active_tenants": None, "active_workflows": None}
     db = _check_workflows_db()
-    ready = bool(db.get("ok")) and (db.get("schema_version") is None or db.get("schema_version") == db.get("expected_version"))
+    ready = bool(db.get("ok")) and (
+        db.get("schema_version") is None or db.get("schema_version") == db.get("expected_version")
+    )
     body = {
         "ready": ready,
         "engine": stats,
@@ -94,16 +97,19 @@ async def readyz():
 
 # Compatibility health endpoints expected by tests (/api/v1/health, /api/v1/health/live, /api/v1/health/ready, /api/v1/health/metrics)
 
+
 @router.get("/health", tags=["health"], summary="Aggregate health status")
 async def api_health():
     """Return aggregate health with a checks map and timestamp."""
     from datetime import datetime as _dt
+
     checks: dict[str, dict] = {}
     overall = "ok"
 
     # Database health (AuthNZ pool)
     try:
         from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_pool
+
         pool = await _get_pool()
         dbh = await pool.health_check()
         checks["database"] = dbh
@@ -116,6 +122,7 @@ async def api_health():
     # Metrics registry presence
     try:
         from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry as _get_reg
+
         reg = _get_reg()
         metrics_ok = bool(reg)
         checks["metrics"] = {"status": "healthy" if metrics_ok else "unhealthy"}
@@ -125,6 +132,18 @@ async def api_health():
         checks["metrics"] = {"status": "unhealthy", "error": str(e)}
         overall = "unhealthy"
 
+    # ChaChaNotes health snapshot
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_health_snapshot
+
+        chacha = get_chacha_health_snapshot()
+        checks["chacha_notes"] = chacha
+        if chacha.get("status") not in {"healthy", "ok"} and overall == "ok":
+            overall = "degraded"
+    except Exception as e:
+        checks["chacha_notes"] = {"status": "unhealthy", "error": str(e)}
+        overall = "degraded"
+
     body = {
         "status": overall,
         "checks": checks,
@@ -133,6 +152,7 @@ async def api_health():
     # Include auth mode for E2E tests and diagnostics
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings  # type: ignore
+
         _s = _get_settings()
         body["auth_mode"] = getattr(_s, "AUTH_MODE", "single_user")
         # In test environments, optionally expose a test API key only with explicit opt-in
@@ -151,6 +171,7 @@ async def api_health():
     # Include Resource Governor policy snapshot metadata when available (mirrors top-level /health)
     try:
         from tldw_Server_API.app.main import app as _app
+
         rgv = getattr(_app.state, "rg_policy_version", None)
         if rgv is not None:
             body["rg_policy_version"] = int(rgv)
@@ -161,10 +182,11 @@ async def api_health():
             import os as _os
             from pathlib import Path as _Path
             import yaml as _yaml
+
             p = _os.getenv("RG_POLICY_PATH")
             if p and _Path(p).exists():
                 try:
-                    with _Path(p).open('r', encoding='utf-8') as _f:
+                    with _Path(p).open("r", encoding="utf-8") as _f:
                         _data = _yaml.safe_load(_f) or {}
                     body["rg_policy_version"] = int(_data.get("version") or 1)
                     body["rg_policy_store"] = _os.getenv("RG_POLICY_STORE", "file")
@@ -190,6 +212,7 @@ async def api_readiness():
     try:
         body = r.body  # bytes
         import json as _json
+
         data = _json.loads(body)
     except Exception:
         data = {"ready": False}
@@ -202,11 +225,12 @@ async def api_health_metrics():
     """Return basic system metrics for tests/diagnostics."""
     try:
         import psutil
+
         cpu = {
             "percent": float(psutil.cpu_percent(interval=0.1)),
         }
         vm = psutil.virtual_memory()
-        du = psutil.disk_usage('/')
+        du = psutil.disk_usage("/")
         mem = {
             "total": int(vm.total),
             "available": int(vm.available),
@@ -223,7 +247,11 @@ async def api_health_metrics():
         return {"cpu": cpu, "memory": mem, "disk": disk}
     except Exception as e:
         logger.warning(f"health/metrics unavailable: {e}")
-        return {"cpu": {"percent": 0.0}, "memory": {"total": 0, "available": 0, "percent": 0.0, "used": 0, "free": 0}, "disk": {"total": 0, "used": 0, "free": 0, "percent": 0.0}}
+        return {
+            "cpu": {"percent": 0.0},
+            "memory": {"total": 0, "available": 0, "percent": 0.0, "used": 0, "free": 0},
+            "disk": {"total": 0, "used": 0, "free": 0, "percent": 0.0},
+        }
 
 
 def _int_env(name: str, default: int) -> int:
@@ -276,9 +304,11 @@ async def api_security_health():
     }
 
     if UnifiedAuditService is None:
-        response.update({
-            "error": "UnifiedAuditService unavailable",
-        })
+        response.update(
+            {
+                "error": "UnifiedAuditService unavailable",
+            }
+        )
         return JSONResponse(response, status_code=503)
 
     service_instance = None
@@ -293,9 +323,11 @@ async def api_security_health():
         response.update(status_bits)
     except Exception as exc:
         logger.error(f"health/security failed: {exc}")
-        response.update({
-            "error": str(exc),
-        })
+        response.update(
+            {
+                "error": str(exc),
+            }
+        )
         return JSONResponse(response, status_code=503)
     finally:
         shutdown = getattr(service_instance, "stop", None)
