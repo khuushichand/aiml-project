@@ -14,6 +14,14 @@ and this project adheres to Some kind of Versioning
 ### Fixed
 
 
+## [0.1.9]
+
+### Changed
+
+### Removed
+
+### Fixed
+
 
 ## [0.1.8] - 2025-11-22
 

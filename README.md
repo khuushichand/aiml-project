@@ -7,6 +7,12 @@
 <img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-blue.svg" />
   </a>
 
+<p>
+  <a href="https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml">
+    <img alt="E2E Critical Smoke" src="https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml/badge.svg" />
+  </a>
+</p>
+
 <h3>Process Media and more with 16+ LLM providers + OpenAI-compatible APIs for Chat, Embeddings and Evals</h3>
 
 <h3>Hosted SaaS + Browser Extension coming soon.</h3>
@@ -17,6 +23,9 @@
 ---
 
 ## Table of Contents
+
+<details>
+<summary>Table of Contents</summary>
 
 - [Overview](#overview)
 - [Current Status](#current-status)
@@ -31,6 +40,7 @@
 - [Quickstart](#quickstart)
 - [Usage Examples](#usage-examples)
 - [Key Endpoints](#key-endpoints)
+- [CI Status & Smoke Tests](#ci-status--smoke-tests)
 - [Running Tests](#running-tests)
 - [Documentation & Resources](#documentation--resources)
   - [Resource Governor Config](#resource-governor-config)
@@ -51,6 +61,7 @@
   - [Getting Help](#getting-help)
   - [Security Disclosures](#security-disclosures)
   - [Project Guidelines](#project-guidelines)
+</details>
 
 ## Overview
 - **tldw_server** is an open-source research multi-tool / backend for ingesting, transcribing, analyzing, and retrieving knowledge from video, audio, documents, websites, and more. 
@@ -63,7 +74,7 @@
 <details>
 <summary> Current Project Status/Latest Release Details Here  - Click-Here</summary>
 
-### Status: Version 0.1.4 published - tldw_server is now in beta
+### Status: Version 0.1.8 published - tldw_server is now in beta
 - Expect bugs, and random issues.
 - Please report any found/encountered.
 - CI/CD reporting green/bug squashing is current Top priority next to getting the webui working properly.
@@ -71,22 +82,11 @@
 #### Active Work-In-Progres (not in order)
 Active Work-in-Progress/Current focus Tracker (not-in-order)
 - Workflows, 
-- browser extension (tldw_Assistant), 
-- Resource Governance Module
+- browser extension (tldw_Assistant),
 - Unified Admin Dashboard
-- TTS Modules (Kokoro, higgs, dia, vibevoice)
 - Watchlists,
 - Collections(Read-it-later)
-- basic WebUI 
-- Documentation
-
-### Roadmap
-Roadmap(not in order)
-- Browser extension for direct web capture (WIP)
-- Sandboxed code execution
-- Speech-to-Speech pipeline for (near) real time chatting
-- See the Issues tag 'Enhancements' or 'Feature Add'
-- Documentation
+- Documentation 
 
 
 ## What's New
@@ -160,13 +160,6 @@ Privacy & Security
 ## Feature Status
 
 See the full Feature Status Matrix in `Docs/Published/Overview/Feature_Status.md`.
-
-## Networking & Limits
-
-- HTTP client and TLS/pinning configuration: `tldw_Server_API/Config_Files/README.md` (timeouts, retries, redirects/proxies, JSON limits, TLS min version, cert pinning, SSE/download helpers).
-- Egress/SSRF policy and security middleware: `tldw_Server_API/app/core/Security/README.md`.
-- Resource Governor (rate limits, tokens, streams; Redis backend optional): `tldw_Server_API/app/core/Resource_Governance/README.md`.
-
 
 ## Architecture & Repo Layout
 
@@ -288,6 +281,13 @@ flowchart LR
   classDef db fill:#f0eaff,stroke:#8e6cf1,color:#3a2a87;
   classDef ext fill:#fff0f0,stroke:#e57373,color:#7b1f1f;
 ```
+
+## Networking & Limits
+
+- HTTP client and TLS/pinning configuration: `tldw_Server_API/Config_Files/README.md` (timeouts, retries, redirects/proxies, JSON limits, TLS min version, cert pinning, SSE/download helpers).
+- Egress/SSRF policy and security middleware: `tldw_Server_API/app/core/Security/README.md`.
+- Resource Governor (rate limits, tokens, streams; Redis backend optional): `tldw_Server_API/app/core/Resource_Governance/README.md`.
+
 
 </details>
 
@@ -482,18 +482,22 @@ curl -s http://127.0.0.1:8000/api/v1/embeddings \
 
 Media Ingest (URL)
 ```bash
-curl -s http://127.0.0.1:8000/api/v1/media/process \
+curl -s -X POST http://127.0.0.1:8000/api/v1/media/add \
   -H "X-API-KEY: $SINGLE_USER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "source": "https://www.youtube.com/watch?v=..."
-  }'
+  -F "media_type=document" \
+  -F "title=Example Article" \
+  -F "keywords=demo,quickstart" \
+  -F "urls=https://www.example.com/some-article"
 ```
 
 Media Search
 ```bash
-curl -s "http://127.0.0.1:8000/api/v1/media/search?q=keyword" \
-  -H "X-API-KEY: $SINGLE_USER_API_KEY"
+curl -s -X POST http://127.0.0.1:8000/api/v1/media/search \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "keyword"
+  }'
 ```
 
 Audio Transcription (file)
@@ -508,8 +512,8 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 <details>
 <summary>Key Endpoints - Click-Here</summary>
 
-- Media: `POST /api/v1/media/process` - ingest/process media (URLs/files)
-- Media Search: `GET /api/v1/media/search` - search ingested content
+- Media: `POST /api/v1/media/add` - ingest/process media (URLs/files) with DB persistence
+- Media Search: `POST /api/v1/media/search` - search ingested content
 - Chat: `POST /api/v1/chat/completions` - OpenAI-compatible chat
 - Chat Commands: `GET /api/v1/chat/commands` - list available slash commands
 - Chat Dictionary Validate: `POST /api/v1/chat/dictionaries/validate` - validate a chat dictionary
@@ -527,6 +531,19 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 - Metrics: `GET /api/v1/metrics/text` - Prometheus metrics (text format)
 - Providers: `GET /api/v1/llm/providers` - provider/models list
 - MCP: `GET /api/v1/mcp/status` - MCP server status
+
+Admin maintenance
+- Chat model aliases cache reload: `POST /api/v1/admin/chat/model-aliases/reload`
+  - Single-user (API key)
+    ```bash
+    curl -s -X POST http://127.0.0.1:8000/api/v1/admin/chat/model-aliases/reload \
+      -H "X-API-KEY: $SINGLE_USER_API_KEY"
+    ```
+  - Multi-user (JWT)
+    ```bash
+    curl -s -X POST http://127.0.0.1:8000/api/v1/admin/chat/model-aliases/reload \
+      -H "Authorization: Bearer $JWT"
+    ```
 
 Examples
 - GET `/api/v1/chat/commands` response
@@ -576,8 +593,29 @@ Examples
 - Use markers (`unit`, `integration`, `e2e`, `external_api`, `performance`) to focus specific areas.
 - Enable optional suites with environment flags such as `RUN_MCP_TESTS=1`, `TLDW_TEST_POSTGRES_REQUIRED=1`, or `RUN_MOCK_OPENAI=1`.
 
+## CI Status & Smoke Tests
+
+| Workflow | Status |
+| --- | --- |
+| E2E Critical Smoke (In-Process) | [![E2E Critical Smoke](https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml/badge.svg)](https://github.com/rmusser01/tldw_server/actions/workflows/e2e-smoke.yml) |
+
+Run locally
+
+- In-process (no open port):
+  - `export E2E_INPROCESS=1 AUTH_MODE=single_user TEST_MODE=1`
+  - `export SINGLE_USER_API_KEY=test-api-key-for-e2e-testing-12345`
+  - `export SINGLE_USER_TEST_API_KEY=$SINGLE_USER_API_KEY`
+  - `python -m pytest tldw_Server_API/tests/e2e/ --critical-only -q`
+- Live server (normal):
+  - `python -m uvicorn tldw_Server_API.app.main:app --reload`
+  - `export E2E_TEST_BASE_URL=http://localhost:8000`
+  - `python -m pytest tldw_Server_API/tests/e2e/ --critical-only -q`
+
+</details>
 
 ## Documentation & Resources
+
+<details> 
 
 - `Docs/Documentation.md` - documentation index and developer guide links
 - `Docs/About.md` - project background and philosophy
@@ -597,8 +635,6 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 ### Chatbook Tools Guide
 
-<details><summary>Chatbook Tools Guide - Click Here</summary>
-
 - Getting started: `Docs/User_Guides/Chatbook_Tools_Getting_Started.md`
 - Product spec (PRD): `Docs/Product/Chatbook-Tools-PRD.md`
 - Related endpoints (also listed above under Key Endpoints):
@@ -614,6 +650,7 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 ## Deployment
 
+<details>
 - Dockerfiles and compose templates live under `Dockerfiles/` (see `Dockerfiles/README.md`).
 - Reverse proxy samples: `Helper_Scripts/Samples/Nginx/`, `Helper_Scripts/Samples/Caddy/`.
 - Monitoring: `Docs/Deployment/Monitoring/` and `Helper_Scripts/Samples/Grafana/`.
