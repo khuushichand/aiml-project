@@ -384,7 +384,7 @@ def test_strip_whisper_metadata_header_removes_prefix():
 
 
 @pytest.mark.unit
-def test_transcribe_audio_uses_safe_default_provider(monkeypatch, tmp_path):
+def test_transcribe_audio_uses_safe_default_provider(monkeypatch):
     # Ensure that when no transcription_provider is given and config is missing
     # STT-Settings/default_transcriber, transcribe_audio falls back to
     # faster-whisper instead of raising KeyError.
