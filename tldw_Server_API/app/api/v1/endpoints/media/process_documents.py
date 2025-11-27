@@ -546,9 +546,8 @@ async def process_documents_endpoint(
                     chunks = _improved_chunking_process(text, chunk_options_dict)
 
                 res["chunks"] = chunks
-    except Exception:
-        # Re-chunking is best-effort; never fail the endpoint if it errors.
-        pass
+    except Exception as exc:
+        logger.debug("Re-chunking failed during metadata normalization", exc_info=True)
 
     return JSONResponse(status_code=final_status_code, content=batch_result)
 

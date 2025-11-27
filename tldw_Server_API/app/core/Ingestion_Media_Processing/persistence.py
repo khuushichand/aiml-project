@@ -957,12 +957,15 @@ async def persist_primary_av_item(
                     persist_visual_documents_from_analysis,
                 )
 
-                created_visual_docs = persist_visual_documents_from_analysis(
-                    db_path=db_path,
-                    client_id=client_id,
-                    media_id=int(media_id_result),
-                    analysis_details=process_result.get("analysis_details") or {},
-                )
+                def _visual_docs_worker() -> int:
+                    return persist_visual_documents_from_analysis(
+                        db_path=db_path,
+                        client_id=client_id,
+                        media_id=int(media_id_result),
+                        analysis_details=process_result.get("analysis_details") or {},
+                    )
+
+                created_visual_docs = await loop.run_in_executor(None, _visual_docs_worker)
                 if created_visual_docs:
                     logger.info(
                         "Persisted %s VisualDocuments for media_id=%s (input_ref=%s)",

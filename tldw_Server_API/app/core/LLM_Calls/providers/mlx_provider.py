@@ -279,7 +279,10 @@ class MLXSessionRegistry:
     @contextlib.contextmanager
     def session_scope(self) -> Iterable[MLXSession]:
         self._ensure_metrics()
-        acquired = self._sema.acquire(blocking=False)
+        # Snapshot the current semaphore so that concurrency updates
+        # (which swap out self._sema) do not affect in-flight contexts.
+        sema = self._sema
+        acquired = sema.acquire(blocking=False)
         if not acquired:
             raise ChatRateLimitError(provider="mlx", message="MLX busy (max concurrency reached)")
         try:
@@ -297,7 +300,7 @@ class MLXSessionRegistry:
             yield session
         finally:
             try:
-                self._sema.release()
+                sema.release()
             except Exception:
                 pass
             with self._lock:

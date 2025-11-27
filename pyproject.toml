@@ -301,13 +301,13 @@ STT_Parakeet = [
 STT_Parakeet_MLX = [
   "librosa",
   "parakeet-mlx",
-  "mlx>=0.8.0; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
+  "mlx>=0.30.0; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
 ]
 
 # MLX LLM provider (Apple Silicon)
 LLM_MLX = [
-  "mlx-lm>=0.14.0; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
-  "mlx>=0.8.0; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
+  "mlx-lm>=0.28.0; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
+  "mlx>=0.30.0; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
 ]
 
 # Text-to-Speech

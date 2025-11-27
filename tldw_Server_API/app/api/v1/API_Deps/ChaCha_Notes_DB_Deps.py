@@ -9,7 +9,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 
 from cachetools import LRUCache
 from fastapi import Depends, HTTPException, status
@@ -179,6 +179,7 @@ else:
     _chacha_db_instances: Dict[str, CharactersRAGDB] = {}
 
 _chacha_db_lock = threading.Lock()
+_chacha_default_char_tasks: Set[asyncio.Task] = set()
 
 
 #######################################################################################################################
@@ -246,33 +247,30 @@ def _health_check_instance(db_instance: CharactersRAGDB) -> bool:
 
 def _create_and_prepare_db(user_id: int, client_id: str) -> CharactersRAGDB:
     db_path: Optional[Path] = None
+    db_path = _get_chacha_db_path_for_user(user_id)
     try:
-        db_path = _get_chacha_db_path_for_user(user_id)
-        try:
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        except Exception as _mk2:
-            logger.debug(f"Secondary ensure for ChaChaNotes parent failed softly: {_mk2}")
-        logger.info(f"Initializing CharactersRAGDB instance for user {user_id} at path: {db_path}")
-        db_instance = CharactersRAGDB(db_path=str(db_path), client_id=str(client_id))
-        _apply_sqlite_tuning(db_instance)
-        try:
-            db_instance.execute_query(
-                """
-                CREATE TABLE IF NOT EXISTS message_metadata(
-                  message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
-                  tool_calls_json TEXT,
-                  extra_json TEXT,
-                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-                """,
-                script=False,
-                commit=True,
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    except Exception as _mk2:
+        logger.debug(f"Secondary ensure for ChaChaNotes parent failed softly: {_mk2}")
+    logger.info(f"Initializing CharactersRAGDB instance for user {user_id} at path: {db_path}")
+    db_instance = CharactersRAGDB(db_path=str(db_path), client_id=str(client_id))
+    _apply_sqlite_tuning(db_instance)
+    try:
+        db_instance.execute_query(
+            """
+            CREATE TABLE IF NOT EXISTS message_metadata(
+              message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+              tool_calls_json TEXT,
+              extra_json TEXT,
+              last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
-        except Exception as _aux:
-            logger.debug(f"Optional table ensure (message_metadata) skipped: {_aux}")
-        return db_instance
-    except Exception as e:
-        raise
+            """,
+            script=False,
+            commit=True,
+        )
+    except Exception as _aux:
+        logger.debug(f"Optional table ensure (message_metadata) skipped: {_aux}")
+    return db_instance
 
 
 async def _ensure_default_character_async(db_instance: CharactersRAGDB, user_id: int) -> None:
@@ -412,7 +410,9 @@ async def warm_chacha_db_for_user(user_id: int, client_id: str | None = None) ->
     try:
         db_instance = await _get_or_init_db_instance(user_id, client_id or str(user_id))
         _CHACHA_HEALTH["warm_startups"] += 1
-        asyncio.create_task(_ensure_default_character_async(db_instance, user_id))
+        task = asyncio.create_task(_ensure_default_character_async(db_instance, user_id))
+        _chacha_default_char_tasks.add(task)
+        task.add_done_callback(_chacha_default_char_tasks.discard)
     except Exception as e:
         logger.warning(f"Warm-up for ChaChaNotes user {user_id} failed: {e}")
 
@@ -455,7 +455,9 @@ async def get_chacha_db_for_user(current_user: User = Depends(get_request_user))
 
     user_id = current_user.id
     db_instance = await _get_or_init_db_instance(user_id, str(current_user.id))
-    asyncio.create_task(_ensure_default_character_async(db_instance, user_id))
+    task = asyncio.create_task(_ensure_default_character_async(db_instance, user_id))
+    _chacha_default_char_tasks.add(task)
+    task.add_done_callback(_chacha_default_char_tasks.discard)
     return db_instance
 
 
