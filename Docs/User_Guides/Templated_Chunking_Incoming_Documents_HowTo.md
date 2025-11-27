@@ -381,3 +381,51 @@ curl -X POST "http://127.0.0.1:8000/api/v1/media/add" \
 For both `/process-pdfs` and `/media/add`, you can inspect the resulting `chunks` to verify:
 - No chunk crosses chapter boundaries (chunks are emitted inside sections/chapters as defined by the template).
 - Each chunk carries hierarchical metadata that can be used downstream for navigation, display, and RAG context.
+
+##### Example: filtering chunks by chapter or subsection
+
+Once you have the JSON response from `/process-pdfs` (or the stored chunks from `/media/add`), you can use the `section_path` / `ancestry_titles` metadata to select exactly the parts of the book you want for a RAG prompt.
+
+Python example (client-side) using `/process-pdfs` output:
+
+```python
+import json
+
+with open("Project2025_Chunked.json", "r", encoding="utf-8") as f:
+    resp = json.load(f)
+
+chunks = resp["results"][0]["chunks"]
+
+# 1) All chunks from chapter 21 (DEPARTMENT OF COMMERCE)
+chapter_21_chunks = [
+    ch for ch in chunks
+    if "**21**" in (ch.get("metadata", {}).get("section_path") or "")
+]
+
+# 2) Only the MINORITY BUSINESS DEVELOPMENT AGENCY subsection
+mbda_chunks = [
+    ch for ch in chunks
+    if (ch.get("metadata", {}).get("section_path") or "").endswith(
+        "**MINORITY BUSINESS DEVELOPMENT AGENCY**"
+    )
+]
+
+print("Chapter 21 chunks:", len(chapter_21_chunks))
+print("MBDA chunks:", len(mbda_chunks))
+```
+
+When building a RAG prompt, you can surface this hierarchy so the model knows exactly where the text comes from, for example:
+
+```text
+You are answering questions about the Project 2025 book.
+
+Context section:
+- Section path: {{chunk.metadata.section_path}}
+- Titles: {{", ".join(chunk.metadata.ancestry_titles or [])}}
+- Text:
+{{chunk.text}}
+
+Use the section path and titles to keep your answer grounded in the right chapter and subsection.
+```
+
+In your frontend, you can show the `section_path` as a breadcrumb (e.g., `SECTION 4: THE ECONOMY > 21 > DEPARTMENT OF COMMERCE > MINORITY BUSINESS DEVELOPMENT AGENCY`) whenever you render a chunk, which makes it easy for users to understand “where in the book” a given answer is coming from.

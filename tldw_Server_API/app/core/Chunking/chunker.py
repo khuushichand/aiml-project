@@ -2476,6 +2476,8 @@ class Chunker:
         overlap_buffer: Any = ""
         method_lower = str(method).lower()
         flush_threshold = self._estimate_stream_flush_threshold(method_lower, max_size)
+        language_lower = (language or "").lower()
+        languages_no_space = {'zh', 'zh-cn', 'zh-tw', 'ja', 'th'}
 
         def _coerce_overlap_value(value: Any) -> str:
             """Normalize overlap carry-over into a textual buffer."""
@@ -2496,11 +2498,13 @@ class Chunker:
                 return segment
             if not segment:
                 return overlap_text
-            sep = ' ' if (
-                method_lower == 'words'
-                and overlap_text
-                and not segment[0].isspace()
-            ) else ''
+            sep = ''
+            if overlap_text and not segment[0].isspace():
+                if method_lower == 'words':
+                    sep = ' '
+                elif language_lower not in languages_no_space and not overlap_text[-1].isspace():
+                    # Preserve a boundary for space-delimited languages to avoid fused tokens
+                    sep = ' '
             return overlap_text + sep + segment
 
         options_dict = dict(options)
