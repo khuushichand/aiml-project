@@ -108,7 +108,7 @@
 - Storage: ChaChaNotes DB + existing keywords/FTS; Chroma for embeddings.
 - Services: `chat_service`, `chat_helpers`, `chat_history`, `notes.py`, `flashcards.py`, `rag_unified`, `connectors.py` patterns.
 - AuthNZ/rate limit: reuse API deps; guard new endpoints with existing decorators.
-- Config knobs: `half_life_days` (float, default 14), `w_bm25` (default 0.65), `w_recency` (default 0.35) normalized to sum≈1; expose via config.txt/env.
+- Config knobs: `half_life_days` (float, default 14), `w_bm25` (default 0.65), `w_recency` (default 0.35) normalized to sum~1; expose via config.txt/env.
 
 ## Risks & Mitigations
 - Schema churn: keep migration small; default nulls; add indices for new filters.
