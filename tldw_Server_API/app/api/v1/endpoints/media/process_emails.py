@@ -434,8 +434,8 @@ async def process_emails_endpoint(
                     chunks = _improved_chunking_process(text, chunk_options_dict)
 
                 res["chunks"] = chunks
-    except Exception:
-        pass
+    except Exception as rechunk_err:
+        logger.debug("Optional email re-chunking failed: %s", rechunk_err)
 
     return JSONResponse(status_code=final_status, content=batch)
 
