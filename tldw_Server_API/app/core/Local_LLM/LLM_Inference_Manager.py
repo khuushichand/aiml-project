@@ -67,8 +67,11 @@ class LLMInferenceManager:
                 lc_cfg.models_dir = Path(lc_cfg.models_dir)
             try:
                 lc_cfg.models_dir.mkdir(parents=True, exist_ok=True)
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.warning(
+                    f"Failed to create llama.cpp models directory {lc_cfg.models_dir}: {e}. "
+                    "Handler will proceed but model loading may fail."
+                )
             self.llamacpp = LlamaCppHandler(lc_cfg, self.config.app_config)
             self.logger.info(
                 f"Llama.cpp handler initialized. Executable: {lc_cfg.executable_path}, Models dir: {lc_cfg.models_dir}"
