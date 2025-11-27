@@ -3931,13 +3931,13 @@ if _MINIMAL_TEST_APP:
     try:
         from tldw_Server_API.app.api.v1.endpoints.workflows import router as _wf_router
 
-        app.include_router(_wf_router, prefix=f"{API_V1_PREFIX}", tags=["workflows"])
+        app.include_router(_wf_router, prefix="", tags=["workflows"])
     except Exception as _wf_min_err:  # noqa: BLE001
         logger.debug(f"Skipping workflows router in minimal test app: {_wf_min_err}")
     try:
         from tldw_Server_API.app.api.v1.endpoints.scheduler_workflows import router as _sch_wf_router
 
-        app.include_router(_sch_wf_router, prefix=f"{API_V1_PREFIX}", tags=["scheduler"])
+        app.include_router(_sch_wf_router, prefix="", tags=["scheduler"])
     except Exception as _sch_min_err:  # noqa: BLE001
         logger.debug(f"Skipping scheduler workflows router in minimal test app: {_sch_min_err}")
     # Evaluations endpoints for abtest tests
@@ -4141,7 +4141,7 @@ else:
         # In test contexts, force-include workflows regardless of policy to avoid 404s.
         _test_ctx = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} or "pytest" in sys.modules
         if _test_ctx:
-            app.include_router(workflows_router, prefix=f"{API_V1_PREFIX}", tags=["workflows"])
+            app.include_router(workflows_router, prefix="", tags=["workflows"])
         else:
             _include_if_enabled("workflows", workflows_router, tags=["workflows"], default_stable=False)
     try:
@@ -4154,7 +4154,7 @@ else:
     if _HAS_SCHEDULER_WF:
         _test_ctx = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} or "pytest" in sys.modules
         if _test_ctx:
-            app.include_router(scheduler_workflows_router, prefix=f"{API_V1_PREFIX}", tags=["scheduler"])
+            app.include_router(scheduler_workflows_router, prefix="", tags=["scheduler"])
         else:
             _include_if_enabled("scheduler", scheduler_workflows_router, tags=["scheduler"], default_stable=False)
     _include_if_enabled("research", research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
