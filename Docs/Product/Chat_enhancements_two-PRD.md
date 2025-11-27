@@ -119,8 +119,8 @@
 
 ## Rollout Plan
 - Phase 1 (MVP): schema migration (including backfill to `in-progress` state and note backlinks), listing filters/order, state changes, tree endpoint, analytics buckets (UTC), knowledge-save to Notes/Flashcards (local only); docs + tests.
- - Phase 2: auto-tagging job; clustering job; cluster filter; UI badges.
- - Phase 3 (v2): connectors (email, issue, Notion/wiki) behind feature flags; reply/comment flows; RAG ingest toggle.
+- Phase 2: auto-tagging job; clustering job; cluster filter; UI badges.
+- Phase 3 (v2): connectors (email, issue, Notion/wiki) behind feature flags; reply/comment flows; RAG ingest toggle.
 
 ## Implementation Plan (added detail)
 - Migration plan (ChaChaNotes):
