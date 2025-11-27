@@ -82,6 +82,7 @@ from tldw_Server_API.app.core.Chat.chat_orchestrator import (
 # Completion schemas centralized in schemas/chat_session_schemas.py
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
 from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_provider_line, sse_done
+from tldw_Server_API.app.core.Utils.common import parse_boolean
 
 
 # Legacy local SSE helpers removed — unified streams handle normalization
@@ -645,14 +646,11 @@ async def character_chat_completion(
         except Exception:
             api_key = None
 
-        # Attempt provider call; allow offline simulation for local-llm in test/dev
+        # Attempt provider call; allow offline simulation for local-llm in test/dev.
         # Offline simulation toggle (supports new flags for clarity, backward compatible with ALLOW_LOCAL_LLM_CALLS)
-        def _truthy(env_val: Optional[str]) -> bool:
-            return isinstance(env_val, str) and env_val.lower() in {"1", "true", "yes", "on"}
-
-        enable_local_llm = _truthy(os.getenv("ENABLE_LOCAL_LLM_PROVIDER"))
-        disable_offline_sim = _truthy(os.getenv("DISABLE_OFFLINE_SIM"))
-        legacy_allow_local = _truthy(os.getenv("ALLOW_LOCAL_LLM_CALLS"))
+        enable_local_llm = parse_boolean(os.getenv("ENABLE_LOCAL_LLM_PROVIDER"))
+        disable_offline_sim = parse_boolean(os.getenv("DISABLE_OFFLINE_SIM"))
+        legacy_allow_local = parse_boolean(os.getenv("ALLOW_LOCAL_LLM_CALLS"))
         offline_sim = provider == "local-llm" and not (enable_local_llm or disable_offline_sim or legacy_allow_local)
         llm_resp = None
         if not offline_sim:

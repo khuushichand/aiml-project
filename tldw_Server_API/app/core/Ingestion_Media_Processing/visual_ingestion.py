@@ -8,12 +8,7 @@ from typing import Any, Dict, Optional
 from loguru import logger
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.config import load_comprehensive_config
-
-
-def _truthy(val: Optional[str], default: bool = False) -> bool:
-    if val is None:
-        return default
-    return str(val).strip().lower() in {"1", "true", "yes", "on"}
+from tldw_Server_API.app.core.Utils.common import parse_boolean
 
 
 @lru_cache(maxsize=1)
@@ -31,7 +26,7 @@ def _visual_rag_settings() -> Dict[str, Any]:
     # Env overrides
     env_enable = os.getenv("VISUAL_RAG_ENABLE")
     if env_enable is not None:
-        settings["enable_visual_rag"] = _truthy(env_enable, default=False)
+        settings["enable_visual_rag"] = parse_boolean(env_enable, default=False)
 
     env_max_images = os.getenv("VISUAL_RAG_MAX_IMAGES_PER_MEDIA")
     if env_max_images is not None:
@@ -48,7 +43,7 @@ def _visual_rag_settings() -> Dict[str, Any]:
             if env_enable is None:
                 raw_enable = section.get("enable_visual_rag")
                 if raw_enable is not None:
-                    settings["enable_visual_rag"] = _truthy(str(raw_enable), default=False)
+                    settings["enable_visual_rag"] = parse_boolean(str(raw_enable), default=False)
             if env_max_images is None:
                 raw_max = section.get("max_images_per_media")
                 if raw_max is not None:

@@ -40,17 +40,13 @@ from fastapi import (
 
 # Import new modules for integration
 
-# Temporary shim for test patch compatibility. Prefer real AuthNZ util if present.
-# try:
-#     from tldw_Server_API.app.core.AuthNZ.auth_utils import (
-#         is_authentication_required as is_authentication_required,  # pragma: no cover
-#     )
-# except Exception:  # pragma: no cover - fallback for tests
-#     def is_authentication_required() -> bool:
-#         """Fallback used in tests, can be monkeypatched by tests.
-#         Defaults to True to enforce auth when not patched.
-#         """
-#         return True
+def is_authentication_required() -> bool:
+    """Legacy shim used by tests to toggle auth enforcement.
+
+    Production code relies on AuthNZ middleware and settings; tests patch this
+    function on the chat module to simulate authentication-disabled scenarios.
+    """
+    return True
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.Chat.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.Chat.request_queue import get_request_queue, RequestPriority
@@ -2081,6 +2077,7 @@ async def save_chat_knowledge(
 ):
     """Persist a snippet from a conversation into Notes (and optional Flashcard)."""
     try:
+        # Validate conversation ownership and optional message linkage before mutating.
         conversation = db.get_conversation_by_id(payload.conversation_id)
         if not conversation or conversation.get("deleted"):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
@@ -2104,37 +2101,41 @@ async def save_chat_knowledge(
         safe_title = conv_title[:200]
         note_title = f"Snippet: {safe_title}" if not safe_title.lower().startswith("snippet") else safe_title
 
-        note_id = db.add_note(
-            title=note_title,
-            content=payload.snippet,
-            conversation_id=payload.conversation_id,
-            message_id=payload.message_id,
-        )
-
-        if payload.tags:
-            for tag in payload.tags:
-                try:
-                    kw = db.get_keyword_by_text(tag)
-                    if not kw:
-                        kw_id = db.add_keyword(tag)
-                        kw = db.get_keyword_by_id(kw_id) if kw_id is not None else None
-                    if kw and kw.get("id") is not None:
-                        db.link_note_to_keyword(note_id, int(kw["id"]))
-                except Exception as kw_err:
-                    logger.warning(f"Keyword attach failed for '{tag}' on note {note_id}: {kw_err}")
-
+        note_id: Optional[int] = None
         flashcard_id: Optional[str] = None
-        if payload.make_flashcard:
-            flashcard_id = db.add_flashcard(
-                {
-                    "front": payload.snippet,
-                    "back": "",
-                    "notes": f"From {safe_title}",
-                    "source_ref_type": "conversation",
-                    "source_ref_id": payload.conversation_id,
-                    "model_type": "basic",
-                }
+
+        # Ensure note, keyword links, and optional flashcard are created atomically.
+        async with db_transaction(db):
+            note_id = db.add_note(
+                title=note_title,
+                content=payload.snippet,
+                conversation_id=payload.conversation_id,
+                message_id=payload.message_id,
             )
+
+            if payload.tags:
+                for tag in payload.tags:
+                    try:
+                        kw = db.get_keyword_by_text(tag)
+                        if not kw:
+                            kw_id = db.add_keyword(tag)
+                            kw = db.get_keyword_by_id(kw_id) if kw_id is not None else None
+                        if kw and kw.get("id") is not None and note_id is not None:
+                            db.link_note_to_keyword(note_id, int(kw["id"]))
+                    except Exception as kw_err:
+                        logger.warning(f"Keyword attach failed for '{tag}' on note {note_id}: {kw_err}")
+
+            if payload.make_flashcard:
+                flashcard_id = db.add_flashcard(
+                    {
+                        "front": payload.snippet,
+                        "back": "",
+                        "notes": f"From {safe_title}",
+                        "source_ref_type": "note",
+                        "source_ref_id": note_id,
+                        "model_type": "basic",
+                    }
+                )
 
         return KnowledgeSaveResponse(
             note_id=note_id,

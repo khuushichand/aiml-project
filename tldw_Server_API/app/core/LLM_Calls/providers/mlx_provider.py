@@ -26,6 +26,7 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatProviderError,
     ChatRateLimitError,
 )
+from tldw_Server_API.app.core.Utils.common import parse_boolean
 from tldw_Server_API.app.core.Metrics.metrics_manager import (
     get_metrics_registry,
     increment_counter,
@@ -36,12 +37,6 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     finalize_stream,
     openai_delta_chunk,
 )
-
-
-def _truthy(val: Optional[str], default: bool = False) -> bool:
-    if val is None:
-        return default
-    return str(val).lower() in {"1", "true", "yes", "on"}
 
 
 def _coerce_int(val: Optional[str], default: Optional[int] = None) -> Optional[int]:
@@ -62,16 +57,16 @@ def _default_settings() -> Dict[str, Any]:
         "device": os.getenv("MLX_DEVICE", "auto"),
         "dtype": os.getenv("MLX_DTYPE"),
         "quantization": os.getenv("MLX_QUANTIZATION"),
-        "compile": _truthy(os.getenv("MLX_COMPILE"), default=True),
+        "compile": parse_boolean(os.getenv("MLX_COMPILE"), default=True),
         "prompt_template": os.getenv("MLX_PROMPT_TEMPLATE"),
         "revision": os.getenv("MLX_REVISION"),
-        "trust_remote_code": _truthy(os.getenv("MLX_TRUST_REMOTE_CODE"), default=False),
+        "trust_remote_code": parse_boolean(os.getenv("MLX_TRUST_REMOTE_CODE"), default=False),
         "tokenizer": os.getenv("MLX_TOKENIZER"),
         "adapter": os.getenv("MLX_ADAPTER"),
         "adapter_weights": os.getenv("MLX_ADAPTER_WEIGHTS"),
         "max_kv_cache_size": _coerce_int(os.getenv("MLX_MAX_KV_CACHE_SIZE")),
         "max_concurrent": max(1, _coerce_int(os.getenv("MLX_MAX_CONCURRENT"), default=1) or 1),
-        "warmup": _truthy(os.getenv("MLX_WARMUP"), default=True),
+        "warmup": parse_boolean(os.getenv("MLX_WARMUP"), default=True),
     }
 
 

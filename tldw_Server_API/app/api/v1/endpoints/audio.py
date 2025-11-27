@@ -919,18 +919,33 @@ async def create_transcription(
             else:
                 # Non-Whisper providers: delegate to adapter which wraps the
                 # existing Parakeet/Canary/Qwen2Audio/external implementations.
-                adapter = stt_registry.get_adapter(provider)
-                artifact = adapter.transcribe_batch(
-                    canonical_path,
-                    model=provider_model_name or model,
-                    language=language,
-                    task=task_normalized,
-                    word_timestamps=("word" in granularity_tokens),
-                    prompt=prompt,
-                )
-                detected_language = artifact.get("language")
-                segments_for_timing = artifact.get("segments") or []
-                transcribed_text = artifact.get("text", "")
+                try:
+                    adapter = stt_registry.get_adapter(provider)
+                    artifact = adapter.transcribe_batch(
+                        canonical_path,
+                        model=provider_model_name or model,
+                        language=language,
+                        task=task_normalized,
+                        word_timestamps=("word" in granularity_tokens),
+                        prompt=prompt,
+                    )
+                    detected_language = artifact.get("language")
+                    segments_for_timing = artifact.get("segments") or []
+                    transcribed_text = artifact.get("text", "")
+                except Exception as e:
+                    logger.error(
+                        "Transcription failed for provider=%s, model=%s: %s",
+                        provider,
+                        provider_model_name or model,
+                        e,
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=(
+                            f"Transcription failed for provider '{provider}' "
+                            f"and model '{provider_model_name or model}'"
+                        ),
+                    ) from e
         finally:
             # Make sure we always release job slot on any path
             try:
