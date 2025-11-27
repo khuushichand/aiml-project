@@ -3,6 +3,9 @@
 #
 # Imports
 from __future__ import annotations
+
+import os
+
 # ---------------------------------------------------------------------------
 # Imports
 # ---------------------------------------------------------------------------
@@ -13,13 +16,12 @@ from tldw_Server_API.app.core.Utils.image_validation import (
 )
 import asyncio
 import sys
-import datetime
 import json
 import time
 import uuid
 from functools import partial, lru_cache
 from collections import defaultdict, deque
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import Mock
 from weakref import WeakKeyDictionary
 import threading
@@ -31,7 +33,6 @@ from fastapi import (
     Depends,
     Header,
     HTTPException,
-    Query,
     Request,
     status,
 )
@@ -40,16 +41,16 @@ from fastapi import (
 # Import new modules for integration
 
 # Temporary shim for test patch compatibility. Prefer real AuthNZ util if present.
-try:
-    from tldw_Server_API.app.core.AuthNZ.auth_utils import (
-        is_authentication_required as is_authentication_required,  # pragma: no cover
-    )
-except Exception:  # pragma: no cover - fallback for tests
-    def is_authentication_required() -> bool:
-        """Fallback used in tests, can be monkeypatched by tests.
-        Defaults to True to enforce auth when not patched.
-        """
-        return True
+# try:
+#     from tldw_Server_API.app.core.AuthNZ.auth_utils import (
+#         is_authentication_required as is_authentication_required,  # pragma: no cover
+#     )
+# except Exception:  # pragma: no cover - fallback for tests
+#     def is_authentication_required() -> bool:
+#         """Fallback used in tests, can be monkeypatched by tests.
+#         Defaults to True to enforce auth when not patched.
+#         """
+#         return True
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.Chat.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.Chat.request_queue import get_request_queue, RequestPriority
@@ -58,39 +59,22 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditContext,
 )
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
-from tldw_Server_API.app.core.Utils.cpu_bound_handler import process_large_json_async
 from tldw_Server_API.app.core.Utils.chunked_image_processor import get_image_processor
 from loguru import logger
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
-    DEFAULT_CHARACTER_NAME,
     get_chacha_db_for_user,
 )
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
-    get_api_keys,
     ChatCompletionRequest,
     DEFAULT_LLM_PROVIDER,
     API_KEYS as SCHEMAS_API_KEYS,
-)
-from tldw_Server_API.app.core.Chat.Chat_Deps import (
-    ChatAPIError,
-    ChatAuthenticationError,
-    ChatBadRequestError,
-    ChatConfigurationError,
-    ChatProviderError,
-    ChatRateLimitError,
 )
 from tldw_Server_API.app.core.Chat.chat_orchestrator import (
     chat_api_call as perform_chat_api_call,
 )
 _ORIGINAL_PERFORM_CHAT_API_CALL = perform_chat_api_call
-from tldw_Server_API.app.core.Chat.prompt_template_manager import (
-    DEFAULT_RAW_PASSTHROUGH_TEMPLATE,
-    PromptTemplate,
-    apply_template_to_string,
-    load_template,
-)
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -107,21 +91,11 @@ from tldw_Server_API.app.api.v1.schemas.chat_knowledge_schemas import (
 # Note: streaming utilities are handled inside chat_service. No direct import needed here.
 from tldw_Server_API.app.core.Chat.chat_helpers import (
     validate_request_payload,
-    get_or_create_character_context,
-    get_or_create_conversation,
-    load_conversation_history,
-    prepare_llm_messages,
-    extract_system_message,
-    extract_response_content,
 )
 from tldw_Server_API.app.core.Chat.chat_exceptions import (
     set_request_id,
-    get_request_id,
     ChatModuleException,
-    ChatValidationError,
     ChatDatabaseError,
-    handle_database_error,
-    ErrorHandler,
     ChatErrorCode,
 )
 from tldw_Server_API.app.api.v1.schemas.chat_validators import (
@@ -132,14 +106,10 @@ from tldw_Server_API.app.api.v1.schemas.chat_validators import (
     validate_max_tokens,
     validate_request_size,
 )
-from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import replace_placeholders
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 from tldw_Server_API.app.core.Chat.chat_service import (
-    parse_provider_model_for_metrics,
-    normalize_request_provider_and_model,
     resolve_provider_and_model,
     resolve_provider_api_key,
-    merge_api_keys_for_provider,
     build_call_params_from_request,
     estimate_tokens_from_json,
     moderate_input_messages,
@@ -155,7 +125,6 @@ from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
-from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
     UsageEventLogger,
@@ -2006,6 +1975,7 @@ async def create_chat_completion(
     tags=["chat"]
 )
 async def get_chat_queue_status(request: Request):
+    """Expose raw chat request queue metrics for diagnostics."""
     # Enforce RBAC only in multi-user mode; allow in single-user for convenience/testing
     try:
         if not is_single_user_mode():
@@ -2026,7 +1996,6 @@ async def get_chat_queue_status(request: Request):
         # Fail closed in multi-user mode if auth context cannot be resolved
         if not is_single_user_mode():
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    """Expose raw chat request queue metrics for diagnostics."""
     try:
         queue = get_request_queue()
     except Exception:
@@ -2034,8 +2003,8 @@ async def get_chat_queue_status(request: Request):
     if queue is None:
         return {"enabled": False, "message": "Queue not initialized in this context"}
     try:
-        status = queue.get_queue_status()
-        return {"enabled": True, **status}
+        queue_status = queue.get_queue_status()
+        return {"enabled": True, **queue_status}
     except Exception as e:
         return {"enabled": True, "error": str(e)}
 
