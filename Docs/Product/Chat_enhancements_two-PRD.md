@@ -65,7 +65,7 @@
 - Topic/keyword/cluster semantics: `topic_label` is a single human-readable label summarizing the primary topic of the conversation (auto-tagger writes this; users can override). Existing `keywords` remain many-to-many tags used for search and filters. `cluster_id` is an opaque group identifier assigned by the clustering job; multiple conversations may share a `cluster_id` and it is mainly used for navigation and analytics.
 - Continue to use `keywords` + `conversation_keywords` for topics/tags; no new table required.
 - Keep `parent_conversation_id` and `parent_message_id` for tree rendering.
-- Cluster metadata (title/centroid/stats) is persisted in ChaChaNotes (e.g., `conversation_clusters` table) to make cluster filters and navigation stable across sessions.
+- Cluster metadata (title/centroid/stats) is persisted in ChaChaNotes (e.g., `conversation_clusters` table with columns: `cluster_id` [PK], `title`, `centroid` [JSON], `size`, `created_at`, `updated_at`). This makes cluster filters and navigation stable across sessions.
 - Backlinks for knowledge bank: Notes currently lack `conversation_id`/`message_id`; add both columns (with indexes) via migration so knowledge-save can write backlinks, and wire to conversation/message IDs for navigation.
 
 ## API Surface (proposed)
