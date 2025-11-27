@@ -109,7 +109,7 @@ async def run_audio_transcribe_gpu_worker(stop_event: Optional[asyncio.Event] = 
 
             # Complete and enqueue next stage
             jm.complete_job(int(job["id"]), worker_id=worker_id, lease_id=str(job.get("lease_id")))
-            next_type = payload.get("perform_chunking") and "audio_chunk" or "audio_store"
+            next_type: Optional[str] = "audio_chunk" if payload.get("perform_chunking") else "audio_store"
             jm.create_job(
                 domain=DOMAIN,
                 queue="default",

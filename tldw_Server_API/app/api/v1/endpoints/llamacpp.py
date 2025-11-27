@@ -5,7 +5,7 @@
 from typing import Optional, Dict, Any
 #
 # Thid-party Libraries
-from fastapi import APIRouter, HTTPException, Body, Depends
+from fastapi import APIRouter, HTTPException, Body, Depends, Request
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List
 #
@@ -50,13 +50,15 @@ router = APIRouter()
 #
 #     API Endpoints: Provide HTTP interfaces to list models, start/swap the server with a specific model, stop it, get status, and run inference.
 
-# Assuming 'llm_manager' is available, e.g., initialized in main.py and passed around or via Depends
-# For simplicity, let's assume it's directly accessible here.
-# from your_main_app_file import llm_manager_instance as llm_manager
+# Assuming 'llm_manager' is available, e.g., initialized in main.py and stored
+# on app.state.llm_manager. Tests may still patch the module-level llm_manager
+# for compatibility, so we fall back to the global when state is missing.
 
 
-def _resolve_llm_manager() -> LLMInferenceManager:
-    mgr = globals().get("llm_manager")
+def _resolve_llm_manager(request: Request) -> LLMInferenceManager:
+    mgr = getattr(request.app.state, "llm_manager", None)
+    if mgr is None:
+        mgr = globals().get("llm_manager")
     if mgr is None:
         raise HTTPException(status_code=503, detail="LLM manager not initialized.")
     return mgr  # type: ignore[return-value]
@@ -163,7 +165,7 @@ async def list_llamacpp_models_endpoint(llm_manager: LLMInferenceManager = Depen
         handler = getattr(llm_manager, "llamacpp", None)
         if handler is None:
             raise HTTPException(status_code=503, detail="Llama.cpp backend is not configured.")
-        if handler and hasattr(handler, "list_models"):
+        if hasattr(handler, "list_models"):
             models = await handler.list_models()
         elif hasattr(llm_manager, "list_local_models"):
             models = await llm_manager.list_local_models(backend="llamacpp")

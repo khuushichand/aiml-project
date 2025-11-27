@@ -15,6 +15,18 @@ ALLOWED_CONVERSATION_STATES = ("in-progress", "resolved", "backlog", "non-viable
 # Chat Session Schemas
 # ========================================================================
 
+
+def _validate_conversation_state(value: Optional[str]) -> Optional[str]:
+    """Shared validator for conversation state field."""
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        raise ValueError("state cannot be empty")
+    if normalized not in ALLOWED_CONVERSATION_STATES:
+        raise ValueError(f"Invalid state '{value}'. Allowed: {', '.join(ALLOWED_CONVERSATION_STATES)}")
+    return normalized
+
 class ChatSessionCreate(BaseModel):
     """Schema for creating a new chat session."""
     character_id: int = Field(..., description="ID of the character for this chat", gt=0)
@@ -36,14 +48,7 @@ class ChatSessionCreate(BaseModel):
     @field_validator("state")
     @classmethod
     def _validate_state(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        normalized = value.strip().lower()
-        if not normalized:
-            raise ValueError("state cannot be empty")
-        if normalized not in ALLOWED_CONVERSATION_STATES:
-            raise ValueError(f"Invalid state '{value}'. Allowed: {', '.join(ALLOWED_CONVERSATION_STATES)}")
-        return normalized
+        return _validate_conversation_state(value)
 
 
 class ChatSessionUpdate(BaseModel):
@@ -66,14 +71,7 @@ class ChatSessionUpdate(BaseModel):
     @field_validator("state")
     @classmethod
     def _validate_state(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        normalized = value.strip().lower()
-        if not normalized:
-            raise ValueError("state cannot be empty")
-        if normalized not in ALLOWED_CONVERSATION_STATES:
-            raise ValueError(f"Invalid state '{value}'. Allowed: {', '.join(ALLOWED_CONVERSATION_STATES)}")
-        return normalized
+        return _validate_conversation_state(value)
 
 
 class ChatSessionResponse(BaseModel):

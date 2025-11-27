@@ -269,7 +269,10 @@ class CanaryAdapter(SttProviderAdapter):
         import soundfile as sf  # type: ignore
         import numpy as np  # type: ignore
 
-        audio_np, sample_rate = sf.read(audio_path)
+        try:
+            audio_np, sample_rate = sf.read(audio_path)
+        except Exception as e:
+            raise ValueError(f"Failed to read audio file {audio_path}: {e}") from e
         if not isinstance(audio_np, np.ndarray):
             audio_np = np.array(audio_np, dtype="float32")
 

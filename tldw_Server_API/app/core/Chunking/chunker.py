@@ -774,24 +774,24 @@ class Chunker:
                 # so these remain nested inside their parent chapter.
                 # Find the nearest ancestor section that was not itself created
                 # from a bold-only subsection.
-                parent_section: Optional[Dict[str, Any]] = None
+                target_parent: Optional[Dict[str, Any]] = None
                 for sec in reversed(section_stack):
                     if sec.get('kind') == 'section' and sec.get('source_kind') != 'bold_subsection':
-                        parent_section = sec
+                        target_parent = sec
                         break
-                if parent_section is None:
-                    parent_section = _ensure_preface_section(bstart)
+                if target_parent is None:
+                    target_parent = _ensure_preface_section(bstart)
 
                 # Close any previously-open bold subsections under this parent
                 # so that new bold headings become siblings rather than nested.
                 while section_stack:
                     top = section_stack[-1]
-                    if top is parent_section or top.get('source_kind') != 'bold_subsection':
+                    if top is target_parent or top.get('source_kind') != 'bold_subsection':
                         break
                     section_stack.pop()
                     _close_section(top, bstart)
 
-                parent_level = int(parent_section.get('level', 1) or 1)
+                parent_level = int(target_parent.get('level', 1) or 1)
                 level = min(parent_level + 1, 6)
                 current_section = {
                     'kind': 'section',
@@ -802,7 +802,7 @@ class Chunker:
                     'children': [],
                     'source_kind': 'bold_subsection',
                 }
-                parent_section.setdefault('children', []).append(current_section)
+                target_parent.setdefault('children', []).append(current_section)
                 section_stack.append(current_section)
                 # Record the bold heading itself as a block inside the subsection
                 _add_block(current_section, bstart, bend, bkind)

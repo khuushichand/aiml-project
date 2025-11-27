@@ -5,9 +5,9 @@ import os
 from functools import lru_cache
 from typing import Any, Dict, Optional
 
+from loguru import logger
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.config import load_comprehensive_config
-from tldw_Server_API.app.core.Utils.Utils import logging
 
 
 def _truthy(val: Optional[str], default: bool = False) -> bool:
@@ -37,8 +37,8 @@ def _visual_rag_settings() -> Dict[str, Any]:
     if env_max_images is not None:
         try:
             settings["max_images_per_media"] = max(1, int(env_max_images))
-        except Exception:
-            pass
+        except (ValueError, TypeError) as e:
+            logger.debug(f"Invalid VISUAL_RAG_MAX_IMAGES_PER_MEDIA value, using default: {e}")
 
     # Config [Visual-RAG] section (only if env didn't override)
     try:
@@ -57,7 +57,7 @@ def _visual_rag_settings() -> Dict[str, Any]:
                     except Exception:
                         pass
     except Exception as exc:
-        logging.debug(f"visual_ingestion: config load skipped/failed: {exc}")
+        logger.debug(f"visual_ingestion: config load skipped/failed: {exc}")
 
     return settings
 
@@ -132,7 +132,7 @@ def persist_visual_documents_from_analysis(
                     )
                     created += 1
                 except Exception as det_err:
-                    logging.debug(f"visual_ingestion: skipping detection due to error: {det_err}")
+                    logger.debug(f"visual_ingestion: skipping detection due to error: {det_err}")
                     continue
     finally:
         try:
@@ -141,4 +141,3 @@ def persist_visual_documents_from_analysis(
             pass
 
     return created
-

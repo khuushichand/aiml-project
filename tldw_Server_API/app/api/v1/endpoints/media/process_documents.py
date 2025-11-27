@@ -322,19 +322,13 @@ async def process_documents_endpoint(
             chunk_options_dict: Optional[Dict[str, Any]] = prepare_chunking_options_dict(
                 form_data
             )
-            try:
-                TemplateClassifier = getattr(media_mod, "TemplateClassifier", None)
-            except Exception:
-                TemplateClassifier = None
+            TemplateClassifier = getattr(media_mod, "TemplateClassifier", None)
 
             if chunk_options_dict is not None:
                 first_url = (form_data.urls or [None])[0]
                 first_filename = None
-                try:
-                    if saved_files_info:
-                        first_filename = saved_files_info[0].get("original_filename")
-                except Exception:
-                    first_filename = None
+                if saved_files_info:
+                    first_filename = saved_files_info[0].get("original_filename")
 
                 chunk_options_dict = apply_chunking_template_if_any(
                     form_data=form_data,

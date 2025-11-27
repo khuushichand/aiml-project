@@ -11,7 +11,7 @@ pytestmark = pytest.mark.unit
 def test_postgres_statement_conversion_includes_chat_metadata_and_backlinks(tmp_path):
     db = CharactersRAGDB(db_path=str(tmp_path / "dummy.db"), client_id="test")
 
-    sql = getattr(db, "_MIGRATION_SQL_V9_TO_V10")
+    sql = db._MIGRATION_SQL_V9_TO_V10
     assert isinstance(sql, str) and "state" in sql and "conversation_id" in sql
 
     stmts = db._convert_sqlite_schema_to_postgres_statements(sql)

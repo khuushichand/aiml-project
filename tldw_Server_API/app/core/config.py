@@ -1648,7 +1648,7 @@ def _as_int(val: object, default: int) -> int:
         return default
 
 
-def get_llamacpp_handler_config():
+def get_llamacpp_handler_config() -> Optional["LlamaCppConfig"]:
     """
     Build a LlamaCppConfig from environment variables or [LlamaCpp] section in config.txt.
 
@@ -1674,7 +1674,11 @@ def get_llamacpp_handler_config():
         _log_warning(f"llama.cpp handler config unavailable (import failed): {exc}")
         return None
 
-    cp = load_comprehensive_config()
+    try:
+        cp = load_comprehensive_config()
+    except Exception as exc:  # noqa: BLE001
+        _log_warning(f"llama.cpp handler config unavailable (config load failed): {exc}")
+        return None
     section = cp["LlamaCpp"] if cp and cp.has_section("LlamaCpp") else None
 
     def _get(opt: str, env_name: str):
@@ -1996,12 +2000,9 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
 
     # Hard-enable critical test routes when the minimal test app is active to
     # avoid 404s in unit tests even if config.txt marks them experimental.
-    try:
-        _minimal = str(os.getenv("MINIMAL_TEST_APP", "")).strip().lower() in {"1", "true", "yes", "on"}
-        if _minimal and key in {"workflows", "scheduler"}:
-            return True
-    except Exception:
-        pass
+    _minimal = str(os.getenv("MINIMAL_TEST_APP", "")).strip().lower() in {"1", "true", "yes", "on"}
+    if _minimal and key in {"workflows", "scheduler"}:
+        return True
     policy = _route_toggle_policy()
 
     # Expand aliases so a single key can control a family of routes.

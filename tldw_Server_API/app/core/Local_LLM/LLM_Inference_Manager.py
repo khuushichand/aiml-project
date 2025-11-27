@@ -167,11 +167,16 @@ class LLMInferenceManager:
             )
         elif backend == "llamacpp":
             messages = kwargs.get("messages")
+            extra_kwargs = {
+                k: v
+                for k, v in kwargs.items()
+                if k not in ["messages", "api_endpoint"]
+            }
             return await handler.inference(
                 prompt=prompt,
                 messages=messages,
                 api_endpoint=kwargs.get("api_endpoint", "/v1/chat/completions"),
-                **{k: v for k, v in kwargs.items() if k != "messages"},
+                **extra_kwargs,
             )
         raise InferenceError(f"Inference not implemented for backend {backend} via this generic method or backend unknown.")
 

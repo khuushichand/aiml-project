@@ -1552,7 +1552,7 @@ async def create_embeddings_with_circuit_breaker(
                 except HTTPException:
                     raise
                 except Exception as exc:
-                    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"MLX embeddings error: {exc}")
+                    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"MLX embeddings error: {exc}") from exc
             else:
                 raise ValueError(f"Unknown provider: {provider}")
 

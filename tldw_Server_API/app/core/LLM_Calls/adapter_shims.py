@@ -568,7 +568,7 @@ def _get_mlx_adapter():
             registry.register_adapter("mlx", MLXChatAdapter)
             adapter = registry.get_adapter("mlx")
         except Exception as exc:
-            logger.error(f"Failed to initialize MLX adapter: {exc}")
+            logger.exception(f"Failed to initialize MLX adapter: {exc}")
             adapter = None
     return adapter
 
@@ -592,6 +592,8 @@ def mlx_chat_handler(
     prompt_template: Optional[str] = None,
     **kwargs: Any,
 ):
+    # api_key is accepted for signature compatibility with other handlers but unused.
+    _ = api_key
     adapter = _get_mlx_adapter()
     if adapter is None:
         from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
@@ -636,6 +638,8 @@ async def mlx_chat_handler_async(
     prompt_template: Optional[str] = None,
     **kwargs: Any,
 ):
+    # api_key is accepted for signature compatibility with other handlers but unused.
+    _ = api_key
     adapter = _get_mlx_adapter()
     if adapter is None:
         from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError

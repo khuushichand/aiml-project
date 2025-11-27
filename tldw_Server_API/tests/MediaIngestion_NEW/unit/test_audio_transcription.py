@@ -274,6 +274,7 @@ def test_perform_transcription_regenerates_on_invalid_cache(monkeypatch, tmp_pat
     monkeypatch.setattr(atlib, "convert_to_wav", lambda *args, **kwargs: str(audio_file))
 
     def fake_run_stt(path, model, vad_filter=False, selected_source_lang="en", duration_seconds=None):
+        _ = (path, vad_filter, duration_seconds)  # kept for signature compatibility in tests
         regen_called["called"] = True
         return {
             "text": "regen",

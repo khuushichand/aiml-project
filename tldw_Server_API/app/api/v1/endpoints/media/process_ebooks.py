@@ -483,8 +483,8 @@ async def process_ebooks_endpoint(
                     chunks = _improved_chunking_process(text, chunk_options_dict)
 
                 res["chunks"] = chunks
-    except Exception:
-        pass
+    except Exception as rechunk_err:
+        logger.debug("Ebook post-processing re-chunking skipped/failed: {}", rechunk_err)
 
     return JSONResponse(status_code=final_status_code, content=batch)
 

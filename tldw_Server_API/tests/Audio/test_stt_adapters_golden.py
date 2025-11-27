@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import List
 
 import pytest
+from tldw_Server_API.app.core.Utils.Utils import logging
 
 
 TOLERANCE_DEFAULT = 0.20  # Conservative default token error rate
@@ -121,7 +122,8 @@ def _load_golden_cases(base: Path, pattern: str) -> List[GoldenCase]:
     for golden_path in base.rglob(pattern):
         try:
             cfg = json.loads(golden_path.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as e:
+            logging.warning(f"Skipping malformed golden case file {golden_path}: {e}")
             continue
         rel_audio = cfg.get("audio")
         if not rel_audio:
@@ -269,4 +271,3 @@ def test_canary_golden_clips():
         segments = artifact.get("segments") or []
         assert isinstance(segments, list)
         assert len(segments) >= case.min_segments
-

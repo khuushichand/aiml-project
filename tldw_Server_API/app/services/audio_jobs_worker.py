@@ -60,7 +60,7 @@ async def _handle_audio_transcribe_stage(payload: Dict[str, Any]) -> tuple[Dict[
     # existing consumers that rely only on 'text' and 'segments'.
     updated_payload["normalized_stt"] = artifact
 
-    next_type: Optional[str] = payload.get("perform_chunking") and "audio_chunk" or "audio_store"
+    next_type: Optional[str] = "audio_chunk" if payload.get("perform_chunking") else "audio_store"
     return updated_payload, next_type
 
 

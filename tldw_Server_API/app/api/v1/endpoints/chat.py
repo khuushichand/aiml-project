@@ -18,7 +18,6 @@ import json
 import time
 import uuid
 from functools import partial, lru_cache
-import os
 from collections import defaultdict, deque
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 from unittest.mock import Mock
@@ -150,7 +149,6 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     execute_non_stream_call,
     queue_is_active,
 )
-import os
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_token_scope
 from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
@@ -2179,4 +2177,4 @@ async def save_chat_knowledge(
         raise
     except Exception as exc:
         logger.error(f"Failed to save chat knowledge snippet: {exc}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save snippet")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save snippet") from exc

@@ -42,6 +42,7 @@ _HAS_CACHETOOLS = True
 DEFAULT_CHACHA_DB_SUBDIR = "chachanotes_user_dbs"  # This will be a sub-directory within the user's main DB directory
 _CHACHA_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chacha-db")
 _CHACHA_WATCHDOG_SECS = float(os.getenv("CHACHA_INIT_WATCHDOG_SECS", "5"))
+_CHACHA_HEALTH_LOCK = threading.Lock()
 _CHACHA_HEALTH: Dict[str, Any] = {
     "init_attempts": 0,
     "init_failures": 0,
@@ -104,21 +105,23 @@ def _resolve_main_user_base_dir() -> Path:
 
 
 def _record_init(duration_ms: float, success: bool, error: Exception | None = None) -> None:
-    _CHACHA_HEALTH["init_attempts"] += 1
-    _CHACHA_HEALTH["last_init_ms"] = duration_ms
-    _CHACHA_HEALTH["cached_instances"] = len(_chacha_db_instances)
-    if success:
-        _CHACHA_HEALTH["last_error"] = None
-    else:
-        _CHACHA_HEALTH["init_failures"] += 1
-        _CHACHA_HEALTH["last_error"] = str(error) if error else "unknown error"
+    with _CHACHA_HEALTH_LOCK:
+        _CHACHA_HEALTH["init_attempts"] += 1
+        _CHACHA_HEALTH["last_init_ms"] = duration_ms
+        _CHACHA_HEALTH["cached_instances"] = len(_chacha_db_instances)
+        if success:
+            _CHACHA_HEALTH["last_error"] = None
+        else:
+            _CHACHA_HEALTH["init_failures"] += 1
+            _CHACHA_HEALTH["last_error"] = str(error) if error else "unknown error"
 
 
 def _record_default_character(success: bool) -> None:
-    if success:
-        _CHACHA_HEALTH["default_char_ensures"] += 1
-    else:
-        _CHACHA_HEALTH["default_char_failures"] += 1
+    with _CHACHA_HEALTH_LOCK:
+        if success:
+            _CHACHA_HEALTH["default_char_ensures"] += 1
+        else:
+            _CHACHA_HEALTH["default_char_failures"] += 1
 
 
 def _maybe_dump_traceback(reason: str) -> None:
@@ -127,12 +130,13 @@ def _maybe_dump_traceback(reason: str) -> None:
     # Rate limit dumps to avoid log spam
     if last_dump and now - float(last_dump) < 300:
         return
-    _CHACHA_HEALTH["last_warn_dump"] = now
+    with _CHACHA_HEALTH_LOCK:
+        _CHACHA_HEALTH["last_warn_dump"] = now
     try:
         logger.warning(f"ChaChaNotes watchdog dump triggered: {reason}")
         faulthandler.dump_traceback(file=sys.stderr)
-    except Exception:
-        pass
+    except Exception as dump_err:
+        logger.debug(f"Faulthandler dump failed: {dump_err}")
 
 
 def get_chacha_health_snapshot() -> Dict[str, Any]:
@@ -255,21 +259,6 @@ def _create_and_prepare_db(user_id: int, client_id: str) -> CharactersRAGDB:
     logger.info(f"Initializing CharactersRAGDB instance for user {user_id} at path: {db_path}")
     db_instance = CharactersRAGDB(db_path=str(db_path), client_id=str(client_id))
     _apply_sqlite_tuning(db_instance)
-    try:
-        db_instance.execute_query(
-            """
-            CREATE TABLE IF NOT EXISTS message_metadata(
-              message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
-              tool_calls_json TEXT,
-              extra_json TEXT,
-              last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """,
-            script=False,
-            commit=True,
-        )
-    except Exception as _aux:
-        logger.debug(f"Optional table ensure (message_metadata) skipped: {_aux}")
     return db_instance
 
 
@@ -355,15 +344,18 @@ def _ensure_default_character(db_instance: CharactersRAGDB) -> Optional[int]:
 
 async def _is_instance_healthy(db_instance: CharactersRAGDB) -> bool:
     try:
-        await asyncio.wait_for(asyncio.to_thread(_health_check_instance, db_instance), timeout=1.0)
-        return True
+        result = await asyncio.wait_for(
+            asyncio.to_thread(_health_check_instance, db_instance),
+            timeout=1.0,
+        )
+        return bool(result)
     except Exception:
         return False
 
 
 async def _get_or_init_db_instance(user_id: int, client_id: str) -> CharactersRAGDB:
     base_dir = _resolve_main_user_base_dir()
-    cache_key = f"{str(base_dir)}::{user_id}"
+    cache_key = f"{base_dir!s}::{user_id}"
     with _chacha_db_lock:
         db_instance = _chacha_db_instances.get(cache_key)
     if db_instance:

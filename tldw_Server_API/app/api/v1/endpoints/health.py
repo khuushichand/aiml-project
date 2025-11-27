@@ -141,6 +141,7 @@ async def api_health():
         if chacha.get("status") not in {"healthy", "ok"} and overall == "ok":
             overall = "degraded"
     except Exception as e:
+        logger.warning(f"ChaChaNotes health snapshot failed: {e}")
         checks["chacha_notes"] = {"status": "unhealthy", "error": str(e)}
         overall = "degraded"
 
@@ -191,8 +192,8 @@ async def api_health():
                     body["rg_policy_version"] = int(_data.get("version") or 1)
                     body["rg_policy_store"] = _os.getenv("RG_POLICY_STORE", "file")
                     body["rg_policy_count"] = len((_data.get("policies") or {}).keys())
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Failed to read RG policy file for /health: {exc}")
     except Exception:
         pass
     code = status.HTTP_200_OK if overall == "ok" else (206 if overall == "degraded" else 503)

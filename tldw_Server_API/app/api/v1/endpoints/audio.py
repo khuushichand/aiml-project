@@ -913,8 +913,9 @@ async def create_transcription(
                 except Exception as e:
                     logger.error(f"Whisper transcription failed: {e}")
                     raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Whisper transcription failed"
-                    )
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Whisper transcription failed",
+                    ) from e
             else:
                 # Non-Whisper providers: delegate to adapter which wraps the
                 # existing Parakeet/Canary/Qwen2Audio/external implementations.

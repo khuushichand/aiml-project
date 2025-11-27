@@ -95,12 +95,14 @@ class MLXSessionRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._sema = threading.BoundedSemaphore(1)
+        self._max_concurrent: int = 1
         self._session: Optional[MLXSession] = None
         self._inflight: int = 0
         self._metrics_registered = False
 
     def _set_concurrency(self, max_concurrent: int) -> None:
         max_concurrent = max(1, int(max_concurrent))
+        self._max_concurrent = max_concurrent
         self._sema = threading.BoundedSemaphore(max_concurrent)
         set_gauge("mlx_max_concurrent", float(max_concurrent))
 
@@ -319,7 +321,7 @@ class MLXSessionRegistry:
                     "loaded_at": None,
                     "supports_embeddings": False,
                     "warmup_completed": False,
-                    "max_concurrent": getattr(self._sema, "_initial_value", 1),
+                    "max_concurrent": self._max_concurrent,
                 }
             s = self._session
             return {
@@ -328,7 +330,7 @@ class MLXSessionRegistry:
                 "loaded_at": s.loaded_at,
                 "supports_embeddings": s.supports_embeddings,
                 "warmup_completed": s.warmup_completed,
-                "max_concurrent": getattr(self._sema, "_initial_value", 1),
+                "max_concurrent": self._max_concurrent,
                 "config": {
                     "device": s.config.get("device"),
                     "dtype": s.config.get("dtype"),
@@ -341,12 +343,15 @@ class MLXSessionRegistry:
 
 
 _registry: Optional[MLXSessionRegistry] = None
+_registry_lock = threading.Lock()
 
 
 def get_mlx_registry() -> MLXSessionRegistry:
     global _registry
     if _registry is None:
-        _registry = MLXSessionRegistry()
+        with _registry_lock:
+            if _registry is None:
+                _registry = MLXSessionRegistry()
     return _registry
 
 
@@ -568,4 +573,4 @@ class MLXEmbeddingsAdapter(EmbeddingsProvider):
         return {"data": data, "object": "list", "model": request.get("model")}
 
 
-__all__ = ["MLXChatAdapter", "MLXEmbeddingsAdapter", "get_mlx_registry", "MLXSessionRegistry"]
+__all__ = ["MLXChatAdapter", "MLXEmbeddingsAdapter", "MLXSessionRegistry", "get_mlx_registry"]

@@ -1049,7 +1049,7 @@ def to_normalized_stt_artifact(
     duration_ms: Optional[int] = None
     if duration_seconds is not None:
         try:
-            duration_ms = int(round(max(float(duration_seconds), 0.0) * 1000))
+            duration_ms = round(max(float(duration_seconds), 0.0) * 1000)
         except Exception:
             duration_ms = None
 
@@ -1177,12 +1177,12 @@ def run_stt_batch_via_registry(
     # Ensure duration_ms is set when we know duration.
     if duration_seconds is not None:
         try:
-            duration_ms = int(round(max(float(duration_seconds), 0.0) * 1000))
+            duration_ms = round(max(float(duration_seconds), 0.0) * 1000)
             usage = artifact.setdefault("usage", {})
             if usage.get("duration_ms") is None:
                 usage["duration_ms"] = duration_ms
-        except Exception:
-            pass
+        except Exception as e:
+            logging.debug(f"Failed to set duration_ms in artifact: {e}")
 
     return artifact
 
