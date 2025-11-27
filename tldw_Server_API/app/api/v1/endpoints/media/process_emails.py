@@ -27,6 +27,12 @@ from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessEmailsForm
 from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from fastapi import HTTPException
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+    prepare_chunking_options_dict,
+    apply_chunking_template_if_any,
+)
 
 router = APIRouter()
 
@@ -37,6 +43,7 @@ router = APIRouter()
     tags=["Media Processing (No DB)"],
 )
 async def process_emails_endpoint(
+    db: MediaDatabase = Depends(get_media_db_for_user),
     form_data: ProcessEmailsForm = Depends(get_process_emails_form),
     files: Optional[List[UploadFile]] = File(None),
 ):
@@ -62,6 +69,8 @@ async def process_emails_endpoint(
         "errors": [],
     }
     items: List[ProcessItem] = []
+    chunk_options_dict: Optional[Dict[str, Any]] = None
+    saved_files_info: List[Dict[str, Any]] = []
 
     # Resolve validator via the media shim so tests that monkeypatch
     # media.file_validator_instance continue to work.
@@ -143,15 +152,29 @@ async def process_emails_endpoint(
                     ) as f:
                         file_bytes = await f.read()
 
-                    chunk_opts = {
-                        "method": (
-                            form_data.chunk_method
-                            if form_data.chunk_method
-                            else "sentences"
-                        ),
-                        "max_size": form_data.chunk_size,
-                        "overlap": form_data.chunk_overlap,
-                    }
+                    if form_data.perform_chunking and chunk_options_dict:
+                        chunk_opts = {
+                            "method": chunk_options_dict.get("method")
+                            or (
+                                form_data.chunk_method
+                                if form_data.chunk_method
+                                else "sentences"
+                            ),
+                            "max_size": chunk_options_dict.get("max_size")
+                            or form_data.chunk_size,
+                            "overlap": chunk_options_dict.get("overlap")
+                            or form_data.chunk_overlap,
+                        }
+                    else:
+                        chunk_opts = {
+                            "method": (
+                                form_data.chunk_method
+                                if form_data.chunk_method
+                                else "sentences"
+                            ),
+                            "max_size": form_data.chunk_size,
+                            "overlap": form_data.chunk_overlap,
+                        }
 
                     name_lower = (pf.get("original_filename") or path.name).lower()
 
@@ -335,6 +358,77 @@ async def process_emails_endpoint(
         final_status = status.HTTP_207_MULTI_STATUS
     else:
         final_status = status.HTTP_400_BAD_REQUEST
+
+    # Optional template/hierarchical re-chunking (best-effort).
+    try:
+        if form_data.perform_chunking:
+            # Build chunk options once using shared helper + templates.
+            chunk_options_dict = prepare_chunking_options_dict(form_data)
+            try:
+                TemplateClassifier = getattr(media_mod, "TemplateClassifier", None)
+            except Exception:
+                TemplateClassifier = None
+
+            if chunk_options_dict is not None:
+                first_filename = None
+                try:
+                    if saved_files_info:
+                        first_filename = saved_files_info[0].get("original_filename")
+                except Exception:
+                    first_filename = None
+
+                chunk_options_dict = apply_chunking_template_if_any(
+                    form_data=form_data,
+                    db=db,
+                    chunking_options_dict=chunk_options_dict,
+                    TemplateClassifier=TemplateClassifier,
+                    first_url=None,
+                    first_filename=first_filename,
+                )
+
+        if form_data.perform_chunking and chunk_options_dict:
+            from tldw_Server_API.app.core.Chunking import (  # type: ignore
+                improved_chunking_process as _improved_chunking_process,
+            )
+            from tldw_Server_API.app.core.Chunking.chunker import (  # type: ignore
+                Chunker as _Chunker,
+            )
+
+            use_hier = bool(
+                chunk_options_dict.get("hierarchical")
+                or isinstance(chunk_options_dict.get("hierarchical_template"), dict)
+            )
+            ck = _Chunker() if use_hier else None
+
+            for res in batch.get("results", []):
+                if not isinstance(res, dict):
+                    continue
+                status_value = str(res.get("status", "")).lower()
+                if status_value not in {"success", "warning"}:
+                    continue
+                text = res.get("content")
+                if not isinstance(text, str) or not text.strip():
+                    continue
+
+                if use_hier and ck is not None:
+                    chunks = ck.chunk_text_hierarchical_flat(
+                        text,
+                        method=chunk_options_dict.get("method") or "sentences",
+                        max_size=chunk_options_dict.get("max_size") or 1000,
+                        overlap=chunk_options_dict.get("overlap") or 200,
+                        language=chunk_options_dict.get("language"),
+                        template=chunk_options_dict.get("hierarchical_template")
+                        if isinstance(
+                            chunk_options_dict.get("hierarchical_template"), dict
+                        )
+                        else None,
+                    )
+                else:
+                    chunks = _improved_chunking_process(text, chunk_options_dict)
+
+                res["chunks"] = chunks
+    except Exception:
+        pass
 
     return JSONResponse(status_code=final_status, content=batch)
 

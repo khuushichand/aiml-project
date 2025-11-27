@@ -265,6 +265,13 @@ class TemplateProcessor:
 
         Supports both {"type", "params"} and {"operation", "config"} schemas.
         """
+        # If there are no postprocessing operations, preserve existing
+        # chunk structures (including any metadata) and return early.
+        # This avoids unnecessarily stripping hierarchical metadata when
+        # a template declares an empty postprocessing block.
+        if not stage.operations:
+            return data
+
         chunks = data.get("chunks", [])
         # Normalize to a list of strings for postprocessors which operate on text
         texts: List[str] = []

@@ -30,6 +30,7 @@
 
 ## Requirements
 ### Functional
+- Existing chat completion/streaming APIs remain unchanged; new metadata is optional on conversation create/update and conversation search now also returns `bm25_norm` alongside ordering (no change to message response payloads).
 - Create/update conversations with `state`, `topic_label`, `source`, `external_ref`, `cluster_id`; defaults are backward compatible.
 - State validation: v0 enforces allowed set `{in-progress, resolved, backlog, non-viable}` on create/update; migration backfills all existing conversations with null/empty `state` to `in-progress` and sets a server-side default of `in-progress` for legacy clients that omit the field. Future v1.2 enables per-tenant state definitions but keeps the allowed set consistent until then.
 - Filter/list by date range, state, topic/keyword, cluster, character; order by BM25, recency, hybrid (bm25+recency), or topic.
@@ -80,6 +81,7 @@
   - `POST /api/v1/chat/connectors/issue/comment`: post a message as issue comment.
   - `POST /api/v1/chat/connectors/notion/export`: push summary/note to page.
   - `POST /api/v1/chat/connectors/notion/ingest`: pull selected pages into Notes.
+- Connector endpoints remain disabled until v2; they are gated by `CHAT_CONNECTORS_V2_ENABLED` (default: false) and tenant-binding readiness.
 - MCP: mirror state/filter/search in `chats_module.py`; expose analytics summary.
 
 ## UX Notes (WebUI/Next)

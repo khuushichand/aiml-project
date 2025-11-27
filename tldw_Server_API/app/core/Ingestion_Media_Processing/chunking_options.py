@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List, Tuple
 
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.config import load_and_log_configs, settings
@@ -121,6 +121,150 @@ def prepare_chunking_options_dict(form_data: Any) -> Optional[Dict[str, Any]]:
     return chunk_options
 
 
+def apply_chunking_template_if_any(
+    form_data: Any,
+    db: Any,
+    chunking_options_dict: Optional[Dict[str, Any]],
+    *,
+    TemplateClassifier: Optional[Any] = None,
+    first_url: Optional[str] = None,
+    first_filename: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Apply an explicit or auto-selected chunking template to the provided
+    chunking options dictionary.
+
+    This helper encapsulates the template application logic that was
+    previously embedded in the `/media/add` orchestration so it can be
+    reused by process-* endpoints without duplicating behaviour.
+    """
+    try:
+        if not getattr(form_data, "perform_chunking", False):
+            return chunking_options_dict
+
+        opts = chunking_options_dict or {}
+
+        # 1) Apply explicit template by name when provided.
+        template_name = getattr(form_data, "chunking_template_name", None)
+        if template_name:
+            try:
+                tpl = db.get_chunking_template(name=template_name)
+            except Exception as db_err:
+                logging.warning("Failed to load chunking template '%s': %s", template_name, db_err)
+                return opts
+
+            if tpl and tpl.get("template_json"):
+                import json as _json
+
+                raw_cfg = tpl["template_json"]
+                try:
+                    cfg = _json.loads(raw_cfg) if isinstance(raw_cfg, str) else raw_cfg
+                except Exception:
+                    cfg = {}
+                cfg = cfg or {}
+                hier_cfg = (cfg.get("chunking") or {}).get("config", {}) or {}
+                hier_tpl = hier_cfg.get("hierarchical_template")
+                if isinstance(hier_tpl, dict):
+                    opts = opts or {}
+                    tpl_method = (cfg.get("chunking") or {}).get("method") or "sentences"
+                    # Respect explicit user chunk_method if set, but let the
+                    # template override any default method chosen earlier.
+                    if not getattr(form_data, "chunk_method", None):
+                        opts["method"] = tpl_method
+
+                    # Allow template to provide max_size/overlap so callers do
+                    # not need to redundantly pass chunk_size/chunk_overlap.
+                    tpl_max_size = hier_cfg.get("max_size")
+                    tpl_overlap = hier_cfg.get("overlap")
+                    if isinstance(tpl_max_size, int):
+                        opts["max_size"] = tpl_max_size
+                    if isinstance(tpl_overlap, int):
+                        opts["overlap"] = tpl_overlap
+
+                    opts["hierarchical"] = True
+                    opts["hierarchical_template"] = hier_tpl
+            return opts
+
+        # 2) Respect explicit user hierarchical/method flags (already
+        # encoded in chunking_options_dict by prepare_chunking_options_dict).
+
+        # 3) Auto-match a template when requested and the user has not
+        # explicitly requested hierarchical chunking.
+        if (
+            getattr(form_data, "auto_apply_template", False)
+            and not getattr(form_data, "hierarchical_chunking", False)
+            and TemplateClassifier is not None
+        ):
+            try:
+                candidates = db.list_chunking_templates(
+                    include_builtin=True,
+                    include_custom=True,
+                    tags=None,
+                    user_id=None,
+                    include_deleted=False,
+                )
+            except Exception as list_err:
+                logging.warning("Failed to list chunking templates for auto-apply: {}", list_err)
+                return opts
+
+            best_cfg: Optional[Dict[str, Any]] = None
+            best_key: Optional[Tuple[float, int]] = None
+
+            for t in candidates:
+                try:
+                    import json as _json
+
+                    cfg = _json.loads(t.get("template_json") or "{}")
+                    if not isinstance(cfg, dict):
+                        cfg = {}
+                except Exception:
+                    cfg = {}
+
+                try:
+                    score = TemplateClassifier.score(  # type: ignore[call-arg]
+                        cfg,
+                        media_type=getattr(form_data, "media_type", None),
+                        title=getattr(form_data, "title", None),
+                        url=first_url,
+                        filename=first_filename,
+                    )
+                except Exception:
+                    score = 0.0
+
+                if score <= 0:
+                    continue
+
+                priority = ((cfg.get("classifier") or {}).get("priority") or 0)  # type: ignore[assignment]
+                key = (float(score), int(priority))
+
+                if best_cfg is None or best_key is None or key > best_key:
+                    best_cfg, best_key = cfg, key
+
+            if best_cfg:
+                hier_cfg = (best_cfg.get("chunking") or {}).get("config") or {}
+                tpl = hier_cfg.get("hierarchical_template")
+                if isinstance(tpl, dict):
+                    opts = opts or {}
+                    tpl_method = (best_cfg.get("chunking") or {}).get("method", "sentences")
+                    if not getattr(form_data, "chunk_method", None):
+                        opts["method"] = tpl_method
+
+                    tpl_max_size = hier_cfg.get("max_size")
+                    tpl_overlap = hier_cfg.get("overlap")
+                    if isinstance(tpl_max_size, int):
+                        opts["max_size"] = tpl_max_size
+                    if isinstance(tpl_overlap, int):
+                        opts["overlap"] = tpl_overlap
+
+                    opts["hierarchical"] = True
+                    opts["hierarchical_template"] = tpl
+
+        return opts
+    except Exception as auto_err:  # Defensive: never break callers
+        logging.warning("Auto-apply chunking template helper failed: {}", auto_err)
+        return chunking_options_dict
+
+
 def prepare_common_options(
     form_data: Any,
     chunk_options: Optional[Dict[str, Any]],
@@ -147,4 +291,3 @@ def prepare_common_options(
         ),
         "author": getattr(form_data, "author", None),
     }
-

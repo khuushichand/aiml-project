@@ -37,6 +37,10 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.video_batch import (
 )
 
 from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+    prepare_chunking_options_dict,
+    apply_chunking_template_if_any,
+)
 
 router = APIRouter()
 
@@ -99,6 +103,7 @@ async def process_videos_endpoint(
     file_handling_errors_structured: List[Dict[str, Any]] = []
     # Map temporary path -> original filename
     temp_path_to_original_name: Dict[str, str] = {}
+    chunk_options_dict: Optional[Dict[str, Any]] = None
 
     # --- Use TempDirManager for reliable cleanup ---
     with TempDirManager(cleanup=True, prefix="process_video_") as temp_dir:
@@ -261,6 +266,77 @@ async def process_videos_endpoint(
             logger.debug("No success item found in final results before return.")
     except Exception as debug_err:  # pragma: no cover - defensive logging
         logger.error(f"Error during debug logging: {debug_err}")
+
+    # Optional template/hierarchical re-chunking of video transcripts (best-effort).
+    try:
+        if form_data.perform_chunking:
+            chunk_options_dict = prepare_chunking_options_dict(form_data)
+            try:
+                TemplateClassifier = getattr(media_mod, "TemplateClassifier", None)
+            except Exception:
+                TemplateClassifier = None
+
+            if chunk_options_dict is not None:
+                first_url = (form_data.urls or [None])[0]
+                first_filename = None
+                try:
+                    if saved_files_info:
+                        first_filename = saved_files_info[0].get("original_filename")
+                except Exception:
+                    first_filename = None
+
+                chunk_options_dict = apply_chunking_template_if_any(
+                    form_data=form_data,
+                    db=db,
+                    chunking_options_dict=chunk_options_dict,
+                    TemplateClassifier=TemplateClassifier,
+                    first_url=first_url,
+                    first_filename=first_filename,
+                )
+
+        if form_data.perform_chunking and chunk_options_dict:
+            from tldw_Server_API.app.core.Chunking import (  # type: ignore
+                improved_chunking_process as _improved_chunking_process,
+            )
+            from tldw_Server_API.app.core.Chunking.chunker import (  # type: ignore
+                Chunker as _Chunker,
+            )
+
+            use_hier = bool(
+                chunk_options_dict.get("hierarchical")
+                or isinstance(chunk_options_dict.get("hierarchical_template"), dict)
+            )
+            ck = _Chunker() if use_hier else None
+
+            for res in batch_result.get("results", []):
+                if not isinstance(res, dict):
+                    continue
+                status_value = str(res.get("status", "")).lower()
+                if status_value not in {"success", "warning"}:
+                    continue
+                text = res.get("content")
+                if not isinstance(text, str) or not text.strip():
+                    continue
+
+                if use_hier and ck is not None:
+                    chunks = ck.chunk_text_hierarchical_flat(
+                        text,
+                        method=chunk_options_dict.get("method") or "sentences",
+                        max_size=chunk_options_dict.get("max_size") or 500,
+                        overlap=chunk_options_dict.get("overlap") or 200,
+                        language=chunk_options_dict.get("language"),
+                        template=chunk_options_dict.get("hierarchical_template")
+                        if isinstance(
+                            chunk_options_dict.get("hierarchical_template"), dict
+                        )
+                        else None,
+                    )
+                else:
+                    chunks = _improved_chunking_process(text, chunk_options_dict)
+
+                res["chunks"] = chunks
+    except Exception:
+        pass
 
     return JSONResponse(status_code=final_status_code, content=batch_result)
 

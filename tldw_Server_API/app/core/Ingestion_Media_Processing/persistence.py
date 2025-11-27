@@ -395,118 +395,30 @@ async def add_media_orchestrate(
             # Prepare chunking options and auto-apply templates
             chunking_options_dict = _prepare_chunking_options_dict(form_data)
 
+            # Apply explicit or auto-selected chunking templates when requested.
             try:
-                if form_data.perform_chunking:
-                    # 1) Apply explicit template by name
-                    if getattr(form_data, "chunking_template_name", None):
-                        tpl = db.get_chunking_template(
-                            name=form_data.chunking_template_name
-                        )
-                        if tpl and tpl.get("template_json"):
-                            raw_cfg = tpl["template_json"]
-                            cfg = (
-                                json.loads(raw_cfg)
-                                if isinstance(raw_cfg, str)
-                                else raw_cfg
-                            )
-                            hier_cfg = ((cfg or {}).get("chunking") or {}).get(
-                                "config", {}
-                            )
-                            if isinstance(
-                                hier_cfg.get("hierarchical_template"), dict
-                            ):
-                                chunking_options_dict = chunking_options_dict or {}
-                                tpl_method = (
-                                    (cfg.get("chunking") or {}).get("method")
-                                    or "sentences"
-                                )
-                                if not form_data.chunk_method:
-                                    chunking_options_dict.setdefault(
-                                        "method", tpl_method
-                                    )
-                                chunking_options_dict["hierarchical"] = True
-                                chunking_options_dict["hierarchical_template"] = (
-                                    hier_cfg["hierarchical_template"]
-                                )
-                    # 2) Respect explicit user hierarchical/method
-                    # (already encoded in chunking_options_dict)
-                    # 3) Auto-match when requested and user didn't request
-                    #    hierarchical explicitly.
-                    elif getattr(form_data, "auto_apply_template", False) and not getattr(
-                        form_data, "hierarchical_chunking", False
-                    ):
-                        candidates = db.list_chunking_templates(
-                            include_builtin=True,
-                            include_custom=True,
-                            tags=None,
-                            user_id=None,
-                            include_deleted=False,
-                        )
-                        first_url = (form_data.urls or [None])[0]
-                        first_filename = None
-                        try:
-                            if saved_files_info:
-                                first_filename = saved_files_info[0][
-                                    "original_filename"
-                                ]
-                        except Exception:
-                            first_filename = None
-                        best_cfg = None
-                        best_key = None
-                        for t in candidates:
-                            try:
-                                cfg = json.loads(
-                                    t.get("template_json") or "{}"
-                                )
-                                if not isinstance(cfg, dict):
-                                    cfg = {}
-                            except Exception:
-                                cfg = {}
-                            score = TemplateClassifier.score(
-                                cfg,
-                                media_type=form_data.media_type,
-                                title=form_data.title,
-                                url=first_url,
-                                filename=first_filename,
-                            )
-                            if score <= 0:
-                                continue
-                            priority = (
-                                (cfg.get("classifier") or {}).get(
-                                    "priority"
-                                )
-                                or 0
-                            )
-                            key = (score, priority)
-                            if best_cfg is None or key > best_key:
-                                best_cfg, best_key = cfg, key
-                        if best_cfg:
-                            hier_cfg = (
-                                (best_cfg.get("chunking") or {}).get(
-                                    "config"
-                                )
-                                or {}
-                            )
-                            tpl = hier_cfg.get("hierarchical_template")
-                            if isinstance(tpl, dict):
-                                chunking_options_dict = (
-                                    chunking_options_dict or {}
-                                )
-                                if not form_data.chunk_method:
-                                    chunking_options_dict.setdefault(
-                                        "method",
-                                        (best_cfg.get("chunking") or {}).get(
-                                            "method", "sentences"
-                                        ),
-                                    )
-                                chunking_options_dict["hierarchical"] = True
-                                chunking_options_dict[
-                                    "hierarchical_template"
-                                ] = tpl
-            except Exception as auto_err:
-                logger.warning(
-                    "Auto-apply chunking template failed: %s", auto_err
+                from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (  # type: ignore  # noqa: E501
+                    apply_chunking_template_if_any as _apply_tpl,
                 )
+
+                first_url = (form_data.urls or [None])[0]
+                first_filename = None
+                try:
+                    if saved_files_info:
+                        first_filename = saved_files_info[0]["original_filename"]
+                except Exception:
+                    first_filename = None
+
+                chunking_options_dict = _apply_tpl(
+                    form_data=form_data,
+                    db=db,
+                    chunking_options_dict=chunking_options_dict,
+                    TemplateClassifier=TemplateClassifier,
+                    first_url=first_url,
+                    first_filename=first_filename,
+                )
+            except Exception as auto_err:
+                logger.warning("Auto-apply chunking template failed: %s", auto_err)
 
             # Even if not used directly here, preserve the legacy call
             # to common options preparation to keep side effects/logging.
