@@ -429,3 +429,6 @@ Use the section path and titles to keep your answer grounded in the right chapte
 ```
 
 In your frontend, you can show the `section_path` as a breadcrumb (e.g., `SECTION 4: THE ECONOMY > 21 > DEPARTMENT OF COMMERCE > MINORITY BUSINESS DEVELOPMENT AGENCY`) whenever you render a chunk, which makes it easy for users to understand “where in the book” a given answer is coming from.
+
+
+
