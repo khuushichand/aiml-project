@@ -127,30 +127,6 @@ async def process_emails_endpoint(
             if err.get("error"):
                 batch["errors"].append(err.get("error"))
 
-        # Apply any hierarchical/template-based chunking configuration once we
-        # know the filenames, so template auto-apply can consider them.
-        if form_data.perform_chunking and chunk_options_dict is not None:
-            try:
-                TemplateClassifier = getattr(media_mod, "TemplateClassifier", None)
-            except Exception:
-                TemplateClassifier = None
-
-            first_filename: Optional[str] = None
-            try:
-                if saved_files_info:
-                    first_filename = saved_files_info[0].get("original_filename")
-            except Exception:
-                first_filename = None
-
-            chunk_options_dict = apply_chunking_template_if_any(
-                form_data=form_data,
-                db=db,
-                chunking_options_dict=chunk_options_dict,
-                TemplateClassifier=TemplateClassifier,
-                first_url=None,
-                first_filename=first_filename,
-            )
-
         for pf in saved_files_info:
             path = Path(pf["path"])
             items.append(
@@ -390,6 +366,33 @@ async def process_emails_endpoint(
 
     # Optional template/hierarchical re-chunking (best-effort).
     try:
+        if form_data.perform_chunking:
+            # Build chunk options once using shared helper + templates.
+            chunk_options_dict = prepare_chunking_options_dict(form_data)
+            try:
+                TemplateClassifier = getattr(media_mod, "TemplateClassifier", None)
+            except Exception as e:
+                logger.debug(f"TemplateClassifier not available: {e}")
+                TemplateClassifier = None
+
+            if chunk_options_dict is not None:
+                first_filename = None
+                try:
+                    if saved_files_info:
+                        first_filename = saved_files_info[0].get("original_filename")
+                except Exception as e:
+                    logger.debug(f"Could not determine first filename: {e}")
+                    first_filename = None
+
+                chunk_options_dict = apply_chunking_template_if_any(
+                    form_data=form_data,
+                    db=db,
+                    chunking_options_dict=chunk_options_dict,
+                    TemplateClassifier=TemplateClassifier,
+                    first_url=None,
+                    first_filename=first_filename,
+                )
+
         if form_data.perform_chunking and chunk_options_dict:
             from tldw_Server_API.app.core.Chunking import (  # type: ignore
                 improved_chunking_process as _improved_chunking_process,

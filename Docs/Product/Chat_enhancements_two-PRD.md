@@ -65,7 +65,7 @@
 - Topic/keyword/cluster semantics: `topic_label` is a single human-readable label summarizing the primary topic of the conversation (auto-tagger writes this; users can override). Existing `keywords` remain many-to-many tags used for search and filters. `cluster_id` is an opaque group identifier assigned by the clustering job; multiple conversations may share a `cluster_id` and it is mainly used for navigation and analytics.
 - Continue to use `keywords` + `conversation_keywords` for topics/tags; no new table required.
 - Keep `parent_conversation_id` and `parent_message_id` for tree rendering.
-- Cluster metadata (title/centroid/stats) is persisted in ChaChaNotes (e.g., `conversation_clusters` table) to make cluster filters and navigation stable across sessions.
+- Cluster metadata (title/centroid/stats) is persisted in ChaChaNotes (e.g., `conversation_clusters` table with columns: `cluster_id` [PK], `title`, `centroid` [JSON], `size`, `created_at`, `updated_at`). This makes cluster filters and navigation stable across sessions.
 - Backlinks for knowledge bank: Notes currently lack `conversation_id`/`message_id`; add both columns (with indexes) via migration so knowledge-save can write backlinks, and wire to conversation/message IDs for navigation.
 
 ## API Surface (proposed)
@@ -108,7 +108,7 @@
 - Storage: ChaChaNotes DB + existing keywords/FTS; Chroma for embeddings.
 - Services: `chat_service`, `chat_helpers`, `chat_history`, `notes.py`, `flashcards.py`, `rag_unified`, `connectors.py` patterns.
 - AuthNZ/rate limit: reuse API deps; guard new endpoints with existing decorators.
-- Config knobs: `half_life_days` (float, default 14), `w_bm25` (default 0.65), `w_recency` (default 0.35) normalized to sum≈1; expose via config.txt/env.
+- Config knobs: `half_life_days` (float, default 14), `w_bm25` (default 0.65), `w_recency` (default 0.35) normalized to sum~1; expose via config.txt/env.
 
 ## Risks & Mitigations
 - Schema churn: keep migration small; default nulls; add indices for new filters.
@@ -119,8 +119,8 @@
 
 ## Rollout Plan
 - Phase 1 (MVP): schema migration (including backfill to `in-progress` state and note backlinks), listing filters/order, state changes, tree endpoint, analytics buckets (UTC), knowledge-save to Notes/Flashcards (local only); docs + tests.
- - Phase 2: auto-tagging job; clustering job; cluster filter; UI badges.
- - Phase 3 (v2): connectors (email, issue, Notion/wiki) behind feature flags; reply/comment flows; RAG ingest toggle.
+- Phase 2: auto-tagging job; clustering job; cluster filter; UI badges.
+- Phase 3 (v2): connectors (email, issue, Notion/wiki) behind feature flags; reply/comment flows; RAG ingest toggle.
 
 ## Implementation Plan (added detail)
 - Migration plan (ChaChaNotes):
