@@ -296,7 +296,9 @@ async def create_note(
         note_id = db.add_note(
             title=effective_title,
             content=note_in.content,
-            note_id=note_in.id  # Pass optional client-provided ID
+            note_id=note_in.id,  # Pass optional client-provided ID
+            conversation_id=note_in.conversation_id,
+            message_id=note_in.message_id,
         )
         if note_id is None:  # Should be caught by exceptions
             raise CharactersRAGDBError("Note creation failed to return an ID.")

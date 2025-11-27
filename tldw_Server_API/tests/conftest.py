@@ -279,6 +279,7 @@ def pytest_collection_modifyitems(config, items):  # pragma: no cover - collecti
 def pytest_configure(config):  # pragma: no cover - registration only
     try:
         config.addinivalue_line("markers", "evaluations: heavy Evaluations tests (opt-in via RUN_EVALUATIONS=1)")
+        config.addinivalue_line("markers", "stt_golden: real-audio STT adapter golden tests (opt-in via TLDW_STT_GOLDEN_ENABLE=1)")
     except Exception:
         pass
 

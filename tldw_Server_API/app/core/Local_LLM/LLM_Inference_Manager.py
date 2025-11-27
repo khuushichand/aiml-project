@@ -11,6 +11,7 @@ from pathlib import Path
 from tldw_Server_API.app.core.Local_LLM.Huggingface_Handler import HuggingFaceHandler
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import InferenceError
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LLMManagerConfig
+from tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler import LlamaCppHandler
 #
 # Local imports
 from tldw_Server_API.app.core.Local_LLM.Llamafile_Handler import LlamafileHandler
@@ -59,6 +60,20 @@ class LLMInferenceManager:
             self.llamafile = LlamafileHandler(lf_cfg, self.config.app_config)
             self.logger.info(f"Llamafile handler initialized. Executable dir: {lf_cfg.llamafile_dir}, Models dir: {lf_cfg.models_dir}")
 
+        self.llamacpp: Optional[LlamaCppHandler] = None
+        if self.config.llamacpp and self.config.llamacpp.enabled:
+            lc_cfg = self.config.llamacpp
+            if isinstance(lc_cfg.models_dir, str):
+                lc_cfg.models_dir = Path(lc_cfg.models_dir)
+            try:
+                lc_cfg.models_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            self.llamacpp = LlamaCppHandler(lc_cfg, self.config.app_config)
+            self.logger.info(
+                f"Llama.cpp handler initialized. Executable: {lc_cfg.executable_path}, Models dir: {lc_cfg.models_dir}"
+            )
+
 
     def get_handler(self, backend_name: str):
         if backend_name == "ollama" and self.ollama:
@@ -67,13 +82,17 @@ class LLMInferenceManager:
             return self.huggingface
         elif backend_name == "llamafile" and self.llamafile:
             return self.llamafile
+        elif backend_name == "llamacpp" and self.llamacpp:
+            return self.llamacpp
         else:
             self.logger.error(f"Backend '{backend_name}' not available or not enabled.")
             raise InferenceError(f"Backend '{backend_name}' not available.")
 
     async def list_local_models(self, backend: str) -> List[str]:
         handler = self.get_handler(backend)
-        return await handler.list_models()
+        if hasattr(handler, "list_models"):
+            return await handler.list_models()
+        raise InferenceError(f"list_local_models not supported for backend {backend}")
 
     async def download_model(self, backend: str, model_name: str, **kwargs) -> str:
         handler = self.get_handler(backend)
@@ -143,6 +162,14 @@ class LLMInferenceManager:
                 # Pass other OpenAI params
                 **{k:v for k,v in kwargs.items() if k not in ["port", "host", "system_message", "n_predict", "temperature", "api_key", "max_tokens"]}
             )
+        elif backend == "llamacpp":
+            messages = kwargs.get("messages")
+            return await handler.inference(
+                prompt=prompt,
+                messages=messages,
+                api_endpoint=kwargs.get("api_endpoint", "/v1/chat/completions"),
+                **{k: v for k, v in kwargs.items() if k != "messages"},
+            )
         raise InferenceError(f"Inference not implemented for backend {backend} via this generic method or backend unknown.")
 
     async def start_server(self, backend: str, model_name: Optional[str] = None, **kwargs) -> Dict[str, Any]:
@@ -162,6 +189,13 @@ class LLMInferenceManager:
                 model_filename=model_name,
                 server_args=kwargs.get("server_args") # Pass the whole dict of args
             )
+        elif backend == "llamacpp":
+            if not model_name:
+                raise InferenceError("model_name (filename) is required for starting llama.cpp server.")
+            return await handler.start_server(
+                model_filename=model_name,
+                server_args=kwargs.get("server_args"),
+            )
         # HuggingFace doesn't typically "start a server" in the same way unless using specific serving tools
         # like Text Generation Inference, which is outside the scope of the provided transformers library usage.
         raise InferenceError(f"Server start not applicable or implemented for backend {backend} via this method.")
@@ -172,6 +206,8 @@ class LLMInferenceManager:
         if backend == "ollama":
             return await handler.stop_server(pid=kwargs.get("pid"), port=kwargs.get("port"))
         elif backend == "llamafile":
+            return await handler.stop_server(pid=kwargs.get("pid"), port=kwargs.get("port"))
+        elif backend == "llamacpp":
             return await handler.stop_server(pid=kwargs.get("pid"), port=kwargs.get("port"))
         raise InferenceError(f"Server stop not applicable or implemented for backend {backend} via this method.")
 

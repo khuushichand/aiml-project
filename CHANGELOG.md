@@ -9,8 +9,13 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 - ChaChaNotes health snapshot surfaced in `/api/v1/health` to monitor init attempts/failures and cache state.
+- MLX local provider scaffolding (Apple Silicon): adapters + admin lifecycle endpoints, metrics parity, and config keys/tests with non-Apple skips.
+- `LLM_MLX` extra in `pyproject.toml` to install `mlx-lm`/`mlx` for Apple Silicon users.
+- Config-driven llama.cpp handler: `LLMInferenceManager` now constructs `LlamaCppHandler` when `[LlamaCpp]` is enabled in `config.txt` or via env, and `/llamacpp` endpoints are wired to the managed handler.
+- ChaChaNotes schema v10 adds conversation metadata (state with `in-progress` default/backfill, topic labels, clusters) plus backlinks on notes (`conversation_id`, `message_id`) with covering indexes and SQLite/Postgres migrations.
 
 ### Changed
+- Conversation title search now applies global BM25 normalization so pagination returns stable, deterministic ordering across the entire result set.
 
 ### Fixed
 

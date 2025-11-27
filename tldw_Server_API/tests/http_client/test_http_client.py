@@ -20,9 +20,12 @@ requires_httpx = pytest.mark.skipif(not _has_httpx(), reason="httpx not installe
 
 
 @requires_httpx
-def test_egress_denied_private_ip():
+def test_egress_denied_private_ip(monkeypatch):
     from tldw_Server_API.app.core.http_client import fetch_json
     from tldw_Server_API.app.core.exceptions import EgressPolicyError
+
+    # Ensure private IP blocking is enabled for this test
+    monkeypatch.setenv("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "true")
 
     with pytest.raises(EgressPolicyError):
         # Private IP should be denied by default policy
@@ -261,6 +264,9 @@ async def test_mixed_host_redirect_egress_denied(monkeypatch):
     import httpx
     from tldw_Server_API.app.core.http_client import afetch, create_async_client
     from tldw_Server_API.app.core.exceptions import EgressPolicyError, RetryExhaustedError
+
+    # Force private IP blocking on for this test
+    monkeypatch.setenv("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "true")
 
     # First hop is a public IP; redirect points to 127.0.0.1 which must be denied by egress
     def handler(request: httpx.Request) -> httpx.Response:

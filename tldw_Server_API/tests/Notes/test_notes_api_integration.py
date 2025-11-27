@@ -184,7 +184,11 @@ def test_create_note(client: TestClient):
     assert data["id"] == note_id_val
     assert data["client_id"] == expected_db_client_id
     mock_chacha_db_instance.add_note.assert_called_once_with(
-        title="New Note", content="Note content", note_id=note_id_val
+        title="New Note",
+        content="Note content",
+        note_id=note_id_val,
+        conversation_id=None,
+        message_id=None,
     )
     mock_chacha_db_instance.get_note_by_id.assert_called_once_with(note_id=note_id_val)
 

@@ -18,6 +18,7 @@ import json
 import time
 import uuid
 from functools import partial, lru_cache
+import os
 from collections import defaultdict, deque
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 from unittest.mock import Mock
@@ -99,6 +100,10 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.core.DB_Management.transaction_utils import (
     db_transaction,
+)
+from tldw_Server_API.app.api.v1.schemas.chat_knowledge_schemas import (
+    KnowledgeSaveRequest,
+    KnowledgeSaveResponse,
 )
 # Note: streaming utilities are handled inside chat_service. No direct import needed here.
 from tldw_Server_API.app.core.Chat.chat_helpers import (
@@ -183,6 +188,15 @@ router = APIRouter()
 
 router.include_router(chat_dictionaries.router)
 router.include_router(chat_documents.router)
+
+def _chat_connectors_enabled() -> bool:
+    """Feature flag for chat connectors v2 (email/issue/wiki exports)."""
+    return str(os.getenv("CHAT_CONNECTORS_V2_ENABLED", "false")).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 # Load configuration values from config
 from tldw_Server_API.app.core.config import load_comprehensive_config, load_and_log_configs
@@ -2084,3 +2098,85 @@ def _sanitize_json_for_rate_limit(request_json: str) -> str:
         return pattern.sub(r'\1<omitted>', request_json)
     except Exception:
         return request_json
+
+
+@router.post(
+    "/knowledge/save",
+    response_model=KnowledgeSaveResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Save a chat snippet to Notes/Flashcards with backlinks",
+    tags=["chat"],
+)
+async def save_chat_knowledge(
+    payload: KnowledgeSaveRequest,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Persist a snippet from a conversation into Notes (and optional Flashcard)."""
+    try:
+        conversation = db.get_conversation_by_id(payload.conversation_id)
+        if not conversation or conversation.get("deleted"):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+        if str(conversation.get("client_id")) != str(current_user.id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+
+        if payload.message_id:
+            message = db.get_message_by_id(payload.message_id)
+            if not message or message.get("deleted"):
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+            if message.get("conversation_id") != payload.conversation_id:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message is not in conversation")
+
+        if payload.export_to != "none" and not _chat_connectors_enabled():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Chat connectors v2 are disabled; enable CHAT_CONNECTORS_V2_ENABLED to export.",
+            )
+
+        conv_title = conversation.get("title") or f"Conversation {payload.conversation_id}"
+        safe_title = conv_title[:200]
+        note_title = f"Snippet: {safe_title}" if not safe_title.lower().startswith("snippet") else safe_title
+
+        note_id = db.add_note(
+            title=note_title,
+            content=payload.snippet,
+            conversation_id=payload.conversation_id,
+            message_id=payload.message_id,
+        )
+
+        if payload.tags:
+            for tag in payload.tags:
+                try:
+                    kw = db.get_keyword_by_text(tag)
+                    if not kw:
+                        kw_id = db.add_keyword(tag)
+                        kw = db.get_keyword_by_id(kw_id) if kw_id is not None else None
+                    if kw and kw.get("id") is not None:
+                        db.link_note_to_keyword(note_id, int(kw["id"]))
+                except Exception as kw_err:
+                    logger.warning(f"Keyword attach failed for '{tag}' on note {note_id}: {kw_err}")
+
+        flashcard_id: Optional[str] = None
+        if payload.make_flashcard:
+            flashcard_id = db.add_flashcard(
+                {
+                    "front": payload.snippet,
+                    "back": "",
+                    "notes": f"From {safe_title}",
+                    "source_ref_type": "conversation",
+                    "source_ref_id": payload.conversation_id,
+                    "model_type": "basic",
+                }
+            )
+
+        return KnowledgeSaveResponse(
+            note_id=note_id,
+            flashcard_id=flashcard_id,
+            conversation_id=payload.conversation_id,
+            message_id=payload.message_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to save chat knowledge snippet: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save snippet")

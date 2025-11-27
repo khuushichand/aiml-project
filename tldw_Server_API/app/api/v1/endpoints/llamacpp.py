@@ -13,6 +13,8 @@ from typing import List
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ModelNotFoundError, ServerError, InferenceError
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Manager import LLMInferenceManager
+from tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler import LlamaCppHandler
 #
 ########################################################################################################################
 #
@@ -53,22 +55,46 @@ router = APIRouter()
 # from your_main_app_file import llm_manager_instance as llm_manager
 
 
+def _resolve_llm_manager() -> LLMInferenceManager:
+    mgr = globals().get("llm_manager")
+    if mgr is None:
+        raise HTTPException(status_code=503, detail="LLM manager not initialized.")
+    return mgr  # type: ignore[return-value]
+
+
+def _resolve_llamacpp_target(llm_manager: LLMInferenceManager, required: tuple[str, ...]):
+    """
+    Return an object (handler or manager) that supports the required llama.cpp methods.
+    Falls back to the manager for compatibility with tests that monkeypatch llm_manager directly.
+    """
+    handler = getattr(llm_manager, "llamacpp", None)
+    candidates = [handler, llm_manager]
+    for cand in candidates:
+        if cand and all(hasattr(cand, name) for name in required):
+            return cand
+    raise HTTPException(status_code=503, detail="Llama.cpp backend is not configured.")
+
+
 # --- Llama.cpp Specific Endpoints ---
 @router.post("/llamacpp/start_server", summary="Start or Swap Llama.cpp Server Model")
 async def start_llamacpp_server_endpoint(
         model_filename: str = Body(..., embed=True,
                                    description="Filename of the GGUF model to load (e.g., 'mistral-7b-v0.1.Q4_K_M.gguf')"),
         server_args: Optional[Dict[str, Any]] = Body({}, embed=True,
-                                                     description="Optional Llama.cpp server arguments (e.g., port, n_gpu_layers)")
+                                                     description="Optional Llama.cpp server arguments (e.g., port, n_gpu_layers)"),
+        llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager),
 ):
     """
     Starts the Llama.cpp server with the specified model.
     If a server is already running, it will be stopped and restarted with the new model (model swap).
     """
     try:
-        if not llm_manager.llamacpp:  # Or llm_manager.get_handler("llamacpp") and catch error
-            raise HTTPException(status_code=400, detail="Llama.cpp backend is not enabled or configured.")
-        result = await llm_manager.start_server(backend="llamacpp", model_name=model_filename, server_args=server_args)
+        target = _resolve_llamacpp_target(llm_manager, ("start_server",))
+        # Prefer handler.start_server if available, else manager.start_server
+        if isinstance(target, LlamaCppHandler):
+            result = await target.start_server(model_filename=model_filename, server_args=server_args)
+        else:
+            result = await target.start_server(backend="llamacpp", model_name=model_filename, server_args=server_args)
         return result
     except (ModelNotFoundError, ServerError, InferenceError) as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -78,11 +104,13 @@ async def start_llamacpp_server_endpoint(
 
 
 @router.post("/llamacpp/stop_server", summary="Stop Llama.cpp Server")
-async def stop_llamacpp_server_endpoint():
+async def stop_llamacpp_server_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
-        if not llm_manager.llamacpp:
-            raise HTTPException(status_code=400, detail="Llama.cpp backend is not enabled or configured.")
-        result = await llm_manager.stop_server(backend="llamacpp")
+        target = _resolve_llamacpp_target(llm_manager, ("stop_server",))
+        if isinstance(target, LlamaCppHandler):
+            result = await target.stop_server()
+        else:
+            result = await target.stop_server(backend="llamacpp")
         return {"message": result}
     except (ServerError, InferenceError) as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -92,12 +120,13 @@ async def stop_llamacpp_server_endpoint():
 
 
 @router.get("/llamacpp/status", summary="Get Llama.cpp Server Status")
-async def get_llamacpp_status_endpoint():
+async def get_llamacpp_status_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
-        if not llm_manager.llamacpp:
-            raise HTTPException(status_code=400, detail="Llama.cpp backend is not enabled or configured.")
-        # status = await llm_manager.llamacpp.get_server_status() # Direct access
-        status = await llm_manager.get_server_status(backend="llamacpp")  # Via manager
+        target = _resolve_llamacpp_target(llm_manager, ("get_server_status",))
+        if isinstance(target, LlamaCppHandler):
+            status = await target.get_server_status()
+        else:
+            status = await target.get_server_status(backend="llamacpp")  # Via manager
         return status
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error getting Llama.cpp server status: {e}", exc_info=True)
@@ -105,14 +134,10 @@ async def get_llamacpp_status_endpoint():
 
 
 @router.get("/llamacpp/metrics", summary="Get Llama.cpp Metrics")
-async def get_llamacpp_metrics_endpoint():
+async def get_llamacpp_metrics_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
-        if not llm_manager.llamacpp:
-            raise HTTPException(status_code=400, detail="Llama.cpp backend is not enabled or configured.")
-        handler = llm_manager.llamacpp
-        if hasattr(handler, "get_metrics"):
-            return handler.get_metrics()  # type: ignore[attr-defined]
-        return {"message": "metrics not available"}
+        handler = _resolve_llamacpp_target(llm_manager, ("get_metrics",))
+        return handler.get_metrics()
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error getting Llama.cpp metrics: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected error occurred.")
@@ -133,11 +158,17 @@ async def get_llamafile_metrics_endpoint():
 
 
 @router.get("/llamacpp/models", summary="List available Llama.cpp models")
-async def list_llamacpp_models_endpoint():
+async def list_llamacpp_models_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
-        if not llm_manager.llamacpp:
-            raise HTTPException(status_code=400, detail="Llama.cpp backend is not enabled or configured.")
-        models = await llm_manager.list_local_models(backend="llamacpp")
+        handler = getattr(llm_manager, "llamacpp", None)
+        if handler is None:
+            raise HTTPException(status_code=503, detail="Llama.cpp backend is not configured.")
+        if handler and hasattr(handler, "list_models"):
+            models = await handler.list_models()
+        elif hasattr(llm_manager, "list_local_models"):
+            models = await llm_manager.list_local_models(backend="llamacpp")
+        else:
+            raise HTTPException(status_code=503, detail="Llama.cpp backend is not configured.")
         return {"available_models": models}
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error listing Llama.cpp models: {e}", exc_info=True)
@@ -148,28 +179,40 @@ from tldw_Server_API.app.api.v1.schemas.llamacpp_schemas import LlamaCppInferenc
 
 
 @router.post("/llamacpp/inference", summary="Run inference with Llama.cpp")
-async def run_llamacpp_inference_endpoint(payload: LlamaCppInferenceRequest):
+async def run_llamacpp_inference_endpoint(
+    payload: LlamaCppInferenceRequest, llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)
+):
     """
     Runs inference using the currently loaded Llama.cpp model.
     Payload should be OpenAI compatible (e.g., include 'messages' list).
     Example: {"messages": [{"role": "user", "content": "Hello!"}], "temperature": 0.7}
     """
     try:
-        if not llm_manager.llamacpp:
-            raise HTTPException(status_code=400, detail="Llama.cpp backend is not enabled or configured.")
-
-        # The 'model_name_or_path' for manager.run_inference is for context,
-        # LlamaCppHandler uses its internally known active model.
-        # We can get it from status or just pass a placeholder.
-        status = await llm_manager.get_server_status(backend="llamacpp")
-        current_model = status.get("model", "unknown_active_model")
-
-        result = await llm_manager.run_inference(
-            backend="llamacpp",
-            model_name_or_path=current_model,  # Contextual
-            prompt=None,  # Assuming payload contains 'messages'
-            **payload.to_kwargs(),  # Pass validated payload as kwargs (extras allowed)
-        )
+        handler = getattr(llm_manager, "llamacpp", None)
+        if handler is None:
+            raise HTTPException(status_code=503, detail="Llama.cpp backend is not configured.")
+        # Prefer handler methods when available; fallback to manager for compatibility with tests
+        if handler and hasattr(handler, "get_server_status") and hasattr(handler, "inference"):
+            status = await handler.get_server_status()
+            current_model = status.get("model", "unknown_active_model")
+            result = await handler.inference(
+                prompt=None,  # Assuming payload contains 'messages'
+                messages=payload.messages,
+                **payload.to_kwargs(),
+            )
+            # Align response model naming with manager-style return
+            result.setdefault("model", current_model)
+        elif hasattr(llm_manager, "get_server_status") and hasattr(llm_manager, "run_inference"):
+            status = await llm_manager.get_server_status(backend="llamacpp")
+            current_model = status.get("model", "unknown_active_model")
+            result = await llm_manager.run_inference(
+                backend="llamacpp",
+                model_name_or_path=current_model,  # Contextual
+                prompt=None,  # Assuming payload contains 'messages'
+                **payload.to_kwargs(),  # Pass validated payload as kwargs (extras allowed)
+            )
+        else:
+            raise HTTPException(status_code=503, detail="Llama.cpp backend is not configured.")
         return result
     except (ServerError, InferenceError) as e:
         raise HTTPException(status_code=400, detail=str(e))

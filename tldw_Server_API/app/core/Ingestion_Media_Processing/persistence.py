@@ -980,6 +980,92 @@ async def persist_primary_av_item(
         process_result["db_message"] = db_message_result
         process_result["media_uuid"] = media_uuid_result
 
+        # Optionally persist a normalized STT transcript into the Transcripts table
+        # for audio/video items when a transcription model is known.
+        try:
+            if (
+                media_type in ["audio", "video"]
+                and media_id_result
+                and transcription_model_used
+                and content_for_db
+            ):
+                from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
+                    to_normalized_stt_artifact,
+                )
+                from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
+                    get_stt_provider_registry,
+                )
+                from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # type: ignore
+                    MediaDatabase as _MediaDBForStt,
+                    upsert_transcript,
+                )
+
+                registry = get_stt_provider_registry()
+                provider_name, provider_model, _ = registry.resolve_provider_for_model(
+                    str(transcription_model_used)
+                )
+                analysis_details = process_result.get("analysis_details") or {}
+                lang_for_stt = analysis_details.get("transcription_language")
+
+                artifact = to_normalized_stt_artifact(
+                    text=str(content_for_db),
+                    segments=process_result.get("segments"),
+                    language=lang_for_stt,
+                    provider=provider_name,
+                    model=provider_model or str(transcription_model_used),
+                )
+
+                def _upsert_worker() -> None:
+                    db = _MediaDBForStt(db_path=db_path, client_id=client_id)
+                    try:
+                        upsert_transcript(
+                            db_instance=db,
+                            media_id=int(media_id_result),
+                            transcription=artifact["text"],
+                            whisper_model=artifact["metadata"]["model"],
+                        )
+                    finally:
+                        db.close_connection()
+
+                await loop.run_in_executor(None, _upsert_worker)
+                # Attach normalized artifact to the process_result for callers
+                process_result["normalized_stt"] = artifact
+        except Exception as stt_err:
+            logger.debug(
+                "STT transcript upsert skipped/failed for %s (media_id=%s): %s",
+                original_input_ref,
+                media_id_result,
+                stt_err,
+            )
+
+        # Optionally persist VisualDocuments for eligible media types (currently PDFs via VLM summary).
+        try:
+            if media_type in ["pdf"] and media_id_result:
+                from tldw_Server_API.app.core.Ingestion_Media_Processing.visual_ingestion import (  # type: ignore
+                    persist_visual_documents_from_analysis,
+                )
+
+                created_visual_docs = persist_visual_documents_from_analysis(
+                    db_path=db_path,
+                    client_id=client_id,
+                    media_id=int(media_id_result),
+                    analysis_details=process_result.get("analysis_details") or {},
+                )
+                if created_visual_docs:
+                    logger.info(
+                        "Persisted %s VisualDocuments for media_id=%s (input_ref=%s)",
+                        created_visual_docs,
+                        media_id_result,
+                        original_input_ref,
+                    )
+        except Exception as visual_err:
+            logger.debug(
+                "Visual RAG ingestion skipped/failed for %s (media_id=%s): %s",
+                original_input_ref,
+                media_id_result,
+                visual_err,
+            )
+
         await persist_claims_if_applicable(
             claims_context=claims_context,
             media_id=process_result.get("db_id"),

@@ -46,7 +46,7 @@ def test_chat_message_content_part_image_url_invalid():
     invalid_string_url = "example.com/image.png"  # Not a data URI
     with pytest.raises(ValidationError) as exc_info:
         ChatCompletionRequestMessageContentPartImageURL(url=invalid_string_url)
-    assert "String url must be a data URI" in str(exc_info.value)
+    assert "data URI for base64 encoded images" in str(exc_info.value)
 
 
 # --- Tests for Message Types ---

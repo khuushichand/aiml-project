@@ -56,6 +56,8 @@ Add MLX-backed local LLM provider (Apple Silicon first) that mirrors llama.cpp s
   - `MLX_REVISION`, `MLX_TRUST_REMOTE_CODE` (bool), `MLX_TOKENIZER` (override), `MLX_ADAPTER`, `MLX_ADAPTER_WEIGHTS`
   - `MLX_MAX_KV_CACHE_SIZE` / preallocation toggle if exposed by mlx-lm
   - Sampling defaults (temperature, top_p, top_k, repetition penalties, presence/frequency penalties, batch size)
+  - Defaults: compile+warmup enabled, `MLX_MAX_CONCURRENT=1`, downloads/trust_remote_code disabled unless explicitly enabled; quantization/KV cache hints are optional and applied only if supported by mlx-lm.
+- **Install hint**: `pip install ".[LLM_MLX]"` on Apple Silicon to pull `mlx-lm` + `mlx` (extra is macOS/arm64-gated).
 - **Dependency wiring**: add MLX to provider selection logic and request schemas; align auth/rate-limit dependencies with existing providers.
 - **Resource guardrails**: default to a single active MLX model/session with `MLX_MAX_CONCURRENT=1`, no batching, and overflow rejected with 429 (future batching TBD); document eviction/swap policy if multiple models are allowed.
 - **Warmup/compile behavior**: default to compile+warmup enabled on load to avoid first-token stalls; make it configurable. If compile/warmup OOMs, return a clear error and keep the prior model active.

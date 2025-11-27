@@ -296,25 +296,25 @@ def transcribe_with_parakeet_mlx(
         if chunk_callback is not None:
             transcribe_kwargs['chunk_callback'] = chunk_callback
 
-        if audio_file_path:
-            result = model.transcribe(audio_file_path, **transcribe_kwargs)
-        elif isinstance(audio_data, np.ndarray):
-            try:
-                result = model.transcribe(audio_data, **transcribe_kwargs)
-            except Exception as direct_err:
-                logging.debug(f"parakeet-mlx direct numpy transcription failed, falling back to temp file: {direct_err}")
+        temp_audio_path: Optional[str] = None
+        try:
+            if audio_file_path:
+                result = model.transcribe(audio_file_path, **transcribe_kwargs)
+            elif isinstance(audio_data, np.ndarray):
+                # Persist numpy audio to a temp file so downstream callers (and tests)
+                # receive a filesystem path consistently.
                 with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
                     sf.write(tmp_file.name, audio_data, 16000, format='WAV')
                     temp_audio_path = tmp_file.name
+                result = model.transcribe(temp_audio_path, **transcribe_kwargs)
+            else:
+                return "[Error: Invalid audio data format]"
+        finally:
+            if temp_audio_path:
                 try:
-                    result = model.transcribe(temp_audio_path, **transcribe_kwargs)
-                finally:
-                    try:
-                        os.remove(temp_audio_path)
-                    except Exception as rm_err:
-                        logging.debug(f"Failed to remove temp audio file (Parakeet_MLX): path={temp_audio_path}, error={rm_err}")
-        else:
-            return "[Error: Invalid audio data format]"
+                    os.remove(temp_audio_path)
+                except Exception as rm_err:
+                    logging.debug(f"Failed to remove temp audio file (Parakeet_MLX): path={temp_audio_path}, error={rm_err}")
 
         # The transcribe method returns an AlignedResult object
         # Extract the text from it

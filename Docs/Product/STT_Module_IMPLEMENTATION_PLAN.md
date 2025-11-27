@@ -4,7 +4,13 @@
 **Tests**:
 - Unit: adapter methods for each provider (success/failure paths, retry & fallback behavior, config parsing, capability flags).
 - Integration: `/api/v1/audio/transcriptions` exercises at least two providers; a Jobs‑driven transcription run uses the shared abstraction.
-**Status**: Not Started
+**Status**: In Progress
+
+**Current Progress**:
+- Implemented `SttProviderAdapter` + registry in `stt_provider_adapter.py` with capability metadata and a `transcribe_batch` API for faster‑whisper, Parakeet, Canary, Qwen2Audio, and external providers.
+- REST `/api/v1/audio/transcriptions` now resolves providers via the registry and delegates batch work through adapters (still returning the same OpenAI‑compatible response shapes).
+- Media ingestion uses the registry and a unified helper (`run_stt_batch_via_registry`) inside `perform_transcription`; ingestion persistence (`persist_primary_av_item`) upserts transcripts into `Transcripts` via `upsert_transcript` and attaches a normalized STT artifact to `process_result`.
+- Jobs (`audio_jobs_worker`, `audio_transcribe_gpu_worker`) now delegate STT to the shared registry helpers (`run_stt_job_via_registry`), and their `audio_transcribe` stages populate both legacy `text`/`segments` fields and a normalized STT artifact on the job payload.
 
 ## Stage 2: REST/DB/Jobs Contract Hardening
 **Goal**: Make REST STT and media ingestion share a normalized transcription artifact and persist it consistently into Media DB v2.
@@ -12,7 +18,13 @@
 **Tests**:
 - Integration: media ingestion (audio URLs/files) writes expected rows into `Transcripts`, `MediaChunks`, and `UnvectorizedMediaChunks`, and returns a result JSON matching the documented contract.
 - Contract: round‑trip tests that reload a transcript from DB and compare to the original normalized artifact (within expected lossy fields such as floating‑point timestamps).
-**Status**: Not Started
+**Status**: In Progress
+
+**Current Progress**:
+- Normalized STT artifact helper (`to_normalized_stt_artifact`) is implemented and used by adapters and ingestion to represent STT results in a single internal shape.
+- REST `/api/v1/audio/transcriptions` and batch ingestion paths now produce/consume this normalized artifact internally, while preserving their existing public response JSON.
+- `persist_primary_av_item` upserts transcripts into `Transcripts` (via `upsert_transcript`) with `whisper_model` derived from the registry, and stores the normalized artifact on `process_result["normalized_stt"]`; chunking continues through the existing `chunks` → `UnvectorizedMediaChunks`/`MediaChunks` pipeline.
+- Jobs (CPU and GPU workers) attach the normalized artifact to their `audio_transcribe` payloads (`normalized_stt`), and dedicated DB round‑trip/contract tests for the normalized artifact remain the primary outstanding item for this stage.
 
 ## Stage 3: Streaming STT Latency & Quotas (M1 Alignment)
 **Goal**: Finalize unified WS STT (turn detection + quotas) to meet latency and fairness requirements while failing open safely when VAD is unavailable.
@@ -37,4 +49,3 @@
 - Harness: manual and (optionally) automated runs of the harness in short mode that verify JSON output structure and non‑zero metrics; basic failure handling (server unavailable, auth errors).
 - Docs: link/lint checks; targeted integration tests that perform one REST STT call and one WS STT session and assert that key metrics and logs are emitted.
 **Status**: Not Started (partial harness stub exists in `Helper_Scripts/voice_latency_harness/harness.py`; needs STT integration and doc alignment)
-

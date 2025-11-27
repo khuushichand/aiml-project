@@ -102,6 +102,11 @@ def _convert_db_conversation_to_response(conv_data: Dict[str, Any]) -> ChatSessi
         character_id=conv_data.get('character_id', 0),
         title=conv_data.get('title'),
         rating=conv_data.get('rating'),
+        state=conv_data.get('state', 'in-progress'),
+        topic_label=conv_data.get('topic_label'),
+        cluster_id=conv_data.get('cluster_id'),
+        source=conv_data.get('source'),
+        external_ref=conv_data.get('external_ref'),
         created_at=conv_data.get('created_at', datetime.now(timezone.utc)),
         last_modified=conv_data.get('last_modified', datetime.now(timezone.utc)),
         message_count=conv_data.get('message_count', 0),
@@ -194,7 +199,12 @@ async def create_chat_session(
             'root_id': chat_id,  # Root for new conversations
             'parent_conversation_id': session_data.parent_conversation_id,
             'client_id': str(current_user.id),
-            'version': 1
+            'version': 1,
+            'state': session_data.state,
+            'topic_label': session_data.topic_label,
+            'cluster_id': session_data.cluster_id,
+            'source': session_data.source,
+            'external_ref': session_data.external_ref,
         }
 
         # Add to database
@@ -1138,7 +1148,11 @@ async def update_chat_session(
         # Update fields via DB abstraction with optimistic locking
         update_fields = update_data.model_dump(exclude_unset=True)
         # Only allow supported fields
-        allowed_update = {k: v for k, v in update_fields.items() if k in {"title", "rating"}}
+        allowed_update = {
+            k: v
+            for k, v in update_fields.items()
+            if k in {"title", "rating", "state", "topic_label", "cluster_id", "source", "external_ref"}
+        }
         # db.update_conversation updates metadata and bumps version even if payload is empty
         db.update_conversation(chat_id, allowed_update, expected_version)
 

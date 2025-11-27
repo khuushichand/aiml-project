@@ -1648,6 +1648,111 @@ def _as_int(val: object, default: int) -> int:
         return default
 
 
+def get_llamacpp_handler_config():
+    """
+    Build a LlamaCppConfig from environment variables or [LlamaCpp] section in config.txt.
+
+    Env overrides (precedence over config.txt):
+        LLAMACPP_ENABLED
+        LLAMACPP_EXECUTABLE_PATH
+        LLAMACPP_MODELS_DIR
+        LLAMACPP_HOST
+        LLAMACPP_PORT
+        LLAMACPP_THREADS
+        LLAMACPP_N_GPU_LAYERS
+        LLAMACPP_CTX_SIZE
+        LLAMACPP_ALLOW_UNVALIDATED_ARGS
+        LLAMACPP_ALLOW_CLI_SECRETS
+        LLAMACPP_PORT_AUTOSELECT
+        LLAMACPP_PORT_PROBE_MAX
+        LLAMACPP_ALLOWED_PATHS  (comma separated)
+        LLAMACPP_LOG_OUTPUT_FILE
+    """
+    try:
+        from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LlamaCppConfig
+    except Exception as exc:  # noqa: BLE001
+        _log_warning(f"llama.cpp handler config unavailable (import failed): {exc}")
+        return None
+
+    cp = load_comprehensive_config()
+    section = cp["LlamaCpp"] if cp and cp.has_section("LlamaCpp") else None
+
+    def _get(opt: str, env_name: str):
+        v = os.getenv(env_name)
+        if v is not None:
+            return v
+        if section is not None:
+            try:
+                return section.get(opt, fallback=None)
+            except Exception:
+                return None
+        return None
+
+    enabled_raw = _get("enabled", "LLAMACPP_ENABLED")
+    enabled = _as_bool(enabled_raw, False)
+    if not enabled:
+        return None
+
+    kwargs: dict[str, object] = {"enabled": True}
+
+    exe = _get("executable_path", "LLAMACPP_EXECUTABLE_PATH")
+    models_dir = _get("models_dir", "LLAMACPP_MODELS_DIR")
+    default_host = _get("default_host", "LLAMACPP_HOST")
+    default_port = _get("default_port", "LLAMACPP_PORT")
+    default_threads = _get("default_threads", "LLAMACPP_THREADS")
+    default_n_gpu_layers = _get("default_n_gpu_layers", "LLAMACPP_N_GPU_LAYERS")
+    default_ctx_size = _get("default_ctx_size", "LLAMACPP_CTX_SIZE")
+    allow_unvalidated_args = _get("allow_unvalidated_args", "LLAMACPP_ALLOW_UNVALIDATED_ARGS")
+    allow_cli_secrets = _get("allow_cli_secrets", "LLAMACPP_ALLOW_CLI_SECRETS")
+    port_autoselect = _get("port_autoselect", "LLAMACPP_PORT_AUTOSELECT")
+    port_probe_max = _get("port_probe_max", "LLAMACPP_PORT_PROBE_MAX")
+    allowed_paths_raw = _get("allowed_paths", "LLAMACPP_ALLOWED_PATHS")
+    log_output_file = _get("log_output_file", "LLAMACPP_LOG_OUTPUT_FILE")
+
+    if exe:
+        kwargs["executable_path"] = Path(str(exe))
+    if models_dir:
+        kwargs["models_dir"] = Path(str(models_dir))
+    if default_host:
+        kwargs["default_host"] = str(default_host)
+    if default_port is not None:
+        kwargs["default_port"] = _as_int(default_port, 8080)
+    if default_threads is not None:
+        if str(default_threads).strip():
+            try:
+                kwargs["default_threads"] = int(str(default_threads))
+            except Exception:
+                _log_warning(f"LLAMACPP_THREADS invalid; ignoring value: {default_threads}")
+    if default_n_gpu_layers is not None:
+        kwargs["default_n_gpu_layers"] = _as_int(default_n_gpu_layers, 0)
+    if default_ctx_size is not None:
+        kwargs["default_ctx_size"] = _as_int(default_ctx_size, 2048)
+    if allow_unvalidated_args is not None:
+        kwargs["allow_unvalidated_args"] = _as_bool(allow_unvalidated_args, False)
+    if allow_cli_secrets is not None:
+        kwargs["allow_cli_secrets"] = _as_bool(allow_cli_secrets, False)
+    if port_autoselect is not None:
+        kwargs["port_autoselect"] = _as_bool(port_autoselect, True)
+    if port_probe_max is not None:
+        kwargs["port_probe_max"] = _as_int(port_probe_max, 10)
+    if allowed_paths_raw:
+        paths = []
+        for part in str(allowed_paths_raw).split(","):
+            p = part.strip()
+            if p:
+                paths.append(Path(p))
+        if paths:
+            kwargs["allowed_paths"] = paths
+    if log_output_file:
+        kwargs["log_output_file"] = Path(str(log_output_file))
+
+    try:
+        return LlamaCppConfig(**kwargs)
+    except Exception as exc:  # noqa: BLE001
+        _log_warning(f"llama.cpp handler config invalid; disabling handler: {exc}")
+        return None
+
+
 def rg_policy_store(default: str = "file") -> str:
     v = os.getenv("RG_POLICY_STORE")
     if v is None:
@@ -1888,6 +1993,15 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
     - Unknown routes are treated as stable by default
     """
     key = (route_key or "").strip().lower()
+
+    # Hard-enable critical test routes when the minimal test app is active to
+    # avoid 404s in unit tests even if config.txt marks them experimental.
+    try:
+        _minimal = str(os.getenv("MINIMAL_TEST_APP", "")).strip().lower() in {"1", "true", "yes", "on"}
+        if _minimal and key in {"workflows", "scheduler"}:
+            return True
+    except Exception:
+        pass
     policy = _route_toggle_policy()
 
     # Expand aliases so a single key can control a family of routes.

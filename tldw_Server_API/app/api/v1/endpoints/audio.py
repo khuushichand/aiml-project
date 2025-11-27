@@ -812,13 +812,14 @@ async def create_transcription(
         else:
             provider_raw, _, _ = parse_transcription_model(model)
 
-        provider_map = {
-            "whisper": "faster-whisper",
-            "parakeet": "parakeet",
-            "canary": "canary",
-            "qwen2audio": "qwen2audio",
-        }
-        provider = provider_map.get(provider_raw, "faster-whisper")
+        # Use the shared STT provider registry so that REST STT and other
+        # subsystems resolve providers/models consistently.
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (
+            get_stt_provider_registry,
+        )
+
+        stt_registry = get_stt_provider_registry()
+        provider, provider_model_name, provider_variant = stt_registry.resolve_provider_for_model(model or "")
 
         def _raise_on_transcription_error(text: Any) -> None:
             if _is_transcription_error_message(text):
@@ -827,12 +828,6 @@ async def create_transcription(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Transcription failed. Please try again or use a different model.",
                 )
-
-        # Import transcription functions and helpers (already imported above)
-        # Get configuration for Nemo models
-        from tldw_Server_API.app.core.config import load_and_log_configs
-
-        config = load_and_log_configs()
 
         # Prepare quotas and transcription now that we hold the slot
 
@@ -903,84 +898,38 @@ async def create_transcription(
                     else:
                         selected_lang_for_stt = language if language else None
 
-                    result = fw_speech_to_text(
+                    adapter = stt_registry.get_adapter(provider)
+                    artifact = adapter.transcribe_batch(
                         canonical_path,
-                        whisper_model=whisper_model_name,
-                        selected_source_lang=selected_lang_for_stt,
-                        vad_filter=False,
-                        diarize=False,
-                        word_timestamps=("word" in granularity_tokens),
-                        return_language=True,
-                        initial_prompt=prompt,
+                        model=whisper_model_name,
+                        language=selected_lang_for_stt,
                         task=task_normalized,
+                        word_timestamps=("word" in granularity_tokens),
+                        prompt=prompt,
                     )
-                    if isinstance(result, tuple) and len(result) == 2:
-                        segments_list, detected_language = result
-                    else:
-                        # Fallback: handle as plain segments list
-                        segments_list, detected_language = result, None
-
-                    # For API-facing responses, strip Whisper metadata header from
-                    # the first segment's Text so clients see only user content.
-                    segments_list = strip_whisper_metadata_header(segments_list)
-                    segments_for_timing = segments_list
-                    # Merge text
-                    transcribed_text = " ".join(
-                        seg.get("Text", "").strip() for seg in segments_list if isinstance(seg, dict)
-                    )
+                    detected_language = artifact.get("language")
+                    segments_for_timing = artifact.get("segments") or []
+                    transcribed_text = artifact.get("text", "")
                 except Exception as e:
                     logger.error(f"Whisper transcription failed: {e}")
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Whisper transcription failed"
                     )
-            elif provider == "parakeet" and config:
-                variant = config.get("STT-Settings", {}).get("nemo_model_variant", "standard")
-                # For Parakeet, we need to use the Nemo module directly
-                from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                    transcribe_with_parakeet,
-                )
-
-                transcribed_text = transcribe_with_parakeet(audio_data, sample_rate, variant)
-            elif provider == "canary":
-                from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                    transcribe_with_canary,
-                    CANARY_SUPPORTED_LANG_CODES,
-                    CANARY_SUPPORTED_LANG_CODES_STR,
-                )
-
-                # Validate Canary language against the full supported set when provided.
-                canary_lang: Optional[str] = None
-                if language:
-                    raw_lang = str(language).strip().lower()
-                    # Accept simple locale forms like "en-US" → "en"
-                    if len(raw_lang) >= 4 and raw_lang[2] in {"-", "_"}:
-                        raw_lang = raw_lang[:2]
-                    if raw_lang not in CANARY_SUPPORTED_LANG_CODES:
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=("Canary provider language must be one of: " f"{CANARY_SUPPORTED_LANG_CODES_STR}."),
-                        )
-                    canary_lang = raw_lang
-
-                # For Canary, respect the requested task: in "transcribe" mode we
-                # perform same-language ASR; in "translate" mode we request
-                # translation to English to mirror Whisper's translate semantics.
-                transcribed_text = transcribe_with_canary(
-                    audio_data,
-                    sample_rate,
-                    canary_lang,
-                    task=task_normalized,
-                    target_language="en" if task_normalized == "translate" else None,
-                )
             else:
-                # Use the general transcribe_audio function
-                transcribe_params = {
-                    "audio_data": audio_data,
-                    "sample_rate": sample_rate,
-                    "transcription_provider": provider,
-                    "speaker_lang": language,
-                }
-                transcribed_text = transcribe_audio(**transcribe_params)
+                # Non-Whisper providers: delegate to adapter which wraps the
+                # existing Parakeet/Canary/Qwen2Audio/external implementations.
+                adapter = stt_registry.get_adapter(provider)
+                artifact = adapter.transcribe_batch(
+                    canonical_path,
+                    model=provider_model_name or model,
+                    language=language,
+                    task=task_normalized,
+                    word_timestamps=("word" in granularity_tokens),
+                    prompt=prompt,
+                )
+                detected_language = artifact.get("language")
+                segments_for_timing = artifact.get("segments") or []
+                transcribed_text = artifact.get("text", "")
         finally:
             # Make sure we always release job slot on any path
             try:

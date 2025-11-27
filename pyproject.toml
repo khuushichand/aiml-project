@@ -304,6 +304,12 @@ STT_Parakeet_MLX = [
   "mlx>=0.8.0; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
 ]
 
+# MLX LLM provider (Apple Silicon)
+LLM_MLX = [
+  "mlx-lm>=0.14.0; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
+  "mlx>=0.8.0; platform_system == \"Darwin\" and platform_machine == \"arm64\"",
+]
+
 # Text-to-Speech
 TTS_All = [
   "pydub>=0.25.0"

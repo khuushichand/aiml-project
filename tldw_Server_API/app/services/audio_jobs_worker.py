@@ -14,6 +14,56 @@ from tldw_Server_API.app.core.Usage.audio_quota import can_start_job, finish_job
 DOMAIN = "audio"
 
 
+async def _handle_audio_transcribe_stage(payload: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[str]]:
+    """
+    Handle the `audio_transcribe` stage for a single job payload.
+
+    This helper delegates STT to the shared registry/adapter helper
+    (`run_stt_job_via_registry`) and normalizes the payload into the
+    expected shape for downstream stages:
+      - `segments`: list of segment dicts
+      - `text`: merged transcript string
+      - `normalized_stt`: full normalized STT artifact
+    """
+    wav_path = payload.get("wav_path")
+    if not wav_path:
+        raise ValueError("missing wav_path in payload")
+
+    raw_model = payload.get("model")
+    model = (raw_model.strip() if isinstance(raw_model, str) else raw_model) or None
+
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
+        run_stt_job_via_registry,
+    )
+
+    artifact = await asyncio.to_thread(
+        run_stt_job_via_registry,
+        wav_path,
+        model,
+        None,
+    )
+
+    segments_list = artifact.get("segments") or []
+    if not isinstance(segments_list, list):
+        raise ValueError("unexpected transcription result format; expected list of segments")
+
+    text_merged = artifact.get("text")
+    if not isinstance(text_merged, str) or not text_merged.strip():
+        text_merged = " ".join(
+            (seg.get("Text", "").strip() if isinstance(seg, dict) else "") for seg in segments_list
+        ).strip()
+
+    updated_payload = dict(payload)
+    updated_payload["segments"] = segments_list
+    updated_payload["text"] = text_merged
+    # Attach full normalized artifact for future stages without breaking
+    # existing consumers that rely only on 'text' and 'segments'.
+    updated_payload["normalized_stt"] = artifact
+
+    next_type: Optional[str] = payload.get("perform_chunking") and "audio_chunk" or "audio_store"
+    return updated_payload, next_type
+
+
 async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
     """MVP in-process worker handling audio pipeline stages.
 
@@ -232,36 +282,7 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                     updated_payload["wav_path"] = out_path
                     next_type = "audio_transcribe"
                 elif jtype == "audio_transcribe":
-                    wav_path = payload.get("wav_path")
-                    model_in = (payload.get("model") or "distil-whisper-large-v3").strip()
-                    # Normalize OpenAI-style alias to a real faster-whisper model
-                    model = "distil-whisper-large-v3" if model_in.lower().startswith("whisper") else model_in
-                    if not wav_path:
-                        raise ValueError("missing wav_path in payload")
-                    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import speech_to_text
-                    result = await asyncio.to_thread(
-                        speech_to_text,
-                        wav_path,
-                        whisper_model=model,
-                        selected_source_lang=None,
-                        vad_filter=False,
-                        diarize=False,
-                    )
-                    # Standardize: ensure we have both segments list and merged text
-                    segments_list = None
-                    if isinstance(result, tuple) and result:
-                        # Some providers may return (segments, meta)
-                        segments_list = result[0]
-                    else:
-                        segments_list = result
-                    if not isinstance(segments_list, list):
-                        raise ValueError("unexpected transcription result format; expected list of segments")
-                    text_merged = " ".join(
-                        (seg.get("Text", "").strip() if isinstance(seg, dict) else "") for seg in segments_list
-                    ).strip()
-                    updated_payload["segments"] = segments_list
-                    updated_payload["text"] = text_merged
-                    next_type = payload.get("perform_chunking") and "audio_chunk" or "audio_store"
+                    updated_payload, next_type = await _handle_audio_transcribe_stage(updated_payload)
                 elif jtype == "audio_chunk":
                     from tldw_Server_API.app.core.Chunking import improved_chunking_process
                     # Prefer merged text; fallback to joining segments on demand
