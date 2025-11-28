@@ -126,6 +126,82 @@ bench-full:
 	$(MAKE) monitoring-down
 
 # -----------------------------------------------------------------------------
+# Chat Streaming Load Harness (Scenario A starter)
+# -----------------------------------------------------------------------------
+.PHONY: load-chat-stream
+
+LOAD_CONCURRENCY ?= 100
+LOAD_STREAMS_PER_CLIENT ?= 1
+LOAD_PROMPT_BYTES ?= 512
+CHAT_MODEL ?= gpt-4o-mini
+
+load-chat-stream:
+	@echo "[load] Chat streaming load: concurrency=$(LOAD_CONCURRENCY) streams/client=$(LOAD_STREAMS_PER_CLIENT) prompt_bytes=$(LOAD_PROMPT_BYTES)"
+	python Helper_Scripts/load_tests/chat_streaming_load.py \
+		--base-url $(BASE_URL) \
+		--api-key "$(API_KEY)" \
+		--model "$(CHAT_MODEL)" \
+		--concurrency $(LOAD_CONCURRENCY) \
+		--streams-per-client $(LOAD_STREAMS_PER_CLIENT) \
+		--prompt-bytes $(LOAD_PROMPT_BYTES)
+
+.PHONY: load-chat-stream-sweep load-chat-stream-sweep-http2
+
+LOAD_CONCURRENCY_STEPS ?= 50 100 200
+
+load-chat-stream-sweep:
+	@echo "[load] Chat streaming sweep (HTTP/1.1): $(LOAD_CONCURRENCY_STEPS)"
+	python Helper_Scripts/load_tests/chat_streaming_sweep.py \
+		--base-url $(BASE_URL) \
+		--api-key "$(API_KEY)" \
+		--model "$(CHAT_MODEL)" \
+		--concurrency-steps $(LOAD_CONCURRENCY_STEPS) \
+		--streams-per-client $(LOAD_STREAMS_PER_CLIENT) \
+		--prompt-bytes $(LOAD_PROMPT_BYTES)
+
+load-chat-stream-sweep-http2:
+	@echo "[load] Chat streaming sweep (HTTP/2): $(LOAD_CONCURRENCY_STEPS)"
+	python Helper_Scripts/load_tests/chat_streaming_sweep.py \
+		--base-url $(BASE_URL) \
+		--api-key "$(API_KEY)" \
+		--model "$(CHAT_MODEL)" \
+		--concurrency-steps $(LOAD_CONCURRENCY_STEPS) \
+		--streams-per-client $(LOAD_STREAMS_PER_CLIENT) \
+		--prompt-bytes $(LOAD_PROMPT_BYTES) \
+		--http2
+
+# Canonical Scenario A sweeps (short vs longer prompts)
+.PHONY: scenario-a-short-http1 scenario-a-short-http2 scenario-a-long-http1 scenario-a-long-http2
+
+SCENARIO_A_CONC_STEPS ?= 50 100 200 400 800
+SCENARIO_A_SHORT_PROMPT_BYTES ?= 256
+SCENARIO_A_LONG_PROMPT_BYTES ?= 1024
+
+scenario-a-short-http1:
+	@echo "[scenario-a] Short prompt, HTTP/1.1 (concurrency=$(SCENARIO_A_CONC_STEPS), prompt_bytes=$(SCENARIO_A_SHORT_PROMPT_BYTES))"
+	$(MAKE) load-chat-stream-sweep \
+		LOAD_CONCURRENCY_STEPS="$(SCENARIO_A_CONC_STEPS)" \
+		LOAD_PROMPT_BYTES=$(SCENARIO_A_SHORT_PROMPT_BYTES)
+
+scenario-a-short-http2:
+	@echo "[scenario-a] Short prompt, HTTP/2 (concurrency=$(SCENARIO_A_CONC_STEPS), prompt_bytes=$(SCENARIO_A_SHORT_PROMPT_BYTES))"
+	$(MAKE) load-chat-stream-sweep-http2 \
+		LOAD_CONCURRENCY_STEPS="$(SCENARIO_A_CONC_STEPS)" \
+		LOAD_PROMPT_BYTES=$(SCENARIO_A_SHORT_PROMPT_BYTES)
+
+scenario-a-long-http1:
+	@echo "[scenario-a] Longer prompt, HTTP/1.1 (concurrency=$(SCENARIO_A_CONC_STEPS), prompt_bytes=$(SCENARIO_A_LONG_PROMPT_BYTES))"
+	$(MAKE) load-chat-stream-sweep \
+		LOAD_CONCURRENCY_STEPS="$(SCENARIO_A_CONC_STEPS)" \
+		LOAD_PROMPT_BYTES=$(SCENARIO_A_LONG_PROMPT_BYTES)
+
+scenario-a-long-http2:
+	@echo "[scenario-a] Longer prompt, HTTP/2 (concurrency=$(SCENARIO_A_CONC_STEPS), prompt_bytes=$(SCENARIO_A_LONG_PROMPT_BYTES))"
+	$(MAKE) load-chat-stream-sweep-http2 \
+		LOAD_CONCURRENCY_STEPS="$(SCENARIO_A_CONC_STEPS)" \
+		LOAD_PROMPT_BYTES=$(SCENARIO_A_LONG_PROMPT_BYTES)
+
+# -----------------------------------------------------------------------------
 # STT Golden Adapter Validation (local/GPU-only)
 # -----------------------------------------------------------------------------
 .PHONY: stt-golden
