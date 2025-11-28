@@ -350,6 +350,32 @@ class MediaDatabase:
         FOREIGN KEY (media_id) REFERENCES Media(id) ON DELETE CASCADE
     );
 
+    -- VisualDocuments Table --
+    -- Stores per-media image-derived artifacts (figures, frames, screenshots) with
+    -- captions/OCR and soft-delete/versioning semantics.
+    CREATE TABLE IF NOT EXISTS VisualDocuments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        media_id INTEGER NOT NULL,
+        location TEXT,
+        page_number INTEGER,
+        frame_index INTEGER,
+        timestamp_seconds REAL,
+        caption TEXT,
+        ocr_text TEXT,
+        tags TEXT,
+        thumbnail_path TEXT,
+        extra_metadata TEXT,
+        uuid TEXT UNIQUE NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        version INTEGER NOT NULL DEFAULT 1,
+        client_id TEXT NOT NULL,
+        deleted BOOLEAN NOT NULL DEFAULT 0,
+        prev_version INTEGER,
+        merge_parent_uuid TEXT,
+        FOREIGN KEY (media_id) REFERENCES Media(id) ON DELETE CASCADE
+    );
+
     -- DocumentVersions Table --
     CREATE TABLE IF NOT EXISTS DocumentVersions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -489,6 +515,15 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_unvectorizedmediachunks_deleted ON UnvectorizedMediaChunks(deleted);
     CREATE INDEX IF NOT EXISTS idx_unvectorizedmediachunks_prev_version ON UnvectorizedMediaChunks(prev_version);
     CREATE INDEX IF NOT EXISTS idx_unvectorizedmediachunks_merge_parent_uuid ON UnvectorizedMediaChunks(merge_parent_uuid);
+
+    -- VisualDocuments indices --
+    CREATE INDEX IF NOT EXISTS idx_visualdocs_media_id ON VisualDocuments(media_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_visualdocs_uuid ON VisualDocuments(uuid);
+    CREATE INDEX IF NOT EXISTS idx_visualdocs_last_modified ON VisualDocuments(last_modified);
+    CREATE INDEX IF NOT EXISTS idx_visualdocs_deleted ON VisualDocuments(deleted);
+    CREATE INDEX IF NOT EXISTS idx_visualdocs_prev_version ON VisualDocuments(prev_version);
+    CREATE INDEX IF NOT EXISTS idx_visualdocs_merge_parent_uuid ON VisualDocuments(merge_parent_uuid);
+    CREATE INDEX IF NOT EXISTS idx_visualdocs_page_frame ON VisualDocuments(media_id, page_number, frame_index);
 
     CREATE INDEX IF NOT EXISTS idx_document_versions_media_id ON DocumentVersions(media_id);
     CREATE INDEX IF NOT EXISTS idx_document_versions_version_number ON DocumentVersions(version_number);
@@ -1253,6 +1288,165 @@ class MediaDatabase:
         except BackendDatabaseError as exc:
             logging.error("Backend execute_many failed: %s", exc, exc_info=True)
             raise DatabaseError(f"Backend execute_many failed: {exc}") from exc
+
+    # -------------------------
+    # VisualDocuments helpers
+    # -------------------------
+    def insert_visual_document(
+        self,
+        media_id: int,
+        *,
+        caption: Optional[str] = None,
+        ocr_text: Optional[str] = None,
+        tags: Optional[str] = None,
+        location: Optional[str] = None,
+        page_number: Optional[int] = None,
+        frame_index: Optional[int] = None,
+        timestamp_seconds: Optional[float] = None,
+        thumbnail_path: Optional[str] = None,
+        extra_metadata: Optional[str] = None,
+    ) -> str:
+        """
+        Insert a new VisualDocuments row for a given media item.
+
+        Returns the generated uuid for the inserted visual document.
+        """
+        conn = self.get_connection()
+        new_uuid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        data: Dict[str, Any] = {
+            "media_id": media_id,
+            "location": location,
+            "page_number": page_number,
+            "frame_index": frame_index,
+            "timestamp_seconds": timestamp_seconds,
+            "caption": caption,
+            "ocr_text": ocr_text,
+            "tags": tags,
+            "thumbnail_path": thumbnail_path,
+            "extra_metadata": extra_metadata,
+            "uuid": new_uuid,
+            "created_at": now,
+            "last_modified": now,
+            "version": 1,
+            "client_id": self.client_id,
+            "deleted": 0,
+            "prev_version": None,
+            "merge_parent_uuid": None,
+        }
+        placeholders = ", ".join([f":{k}" for k in data.keys()])
+        columns = ", ".join(data.keys())
+        sql = f"INSERT INTO VisualDocuments ({columns}) VALUES ({placeholders})"
+        try:
+            self._execute_with_connection(conn, sql, data)
+            try:
+                self._log_sync_event(
+                    conn,
+                    "VisualDocuments",
+                    new_uuid,
+                    "create",
+                    1,
+                    json.dumps(
+                        {
+                            "media_id": media_id,
+                            "caption": caption or "",
+                            "ocr_text": ocr_text or "",
+                        }
+                    ),
+                )
+            except Exception:
+                pass
+        except Exception as exc:
+            raise DatabaseError(f"Failed to insert VisualDocument: {exc}") from exc
+        return new_uuid
+
+    def list_visual_documents_for_media(
+        self,
+        media_id: int,
+        *,
+        include_deleted: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return all VisualDocuments for a media item, ordered by page/frame/timestamp.
+        """
+        conn = self.get_connection()
+        clauses: List[str] = ["media_id = :media_id"]
+        params: Dict[str, Any] = {"media_id": media_id}
+        if not include_deleted:
+            clauses.append("deleted = 0")
+        where_sql = " AND ".join(clauses)
+        sql = (
+            "SELECT * FROM VisualDocuments "
+            f"WHERE {where_sql} "
+            "ORDER BY "
+            "COALESCE(page_number, 0), "
+            "COALESCE(frame_index, 0), "
+            "COALESCE(timestamp_seconds, 0.0), "
+            "id"
+        )
+        try:
+            return self._fetchall_with_connection(conn, sql, params)
+        except Exception as exc:
+            raise DatabaseError(f"Failed to list VisualDocuments for media_id={media_id}: {exc}") from exc
+
+    def soft_delete_visual_documents_for_media(
+        self,
+        media_id: int,
+        *,
+        hard_delete: bool = False,
+    ) -> None:
+        """
+        Soft-delete (or hard-delete when requested) all VisualDocuments for a media item.
+
+        Soft delete marks rows as deleted=1 and logs sync events; hard delete removes rows.
+        """
+        conn = self.get_connection()
+        try:
+            if hard_delete:
+                self._execute_with_connection(
+                    conn,
+                    "DELETE FROM VisualDocuments WHERE media_id = :media_id",
+                    {"media_id": media_id},
+                )
+                try:
+                    self._log_sync_event(
+                        conn,
+                        "VisualDocuments",
+                        f"media:{media_id}",
+                        "delete",
+                        1,
+                        json.dumps({"media_id": media_id, "mode": "hard"}),
+                    )
+                except Exception:
+                    pass
+            else:
+                rows = self._fetchall_with_connection(
+                    conn,
+                    "SELECT uuid, version FROM VisualDocuments WHERE media_id = :media_id AND deleted = 0",
+                    {"media_id": media_id},
+                )
+                for row in rows:
+                    v_uuid = row.get("uuid")
+                    current_version = int(row.get("version") or 1)
+                    new_version = current_version + 1
+                    self._execute_with_connection(
+                        conn,
+                        "UPDATE VisualDocuments SET deleted = 1, version = :version WHERE uuid = :uuid",
+                        {"uuid": v_uuid, "version": new_version},
+                    )
+                    try:
+                        self._log_sync_event(
+                            conn,
+                            "VisualDocuments",
+                            v_uuid,
+                            "delete",
+                            new_version,
+                            json.dumps({"media_id": media_id}),
+                        )
+                    except Exception:
+                        pass
+        except Exception as exc:
+            raise DatabaseError(f"Failed to delete VisualDocuments for media_id={media_id}: {exc}") from exc
 
     # -------------------------
     # Chunk-level FTS helpers

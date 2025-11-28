@@ -38,6 +38,10 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
 from tldw_Server_API.app.core.Ingestion_Media_Processing.result_normalization import (
     normalise_pdf_result,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+    prepare_chunking_options_dict,
+    apply_chunking_template_if_any,
+)
 
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
@@ -103,6 +107,8 @@ async def process_pdfs_endpoint(
 
     batch: Dict[str, Any] = {"results": [], "errors": []}
     items: List[ProcessItem] = []
+    saved_files_info: List[Dict[str, Any]] = []
+    chunk_options_dict: Optional[Dict[str, Any]] = None
 
     with TempDirManager(prefix="process_pdfs_") as temp_dir:
         temp_dir_path = Path(temp_dir)
@@ -124,6 +130,7 @@ async def process_pdfs_endpoint(
                 validator=validator,
                 allowed_extensions=ALLOWED_PDF_EXTENSIONS,
             )
+            saved_files_info = list(saved_files)
 
             for err_info in upload_errors:
                 original_filename = (
@@ -213,12 +220,33 @@ async def process_pdfs_endpoint(
             )
             return JSONResponse(status_code=status_code, content=batch)
 
-        # Chunking options match the legacy endpoint semantics.
-        chunk_opts = {
-            "method": form_data.chunk_method or "sentences",
-            "max_size": form_data.chunk_size,
-            "overlap": form_data.chunk_overlap,
-        }
+        # Prepare chunking options (including templates/hierarchical when requested).
+        if form_data.perform_chunking:
+            chunk_options_dict = prepare_chunking_options_dict(form_data)
+            try:
+                TemplateClassifier = getattr(media_mod, "TemplateClassifier", None)
+            except Exception:
+                TemplateClassifier = None
+
+            if chunk_options_dict is not None:
+                first_url = (form_data.urls or [None])[0]
+                first_filename = None
+                try:
+                    if saved_files_info:
+                        first_filename = saved_files_info[0].get("original_filename")
+                except Exception:
+                    first_filename = None
+
+                chunk_options_dict = apply_chunking_template_if_any(
+                    form_data=form_data,
+                    db=db,
+                    chunking_options_dict=chunk_options_dict,
+                    TemplateClassifier=TemplateClassifier,
+                    first_url=first_url,
+                    first_filename=first_filename,
+                )
+        else:
+            chunk_options_dict = None
 
         async def _pdf_batch_processor(process_items: List[ProcessItem]) -> List[Dict[str, Any]]:
             results: List[Dict[str, Any]] = []
@@ -255,9 +283,21 @@ async def process_pdfs_endpoint(
                         author_override=form_data.author,
                         keywords=form_data.keywords,
                         perform_chunking=form_data.perform_chunking or None,
-                        chunk_method=chunk_opts["method"],
-                        max_chunk_size=chunk_opts["max_size"],
-                        chunk_overlap=chunk_opts["overlap"],
+                        chunk_method=(
+                            (chunk_options_dict or {}).get("method")
+                            if form_data.perform_chunking
+                            else None
+                        ),
+                        max_chunk_size=(
+                            (chunk_options_dict or {}).get("max_size")
+                            if form_data.perform_chunking
+                            else None
+                        ),
+                        chunk_overlap=(
+                            (chunk_options_dict or {}).get("overlap")
+                            if form_data.perform_chunking
+                            else None
+                        ),
                         perform_analysis=form_data.perform_analysis,
                         api_name=form_data.api_name,
                         # api_key is resolved from server-side config only
@@ -329,6 +369,57 @@ async def process_pdfs_endpoint(
         processed_count,
         errors_count,
     )
+
+    # Optional template/hierarchical re-chunking of results (best-effort).
+    try:
+        if form_data.perform_chunking and chunk_options_dict:
+            logger.info(
+                "Re-chunking /process-pdfs results with options: {}",
+                chunk_options_dict,
+            )
+            from tldw_Server_API.app.core.Chunking import (  # type: ignore
+                improved_chunking_process as _improved_chunking_process,
+            )
+            from tldw_Server_API.app.core.Chunking.chunker import (  # type: ignore
+                Chunker as _Chunker,
+            )
+
+            use_hier = bool(
+                chunk_options_dict.get("hierarchical")
+                or isinstance(chunk_options_dict.get("hierarchical_template"), dict)
+            )
+            ck = _Chunker() if use_hier else None
+
+            for res in batch.get("results", []):
+                if not isinstance(res, dict):
+                    continue
+                status_value = str(res.get("status", "")).lower()
+                if status_value not in {"success", "warning"}:
+                    continue
+                text = res.get("content")
+                if not isinstance(text, str) or not text.strip():
+                    continue
+
+                if use_hier and ck is not None:
+                    chunks = ck.chunk_text_hierarchical_flat(
+                        text,
+                        method=chunk_options_dict.get("method") or "sentences",
+                        max_size=chunk_options_dict.get("max_size") or 500,
+                        overlap=chunk_options_dict.get("overlap") or 200,
+                        language=chunk_options_dict.get("language"),
+                        template=chunk_options_dict.get("hierarchical_template")
+                        if isinstance(
+                            chunk_options_dict.get("hierarchical_template"), dict
+                        )
+                        else None,
+                    )
+                else:
+                    chunks = _improved_chunking_process(text, chunk_options_dict)
+
+                res["chunks"] = chunks
+    except Exception:
+        # Never fail the endpoint due to re-chunking issues.
+        pass
 
     return JSONResponse(status_code=final_status_code, content=batch)
 

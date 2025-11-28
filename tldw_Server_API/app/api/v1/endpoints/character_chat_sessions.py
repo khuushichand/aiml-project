@@ -82,6 +82,7 @@ from tldw_Server_API.app.core.Chat.chat_orchestrator import (
 # Completion schemas centralized in schemas/chat_session_schemas.py
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
 from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_provider_line, sse_done
+from tldw_Server_API.app.core.Utils.common import parse_boolean
 
 
 # Legacy local SSE helpers removed — unified streams handle normalization
@@ -102,6 +103,11 @@ def _convert_db_conversation_to_response(conv_data: Dict[str, Any]) -> ChatSessi
         character_id=conv_data.get('character_id', 0),
         title=conv_data.get('title'),
         rating=conv_data.get('rating'),
+        state=conv_data.get('state', 'in-progress'),
+        topic_label=conv_data.get('topic_label'),
+        cluster_id=conv_data.get('cluster_id'),
+        source=conv_data.get('source'),
+        external_ref=conv_data.get('external_ref'),
         created_at=conv_data.get('created_at', datetime.now(timezone.utc)),
         last_modified=conv_data.get('last_modified', datetime.now(timezone.utc)),
         message_count=conv_data.get('message_count', 0),
@@ -194,7 +200,12 @@ async def create_chat_session(
             'root_id': chat_id,  # Root for new conversations
             'parent_conversation_id': session_data.parent_conversation_id,
             'client_id': str(current_user.id),
-            'version': 1
+            'version': 1,
+            'state': session_data.state,
+            'topic_label': session_data.topic_label,
+            'cluster_id': session_data.cluster_id,
+            'source': session_data.source,
+            'external_ref': session_data.external_ref,
         }
 
         # Add to database
@@ -635,14 +646,11 @@ async def character_chat_completion(
         except Exception:
             api_key = None
 
-        # Attempt provider call; allow offline simulation for local-llm in test/dev
+        # Attempt provider call; allow offline simulation for local-llm in test/dev.
         # Offline simulation toggle (supports new flags for clarity, backward compatible with ALLOW_LOCAL_LLM_CALLS)
-        def _truthy(env_val: Optional[str]) -> bool:
-            return isinstance(env_val, str) and env_val.lower() in {"1", "true", "yes", "on"}
-
-        enable_local_llm = _truthy(os.getenv("ENABLE_LOCAL_LLM_PROVIDER"))
-        disable_offline_sim = _truthy(os.getenv("DISABLE_OFFLINE_SIM"))
-        legacy_allow_local = _truthy(os.getenv("ALLOW_LOCAL_LLM_CALLS"))
+        enable_local_llm = parse_boolean(os.getenv("ENABLE_LOCAL_LLM_PROVIDER"))
+        disable_offline_sim = parse_boolean(os.getenv("DISABLE_OFFLINE_SIM"))
+        legacy_allow_local = parse_boolean(os.getenv("ALLOW_LOCAL_LLM_CALLS"))
         offline_sim = provider == "local-llm" and not (enable_local_llm or disable_offline_sim or legacy_allow_local)
         llm_resp = None
         if not offline_sim:
@@ -1138,7 +1146,11 @@ async def update_chat_session(
         # Update fields via DB abstraction with optimistic locking
         update_fields = update_data.model_dump(exclude_unset=True)
         # Only allow supported fields
-        allowed_update = {k: v for k, v in update_fields.items() if k in {"title", "rating"}}
+        allowed_update = {
+            k: v
+            for k, v in update_fields.items()
+            if k in {"title", "rating", "state", "topic_label", "cluster_id", "source", "external_ref"}
+        }
         # db.update_conversation updates metadata and bumps version even if payload is empty
         db.update_conversation(chat_id, allowed_update, expected_version)
 

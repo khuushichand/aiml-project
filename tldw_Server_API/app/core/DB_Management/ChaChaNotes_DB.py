@@ -357,8 +357,10 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 9  # Schema v9 adds note_edges for Notes Graph manual links
+    _CURRENT_SCHEMA_VERSION = 10  # Schema v10 adds chat state/topic metadata + note backlinks
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
+    _ALLOWED_CONVERSATION_STATES: Tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
+    _DEFAULT_CONVERSATION_STATE = "in-progress"
 
     _FTS_CONFIG: List[Tuple[str, str, List[str]]] = [
         (
@@ -1513,6 +1515,41 @@ UPDATE db_schema_version
    AND version < 9;
 """
 
+    # --- Migration: V9 -> V10 (Chat metadata + note backlinks + indexes) ---
+    _MIGRATION_SQL_V9_TO_V10 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 10 - Chat metadata + note backlinks (2025-11-20)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+/* Conversations: state/topic/cluster/source/external_ref */
+ALTER TABLE conversations ADD COLUMN state TEXT NOT NULL DEFAULT 'in-progress' CHECK(state IN ('in-progress','resolved','backlog','non-viable'));
+ALTER TABLE conversations ADD COLUMN topic_label TEXT;
+ALTER TABLE conversations ADD COLUMN cluster_id TEXT;
+ALTER TABLE conversations ADD COLUMN source TEXT;
+ALTER TABLE conversations ADD COLUMN external_ref TEXT;
+
+/* Backfill legacy rows to default state */
+UPDATE conversations SET state = 'in-progress' WHERE state IS NULL OR TRIM(state) = '';
+
+/* Helpful indexes for new filters/orderings */
+CREATE INDEX IF NOT EXISTS idx_conversations_state ON conversations(state);
+CREATE INDEX IF NOT EXISTS idx_conversations_cluster ON conversations(cluster_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_last_modified ON conversations(last_modified);
+CREATE INDEX IF NOT EXISTS idx_conversations_topic_label ON conversations(topic_label);
+
+/* Notes: backlinks to conversations/messages */
+ALTER TABLE notes ADD COLUMN conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL;
+ALTER TABLE notes ADD COLUMN message_id TEXT REFERENCES messages(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id);
+
+UPDATE db_schema_version
+   SET version = 10
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 10;
+"""
+
     def __init__(
         self,
         db_path: Union[str, Path],
@@ -2330,6 +2367,26 @@ UPDATE db_schema_version
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V8->V9: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V9 for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _migrate_from_v9_to_v10(self, conn: sqlite3.Connection):
+        """Migrates schema from V9 to V10 (chat metadata + note backlinks + indexes)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V9 to V10 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V9_TO_V10)
+            final_version = self._get_db_version(conn)
+            if final_version != 10:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V9->V10 failed version check. Expected 10, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V10 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V9->V10 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V9->V10 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V9->V10: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V10 for '{self._SCHEMA_NAME}': {e}") from e
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -2438,6 +2495,12 @@ UPDATE db_schema_version
                     # Ensure helpful indexes that may have been introduced post-creation
                     try:
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_state ON conversations(state)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_cluster ON conversations(cluster_id)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_last_modified ON conversations(last_modified)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_topic_label ON conversations(topic_label)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)")
                     except sqlite3.Error:
                         pass
                     # Verify core FTS tables exist to avoid silent search failures
@@ -2465,6 +2528,9 @@ UPDATE db_schema_version
                         current_db_version = self._get_db_version(conn)
                     if target_version >= 9 and current_db_version == 8:
                         self._migrate_from_v8_to_v9(conn)
+                        current_db_version = self._get_db_version(conn)
+                    if target_version >= 10 and current_db_version == 9:
+                        self._migrate_from_v9_to_v10(conn)
                         current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
@@ -2500,6 +2566,9 @@ UPDATE db_schema_version
                         if target_version >= 9 and current_db_version == 8:
                             self._migrate_from_v8_to_v9(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 10 and current_db_version == 9:
+                            self._migrate_from_v9_to_v10(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 5 and target_version >= 6:
                         self._migrate_from_v5_to_v6(conn)
                         current_db_version = self._get_db_version(conn)
@@ -2512,6 +2581,9 @@ UPDATE db_schema_version
                         if target_version >= 9 and current_db_version == 8:
                             self._migrate_from_v8_to_v9(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 10 and current_db_version == 9:
+                            self._migrate_from_v9_to_v10(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 6 and target_version >= 7:
                         self._migrate_from_v6_to_v7(conn)
                         current_db_version = self._get_db_version(conn)
@@ -2521,14 +2593,26 @@ UPDATE db_schema_version
                         if target_version >= 9 and current_db_version == 8:
                             self._migrate_from_v8_to_v9(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 10 and current_db_version == 9:
+                            self._migrate_from_v9_to_v10(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 7 and target_version >= 8:
                         self._migrate_from_v7_to_v8(conn)
                         current_db_version = self._get_db_version(conn)
                         if target_version >= 9 and current_db_version == 8:
                             self._migrate_from_v8_to_v9(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 10 and current_db_version == 9:
+                            self._migrate_from_v9_to_v10(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 8 and target_version >= 9:
                         self._migrate_from_v8_to_v9(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 10 and current_db_version == 9:
+                            self._migrate_from_v9_to_v10(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 9 and target_version >= 10:
+                        self._migrate_from_v9_to_v10(conn)
                         current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
@@ -2613,6 +2697,10 @@ UPDATE db_schema_version
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V8_TO_V9, conn, expected_version=9)
                 current_version = 9
 
+            if current_version < 10:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V9_TO_V10, conn, expected_version=10)
+                current_version = 10
+
             if current_version > target_version:
                 raise SchemaError(
                     f"Database schema version ({current_version}) is newer than supported by code ({target_version})."
@@ -2639,6 +2727,30 @@ UPDATE db_schema_version
                 try:
                     self.backend.execute(
                         "CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_state ON conversations(state)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_cluster ON conversations(cluster_id)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_last_modified ON conversations(last_modified)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_topic_label ON conversations(topic_label)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)",
                         connection=conn,
                     )
                 except Exception:
@@ -4203,6 +4315,33 @@ UPDATE db_schema_version
             raise CharactersRAGDBError(f"Fallback tag search failed: {e}") from e
 
     # --- Conversation Methods ---
+    def _normalize_conversation_state(self, state: Optional[str]) -> str:
+        """
+        Normalize and validate conversation state, applying the default when missing.
+        """
+        if state is None:
+            return self._DEFAULT_CONVERSATION_STATE
+        if not isinstance(state, str):
+            raise InputError(f"Conversation state must be a string. Got: {state!r}")
+        normalized = state.strip().lower()
+        if not normalized:
+            raise InputError("Conversation state cannot be empty.")
+        if normalized not in self._ALLOWED_CONVERSATION_STATES:
+            raise InputError(
+                f"Invalid conversation state '{state}'. Allowed: {', '.join(self._ALLOWED_CONVERSATION_STATES)}"
+            )
+        return normalized
+
+    @staticmethod
+    def _normalize_nullable_text(value: Any) -> Optional[str]:
+        """Normalize optional text fields; returns None for empty/whitespace."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped if stripped else None
+        return str(value)
+
     def add_conversation(self, conv_data: Dict[str, Any]) -> Optional[str]:
         """
         Adds a new conversation to the database.
@@ -4242,25 +4381,31 @@ UPDATE db_schema_version
         if not client_id:
             raise InputError("Client ID is required for conversation (either in conv_data or DB instance).")
 
+        state = self._normalize_conversation_state(conv_data.get('state'))
+        topic_label = self._normalize_nullable_text(conv_data.get('topic_label'))
+        cluster_id = self._normalize_nullable_text(conv_data.get('cluster_id'))
+        source = self._normalize_nullable_text(conv_data.get('source'))
+        external_ref = self._normalize_nullable_text(conv_data.get('external_ref'))
+
         now = self._get_current_utc_timestamp_iso()
         query = """
                 INSERT INTO conversations (id, root_id, forked_from_message_id, parent_conversation_id, \
-                                           character_id, title, rating, \
+                                           character_id, title, state, topic_label, cluster_id, source, external_ref, rating, \
                                            created_at, last_modified, client_id, version, deleted) \
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                 """ # created_at added
         if self.backend_type == BackendType.POSTGRESQL:
             params = (
                 conv_id, root_id, conv_data.get('forked_from_message_id'),
                 conv_data.get('parent_conversation_id'), conv_data['character_id'],
-                conv_data.get('title'), conv_data.get('rating'),
+                conv_data.get('title'), state, topic_label, cluster_id, source, external_ref, conv_data.get('rating'),
                 now, now, client_id, 1, False
             )
         else:
             params = (
                 conv_id, root_id, conv_data.get('forked_from_message_id'),
                 conv_data.get('parent_conversation_id'), conv_data['character_id'],
-                conv_data.get('title'), conv_data.get('rating'),
+                conv_data.get('title'), state, topic_label, cluster_id, source, external_ref, conv_data.get('rating'),
                 now, now, client_id, 1, 0
             )
         try:
@@ -4505,7 +4650,8 @@ UPDATE db_schema_version
         Note: this method does not change ownership; the `client_id` field is preserved
         unless explicitly provided in `update_data` by a privileged caller.
 
-        Updatable fields from `update_data`: 'title', 'rating'. Other fields are ignored.
+        Updatable fields from `update_data`: 'title', 'rating', 'state',
+        'topic_label', 'cluster_id', 'source', 'external_ref'. Other fields are ignored.
         If `update_data` is empty or contains no updatable fields, metadata (version,
         last_modified, client_id) is still updated if the version check passes.
 
@@ -4533,6 +4679,12 @@ UPDATE db_schema_version
              # Basic check, DB has CHECK constraint too
             if not (1 <= update_data['rating'] <= 5):
                 raise InputError(f"Rating must be between 1 and 5. Got: {update_data['rating']}")
+
+        if 'state' in update_data:
+            state_val = update_data.get('state')
+            if state_val is None:
+                raise InputError("Conversation state cannot be empty.")
+            update_data['state'] = self._normalize_conversation_state(state_val)
 
         now = self._get_current_utc_timestamp_iso()
 
@@ -4581,11 +4733,25 @@ UPDATE db_schema_version
                     fields_to_update_sql.append("rating = ?")
                     params_for_set_clause.append(update_data['rating'])
 
-                # Add other updatable fields from update_data here if needed in the future
-                # Example:
-                # if 'some_other_field' in update_data:
-                #     fields_to_update_sql.append("some_other_field = ?")
-                #     params_for_set_clause.append(update_data['some_other_field'])
+                if 'state' in update_data:
+                    fields_to_update_sql.append("state = ?")
+                    params_for_set_clause.append(update_data['state'])
+
+                if 'topic_label' in update_data:
+                    fields_to_update_sql.append("topic_label = ?")
+                    params_for_set_clause.append(self._normalize_nullable_text(update_data.get('topic_label')))
+
+                if 'cluster_id' in update_data:
+                    fields_to_update_sql.append("cluster_id = ?")
+                    params_for_set_clause.append(self._normalize_nullable_text(update_data.get('cluster_id')))
+
+                if 'source' in update_data:
+                    fields_to_update_sql.append("source = ?")
+                    params_for_set_clause.append(self._normalize_nullable_text(update_data.get('source')))
+
+                if 'external_ref' in update_data:
+                    fields_to_update_sql.append("external_ref = ?")
+                    params_for_set_clause.append(self._normalize_nullable_text(update_data.get('external_ref')))
 
                 next_version_val = expected_version + 1  # Version always increments on successful update
 
@@ -4739,6 +4905,7 @@ UPDATE db_schema_version
         title_query: str,
         character_id: Optional[int] = None,
         limit: int = 10,
+        offset: int = 0,
         client_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -4774,57 +4941,88 @@ UPDATE db_schema_version
                 logger.debug("Conversation title query normalized to empty tsquery for input '%s'", title_query)
                 return []
 
-            base_query = [
-                "SELECT c.*, ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?)) AS rank",
-                "FROM conversations c",
-                "WHERE c.deleted = FALSE",
-                "AND c.conversations_fts_tsv @@ to_tsquery('english', ?)",
-            ]
+            base_query = """
+                SELECT c.*, ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?)) AS bm25_raw
+                FROM conversations c
+                WHERE c.deleted = FALSE
+                  AND c.conversations_fts_tsv @@ to_tsquery('english', ?)
+            """
             params_list: List[Any] = [tsquery, tsquery]
-
+            filters: List[str] = []
             if character_id is not None:
-                base_query.append("AND c.character_id = ?")
+                filters.append("c.character_id = ?")
                 params_list.append(character_id)
             if client_filter is not None:
-                base_query.append("AND c.client_id = ?")
+                filters.append("c.client_id = ?")
                 params_list.append(client_filter)
-
-            base_query.append("ORDER BY rank DESC, c.last_modified DESC")
-            base_query.append("LIMIT ?")
-            params_list.append(limit)
+            if filters:
+                base_query += " AND " + " AND ".join(filters)
 
             try:
-                cursor = self.execute_query("\n".join(base_query), tuple(params_list))
-                return [dict(row) for row in cursor.fetchall()]
+                cursor = self.execute_query(base_query, tuple(params_list))
+                rows = [dict(row) for row in cursor.fetchall()]
             except CharactersRAGDBError as exc:
                 logger.error("PostgreSQL FTS search failed for conversations term '%s': %s", title_query, exc)
                 raise
 
-        safe_search_term = f'"{title_query}"'
-        base_query = """
-                     SELECT c.*
-                     FROM conversations_fts, conversations c
-                     WHERE conversations_fts.rowid = c.rowid \
-                       AND conversations_fts MATCH ? \
-                       AND c.deleted = 0 \
-                     """
-        params_list = [title_query]
-        if character_id is not None:
-            base_query += " AND c.character_id = ?"
-            params_list.append(character_id)
-        if client_filter is not None:
-            base_query += " AND c.client_id = ?"
-            params_list.append(client_filter)
+            if not rows:
+                return []
+            max_score = max([row.get("bm25_raw", 0) or 0 for row in rows]) or 0
+            for row in rows:
+                raw = row.get("bm25_raw", 0) or 0
+                row["bm25_norm"] = (raw / max_score) if max_score else 0
+            rows.sort(
+                key=lambda r: (
+                    -(r.get("bm25_norm") or 0),
+                    str(r.get("last_modified") or ""),
+                    r.get("id") or "",
+                ),
+                reverse=False,
+            )
+            return rows[offset: offset + limit]
 
-        base_query += " ORDER BY bm25(conversations_fts) ASC, c.last_modified DESC LIMIT ?"
-        params_list.append(limit)
+        safe_search_term = f'"{title_query}"'
+        filters: List[str] = ["conversations_fts MATCH ?", "c.deleted = 0"]
+        params_filters: List[Any] = [title_query]
+        if character_id is not None:
+            filters.append("c.character_id = ?")
+            params_filters.append(character_id)
+        if client_filter is not None:
+            filters.append("c.client_id = ?")
+            params_filters.append(client_filter)
+
+        where_clause = " AND ".join(filters)
+
+        select_query = f"""
+            SELECT c.*, bm25(conversations_fts) AS bm25_raw
+            FROM conversations_fts
+            JOIN conversations c ON conversations_fts.rowid = c.rowid
+            WHERE {where_clause}
+        """
 
         try:
-            cursor = self.execute_query(base_query, tuple(params_list))
-            return [dict(row) for row in cursor.fetchall()]
+            cursor = self.execute_query(select_query, tuple(params_filters))
+            rows = [dict(row) for row in cursor.fetchall()]
         except CharactersRAGDBError as e:
             logger.error(f"Error searching conversations for title '{safe_search_term}': {e}")
             raise
+
+        if not rows:
+            return []
+        max_bm25 = max([-1 * (row.get("bm25_raw", 0) or 0) for row in rows]) or 0
+        for row in rows:
+            raw = -1 * (row.get("bm25_raw", 0) or 0)
+            row["bm25_norm"] = (raw / max_bm25) if max_bm25 else 0
+
+        rows.sort(
+            key=lambda r: (
+                -(r.get("bm25_norm") or 0),
+                str(r.get("last_modified") or ""),
+                r.get("id") or "",
+            ),
+            reverse=False,
+        )
+        return rows[offset: offset + limit]
 
     # --- Message Methods ---
     def add_message(self, msg_data: Dict[str, Any]) -> Optional[str]:
@@ -6160,7 +6358,14 @@ UPDATE db_schema_version
                                               limit)
 
     # Notes (Now with UUID and specific methods)
-    def add_note(self, title: str, content: str, note_id: Optional[str] = None) -> str | None:
+    def add_note(
+        self,
+        title: str,
+        content: str,
+        note_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+    ) -> str | None:
         if not title or not title.strip():
             raise InputError("Note title cannot be empty.")
         if content is None: # Allow empty string for content
@@ -6169,15 +6374,23 @@ UPDATE db_schema_version
         final_note_id = note_id or self._generate_uuid()
         now = self._get_current_utc_timestamp_iso()
         client_id_to_use = self.client_id # Notes use the instance's client_id directly
+        normalized_conversation_id = self._normalize_nullable_text(conversation_id)
+        normalized_message_id = self._normalize_nullable_text(message_id)
 
         query = """
-            INSERT INTO notes (id, title, content, last_modified, client_id, version, deleted, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO notes (id, title, content, last_modified, client_id, version, deleted, created_at, conversation_id, message_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         if self.backend_type == BackendType.POSTGRESQL:
-            params = (final_note_id, title.strip(), content, now, client_id_to_use, 1, False, now)
+            params = (
+                final_note_id, title.strip(), content, now, client_id_to_use, 1, False, now,
+                normalized_conversation_id, normalized_message_id
+            )
         else:
-            params = (final_note_id, title.strip(), content, now, client_id_to_use, 1, 0, now)
+            params = (
+                final_note_id, title.strip(), content, now, client_id_to_use, 1, 0, now,
+                normalized_conversation_id, normalized_message_id
+            )
 
         try:
             with self.transaction() as conn:
@@ -6221,12 +6434,18 @@ UPDATE db_schema_version
         fields_to_update_sql = []
         params_for_set_clause = []
 
-        allowed_to_update = ['title', 'content']
+        allowed_to_update = ['title', 'content', 'conversation_id', 'message_id']
         for key, value in update_data.items():
             if key in allowed_to_update:
-                fields_to_update_sql.append(f"{key} = ?")
-                # Title might need stripping, content is as-is
-                params_for_set_clause.append(value.strip() if key == 'title' and isinstance(value, str) else value)
+                if key == 'title' and isinstance(value, str):
+                    fields_to_update_sql.append(f"{key} = ?")
+                    params_for_set_clause.append(value.strip())
+                elif key in ('conversation_id', 'message_id'):
+                    fields_to_update_sql.append(f"{key} = ?")
+                    params_for_set_clause.append(self._normalize_nullable_text(value))
+                else:
+                    fields_to_update_sql.append(f"{key} = ?")
+                    params_for_set_clause.append(value)
             elif key not in ['id', 'created_at', 'last_modified', 'version', 'client_id', 'deleted']:
                 logger.warning(
                     f"Attempted to update immutable or unknown field '{key}' in note ID {note_id}, skipping.")

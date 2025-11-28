@@ -335,9 +335,15 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
             # Decode tokens back to text
             try:
                 if hasattr(self.tokenizer, 'decode'):
-                    chunk_text = self.tokenizer.decode(chunk_tokens)
+                    try:
+                        chunk_text = self.tokenizer.decode(chunk_tokens, skip_special_tokens=True)
+                    except TypeError:
+                        chunk_text = self.tokenizer.decode(chunk_tokens)
                 elif hasattr(self.tokenizer, 'tokenizer') and hasattr(self.tokenizer.tokenizer, 'decode'):
-                    chunk_text = self.tokenizer.tokenizer.decode(chunk_tokens)
+                    try:
+                        chunk_text = self.tokenizer.tokenizer.decode(chunk_tokens, skip_special_tokens=True)
+                    except TypeError:
+                        chunk_text = self.tokenizer.tokenizer.decode(chunk_tokens)
                 else:
                     raise AttributeError('No decode() available on tokenizer or underlying implementation')
 

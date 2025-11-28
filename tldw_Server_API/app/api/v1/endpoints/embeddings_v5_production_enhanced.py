@@ -79,6 +79,7 @@ from tldw_Server_API.app.core.Infrastructure.redis_factory import (
     create_async_redis_client,
     ensure_async_client_closed,
 )
+from tldw_Server_API.app.core.LLM_Calls.embeddings_adapter_registry import get_embeddings_registry
 from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_present
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
@@ -306,6 +307,7 @@ class EmbeddingProvider(str, Enum):
     VOYAGE = "voyage"
     GOOGLE = "google"
     MISTRAL = "mistral"
+    MLX = "mlx"
 
 # Production configuration
 DEFAULT_MAX_BATCH_SIZE = 100
@@ -524,7 +526,8 @@ PROVIDER_MODELS = {
         "jinaai/jina-embeddings-v3",
         "BAAI/bge-large-en-v1.5",
         "BAAI/bge-small-en-v1.5",
-    ]
+    ],
+    EmbeddingProvider.MLX: [],
 }
 
 # Optional allowlists and per-model token limits (override via settings)
@@ -1421,6 +1424,11 @@ def build_provider_config(
             "model_name_or_path": model,
             "api_url": api_url or settings.get("LOCAL_API_URL"),
         }
+    elif provider == EmbeddingProvider.MLX:
+        return {
+            "provider": "mlx",
+            "model_name_or_path": model,
+        }
     else:
         raise ValueError(f"Unknown provider: {provider}")
 
@@ -1525,6 +1533,26 @@ async def create_embeddings_with_circuit_breaker(
                     if not embs or len(embs) != len(texts):
                         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Google embeddings response format")
                     return embs
+            elif provider == "mlx":
+                loop = asyncio.get_running_loop()
+                registry = get_embeddings_registry()
+                adapter = registry.get_adapter("mlx")
+                if adapter is None:
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="MLX embeddings adapter unavailable")
+
+                try:
+                    resp = await loop.run_in_executor(
+                        None,
+                        lambda: adapter.embed({"input": texts, "model": model_id}),
+                    )
+                    data = resp.get("data") if isinstance(resp, dict) else None
+                    if not data:
+                        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="MLX embeddings returned empty data")
+                    return [item.get("embedding", []) for item in data]
+                except HTTPException:
+                    raise
+                except Exception as exc:
+                    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"MLX embeddings error: {exc}") from exc
             else:
                 raise ValueError(f"Unknown provider: {provider}")
 

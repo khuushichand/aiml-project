@@ -107,14 +107,21 @@ async def test_audio_worker_transcribe_normalizes_segments_and_text_tuple(monkey
     monkeypatch.setattr(worker, "increment_jobs_started", _fake_increment_jobs_started, raising=True)
     monkeypatch.setattr(worker, "finish_job", _fake_finish_job, raising=True)
 
-    # Stub speech_to_text so no real STT runs
+    # Stub run_stt_job_via_registry so no real STT runs
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
 
-    def _fake_speech_to_text(*args, **kwargs):
+    def _fake_run_stt_job_via_registry(wav_path, model, language):
         segs = [{"Text": "hello worker", "start_seconds": 0.0, "end_seconds": 1.0}]
-        return segs, "en"
+        return {
+            "text": "hello worker",
+            "language": "en",
+            "segments": segs,
+            "diarization": {"enabled": False, "speakers": None},
+            "usage": {"duration_ms": None, "tokens": None},
+            "metadata": {"provider": "faster-whisper", "model": model or ""},
+        }
 
-    monkeypatch.setattr(atlib, "speech_to_text", _fake_speech_to_text, raising=True)
+    monkeypatch.setattr(atlib, "run_stt_job_via_registry", _fake_run_stt_job_via_registry, raising=True)
 
     # Create a dummy wav file and corresponding audio_transcribe job
     wav_path = tmp_path / "sample.wav"
@@ -184,15 +191,21 @@ async def test_audio_gpu_worker_normalizes_segments_and_text(monkeypatch, tmp_pa
     monkeypatch.setattr(gpu_worker, "increment_jobs_started", _fake_increment_jobs_started, raising=True)
     monkeypatch.setattr(gpu_worker, "finish_job", _fake_finish_job, raising=True)
 
-    # Stub speech_to_text for GPU worker
+    # Stub run_stt_job_via_registry for GPU worker so no real STT runs
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
 
-    def _fake_speech_to_text_gpu(*args, **kwargs):
+    def _fake_run_stt_job_via_registry_gpu(wav_path, model, language):
         segs = [{"Text": "hello gpu", "start_seconds": 0.0, "end_seconds": 1.0}]
-        # Return plain segments (no language) to exercise the non-tuple path
-        return segs
+        return {
+            "text": "hello gpu",
+            "language": "en",
+            "segments": segs,
+            "diarization": {"enabled": False, "speakers": None},
+            "usage": {"duration_ms": None, "tokens": None},
+            "metadata": {"provider": "faster-whisper", "model": model or ""},
+        }
 
-    monkeypatch.setattr(atlib, "speech_to_text", _fake_speech_to_text_gpu, raising=True)
+    monkeypatch.setattr(atlib, "run_stt_job_via_registry", _fake_run_stt_job_via_registry_gpu, raising=True)
 
     wav_path = tmp_path / "sample_gpu.wav"
     wav_path.write_bytes(b"\x00\x00")

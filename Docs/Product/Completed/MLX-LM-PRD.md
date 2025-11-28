@@ -34,6 +34,7 @@ Add MLX-backed local LLM provider (Apple Silicon first) that mirrors llama.cpp s
 - Models are pre-downloaded; user provides model path.
 - Follow local provider patterns for prompt formatting, safety checks, and threading controls.
 - Keep memory usage predictable; expose max context and batch size controls.
+- Repo-id downloads are configurable via config.txt but disabled by default (production default: off); `trust_remote_code` defaults to false and should remain off unless explicitly allowed.
 
 ## Architecture and Design
 - **New provider module**: `tldw_Server_API/app/core/LLM_Calls/providers/mlx_provider.py` implementing the same interface used by other local providers (e.g., llama.cpp).
@@ -55,8 +56,11 @@ Add MLX-backed local LLM provider (Apple Silicon first) that mirrors llama.cpp s
   - `MLX_REVISION`, `MLX_TRUST_REMOTE_CODE` (bool), `MLX_TOKENIZER` (override), `MLX_ADAPTER`, `MLX_ADAPTER_WEIGHTS`
   - `MLX_MAX_KV_CACHE_SIZE` / preallocation toggle if exposed by mlx-lm
   - Sampling defaults (temperature, top_p, top_k, repetition penalties, presence/frequency penalties, batch size)
+  - Defaults: compile+warmup enabled, `MLX_MAX_CONCURRENT=1`, downloads/trust_remote_code disabled unless explicitly enabled; quantization/KV cache hints are optional and applied only if supported by mlx-lm.
+- **Install hint**: `pip install ".[LLM_MLX]"` on Apple Silicon to pull `mlx-lm` + `mlx` (extra is macOS/arm64-gated).
 - **Dependency wiring**: add MLX to provider selection logic and request schemas; align auth/rate-limit dependencies with existing providers.
-- **Resource guardrails**: default to a single active MLX model/session with configurable max concurrency (e.g., `MLX_MAX_CONCURRENT`); on overflow, apply existing queue/backpressure policy or reject with 429; document eviction/swap policy if multiple models are allowed.
+- **Resource guardrails**: default to a single active MLX model/session with `MLX_MAX_CONCURRENT=1`, no batching, and overflow rejected with 429 (future batching TBD); document eviction/swap policy if multiple models are allowed.
+- **Warmup/compile behavior**: default to compile+warmup enabled on load to avoid first-token stalls; make it configurable. If compile/warmup OOMs, return a clear error and keep the prior model active.
 
 ## API Surface
 - **Management (new)**
@@ -75,15 +79,23 @@ Add MLX-backed local LLM provider (Apple Silicon first) that mirrors llama.cpp s
 - Concurrency: parallel chat requests under rate limits; session registry thread/async safety.
 - Streaming: verify OpenAI-compatible chunk shape/SSE framing and WS parity using `generate_stream`.
 - Performance smoke: context and token throughput within expected bounds on M-series; stable memory behavior under back-to-back requests.
+- CI portability: add CPU-only smoke/skip markers for non-Apple runners (no MPS); keep integration coverage meaningful without hard-failing on missing Metal.
 
 ## Observability
 - Log model loads/unloads, errors, inference timing, token counts, and parameter overrides.
-- Metrics hooks for load time, active sessions, request latency, and queue depth where available.
+- Metrics hooks for load time, active sessions, request latency, queue depth, and token throughput, maintaining parity with other providers.
 
 ## Security
-- Auth enforced on management endpoints; no anonymous load/unload.
+- Auth enforced on management endpoints; lifecycle endpoints are admin-only/allowlist-gated via the resource governance module with per-tenant/provider quotas and rate limits; no anonymous load/unload.
 - Validate file paths (prevent traversal outside allowed roots when applicable).
+- Repo-id downloads are disabled by default; enabling them is explicit in config.txt. `trust_remote_code` defaults to false and should only be toggled when the deployment explicitly allows it.
 - Do not log secrets or full prompts unless debug-level logging is explicitly enabled.
+
+## Error Contracts
+- Capability errors: embeddings on chat-only models return a clear capability error with HTTP 400/422 and provider-specific code.
+- Load failures: bad path, compile/warmup OOM, or invalid config return 400 with reason; when swapping, failure preserves the prior model.
+- Overflow: when `MLX_MAX_CONCURRENT` is exceeded, reject with HTTP 429 and no queue (future batching TBD).
+- Unload while in-flight: return “Model Unavailable due to swapping” and drain in-flight requests gracefully.
 
 ## Migration and Docs
 - Update provider docs with config keys, Apple Silicon setup notes, and example requests.

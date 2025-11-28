@@ -22,6 +22,7 @@ class EmbeddingsProviderRegistry:
         "openai": "tldw_Server_API.app.core.LLM_Calls.providers.openai_embeddings_adapter.OpenAIEmbeddingsAdapter",
         "huggingface": "tldw_Server_API.app.core.LLM_Calls.providers.huggingface_embeddings_adapter.HuggingFaceEmbeddingsAdapter",
         "google": "tldw_Server_API.app.core.LLM_Calls.providers.google_embeddings_adapter.GoogleEmbeddingsAdapter",
+        "mlx": "tldw_Server_API.app.core.LLM_Calls.providers.mlx_provider.MLXEmbeddingsAdapter",
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):

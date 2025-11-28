@@ -273,11 +273,19 @@ def test_perform_transcription_regenerates_on_invalid_cache(monkeypatch, tmp_pat
 
     monkeypatch.setattr(atlib, "convert_to_wav", lambda *args, **kwargs: str(audio_file))
 
-    def fake_regenerate(path, model, vad_use, selected_source_lang="en"):
+    def fake_run_stt(path, model, vad_filter=False, selected_source_lang="en", duration_seconds=None):
+        _ = (path, vad_filter, duration_seconds)  # kept for signature compatibility in tests
         regen_called["called"] = True
-        return path, regenerated
+        return {
+            "text": "regen",
+            "language": selected_source_lang,
+            "segments": regenerated,
+            "diarization": {"enabled": False, "speakers": None},
+            "usage": {"duration_ms": None, "tokens": None},
+            "metadata": {"provider": "faster-whisper", "model": model},
+        }
 
-    monkeypatch.setattr(atlib, "re_generate_transcription", fake_regenerate)
+    monkeypatch.setattr(atlib, "run_stt_batch_via_registry", fake_run_stt)
 
     audio_path, segments = perform_transcription(
         str(audio_file),
@@ -608,3 +616,32 @@ def test_speech_to_text_return_language_consistent_for_qwen2audio(monkeypatch, t
     assert segments[0]["Text"] == "qwen"
     # selected_source_lang was None, so language is None
     assert lang is None
+
+
+@pytest.mark.unit
+def test_to_normalized_stt_artifact_basic():
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
+        to_normalized_stt_artifact,
+    )
+
+    segments = [
+        {"Text": "hello", "start_seconds": 0.0, "end_seconds": 0.5},
+        {"Text": "world", "start_seconds": 0.5, "end_seconds": 1.0},
+    ]
+    artifact = to_normalized_stt_artifact(
+        text="hello world",
+        segments=segments,
+        language="en",
+        provider="faster-whisper",
+        model="tiny",
+        duration_seconds=1.0,
+    )
+
+    assert artifact["text"] == "hello world"
+    assert artifact["language"] == "en"
+    assert isinstance(artifact["segments"], list)
+    assert artifact["usage"]["duration_ms"] == 1000
+    assert artifact["metadata"]["provider"] == "faster-whisper"
+    assert artifact["metadata"]["model"] == "tiny"
+    assert artifact["diarization"]["enabled"] is False
+    assert artifact["diarization"]["speakers"] is None

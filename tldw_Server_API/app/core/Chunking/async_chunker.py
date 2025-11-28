@@ -202,6 +202,10 @@ class AsyncChunker:
         normalized_method = Chunker._normalize_method_argument(base_method)
         method_name = normalized_method or str(base_method)
         method_lower = method_name.lower()
+        space_delimited_methods = {
+            'words', 'sentences', 'paragraphs', 'semantic', 'tokens',
+            'propositions', 'structure_aware', 'code', 'fixed_size',
+        }
 
         def _coerce_overlap_value(value: Any) -> str:
             """Ensure overlap carry-over stays textual even for structured chunks."""
@@ -217,18 +221,23 @@ class AsyncChunker:
                 return ""
 
         async for text_piece in text_stream:
-            buffer += text_piece
+                buffer += text_piece
 
-            # Process buffer when it's large enough
-            if len(buffer) >= buffer_size:
-                # Chunk the buffer using precise boundary concatenation
-                overlap_text = _coerce_overlap_value(overlap_buffer)
-                sep = ' ' if method_lower == 'words' and overlap_text and buffer and not buffer[0].isspace() else ''
-                combined = overlap_text + sep + buffer
-                chunks = await self.chunk_text(
-                    combined,
-                    method, max_size, overlap, **options
-                )
+                # Process buffer when it's large enough
+                if len(buffer) >= buffer_size:
+                    # Chunk the buffer using precise boundary concatenation
+                    overlap_text = _coerce_overlap_value(overlap_buffer)
+                    sep = ''
+                    if overlap_text and buffer and not buffer[0].isspace() and not overlap_text.endswith((' ', '\t', '\n', '\r', '\v', '\f')):
+                        if method_lower == 'words':
+                            sep = ' '
+                        elif method_lower in space_delimited_methods:
+                            sep = ' '
+                    combined = overlap_text + sep + buffer
+                    chunks = await self.chunk_text(
+                        combined,
+                        method, max_size, overlap, **options
+                    )
 
                 # Overlap handling: when overlap>0, we can yield all chunks now and carry only the tail.
                 # When overlap==0, yield all but the last and carry the last chunk for the next iteration.
@@ -267,7 +276,12 @@ class AsyncChunker:
                 should_flush = True
         if should_flush:
             overlap_text = _coerce_overlap_value(overlap_buffer)
-            sep = ' ' if method_lower == 'words' and overlap_text and buffer and not buffer[0].isspace() else ''
+            sep = ''
+            if overlap_text and buffer and not buffer[0].isspace() and not overlap_text.endswith((' ', '\t', '\n', '\r', '\v', '\f')):
+                if method_lower == 'words':
+                    sep = ' '
+                elif method_lower in space_delimited_methods:
+                    sep = ' '
             combined = overlap_text + sep + buffer
             chunks = await self.chunk_text(
                 combined,

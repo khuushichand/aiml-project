@@ -16,10 +16,13 @@ requires_httpx = pytest.mark.skipif(not _has_httpx(), reason="httpx not installe
 
 
 @requires_httpx
-def test_egress_denial_increments_metric():
+def test_egress_denial_increments_metric(monkeypatch):
     from tldw_Server_API.app.core.http_client import fetch_json
     from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
     from tldw_Server_API.app.core.exceptions import EgressPolicyError
+
+    # Ensure private IP blocking is enabled for this egress denial test
+    monkeypatch.setenv("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "true")
 
     reg = get_metrics_registry()
     before_total = reg.get_metric_stats("http_client_egress_denials_total").get("sum", 0) or 0

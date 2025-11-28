@@ -10,7 +10,7 @@ def test_process_audio_files_uses_check_transcription_model_status(monkeypatch, 
     audio_path.write_bytes(b"\x00" * 2048)
 
     # Stub speech_to_text so no real STT runs
-    def fake_speech_to_text(audio_file_path, whisper_model, selected_source_lang, vad_filter, diarize):
+    def fake_speech_to_text(audio_file_path=None, whisper_model=None, selected_source_lang=None, vad_filter=None, diarize=None, **kwargs):
         return [{"start_seconds": 0, "end_seconds": 0, "Text": "hello"}]
 
     monkeypatch.setattr(audio_files, "speech_to_text", fake_speech_to_text)
@@ -42,4 +42,3 @@ def test_process_audio_files_uses_check_transcription_model_status(monkeypatch, 
     item = result["results"][0]
     warnings = item.get("warnings") or []
     assert any("Model large-v3 is not available locally" in w for w in warnings)
-

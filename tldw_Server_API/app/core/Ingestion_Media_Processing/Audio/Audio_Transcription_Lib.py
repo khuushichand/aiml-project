@@ -27,6 +27,7 @@ import tempfile
 import threading
 import time
 import queue
+from functools import lru_cache
 from typing import Optional, Union, List, Dict, Any, Tuple
 #
 # DEBUG Imports
@@ -449,14 +450,15 @@ def perform_transcription(
                         logging.warning(f"Failed to read/parse existing diarized file: {e}")
                         # Continue to regenerate
 
-                # First, get the transcription segments
+                # First, get the transcription segments via the unified STT helper
                 logging.info(f"Generating transcription for diarization")
-                _, transcription_segments = re_generate_transcription(
+                artifact = run_stt_batch_via_registry(
                     audio_file_path,
                     transcription_model,
-                    vad_use,
-                    selected_source_lang=transcription_language
+                    vad_filter=vad_use,
+                    selected_source_lang=transcription_language,
                 )
+                transcription_segments = artifact.get("segments") or []
 
                 if transcription_segments is None:
                     logging.error(f"Transcription generation failed for {audio_file_path}")
@@ -533,17 +535,16 @@ def perform_transcription(
 
             # Generate new transcription (or overwrite existing)
             logging.info(f"Generating/Overwriting transcription for {audio_file_path}")
-            # Ensure re_generate_transcription handles errors from speech_to_text
-            _ , segments = re_generate_transcription(
+            artifact = run_stt_batch_via_registry(
                 audio_file_path,
                 transcription_model,
-                vad_use,
-                selected_source_lang=transcription_language # Pass language
+                vad_filter=vad_use,
+                selected_source_lang=transcription_language,
             )
-
-            if segments is None: # Check if generation failed
-                 logging.error(f"Transcription generation failed for {audio_file_path}")
-                 return audio_file_path, None # Return path, None segments
+            segments = artifact.get("segments") or []
+            if not segments:
+                logging.error(f"Transcription generation failed for {audio_file_path} (no segments)")
+                return audio_file_path, None  # Return path, None segments
 
             # Saving is handled within speech_to_text called by re_generate_transcription
             # but we already checked for overwrite flag above. If overwrite=True,
@@ -744,11 +745,22 @@ class PartialTranscriptionThread(threading.Thread):
                         audio_np = audio_np.reshape((-1, 2))
                         audio_np = np.mean(audio_np, axis=1)  # simple stereo -> mono
 
-                    # Transcribe using configured provider or default
-                    config = loaded_config_data or load_and_log_configs()
-                    provider = "faster-whisper"  # Default
-                    if config and 'STT-Settings' in config:
-                        provider = config['STT-Settings'].get('default_transcriber', 'faster-whisper')
+                    # Transcribe using configured provider or default via the
+                    # shared STT provider registry. This keeps default selection
+                    # consistent with the rest of the STT module and the PRD.
+                    try:
+                        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
+                            get_stt_provider_registry,
+                        )
+
+                        provider = get_stt_provider_registry().get_default_provider_name()
+                    except Exception:
+                        # Defensive fallback in case the registry cannot be
+                        # imported in a constrained environment.
+                        config = loaded_config_data or load_and_log_configs()
+                        provider = "faster-whisper"
+                        if config and 'STT-Settings' in config:
+                            provider = config['STT-Settings'].get('default_transcriber', 'faster-whisper')
 
                     if provider == 'parakeet':
                         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
@@ -1002,6 +1014,231 @@ def strip_whisper_metadata_header(segments):
     except Exception:
         # Never fail the caller because of header stripping
         return segments
+
+
+def to_normalized_stt_artifact(
+    text: str,
+    segments,
+    *,
+    language: Optional[str] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    duration_seconds: Optional[float] = None,
+    diarization_enabled: bool = False,
+    diarization_speakers: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Build a normalized STT artifact from text/segments.
+
+    This helper is used by ingestion/Jobs to ensure a consistent internal
+    representation of STT results, even when different code paths
+    (REST, media ingestion, workers) assemble transcripts differently.
+    """
+    # Normalize segments into a list
+    seg_list: List[Dict[str, Any]] = []
+    try:
+        if isinstance(segments, dict):
+            maybe = segments.get("segments")
+            if isinstance(maybe, list):
+                seg_list = maybe
+        elif isinstance(segments, list):
+            seg_list = segments
+    except Exception:
+        seg_list = []
+
+    duration_ms: Optional[int] = None
+    if duration_seconds is not None:
+        try:
+            duration_ms = round(max(float(duration_seconds), 0.0) * 1000)
+        except Exception:
+            duration_ms = None
+
+    return {
+        "text": text or "",
+        "language": language,
+        "segments": seg_list,
+        "diarization": {"enabled": bool(diarization_enabled), "speakers": diarization_speakers},
+        "usage": {"duration_ms": duration_ms, "tokens": None},
+        "metadata": {
+            "provider": provider or "",
+            "model": model or "",
+        },
+    }
+
+
+@lru_cache(maxsize=1)
+def _valid_whisper_model_sizes_for_jobs() -> set:
+    """
+    Cached lookup of known faster-whisper model sizes for jobs helper.
+
+    Mirrors the audio endpoint's _valid_whisper_model_sizes but is defined
+    here to avoid circular imports between core audio libs and API modules.
+    """
+    try:
+        return set(getattr(WhisperModel, "valid_model_sizes", []))
+    except Exception:
+        # If WhisperModel is unavailable, fall back to empty set so that
+        # model mapping simply treats all inputs as aliases.
+        return set()
+
+
+def _map_openai_audio_model_to_whisper_for_jobs(model: Optional[str]) -> str:
+    """
+    Map OpenAI-style audio model ids to a faster-whisper model name.
+
+    This mirrors the behavior of the REST audio endpoint's
+    `_map_openai_audio_model_to_whisper` helper so that Jobs use the same
+    model mapping semantics (e.g., 'whisper-1' -> 'large-v3'). Unknown
+    values fall back to 'large-v3'.
+    """
+    default_model = "large-v3"
+    if not model:
+        return default_model
+
+    raw = str(model).strip()
+    if not raw:
+        return default_model
+
+    m = raw.lower()
+    valid_sizes = _valid_whisper_model_sizes_for_jobs()
+
+    # Pass through known internal sizes and HF ids
+    if raw in valid_sizes or m in valid_sizes or "/" in raw:
+        return raw
+
+    # OpenAI-compatible aliases
+    if m == "whisper-1":
+        return default_model
+
+    # Fallback to default
+    return default_model
+
+
+def run_stt_batch_via_registry(
+    audio_file_path: str,
+    transcription_model: str,
+    *,
+    vad_filter: bool = False,
+    selected_source_lang: str = "en",
+    duration_seconds: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Run batch STT via the shared provider registry and return a normalized artifact.
+
+    This helper centralizes provider/model resolution for ingestion-style flows.
+    For Whisper-family models it delegates to `re_generate_transcription` to
+    preserve existing caching behaviour; for other providers it uses the
+    adapter-based `transcribe_batch` implementation.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
+        get_stt_provider_registry,
+    )
+
+    registry = get_stt_provider_registry()
+    provider, provider_model, _ = registry.resolve_provider_for_model(transcription_model or "")
+    adapter = registry.get_adapter(provider)
+
+    # Whisper-family models: reuse the canonical regeneration helper so that
+    # transcript cache files and error semantics remain unchanged.
+    if provider == "faster-whisper":
+        _, segments = re_generate_transcription(
+            audio_file_path,
+            transcription_model,
+            vad_filter,
+            selected_source_lang=selected_source_lang,
+        )
+        if segments is None:
+            raise RuntimeError("STT transcription failed; no segments produced")
+
+        text = " ".join(
+            str(seg.get("Text", "")).strip()
+            for seg in segments
+            if isinstance(seg, dict)
+        )
+        return to_normalized_stt_artifact(
+            text=text,
+            segments=segments,
+            language=selected_source_lang,
+            provider=provider,
+            model=provider_model or transcription_model,
+            duration_seconds=duration_seconds,
+        )
+
+    # Non-Whisper providers: use adapter transcribe_batch directly.
+    artifact = adapter.transcribe_batch(
+        audio_file_path,
+        model=provider_model or transcription_model,
+        language=selected_source_lang,
+        task="transcribe",
+        word_timestamps=False,
+        prompt=None,
+    )
+
+    # Ensure duration_ms is set when we know duration.
+    if duration_seconds is not None:
+        try:
+            duration_ms = round(max(float(duration_seconds), 0.0) * 1000)
+            usage = artifact.setdefault("usage", {})
+            if usage.get("duration_ms") is None:
+                usage["duration_ms"] = duration_ms
+        except Exception as e:
+            logging.debug(f"Failed to set duration_ms in artifact: {e}")
+
+    return artifact
+
+
+def run_stt_job_via_registry(
+    wav_path: str,
+    model: Optional[str],
+    language: Optional[str],
+) -> Dict[str, Any]:
+    """
+    Run STT for Jobs via the shared provider registry and return a normalized artifact.
+
+    This helper is intended for worker-style flows (audio_jobs_worker,
+    audio_transcribe_gpu_worker). It mirrors the REST endpoint's behavior for
+    Whisper-family models by reusing the same OpenAI-style model mapping
+    semantics (e.g., 'whisper-1' -> 'large-v3') while delegating to provider
+    adapters for non-Whisper providers.
+    """
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
+        get_stt_provider_registry,
+    )
+
+    registry = get_stt_provider_registry()
+    # When no model is provided, fall back to the OpenAI-style default
+    # alias so that Jobs align with the REST audio endpoint's behavior.
+    requested_model = (model or "whisper-1").strip()
+    provider, provider_model, _ = registry.resolve_provider_for_model(requested_model)
+    adapter = registry.get_adapter(provider)
+
+    # Whisper-family models: reuse the OpenAI-compatible alias mapping so
+    # that 'whisper-1' and similar identifiers resolve consistently across
+    # REST, ingestion, and Jobs.
+    if provider == "faster-whisper":
+        whisper_model_name = _map_openai_audio_model_to_whisper_for_jobs(requested_model)
+        selected_lang = language or None
+        artifact = adapter.transcribe_batch(
+            wav_path,
+            model=whisper_model_name,
+            language=selected_lang,
+            task="transcribe",
+            word_timestamps=False,
+            prompt=None,
+        )
+        return artifact
+
+    # Non-Whisper providers: use adapter transcribe_batch directly with the
+    # resolved provider-specific model identifier.
+    artifact = adapter.transcribe_batch(
+        wav_path,
+        model=provider_model or requested_model,
+        language=language or None,
+        task="transcribe",
+        word_timestamps=False,
+        prompt=None,
+    )
+    return artifact
 
 
 ##########################################################

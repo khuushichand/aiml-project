@@ -742,11 +742,12 @@ class Chunker:
             return preface_section
 
         for (bstart, bend, bkind) in spans:
-            # New section on header
+            header_segment = text[bstart:bend]
+
+            # New section on Markdown header
             if bkind == 'header_atx':
                 # Close previous sections (including any preface) before starting a new one
                 _close_section(preface_section, bstart)
-                header_segment = text[bstart:bend]
                 level_match = re.match(r'^\s*(#{1,6})\s', header_segment)
                 level = len(level_match.group(1)) if level_match else 1
                 while section_stack and section_stack[-1].get('level', 0) >= level:
@@ -759,11 +760,51 @@ class Chunker:
                     'title': self._extract_header_title(header_segment),
                     'start_offset': bstart,
                     'end_offset': None,
-                    'children': []
+                    'children': [],
+                    'source_kind': 'header_atx',
                 }
                 parent_section.setdefault('children', []).append(current_section)
                 section_stack.append(current_section)
                 # Record the header itself as a block so offsets include the title text
+                _add_block(current_section, bstart, bend, bkind)
+            elif bkind == 'bold_subsection':
+                # Bold-only lines promoted to subsections under the nearest
+                # non-bold section (typically the current chapter/agency).
+                # We deliberately do not reset the higher-level chapter stack
+                # so these remain nested inside their parent chapter.
+                # Find the nearest ancestor section that was not itself created
+                # from a bold-only subsection.
+                target_parent: Optional[Dict[str, Any]] = None
+                for sec in reversed(section_stack):
+                    if sec.get('kind') == 'section' and sec.get('source_kind') != 'bold_subsection':
+                        target_parent = sec
+                        break
+                if target_parent is None:
+                    target_parent = _ensure_preface_section(bstart)
+
+                # Close any previously-open bold subsections under this parent
+                # so that new bold headings become siblings rather than nested.
+                while section_stack:
+                    top = section_stack[-1]
+                    if top is target_parent or top.get('source_kind') != 'bold_subsection':
+                        break
+                    section_stack.pop()
+                    _close_section(top, bstart)
+
+                parent_level = int(target_parent.get('level', 1) or 1)
+                level = min(parent_level + 1, 6)
+                current_section = {
+                    'kind': 'section',
+                    'level': level,
+                    'title': self._extract_header_title(header_segment),
+                    'start_offset': bstart,
+                    'end_offset': None,
+                    'children': [],
+                    'source_kind': 'bold_subsection',
+                }
+                target_parent.setdefault('children', []).append(current_section)
+                section_stack.append(current_section)
+                # Record the bold heading itself as a block inside the subsection
                 _add_block(current_section, bstart, bend, bkind)
             elif bkind != 'blank':
                 current_section = section_stack[-1] if section_stack else None
@@ -2435,6 +2476,8 @@ class Chunker:
         overlap_buffer: Any = ""
         method_lower = str(method).lower()
         flush_threshold = self._estimate_stream_flush_threshold(method_lower, max_size)
+        language_lower = (language or "").lower()
+        languages_no_space = {'zh', 'zh-cn', 'zh-tw', 'ja', 'th'}
 
         def _coerce_overlap_value(value: Any) -> str:
             """Normalize overlap carry-over into a textual buffer."""
@@ -2455,11 +2498,13 @@ class Chunker:
                 return segment
             if not segment:
                 return overlap_text
-            sep = ' ' if (
-                method_lower == 'words'
-                and overlap_text
-                and not segment[0].isspace()
-            ) else ''
+            sep = ''
+            if overlap_text and not segment[0].isspace():
+                if method_lower == 'words':
+                    sep = ' '
+                elif language_lower not in languages_no_space and not overlap_text[-1].isspace():
+                    # Preserve a boundary for space-delimited languages to avoid fused tokens
+                    sep = ' '
             return overlap_text + sep + segment
 
         options_dict = dict(options)

@@ -395,118 +395,30 @@ async def add_media_orchestrate(
             # Prepare chunking options and auto-apply templates
             chunking_options_dict = _prepare_chunking_options_dict(form_data)
 
+            # Apply explicit or auto-selected chunking templates when requested.
             try:
-                if form_data.perform_chunking:
-                    # 1) Apply explicit template by name
-                    if getattr(form_data, "chunking_template_name", None):
-                        tpl = db.get_chunking_template(
-                            name=form_data.chunking_template_name
-                        )
-                        if tpl and tpl.get("template_json"):
-                            raw_cfg = tpl["template_json"]
-                            cfg = (
-                                json.loads(raw_cfg)
-                                if isinstance(raw_cfg, str)
-                                else raw_cfg
-                            )
-                            hier_cfg = ((cfg or {}).get("chunking") or {}).get(
-                                "config", {}
-                            )
-                            if isinstance(
-                                hier_cfg.get("hierarchical_template"), dict
-                            ):
-                                chunking_options_dict = chunking_options_dict or {}
-                                tpl_method = (
-                                    (cfg.get("chunking") or {}).get("method")
-                                    or "sentences"
-                                )
-                                if not form_data.chunk_method:
-                                    chunking_options_dict.setdefault(
-                                        "method", tpl_method
-                                    )
-                                chunking_options_dict["hierarchical"] = True
-                                chunking_options_dict["hierarchical_template"] = (
-                                    hier_cfg["hierarchical_template"]
-                                )
-                    # 2) Respect explicit user hierarchical/method
-                    # (already encoded in chunking_options_dict)
-                    # 3) Auto-match when requested and user didn't request
-                    #    hierarchical explicitly.
-                    elif getattr(form_data, "auto_apply_template", False) and not getattr(
-                        form_data, "hierarchical_chunking", False
-                    ):
-                        candidates = db.list_chunking_templates(
-                            include_builtin=True,
-                            include_custom=True,
-                            tags=None,
-                            user_id=None,
-                            include_deleted=False,
-                        )
-                        first_url = (form_data.urls or [None])[0]
-                        first_filename = None
-                        try:
-                            if saved_files_info:
-                                first_filename = saved_files_info[0][
-                                    "original_filename"
-                                ]
-                        except Exception:
-                            first_filename = None
-                        best_cfg = None
-                        best_key = None
-                        for t in candidates:
-                            try:
-                                cfg = json.loads(
-                                    t.get("template_json") or "{}"
-                                )
-                                if not isinstance(cfg, dict):
-                                    cfg = {}
-                            except Exception:
-                                cfg = {}
-                            score = TemplateClassifier.score(
-                                cfg,
-                                media_type=form_data.media_type,
-                                title=form_data.title,
-                                url=first_url,
-                                filename=first_filename,
-                            )
-                            if score <= 0:
-                                continue
-                            priority = (
-                                (cfg.get("classifier") or {}).get(
-                                    "priority"
-                                )
-                                or 0
-                            )
-                            key = (score, priority)
-                            if best_cfg is None or key > best_key:
-                                best_cfg, best_key = cfg, key
-                        if best_cfg:
-                            hier_cfg = (
-                                (best_cfg.get("chunking") or {}).get(
-                                    "config"
-                                )
-                                or {}
-                            )
-                            tpl = hier_cfg.get("hierarchical_template")
-                            if isinstance(tpl, dict):
-                                chunking_options_dict = (
-                                    chunking_options_dict or {}
-                                )
-                                if not form_data.chunk_method:
-                                    chunking_options_dict.setdefault(
-                                        "method",
-                                        (best_cfg.get("chunking") or {}).get(
-                                            "method", "sentences"
-                                        ),
-                                    )
-                                chunking_options_dict["hierarchical"] = True
-                                chunking_options_dict[
-                                    "hierarchical_template"
-                                ] = tpl
-            except Exception as auto_err:
-                logger.warning(
-                    "Auto-apply chunking template failed: %s", auto_err
+                from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (  # type: ignore  # noqa: E501
+                    apply_chunking_template_if_any as _apply_tpl,
                 )
+
+                first_url = (form_data.urls or [None])[0]
+                first_filename = None
+                try:
+                    if saved_files_info:
+                        first_filename = saved_files_info[0]["original_filename"]
+                except Exception:
+                    first_filename = None
+
+                chunking_options_dict = _apply_tpl(
+                    form_data=form_data,
+                    db=db,
+                    chunking_options_dict=chunking_options_dict,
+                    TemplateClassifier=TemplateClassifier,
+                    first_url=first_url,
+                    first_filename=first_filename,
+                )
+            except Exception as auto_err:
+                logger.warning("Auto-apply chunking template failed: %s", auto_err)
 
             # Even if not used directly here, preserve the legacy call
             # to common options preparation to keep side effects/logging.
@@ -979,6 +891,95 @@ async def persist_primary_av_item(
         process_result["db_id"] = media_id_result
         process_result["db_message"] = db_message_result
         process_result["media_uuid"] = media_uuid_result
+
+        # Optionally persist a normalized STT transcript into the Transcripts table
+        # for audio/video items when a transcription model is known.
+        try:
+            if (
+                media_type in ["audio", "video"]
+                and media_id_result
+                and transcription_model_used
+                and content_for_db
+            ):
+                from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
+                    to_normalized_stt_artifact,
+                )
+                from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
+                    get_stt_provider_registry,
+                )
+                from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # type: ignore
+                    MediaDatabase as _MediaDBForStt,
+                    upsert_transcript,
+                )
+
+                registry = get_stt_provider_registry()
+                provider_name, provider_model, _ = registry.resolve_provider_for_model(
+                    str(transcription_model_used)
+                )
+                analysis_details = process_result.get("analysis_details") or {}
+                lang_for_stt = analysis_details.get("transcription_language")
+
+                artifact = to_normalized_stt_artifact(
+                    text=str(content_for_db),
+                    segments=process_result.get("segments"),
+                    language=lang_for_stt,
+                    provider=provider_name,
+                    model=provider_model or str(transcription_model_used),
+                )
+
+                def _upsert_worker() -> None:
+                    db = _MediaDBForStt(db_path=db_path, client_id=client_id)
+                    try:
+                        upsert_transcript(
+                            db_instance=db,
+                            media_id=int(media_id_result),
+                            transcription=artifact["text"],
+                            whisper_model=artifact["metadata"]["model"],
+                        )
+                    finally:
+                        db.close_connection()
+
+                await loop.run_in_executor(None, _upsert_worker)
+                # Attach normalized artifact to the process_result for callers
+                process_result["normalized_stt"] = artifact
+        except Exception as stt_err:
+            logger.debug(
+                "STT transcript upsert skipped/failed for %s (media_id=%s): %s",
+                original_input_ref,
+                media_id_result,
+                stt_err,
+            )
+
+        # Optionally persist VisualDocuments for eligible media types (currently PDFs via VLM summary).
+        try:
+            if media_type in ["pdf"] and media_id_result:
+                from tldw_Server_API.app.core.Ingestion_Media_Processing.visual_ingestion import (  # type: ignore
+                    persist_visual_documents_from_analysis,
+                )
+
+                def _visual_docs_worker() -> int:
+                    return persist_visual_documents_from_analysis(
+                        db_path=db_path,
+                        client_id=client_id,
+                        media_id=int(media_id_result),
+                        analysis_details=process_result.get("analysis_details") or {},
+                    )
+
+                created_visual_docs = await loop.run_in_executor(None, _visual_docs_worker)
+                if created_visual_docs:
+                    logger.info(
+                        "Persisted %s VisualDocuments for media_id=%s (input_ref=%s)",
+                        created_visual_docs,
+                        media_id_result,
+                        original_input_ref,
+                    )
+        except Exception as visual_err:
+            logger.debug(
+                "Visual RAG ingestion skipped/failed for %s (media_id=%s): %s",
+                original_input_ref,
+                media_id_result,
+                visual_err,
+            )
 
         await persist_claims_if_applicable(
             claims_context=claims_context,

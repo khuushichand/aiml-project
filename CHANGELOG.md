@@ -7,16 +7,52 @@ and this project adheres to Some kind of Versioning
     
 ## [Unreleased]
 
+### Added
+
 ### Changed
 
 ### Removed
 
 ### Fixed
 
+## [0.1.10] - 2025-11-27
+
+### Added
+- ChaChaNotes health snapshot surfaced in `/api/v1/health` to monitor init attempts/failures and cache state.
+- MLX local provider scaffolding (Apple Silicon): adapters + admin lifecycle endpoints, metrics parity, and config keys/tests with non-Apple skips.
+- `LLM_MLX` extra in `pyproject.toml` to install `mlx-lm`/`mlx` for Apple Silicon users.
+- Config-driven llama.cpp handler: `LLMInferenceManager` now constructs `LlamaCppHandler` when `[LlamaCpp]` is enabled in `config.txt` or via env, and `/llamacpp` endpoints are wired to the managed handler.
+- ChaChaNotes schema v10 adds conversation metadata (state with `in-progress` default/backfill, topic labels, clusters) plus backlinks on notes (`conversation_id`, `message_id`) with covering indexes and SQLite/Postgres migrations.
+- Templated hierarchical chunking for incoming documents/emails across `/api/v1/media/process_*` endpoints, including TemplateClassifier-based auto-selection of chunking templates and optional section trees.
+- Streaming chunker/runtime helpers now honor shared chunking options via `prepare_chunking_options_dict`/`apply_chunking_template_if_any` for consistent behavior across document, PDF, video, audio, ebook, and email processing.
+- User-facing documentation for templated chunking (`Templated_Chunking_Incoming_Documents_HowTo.md`) and the Project 2025 RAG workflow guide for policy/document ingestion.
+- Chat diagnostics endpoints: `GET /api/v1/chat/queue/status` and `GET /api/v1/chat/queue/activity` exposing queue metrics and recent job activity, RBAC-gated to `system.logs` in multi-user mode.
+
+### Changed
+- Conversation title search now applies global BM25 normalization so pagination returns stable, deterministic ordering across the entire result set.
+- Chunking engine improvements for streaming text and Markdown: better whitespace handling for word/semantic/token chunking and promotion of bold-only headings into hierarchical subsections under their parent section.
+- ChaChaNotes dependency now ensures per-user DB directories are created, optional `message_metadata` is initialized, and default-character warmup tasks are tracked so the health snapshot accurately reflects warm starts.
+- Llama.cpp integration: `LLMInferenceManager` logs model-directory creation failures instead of silently swallowing them, and `/llamacpp` endpoints resolve the manager from `app.state.llm_manager` (falling back to the module-level instance) with a clear 503 when not configured.
+- Workflows and scheduler workflow routers are always mounted (without an `/api/v1` prefix) inside minimal/test apps so tests and tooling can call them consistently.
+
+### Fixed
+- ChaChaNotes warmup no longer leaves orphaned default-character tasks; background tasks are tracked and cleaned up when complete, improving shutdown and health reporting.
+- Visual document ingestion from audio/video analysis now persists slide/visual artifacts via a thread executor, avoiding event-loop blocking during heavy analysis.
+- MLX local provider concurrency: `MLXSessionRegistry.session_scope` snapshots the semaphore per context so dynamic concurrency updates cannot corrupt in-flight sessions.
+- Media re-chunking for documents and emails remains best-effort but now logs failures at debug level instead of silently swallowing errors, making template issues easier to diagnose.
+- Async chunker and template processor now handle multi-operation stages safely and preserve whitespace between overlapping chunks for all space-delimited methods.
+- `/api/v1/health` now logs ChaChaNotes snapshot failures and resource-governance policy file read errors while still reporting a degraded health state instead of failing the endpoint.
+- Chat queue status/activity endpoints avoid shadowing FastAPI's `status` module and enforce RBAC correctly, so authentication/authorization failures return the intended HTTP codes instead of spurious 500s.
+
 
 ## [0.1.9]
 
+### Added
+- ChaChaNotes health snapshot surfaced in `/api/v1/health` to monitor init attempts/failures and cache state.
+
 ### Changed
+- ChaChaNotes dependency now initializes in a dedicated executor with WAL/busy-timeout tuning and background default-character creation; request path reduced to cache lookup + health probe.
+- Startup warms the single-user ChaChaNotes instance to avoid first-request blocking; shutdown now closes cached instances and stops the ChaChaNotes executor to prevent lingering threads.
 
 ### Removed
 

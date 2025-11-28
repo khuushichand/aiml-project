@@ -1,6 +1,12 @@
 Release Notes
 =============
 
+2025-11-26
+
+- ChaChaNotes schema v10 adds conversation metadata with an `in-progress` default/backfill plus topic and cluster labels.
+- Notes now store backlinks via `conversation_id` and `message_id` with covering indexes; SQLite/Postgres migrations are included.
+- Conversation title search applies global BM25 normalization so pagination returns stable ordering across the full result set.
+
 2025-10-29
 
 - Watchlists: OPML export supports group filters via `group` query parameter.

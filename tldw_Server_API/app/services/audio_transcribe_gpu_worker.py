@@ -13,6 +13,49 @@ from tldw_Server_API.app.core.Usage.audio_quota import can_start_job, finish_job
 DOMAIN = "audio"
 
 
+async def _handle_gpu_audio_transcribe_stage(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle the GPU `audio_transcribe` stage for a single job payload.
+
+    This mirrors the CPU worker's behavior but delegates STT to the shared
+    registry/adapter helper (`run_stt_job_via_registry`) so that provider
+    selection and normalized artifacts stay consistent across entrypoints.
+    """
+    wav_path = payload.get("wav_path")
+    if not wav_path:
+        raise ValueError("missing wav_path in payload")
+
+    raw_model = payload.get("model")
+    model = (raw_model.strip() if isinstance(raw_model, str) else raw_model) or None
+
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
+        run_stt_job_via_registry,
+    )
+
+    artifact = await asyncio.to_thread(
+        run_stt_job_via_registry,
+        wav_path,
+        model,
+        None,
+    )
+
+    segments_list = artifact.get("segments") or []
+    if not isinstance(segments_list, list):
+        raise ValueError("unexpected transcription result format; expected list of segments")
+
+    text_merged = artifact.get("text")
+    if not isinstance(text_merged, str) or not text_merged.strip():
+        text_merged = " ".join(
+            (seg.get("Text", "").strip() if isinstance(seg, dict) else "") for seg in segments_list
+        ).strip()
+
+    updated_payload = dict(payload)
+    updated_payload["segments"] = segments_list
+    updated_payload["text"] = text_merged
+    updated_payload["normalized_stt"] = artifact
+    return updated_payload
+
+
 async def run_audio_transcribe_gpu_worker(stop_event: Optional[asyncio.Event] = None) -> None:
     """GPU-focused worker that only processes the `audio_transcribe` stage.
 
@@ -62,39 +105,11 @@ async def run_audio_transcribe_gpu_worker(stop_event: Optional[asyncio.Event] = 
                 pass
 
             payload: Dict[str, Any] = job.get("payload") or {}
-            wav_path = payload.get("wav_path")
-            model_in = (payload.get("model") or "distil-whisper-large-v3").strip()
-            model = "distil-whisper-large-v3" if model_in.lower().startswith("whisper") else model_in
-            if not wav_path:
-                raise ValueError("missing wav_path in payload")
-
-            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import speech_to_text
-
-            # Run STT (GPU-accelerated if available in environment/driver)
-            result = await asyncio.to_thread(
-                speech_to_text,
-                wav_path,
-                whisper_model=model,
-                selected_source_lang=None,
-                vad_filter=False,
-                diarize=False,
-            )
-            # Normalize payload for downstream stages
-            segments_list = None
-            if isinstance(result, tuple) and result:
-                segments_list = result[0]
-            else:
-                segments_list = result
-            if not isinstance(segments_list, list):
-                raise ValueError("unexpected transcription result format; expected list of segments")
-            text_merged = " ".join((seg.get("Text", "").strip() if isinstance(seg, dict) else "") for seg in segments_list).strip()
-            updated_payload = dict(payload)
-            updated_payload["segments"] = segments_list
-            updated_payload["text"] = text_merged
+            updated_payload = await _handle_gpu_audio_transcribe_stage(payload)
 
             # Complete and enqueue next stage
             jm.complete_job(int(job["id"]), worker_id=worker_id, lease_id=str(job.get("lease_id")))
-            next_type = payload.get("perform_chunking") and "audio_chunk" or "audio_store"
+            next_type: Optional[str] = "audio_chunk" if payload.get("perform_chunking") else "audio_store"
             jm.create_job(
                 domain=DOMAIN,
                 queue="default",

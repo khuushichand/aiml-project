@@ -37,13 +37,6 @@ class LlamafileConfig(BaseHandlerConfig):
     allowed_paths: Optional[list[Path]] = None
     # Add other llamafile specific defaults if needed from the `start_llamafile` args
 
-class LLMManagerConfig(BaseModel):
-    ollama: Optional[OllamaConfig] = OllamaConfig()
-    huggingface: Optional[HuggingFaceConfig] = HuggingFaceConfig()
-    llamafile: Optional[LlamafileConfig] = LlamafileConfig()
-    # Global settings for the library
-    app_config: Dict[str, Any] = {} # To pass through parts of your project_config.settings
-
 class LlamaCppConfig(BaseHandlerConfig):
     executable_path: FilePath = Path("vendor/llama.cpp/server") # Default path to llama.cpp server executable
     models_dir: DirectoryPath = Path("models/gguf_models")    # Directory for GGUF model files
@@ -65,6 +58,14 @@ class LlamaCppConfig(BaseHandlerConfig):
     # If executable_path or models_dir might not exist at config load time,
     # you might need to remove FilePath/DirectoryPath validation temporarily
     # or ensure they are created before loading the config.
+
+class LLMManagerConfig(BaseModel):
+    ollama: Optional[OllamaConfig] = OllamaConfig()
+    huggingface: Optional[HuggingFaceConfig] = HuggingFaceConfig()
+    llamafile: Optional[LlamafileConfig] = LlamafileConfig()
+    llamacpp: Optional[LlamaCppConfig] = None
+    # Global settings for the library
+    app_config: Dict[str, Any] = {} # To pass through parts of your project_config.settings
 
 #
 # End of LLM_Inference_Schemas.py

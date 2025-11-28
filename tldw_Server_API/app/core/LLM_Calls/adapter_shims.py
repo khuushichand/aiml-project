@@ -8,6 +8,7 @@ through the adapter registry when enabled by feature flags.
 """
 
 import os
+import asyncio
 from typing import Any, Dict, List, Optional, Union
 
 from loguru import logger
@@ -551,6 +552,126 @@ def anthropic_chat_handler(
     if streaming is not None:
         request["stream"] = bool(streaming)
     return adapter.stream(request) if streaming else adapter.chat(request)
+
+
+# -----------------------------
+# MLX adapter-backed shims
+# -----------------------------
+
+def _get_mlx_adapter():
+    registry = get_registry()
+    adapter = registry.get_adapter("mlx")
+    if adapter is None:
+        try:
+            from tldw_Server_API.app.core.LLM_Calls.providers.mlx_provider import MLXChatAdapter
+
+            registry.register_adapter("mlx", MLXChatAdapter)
+            adapter = registry.get_adapter("mlx")
+        except Exception as exc:
+            logger.exception(f"Failed to initialize MLX adapter: {exc}")
+            adapter = None
+    return adapter
+
+
+def mlx_chat_handler(
+    input_data: List[Dict[str, Any]],
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    system_message: Optional[str] = None,
+    temp: Optional[float] = None,
+    topp: Optional[float] = None,
+    topk: Optional[int] = None,
+    streaming: Optional[bool] = False,
+    max_tokens: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    user: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    custom_prompt_arg: Optional[str] = None,
+    prompt_template: Optional[str] = None,
+    **kwargs: Any,
+):
+    # api_key is accepted for signature compatibility with other handlers but unused.
+    _ = api_key
+    adapter = _get_mlx_adapter()
+    if adapter is None:
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="mlx", message="MLX adapter unavailable")
+    request: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": topp if topp is not None else kwargs.get("top_p"),
+        "top_k": topk if topk is not None else kwargs.get("top_k"),
+        "max_tokens": max_tokens,
+        "stop": stop,
+        "response_format": response_format,
+        "user": user,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "prompt_template": prompt_template,
+        "custom_prompt_arg": custom_prompt_arg,
+    }
+    if streaming is not None:
+        request["stream"] = bool(streaming)
+    return adapter.stream(request) if streaming else adapter.chat(request)
+
+
+async def mlx_chat_handler_async(
+    input_data: List[Dict[str, Any]],
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    system_message: Optional[str] = None,
+    temp: Optional[float] = None,
+    topp: Optional[float] = None,
+    topk: Optional[int] = None,
+    streaming: Optional[bool] = False,
+    max_tokens: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    user: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    custom_prompt_arg: Optional[str] = None,
+    prompt_template: Optional[str] = None,
+    **kwargs: Any,
+):
+    # api_key is accepted for signature compatibility with other handlers but unused.
+    _ = api_key
+    adapter = _get_mlx_adapter()
+    if adapter is None:
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="mlx", message="MLX adapter unavailable")
+
+    request: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": topp if topp is not None else kwargs.get("top_p"),
+        "top_k": topk if topk is not None else kwargs.get("top_k"),
+        "max_tokens": max_tokens,
+        "stop": stop,
+        "response_format": response_format,
+        "user": user,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "prompt_template": prompt_template,
+        "custom_prompt_arg": custom_prompt_arg,
+    }
+    if streaming is not None:
+        request["stream"] = bool(streaming)
+
+    if streaming:
+        async def _astream():
+            for chunk in adapter.stream(request):
+                yield chunk
+        return _astream()
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: adapter.chat(request))
 
 
 # -----------------------------

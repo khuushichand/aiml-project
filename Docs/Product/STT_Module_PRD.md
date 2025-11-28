@@ -1,5 +1,13 @@
 **STT Module PRD v1.0**
 
+- **Meta**
+  - Owner: Core Voice & API Team
+  - Status: In Progress (see `Docs/Product/STT_Module_IMPLEMENTATION_PLAN.md` for staged execution and status details)
+  - Implementation Progress:
+    - Provider registry + adapters implemented (`stt_provider_adapter.py`) and used by REST `/api/v1/audio/transcriptions`, ingestion persistence, and Jobs (CPU and GPU workers).
+    - Normalized STT artifact shape in place (`to_normalized_stt_artifact`, adapter `transcribe_batch`) and used internally by REST, `/media/add` ingestion, and Jobs; transcripts now upserted into `Transcripts` keyed by `(media_id, whisper_model)` with the full artifact stored in `Transcripts.transcription`.
+    - Unified batch helpers for ingestion and Jobs (`run_stt_batch_via_registry`, `run_stt_job_via_registry`) wired into `perform_transcription` and `audio_jobs_worker`/`audio_transcribe_gpu_worker`; remaining WS streaming/metrics work are still pending.
+
 - **Project Summary**
   - Speech-to-Text (STT) powers `/api/v1/audio/transcriptions` and `/api/v1/audio/stream/transcribe`.
   - Current providers live under `tldw_Server_API/app/core/Ingestion_Media_Processing/Audio/` and include faster-whisper (CPU/GPU), NVIDIA NeMo (Parakeet/Canary), and Qwen2Audio.
@@ -38,7 +46,7 @@
   - REST STT endpoint (`/api/v1/audio/transcriptions`) handles multipart uploads (OpenAI-compatible); URL-based and yt-dlp flows remain in media ingestion endpoints that call into the shared STT module.
   - Streaming endpoint supports partial/interim updates and final transcripts, accepts `auth`/`config`/`audio`/`commit` messages as in the current unified WS implementation, and respects lease/quota enforcement; any additional status/warning frames remain backward compatible with existing clients.
   - Transcript schema includes segments with timestamps, speaker labels, confidence, optional diarization, and usage stats; shape aligns with the existing REST/WS schemas, with optional extra metadata for diagnostics.
-  - Persist transcripts and metadata into Media DB v2: normalized transcript text in the `Transcripts` table (`transcription`), keyed by `(media_id, whisper_model)` (provider/model), with `Media.transcription_model` tracking the effective/default model. Segments/chunks stored via `MediaChunks`/`UnvectorizedMediaChunks`; ingestion result JSON continues to carry transcript content/segments in the established shape.
+  - Persist transcripts and metadata into Media DB v2: normalized STT artifacts (including `text`, `segments`, `language`, `diarization`, `usage`, `metadata`) serialized into the `Transcripts` table (`transcription`), keyed by `(media_id, whisper_model)` (provider/model), with `Media.transcription_model` tracking the effective/default model. Segments/chunks are written via `MediaChunks`/`UnvectorizedMediaChunks`; ingestion result JSON continues to carry transcript content/segments in the established shape and may include `normalized_stt` for internal consumers.
   - Config-driven defaults with request-level overrides (bounded validation).
   - Rate limiting via SlowAPI/global plus per-provider thresholds.
   - Retry/backoff policy with provider-specific fatal vs retriable errors; fallbacks must not mask auth/quota/validation failures and should be configurable per environment.

@@ -39,6 +39,10 @@ from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
 )
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessEbooksForm
 from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+    prepare_chunking_options_dict,
+    apply_chunking_template_if_any,
+)
 
 router = APIRouter()
 
@@ -120,6 +124,7 @@ def _process_single_ebook(
     tags=["Media Processing (No DB)"],
 )
 async def process_ebooks_endpoint(
+    db: MediaDatabase = Depends(get_media_db_for_user),
     form_data: ProcessEbooksForm = Depends(get_process_ebooks_form),
     files: Optional[List[UploadFile]] = File(
         None, description="EPUB file uploads (.epub)"
@@ -158,6 +163,8 @@ async def process_ebooks_endpoint(
 
     batch: Dict[str, Any] = {"results": [], "errors": []}
     items: List[ProcessItem] = []
+    saved_files_info: List[Dict[str, Any]] = []
+    chunk_options_dict: Optional[Dict[str, Any]] = None
 
     with TempDirManager(prefix="process_ebooks_") as temp_dir:
         temp_dir_path = Path(temp_dir)
@@ -179,6 +186,7 @@ async def process_ebooks_endpoint(
                 validator=validator,
                 allowed_extensions=ALLOWED_EBOOK_EXTENSIONS,
             )
+            saved_files_info = list(saved_files)
 
             for err_info in upload_errors:
                 original_filename = (
@@ -291,19 +299,33 @@ async def process_ebooks_endpoint(
             )
             return JSONResponse(status_code=status_code, content=batch)
 
-        # Chunking options match the legacy endpoint semantics.
-        chunk_options: Optional[Dict[str, Any]] = None
+        # Prepare chunking options (with optional templates/hierarchical rules).
         if form_data.perform_chunking:
-            chunk_options = {
-                "method": form_data.chunk_method,
-                "max_size": form_data.chunk_size,
-                "overlap": form_data.chunk_overlap,
-                "language": form_data.chunk_language,
-                "custom_chapter_pattern": form_data.custom_chapter_pattern,
-            }
-            chunk_options = {
-                key: value for key, value in chunk_options.items() if value is not None
-            }
+            chunk_options_dict = prepare_chunking_options_dict(form_data)
+            try:
+                TemplateClassifier = getattr(media_mod, "TemplateClassifier", None)
+            except Exception:
+                TemplateClassifier = None
+
+            if chunk_options_dict is not None:
+                first_url = (form_data.urls or [None])[0]
+                first_filename = None
+                try:
+                    if saved_files_info:
+                        first_filename = saved_files_info[0].get("original_filename")
+                except Exception:
+                    first_filename = None
+
+                chunk_options_dict = apply_chunking_template_if_any(
+                    form_data=form_data,
+                    db=db,
+                    chunking_options_dict=chunk_options_dict,
+                    TemplateClassifier=TemplateClassifier,
+                    first_url=first_url,
+                    first_filename=first_filename,
+                )
+        else:
+            chunk_options_dict = None
 
         async def _ebook_batch_processor(
             process_items: List[ProcessItem],
@@ -324,7 +346,7 @@ async def process_ebooks_endpoint(
                         author_override=form_data.author,
                         keywords=form_data.keywords,
                         perform_chunking=form_data.perform_chunking,
-                        chunk_options=chunk_options,
+                        chunk_options=chunk_options_dict,
                         perform_analysis=form_data.perform_analysis,
                         summarize_recursively=form_data.summarize_recursively,
                         api_name=form_data.api_name,
@@ -417,6 +439,52 @@ async def process_ebooks_endpoint(
         processed_count,
         errors_count,
     )
+
+    # Optional template/hierarchical re-chunking of results (best-effort).
+    try:
+        if form_data.perform_chunking and chunk_options_dict:
+            from tldw_Server_API.app.core.Chunking import (  # type: ignore
+                improved_chunking_process as _improved_chunking_process,
+            )
+            from tldw_Server_API.app.core.Chunking.chunker import (  # type: ignore
+                Chunker as _Chunker,
+            )
+
+            use_hier = bool(
+                chunk_options_dict.get("hierarchical")
+                or isinstance(chunk_options_dict.get("hierarchical_template"), dict)
+            )
+            ck = _Chunker() if use_hier else None
+
+            for res in batch.get("results", []):
+                if not isinstance(res, dict):
+                    continue
+                status_value = str(res.get("status", "")).lower()
+                if status_value not in {"success", "warning"}:
+                    continue
+                text = res.get("content")
+                if not isinstance(text, str) or not text.strip():
+                    continue
+
+                if use_hier and ck is not None:
+                    chunks = ck.chunk_text_hierarchical_flat(
+                        text,
+                        method=chunk_options_dict.get("method") or "sentences",
+                        max_size=chunk_options_dict.get("max_size") or 1000,
+                        overlap=chunk_options_dict.get("overlap") or 200,
+                        language=chunk_options_dict.get("language"),
+                        template=chunk_options_dict.get("hierarchical_template")
+                        if isinstance(
+                            chunk_options_dict.get("hierarchical_template"), dict
+                        )
+                        else None,
+                    )
+                else:
+                    chunks = _improved_chunking_process(text, chunk_options_dict)
+
+                res["chunks"] = chunks
+    except Exception as rechunk_err:
+        logger.debug("Ebook post-processing re-chunking skipped/failed: {}", rechunk_err)
 
     return JSONResponse(status_code=final_status_code, content=batch)
 

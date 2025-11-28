@@ -8,16 +8,35 @@ from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 from uuid import UUID
 
+ALLOWED_CONVERSATION_STATES = ("in-progress", "resolved", "backlog", "non-viable")
+
 
 # ========================================================================
 # Chat Session Schemas
 # ========================================================================
+
+
+def _validate_conversation_state(value: Optional[str]) -> Optional[str]:
+    """Shared validator for conversation state field."""
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        raise ValueError("state cannot be empty")
+    if normalized not in ALLOWED_CONVERSATION_STATES:
+        raise ValueError(f"Invalid state '{value}'. Allowed: {', '.join(ALLOWED_CONVERSATION_STATES)}")
+    return normalized
 
 class ChatSessionCreate(BaseModel):
     """Schema for creating a new chat session."""
     character_id: int = Field(..., description="ID of the character for this chat", gt=0)
     title: Optional[str] = Field(None, description="Optional title for the chat session")
     parent_conversation_id: Optional[str] = Field(None, description="Parent conversation ID for forked chats")
+    state: Optional[str] = Field(None, description="Lifecycle state for the conversation")
+    topic_label: Optional[str] = Field(None, description="Primary topic label for the conversation")
+    cluster_id: Optional[str] = Field(None, description="Cluster/group identifier for navigation")
+    source: Optional[str] = Field(None, description="Source of the conversation (e.g., email, issue)")
+    external_ref: Optional[str] = Field(None, description="External reference/link for the conversation")
 
     model_config = {"json_schema_extra": {
         "example": {
@@ -26,11 +45,21 @@ class ChatSessionCreate(BaseModel):
         }
     }}
 
+    @field_validator("state")
+    @classmethod
+    def _validate_state(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_conversation_state(value)
+
 
 class ChatSessionUpdate(BaseModel):
     """Schema for updating a chat session."""
     title: Optional[str] = Field(None, description="New title for the chat")
     rating: Optional[int] = Field(None, ge=1, le=5, description="Rating for the conversation")
+    state: Optional[str] = Field(None, description="Lifecycle state for the conversation")
+    topic_label: Optional[str] = Field(None, description="Primary topic label for the conversation")
+    cluster_id: Optional[str] = Field(None, description="Cluster/group identifier for navigation")
+    source: Optional[str] = Field(None, description="Source of the conversation (e.g., email, issue)")
+    external_ref: Optional[str] = Field(None, description="External reference/link for the conversation")
 
     model_config = {"json_schema_extra": {
         "example": {
@@ -39,6 +68,11 @@ class ChatSessionUpdate(BaseModel):
         }
     }}
 
+    @field_validator("state")
+    @classmethod
+    def _validate_state(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_conversation_state(value)
+
 
 class ChatSessionResponse(BaseModel):
     """Schema for chat session responses."""
@@ -46,6 +80,11 @@ class ChatSessionResponse(BaseModel):
     character_id: int = Field(..., description="ID of the associated character")
     title: Optional[str] = Field(None, description="Chat session title")
     rating: Optional[int] = Field(None, description="User rating of the conversation")
+    state: str = Field("in-progress", description="Lifecycle state of the conversation")
+    topic_label: Optional[str] = Field(None, description="Primary topic label for the conversation")
+    cluster_id: Optional[str] = Field(None, description="Cluster/group identifier for navigation")
+    source: Optional[str] = Field(None, description="Source of the conversation (e.g., email, issue)")
+    external_ref: Optional[str] = Field(None, description="External reference/link for the conversation")
     created_at: datetime = Field(..., description="Creation timestamp")
     last_modified: datetime = Field(..., description="Last modification timestamp")
     message_count: Optional[int] = Field(0, description="Number of messages in the chat")

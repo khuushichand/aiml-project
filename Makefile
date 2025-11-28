@@ -124,3 +124,16 @@ bench-full:
 	@echo "[full] Tip: enable STREAMS_UNIFIED=1 on the server to populate SSE panels"
 	@echo "[full] Stopping monitoring stack"
 	$(MAKE) monitoring-down
+
+# -----------------------------------------------------------------------------
+# STT Golden Adapter Validation (local/GPU-only)
+# -----------------------------------------------------------------------------
+.PHONY: stt-golden
+
+STT_GOLDEN_AUDIO_DIR ?= ./test_models/stt_golden
+
+stt-golden:
+	@echo "[stt-golden] Running STT golden adapter tests against $(STT_GOLDEN_AUDIO_DIR)"
+	TLDW_STT_GOLDEN_ENABLE=1 \
+	TLDW_STT_GOLDEN_AUDIO_DIR="$(STT_GOLDEN_AUDIO_DIR)" \
+	python -m pytest tldw_Server_API/tests/Audio/test_stt_adapters_golden.py -m "stt_golden" -v

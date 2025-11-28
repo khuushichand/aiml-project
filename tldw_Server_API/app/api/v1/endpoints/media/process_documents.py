@@ -23,6 +23,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     prepare_chunking_options_dict,
+    apply_chunking_template_if_any,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
     ProcessItem,
@@ -101,6 +102,7 @@ async def process_documents_endpoint(
         "errors": [],
         "results": [],
     }
+    saved_files_info: List[Dict[str, Any]] = []
     # Map to track original ref -> temp path
     source_map: Dict[str, Path] = {}
 
@@ -132,6 +134,7 @@ async def process_documents_endpoint(
                 validator=validator,
                 allowed_extensions=ALLOWED_DOC_EXTENSIONS,
             )
+            saved_files_info = list(saved_files)
             # Add file saving/validation errors to batch_result
             for err_info in upload_errors:
                 original_filename = (
@@ -319,6 +322,22 @@ async def process_documents_endpoint(
             chunk_options_dict: Optional[Dict[str, Any]] = prepare_chunking_options_dict(
                 form_data
             )
+            TemplateClassifier = getattr(media_mod, "TemplateClassifier", None)
+
+            if chunk_options_dict is not None:
+                first_url = (form_data.urls or [None])[0]
+                first_filename = None
+                if saved_files_info:
+                    first_filename = saved_files_info[0].get("original_filename")
+
+                chunk_options_dict = apply_chunking_template_if_any(
+                    form_data=form_data,
+                    db=db,
+                    chunking_options_dict=chunk_options_dict,
+                    TemplateClassifier=TemplateClassifier,
+                    first_url=first_url,
+                    first_filename=first_filename,
+                )
         else:
             chunk_options_dict = None
 
@@ -477,6 +496,52 @@ async def process_documents_endpoint(
         batch_result.get("processed_count", 0),
         batch_result.get("errors_count", 0),
     )
+
+    # --- Optional template/hierarchical re-chunking of results ---
+    try:
+        if form_data.perform_chunking and chunk_options_dict:
+            from tldw_Server_API.app.core.Chunking import (  # type: ignore
+                improved_chunking_process as _improved_chunking_process,
+            )
+            from tldw_Server_API.app.core.Chunking.chunker import (  # type: ignore
+                Chunker as _Chunker,
+            )
+
+            use_hier = bool(
+                chunk_options_dict.get("hierarchical")
+                or isinstance(chunk_options_dict.get("hierarchical_template"), dict)
+            )
+            ck = _Chunker() if use_hier else None
+
+            for res in batch_result.get("results", []):
+                if not isinstance(res, dict):
+                    continue
+                status_value = str(res.get("status", "")).lower()
+                if status_value not in {"success", "warning"}:
+                    continue
+                text = res.get("content")
+                if not isinstance(text, str) or not text.strip():
+                    continue
+
+                if use_hier and ck is not None:
+                    chunks = ck.chunk_text_hierarchical_flat(
+                        text,
+                        method=chunk_options_dict.get("method") or "sentences",
+                        max_size=chunk_options_dict.get("max_size") or 500,
+                        overlap=chunk_options_dict.get("overlap") or 200,
+                        language=chunk_options_dict.get("language"),
+                        template=chunk_options_dict.get("hierarchical_template")
+                        if isinstance(
+                            chunk_options_dict.get("hierarchical_template"), dict
+                        )
+                        else None,
+                    )
+                else:
+                    chunks = _improved_chunking_process(text, chunk_options_dict)
+
+                res["chunks"] = chunks
+    except Exception as exc:
+        logger.debug("Re-chunking failed during metadata normalization", exc_info=True)
 
     return JSONResponse(status_code=final_status_code, content=batch_result)
 

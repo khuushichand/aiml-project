@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field, ConfigDict
 class NoteBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=255, description="Title of the note")
     content: str = Field(..., min_length=1, max_length=5000000, description="Content of the note (max 5MB)")
+    conversation_id: Optional[str] = Field(None, description="Optional conversation ID backlink")
+    message_id: Optional[str] = Field(None, description="Optional message ID backlink")
 
 
 class NoteCreate(NoteBase):
@@ -72,6 +74,8 @@ class NoteCreate(NoteBase):
 class NoteUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=255, description="New title for the note")
     content: Optional[str] = Field(None, min_length=1, max_length=5000000, description="New content for the note (max 5MB)")
+    conversation_id: Optional[str] = Field(None, description="Optional conversation ID backlink")
+    message_id: Optional[str] = Field(None, description="Optional message ID backlink")
     # Ensure at least one field is provided for update, or handle in endpoint if empty update is no-op
     # Pydantic v2: model_validator
 

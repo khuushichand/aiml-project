@@ -28,6 +28,7 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_shims import (
     bedrock_chat_handler,
     custom_openai_chat_handler,
     custom_openai_2_chat_handler,
+    mlx_chat_handler,
     openai_chat_handler_async,
     anthropic_chat_handler_async,
     groq_chat_handler_async,
@@ -40,6 +41,7 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_shims import (
     custom_openai_2_chat_handler_async,
     google_chat_handler_async,
     mistral_chat_handler_async,
+    mlx_chat_handler_async,
 )
 from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
     chat_with_aphrodite, chat_with_local_llm, chat_with_ollama,
@@ -78,6 +80,7 @@ API_CALL_HANDLERS: Dict[str, Callable] = {
     'aphrodite': chat_with_aphrodite,
     'custom-openai-api': custom_openai_chat_handler,
     'custom-openai-api-2': custom_openai_2_chat_handler,
+    'mlx': mlx_chat_handler,
 }
 """
 A dispatch table mapping API endpoint names (e.g., 'openai') to their
@@ -100,6 +103,7 @@ ASYNC_API_CALL_HANDLERS: Dict[str, Callable] = {
     'custom-openai-api-2': custom_openai_2_chat_handler_async,
     'google': google_chat_handler_async,
     'mistral': mistral_chat_handler_async,
+    'mlx': mlx_chat_handler_async,
 }
 
 # 2. Parameter mapping for each provider
@@ -558,6 +562,24 @@ PROVIDER_PARAM_MAP: Dict[str, Dict[str, str]] = {
         'http_client_factory': 'http_client_factory',
         'http_fetcher': 'http_fetcher',
     },
+    'mlx': {
+        'app_config': 'app_config',
+        'messages_payload': 'input_data',
+        'temp': 'temp',
+        'system_message': 'system_message',
+        'streaming': 'streaming',
+        'topp': 'topp',
+        'topk': 'topk',
+        'model': 'model',
+        'max_tokens': 'max_tokens',
+        'stop': 'stop',
+        'response_format': 'response_format',
+        'user_identifier': 'user',
+        'tools': 'tools',
+        'tool_choice': 'tool_choice',
+        'prompt_template': 'prompt_template',
+        'custom_prompt_arg': 'custom_prompt_arg',
+    },
     'custom-openai-api': {
         'app_config': 'app_config',
         'api_key': 'api_key',
@@ -675,6 +697,7 @@ PROVIDER_REQUIRES_KEY: Dict[str, bool] = {
     'local-llm': False,
     'ollama': False,
     'aphrodite': False,
+    'mlx': False,
     'custom-openai-api': True,
     'custom-openai-api-2': True,
 }
@@ -801,6 +824,12 @@ PROVIDER_CAPABILITIES: Dict[str, Dict[str, Any]] = {
         'supports_tools': False,
         'default_timeout_seconds': 120,
         'max_output_tokens_default': 2048,
+    },
+    'mlx': {
+        'supports_streaming': True,
+        'supports_tools': False,
+        'default_timeout_seconds': 120,
+        'max_output_tokens_default': None,
     },
     'bedrock': {
         'supports_streaming': True,

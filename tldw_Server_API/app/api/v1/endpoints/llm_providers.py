@@ -4,6 +4,7 @@ import time
 from functools import partial
 from typing import Dict, List, Any, Optional, Tuple
 from urllib.parse import urlparse, urljoin
+import os
 import requests
 from fastapi import APIRouter, HTTPException, Depends
 from loguru import logger
@@ -869,6 +870,14 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 'section': 'Local-API',
                 'model_discovery': 'openai',
             },
+            'mlx': {
+                'display_name': 'MLX',
+                'endpoint_field': None,
+                'model_field': 'mlx_model_path',
+                'type': 'local',
+                'section': 'MLX',
+                'model_discovery': None,
+            },
             'custom_openai_api': {
                 'display_name': 'Custom OpenAI API',
                 'endpoint_field': 'custom_openai_api_ip',
@@ -892,8 +901,13 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
         for provider_name, provider_info in provider_mappings.items():
             section_name = provider_info.get('section')
 
-            # Skip if section doesn't exist
-            if not section_name or not config_parser.has_section(section_name):
+            config_section_exists = bool(section_name and config_parser.has_section(section_name))
+            # Allow MLX to surface even when only env-based config exists
+            if not config_section_exists and provider_name != "mlx":
+                continue
+            # For MLX, proceed even if the [MLX] section is absent to allow env-only configs or to show as disabled
+            section_exists = config_section_exists or provider_name == "mlx"
+            if not section_exists:
                 continue
 
             # Check if provider is configured
@@ -904,7 +918,7 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
             if provider_info['type'] == 'commercial':
                 # Check for API key
                 api_key_field = provider_info.get('api_key_field')
-                if api_key_field and config_parser.has_option(section_name, api_key_field):
+                if api_key_field and config_section_exists and config_parser.has_option(section_name, api_key_field):
                     api_key = config_parser.get(section_name, api_key_field, fallback='')
                     # Check if API key is valid (not empty and not placeholder)
                     if api_key and not api_key.startswith('<') and not api_key.endswith('>'):
@@ -913,13 +927,13 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
             else:
                 # Check for endpoint URL for local providers
                 endpoint_field = provider_info.get('endpoint_field')
-                if endpoint_field and config_parser.has_option(section_name, endpoint_field):
+                if endpoint_field and config_section_exists and config_parser.has_option(section_name, endpoint_field):
                     endpoint_url = config_parser.get(section_name, endpoint_field, fallback='')
                     if endpoint_url and endpoint_url.strip() and not endpoint_url.startswith('<'):
                         is_configured = True
                 # Optional API key support for local endpoints that require it
                 api_key_field = provider_info.get('api_key_field')
-                if api_key_field and config_parser.has_option(section_name, api_key_field):
+                if api_key_field and config_section_exists and config_parser.has_option(section_name, api_key_field):
                     val = config_parser.get(section_name, api_key_field, fallback='')
                     if val and not val.startswith('<') and not val.endswith('>'):
                         api_key_value = val
@@ -929,9 +943,17 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
             model_field = provider_info.get('model_field')
             models = []
 
-            if model_field and config_parser.has_option(section_name, model_field):
+            if model_field and config_section_exists and config_parser.has_option(section_name, model_field):
                 model_value = config_parser.get(section_name, model_field, fallback='')
                 models = parse_model_string(model_value)
+            # Env-based model path for MLX when no config section is present
+            if provider_name == "mlx" and not models:
+                env_model = os.getenv("MLX_MODEL_PATH", "")
+                if env_model:
+                    models = parse_model_string(env_model)
+                    is_configured = True
+            if provider_name == "mlx" and models and not is_configured:
+                is_configured = True
 
             # Augment or seed with models from the pricing catalog for commercial providers.
             # This makes model_pricing.json the primary reference for available models,

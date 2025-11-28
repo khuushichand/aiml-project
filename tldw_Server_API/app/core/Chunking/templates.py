@@ -178,7 +178,12 @@ class TemplateProcessor:
         text = data["text"]
 
         # Get chunking parameters
-        chunk_ops = stage.operations[0] if stage.operations else {}
+        if not stage.operations:
+            chunk_ops = {}
+        else:
+            if len(stage.operations) > 1:
+                logger.warning("Chunk stage defines multiple operations; only the first will be applied")
+            chunk_ops = stage.operations[0]
         method = chunk_ops.get("method", base_method)
         # Allow runtime override of method (apply-time)
         if isinstance(options.get('method'), str):
@@ -265,6 +270,13 @@ class TemplateProcessor:
 
         Supports both {"type", "params"} and {"operation", "config"} schemas.
         """
+        # If there are no postprocessing operations, preserve existing
+        # chunk structures (including any metadata) and return early.
+        # This avoids unnecessarily stripping hierarchical metadata when
+        # a template declares an empty postprocessing block.
+        if not stage.operations:
+            return data
+
         chunks = data.get("chunks", [])
         # Normalize to a list of strings for postprocessors which operate on text
         texts: List[str] = []

@@ -893,7 +893,7 @@ def update_conversation_metadata(
     """Update conversation metadata with optimistic locking."""
 
     try:
-        valid_update_keys = {"title", "rating"}
+        valid_update_keys = {"title", "rating", "state", "topic_label", "cluster_id", "source", "external_ref"}
         payload_to_db = {k: v for k, v in update_data.items() if k in valid_update_keys}
 
         if not payload_to_db:

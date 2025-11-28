@@ -242,6 +242,16 @@ video_chunking_multi_level = false
 video_language = english
 chunking_types = 'article', 'audio', 'book', 'document', 'mediawiki_article', 'mediawiki_dump', 'obsidian_note', 'podcast', 'text', 'video'
 
+[Visual-RAG]
+enable_visual_rag = False
+visual_caption_backend = local
+visual_caption_model =
+visual_ocr_enabled = True
+visual_embedding_model =
+max_images_per_media = 32
+visual_max_docs_per_user = 50000
+video_frame_sampling_interval_seconds = 10
+
 [AuthNZ]
 auth_mode = single_user
 database_url = sqlite:///./Databases/users.db
@@ -568,6 +578,27 @@ custom_openai2_api_api_retry_delay = 1
 default_api = openai
 default_api_for_tasks = anthropic
 
+# MLX (Apple Silicon) local provider (in-process)
+[MLX]
+# Path or repo id for the MLX model to load
+mlx_model_path = <path_or_repo_id>
+# Optional overrides; defaults favor single-concurrency + warmup/compile on.
+mlx_max_seq_len =
+mlx_max_batch_size =
+mlx_device = auto
+mlx_dtype =
+mlx_quantization =
+mlx_compile = true
+mlx_warmup = true
+mlx_prompt_template =
+mlx_revision =
+mlx_tokenizer =
+mlx_adapter =
+mlx_adapter_weights =
+mlx_max_kv_cache_size =
+mlx_max_concurrent = 1
+mlx_trust_remote_code = false
+
 # Local-API: OpenAI-compatible servers expect a 'model' in requests (per OpenAI spec + server docs).
 # If your server does not expose a default, add a placeholder model name here so the UI/clients can send one.
 [Local-API]
@@ -660,6 +691,25 @@ streaming = True
 temperature = 0.7
 top_p = 0.9
 min_p = 0.05
+
+[LlamaCpp]
+# Enable the managed llama.cpp handler (llama-server binary) for /llamacpp endpoints
+enabled = false
+executable_path = vendor/llama.cpp/server
+models_dir = models/gguf_models
+default_host = 127.0.0.1
+default_port = 8080
+default_threads =
+default_n_gpu_layers = 0
+default_ctx_size = 2048
+allow_unvalidated_args = false
+allow_cli_secrets = false
+port_autoselect = true
+port_probe_max = 10
+# Comma-separated list of additional directories where models/logs may reside
+allowed_paths =
+# Optional path to a log file for llama.cpp server stdout/stderr
+log_output_file =
 
 [STT-Settings]
 default_transcriber = faster-whisper

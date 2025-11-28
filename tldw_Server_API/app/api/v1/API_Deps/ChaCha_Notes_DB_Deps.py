@@ -1,15 +1,20 @@
 # tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB_Deps.py
 import asyncio
-import os
-import json
-import threading
-from pathlib import Path
-from loguru import logger
-from typing import Dict, Optional, List
-
-from fastapi import Depends, HTTPException, status
+import faulthandler
 import inspect
+import json
+import os
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any, Dict, Optional, Set
+
 from cachetools import LRUCache
+from fastapi import Depends, HTTPException, status
+from loguru import logger
+
 #
 #    logging.warning("cachetools not found. ChaChaNotes DB instance cache will grow indefinitely. "
 #                    "Install with: pip install cachetools")
@@ -24,15 +29,31 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     InputError,
     ConflictError,
 )
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Utils.Utils import get_project_root
+
 #
 #######################################################################################################################
 
 
 # --- Configuration ---
 _HAS_CACHETOOLS = True
-DEFAULT_CHACHA_DB_SUBDIR = "chachanotes_user_dbs" # This will be a sub-directory within the user's main DB directory
+DEFAULT_CHACHA_DB_SUBDIR = "chachanotes_user_dbs"  # This will be a sub-directory within the user's main DB directory
+_CHACHA_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chacha-db")
+_CHACHA_WATCHDOG_SECS = float(os.getenv("CHACHA_INIT_WATCHDOG_SECS", "5"))
+_CHACHA_HEALTH_LOCK = threading.Lock()
+_CHACHA_HEALTH: Dict[str, Any] = {
+    "init_attempts": 0,
+    "init_failures": 0,
+    "last_init_ms": None,
+    "last_error": None,
+    "last_warn_dump": None,
+    "cached_instances": 0,
+    "default_char_ensures": 0,
+    "default_char_failures": 0,
+    "warm_startups": 0,
+}
 
 
 def _normalise_user_base_path(raw_path: Path) -> Path:
@@ -78,13 +99,66 @@ def _resolve_main_user_base_dir() -> Path:
     logger.critical("CRITICAL: USER_DB_BASE_DIR is not configured in settings or environment. Using fallback.")
     return _normalise_user_base_path(Path("./app_data/user_databases_fallback"))
 
+
 # USER_CHACHA_DB_BASE_DIR will now be defined *per user* inside _get_chacha_db_path_for_user
 # We only need the main base directory here at the module level.
+
+
+def _record_init(duration_ms: float, success: bool, error: Exception | None = None) -> None:
+    with _CHACHA_HEALTH_LOCK:
+        _CHACHA_HEALTH["init_attempts"] += 1
+        _CHACHA_HEALTH["last_init_ms"] = duration_ms
+        _CHACHA_HEALTH["cached_instances"] = len(_chacha_db_instances)
+        if success:
+            _CHACHA_HEALTH["last_error"] = None
+        else:
+            _CHACHA_HEALTH["init_failures"] += 1
+            _CHACHA_HEALTH["last_error"] = str(error) if error else "unknown error"
+
+
+def _record_default_character(success: bool) -> None:
+    with _CHACHA_HEALTH_LOCK:
+        if success:
+            _CHACHA_HEALTH["default_char_ensures"] += 1
+        else:
+            _CHACHA_HEALTH["default_char_failures"] += 1
+
+
+def _maybe_dump_traceback(reason: str) -> None:
+    now = time.time()
+    last_dump = _CHACHA_HEALTH.get("last_warn_dump")
+    # Rate limit dumps to avoid log spam
+    if last_dump and now - float(last_dump) < 300:
+        return
+    with _CHACHA_HEALTH_LOCK:
+        _CHACHA_HEALTH["last_warn_dump"] = now
+    try:
+        logger.warning(f"ChaChaNotes watchdog dump triggered: {reason}")
+        faulthandler.dump_traceback(file=sys.stderr)
+    except Exception as dump_err:
+        logger.debug(f"Faulthandler dump failed: {dump_err}")
+
+
+def get_chacha_health_snapshot() -> Dict[str, Any]:
+    status = "healthy"
+    if _CHACHA_HEALTH.get("init_failures"):
+        status = "degraded"
+    return {
+        "status": status,
+        "init_attempts": _CHACHA_HEALTH.get("init_attempts"),
+        "init_failures": _CHACHA_HEALTH.get("init_failures"),
+        "last_init_ms": _CHACHA_HEALTH.get("last_init_ms"),
+        "last_error": _CHACHA_HEALTH.get("last_error"),
+        "cached_instances": len(_chacha_db_instances),
+        "default_char_ensures": _CHACHA_HEALTH.get("default_char_ensures"),
+        "default_char_failures": _CHACHA_HEALTH.get("default_char_failures"),
+    }
 
 
 def resolve_chacha_user_base_dir() -> Path:
     """Public helper to expose the resolved user database base directory."""
     return _resolve_main_user_base_dir()
+
 
 SERVER_CLIENT_ID = settings.get("SERVER_CLIENT_ID")
 if not SERVER_CLIENT_ID:
@@ -109,11 +183,13 @@ else:
     _chacha_db_instances: Dict[str, CharactersRAGDB] = {}
 
 _chacha_db_lock = threading.Lock()
+_chacha_default_char_tasks: Set[asyncio.Task] = set()
 
 
 #######################################################################################################################
 
 # --- Helper Functions ---
+
 
 def _get_chacha_db_path_for_user(user_id: int) -> Path:
     """
@@ -137,9 +213,7 @@ def _get_chacha_db_path_for_user(user_id: int) -> Path:
             f"Failed to create user directory for ChaChaNotes at {user_dir}: {e}",
             exc_info=True,
         )
-        raise IOError(
-            f"Could not initialize ChaChaNotes storage directory for user {user_id}."
-        ) from e
+        raise IOError(f"Could not initialize ChaChaNotes storage directory for user {user_id}.") from e
 
     db_file = user_dir / DatabasePaths.CHACHA_DB_NAME
     # Extra safety: ensure parent exists even if upstream helpers change
@@ -149,6 +223,63 @@ def _get_chacha_db_path_for_user(user_id: int) -> Path:
         logger.debug(f"Parent ensure for ChaChaNotes path failed softly: { _mk_e }")
     logger.info(f"Ensured ChaChaNotes DB directory for user {user_id}: {db_file.parent}")
     return db_file
+
+
+def _apply_sqlite_tuning(db_instance: CharactersRAGDB) -> None:
+    if db_instance.backend_type != BackendType.SQLITE:
+        return
+    try:
+        conn = db_instance.get_connection()
+        # Harden concurrency characteristics
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA busy_timeout = 10000")
+    except Exception as e:
+        logger.debug(f"ChaChaNotes tuning skipped: {e}")
+
+
+def _health_check_instance(db_instance: CharactersRAGDB) -> bool:
+    try:
+        conn = db_instance.get_connection()
+        conn.execute("PRAGMA busy_timeout = 1000")
+        conn.execute("SELECT 1")
+        return True
+    except Exception as e:
+        logger.warning(f"ChaChaNotes health probe failed: {e}")
+        return False
+
+
+def _create_and_prepare_db(user_id: int, client_id: str) -> CharactersRAGDB:
+    db_path: Optional[Path] = None
+    db_path = _get_chacha_db_path_for_user(user_id)
+    try:
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    except Exception as _mk2:
+        logger.debug(f"Secondary ensure for ChaChaNotes parent failed softly: {_mk2}")
+    logger.info(f"Initializing CharactersRAGDB instance for user {user_id} at path: {db_path}")
+    db_instance = CharactersRAGDB(db_path=str(db_path), client_id=str(client_id))
+    _apply_sqlite_tuning(db_instance)
+    return db_instance
+
+
+async def _ensure_default_character_async(db_instance: CharactersRAGDB, user_id: int) -> None:
+    loop = asyncio.get_running_loop()
+    try:
+        await asyncio.wait_for(
+            loop.run_in_executor(_CHACHA_EXECUTOR, _ensure_default_character, db_instance),
+            timeout=5,
+        )
+        _record_default_character(True)
+    except asyncio.TimeoutError:
+        _record_default_character(False)
+        logger.warning(f"Timed out ensuring default character for user {user_id}; will retry on next access.")
+    except Exception as e:
+        _record_default_character(False)
+        logger.warning(
+            f"Error ensuring default character for user {user_id}: {e}. Continuing; will retry on next access.",
+            exc_info=True,
+        )
+
 
 def _ensure_default_character(db_instance: CharactersRAGDB) -> Optional[int]:
     """
@@ -160,27 +291,27 @@ def _ensure_default_character(db_instance: CharactersRAGDB) -> Optional[int]:
         default_char = db_instance.get_character_card_by_name(DEFAULT_CHARACTER_NAME)
         if default_char:
             logger.debug(f"Default character '{DEFAULT_CHARACTER_NAME}' already exists with ID: {default_char['id']}.")
-            return default_char['id']
+            return default_char["id"]
         else:
             logger.info(f"Default character '{DEFAULT_CHARACTER_NAME}' not found. Creating now...")
             card_data = {
-                'name': DEFAULT_CHARACTER_NAME,
-                'description': DEFAULT_CHARACTER_DESCRIPTION,
+                "name": DEFAULT_CHARACTER_NAME,
+                "description": DEFAULT_CHARACTER_DESCRIPTION,
                 # All other fields will be None or default in the DB
-                'personality': "Supportive, patient, and concise.",
-                'scenario': "General assistance",
-                'system_prompt': "You are a helpful AI assistant.",
-                'image': None,
-                'post_history_instructions': None,
-                'first_message': "Hello! I'm your Helpful AI Assistant. How can I support you today?",
-                'message_example': None,
-                'creator_notes': "This character is automatically generated to provide a reliable default assistant persona.",
-                'alternate_greetings': None,
-                'tags': json.dumps(["default", "neutral", "assistant"]), # Store as JSON string
-                'creator': "System",
-                'character_version': "1.0",
-                'extensions': None,
-                'client_id': db_instance.client_id # Ensure client_id is set
+                "personality": "Supportive, patient, and concise.",
+                "scenario": "General assistance",
+                "system_prompt": "You are a helpful AI assistant.",
+                "image": None,
+                "post_history_instructions": None,
+                "first_message": "Hello! I'm your Helpful AI Assistant. How can I support you today?",
+                "message_example": None,
+                "creator_notes": "This character is automatically generated to provide a reliable default assistant persona.",
+                "alternate_greetings": None,
+                "tags": json.dumps(["default", "neutral", "assistant"]),  # Store as JSON string
+                "creator": "System",
+                "character_version": "1.0",
+                "extensions": None,
+                "client_id": db_instance.client_id,  # Ensure client_id is set
             }
             # The add_character_card in CharactersRAGDB handles versioning and timestamps.
             char_id = db_instance.add_character_card(card_data)
@@ -189,37 +320,109 @@ def _ensure_default_character(db_instance: CharactersRAGDB) -> Optional[int]:
                 return char_id
             else:
                 # This should ideally not happen if add_character_card raises on failure
-                logger.error(f"Failed to create default character '{DEFAULT_CHARACTER_NAME}'. add_character_card returned None.")
+                logger.error(
+                    f"Failed to create default character '{DEFAULT_CHARACTER_NAME}'. add_character_card returned None."
+                )
                 return None
-    except ConflictError as e: # Should only happen if get_character_card_by_name had an issue or race condition
+    except ConflictError as e:  # Should only happen if get_character_card_by_name had an issue or race condition
         logger.warning(f"Conflict error while ensuring default character (likely race condition, re-fetching): {e}")
         # Re-fetch, as it might have been created by another thread.
         refetched_char = db_instance.get_character_card_by_name(DEFAULT_CHARACTER_NAME)
         if refetched_char:
-            return refetched_char['id']
+            return refetched_char["id"]
         logger.error(f"Still could not get/create default character after conflict: {e}")
         return None
     except (CharactersRAGDBError, SchemaError, InputError) as e:
         logger.error(f"Database error while ensuring default character '{DEFAULT_CHARACTER_NAME}': {e}", exc_info=True)
-        return None # Indicate failure
+        return None  # Indicate failure
     except Exception as e_gen:
-        logger.error(f"Unexpected error while ensuring default character '{DEFAULT_CHARACTER_NAME}': {e_gen}", exc_info=True)
+        logger.error(
+            f"Unexpected error while ensuring default character '{DEFAULT_CHARACTER_NAME}': {e_gen}", exc_info=True
+        )
         return None
+
+
+async def _is_instance_healthy(db_instance: CharactersRAGDB) -> bool:
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(_health_check_instance, db_instance),
+            timeout=1.0,
+        )
+        return bool(result)
+    except Exception:
+        return False
+
+
+async def _get_or_init_db_instance(user_id: int, client_id: str) -> CharactersRAGDB:
+    base_dir = _resolve_main_user_base_dir()
+    cache_key = f"{base_dir!s}::{user_id}"
+    with _chacha_db_lock:
+        db_instance = _chacha_db_instances.get(cache_key)
+    if db_instance:
+        if await _is_instance_healthy(db_instance):
+            return db_instance
+        logger.warning(f"ChaChaNotes cached instance unhealthy for user {user_id}; evicting and rebuilding.")
+        with _chacha_db_lock:
+            if _chacha_db_instances.get(cache_key) is db_instance:
+                _chacha_db_instances.pop(cache_key, None)
+
+    loop = asyncio.get_running_loop()
+    start = time.perf_counter()
+    try:
+        db_instance = await asyncio.wait_for(
+            loop.run_in_executor(_CHACHA_EXECUTOR, _create_and_prepare_db, user_id, client_id),
+            timeout=max(_CHACHA_WATCHDOG_SECS * 3, 5),
+        )
+        duration_ms = (time.perf_counter() - start) * 1000
+        _record_init(duration_ms, True)
+        if duration_ms / 1000 > _CHACHA_WATCHDOG_SECS:
+            _maybe_dump_traceback(f"ChaChaNotes init exceeded {_CHACHA_WATCHDOG_SECS}s for user {user_id}")
+    except asyncio.TimeoutError as e:
+        _record_init(_CHACHA_WATCHDOG_SECS * 1000, False, e)
+        _maybe_dump_traceback(f"ChaChaNotes init timed out for user {user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ChaChaNotes initialization timed out",
+        ) from e
+    except Exception as e:
+        duration_ms = (time.perf_counter() - start) * 1000
+        _record_init(duration_ms, False, e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not initialize character & notes database for user: {e}",
+        ) from e
+
+    with _chacha_db_lock:
+        _chacha_db_instances[cache_key] = db_instance
+        _CHACHA_HEALTH["cached_instances"] = len(_chacha_db_instances)
+    return db_instance
+
+
+async def warm_chacha_db_for_user(user_id: int, client_id: str | None = None) -> None:
+    try:
+        db_instance = await _get_or_init_db_instance(user_id, client_id or str(user_id))
+        _CHACHA_HEALTH["warm_startups"] += 1
+        task = asyncio.create_task(_ensure_default_character_async(db_instance, user_id))
+        _chacha_default_char_tasks.add(task)
+        task.add_done_callback(_chacha_default_char_tasks.discard)
+    except Exception as e:
+        logger.warning(f"Warm-up for ChaChaNotes user {user_id} failed: {e}")
+
 
 # --- Main Dependency Function ---
 
-async def get_chacha_db_for_user(
-        current_user: User = Depends(get_request_user)
-) -> CharactersRAGDB:
+
+async def get_chacha_db_for_user(current_user: User = Depends(get_request_user)) -> CharactersRAGDB:
     """
     FastAPI dependency to get the CharactersRAGDB instance for the identified user.
-    Handles caching, initialization, and schema checks.
+    Handles caching and health checks; heavy initialization runs in a dedicated executor.
     """
     # Respect FastAPI dependency overrides explicitly if they exist.
     # Some test environments reset overrides aggressively; checking here ensures
     # we still honor an override bound to this callable.
     try:
         from tldw_Server_API.app.main import app as _app  # Local import to avoid import cycles at module load
+
         override_fn = _app.dependency_overrides.get(get_chacha_db_for_user)
         if override_fn is not None:
             try:
@@ -238,104 +441,15 @@ async def get_chacha_db_for_user(
     logger.info("<<<<< ACTUAL get_chacha_db_for_user CALLED >>>>>")
     if not current_user or not isinstance(current_user.id, int):  # Ensure user_id is an int
         logger.error("get_chacha_db_for_user called without a valid User object or user.id is not int.")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="User identification failed for ChaChaNotes DB.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User identification failed for ChaChaNotes DB."
+        )
 
     user_id = current_user.id
-    base_dir = _resolve_main_user_base_dir()
-    cache_key = f"{str(base_dir)}::{user_id}"
-    db_instance: Optional[CharactersRAGDB] = None
-
-    with _chacha_db_lock:  # Protects cache access
-        db_instance = _chacha_db_instances.get(cache_key)
-
-    if db_instance:
-        try:
-            # Perform a quick check to see if the connection is alive
-            # This is a basic check; the CharactersRAGDB class handles more robust connection checks internally
-            conn = db_instance.get_connection()
-            conn.execute("SELECT 1")
-            db_instance.ensure_character_tables_ready()
-            logger.debug(f"Using cached and active ChaChaNotesDB instance for user_id: {user_id}")
-            return db_instance
-        except (CharactersRAGDBError, AttributeError, Exception) as e:  # Catch broader errors if connection is dead
-            logger.warning(f"Cached ChaChaNotesDB instance for user {user_id} seems inactive ({e}). Re-initializing.")
-            with _chacha_db_lock:  # Ensure exclusive access for removal
-                if _chacha_db_instances.get(cache_key) is db_instance:  # ensure it's the same instance
-                    _chacha_db_instances.pop(cache_key, None)
-            db_instance = None  # Force re-initialization
-
-    logger.info(f"No usable cached ChaChaNotesDB instance found for user_id: {user_id}. Initializing.")
-    with _chacha_db_lock:  # Protects instance creation and cache update
-        # Double-check cache in case another thread created it while waiting
-        db_instance = _chacha_db_instances.get(cache_key)
-        if db_instance:  # pragma: no cover
-            logger.debug(f"ChaChaNotesDB instance for user {user_id} created concurrently by another thread.")
-            return db_instance
-
-        db_path: Optional[Path] = None
-        try:
-            db_path = _get_chacha_db_path_for_user(user_id)
-            # Defensive: ensure directory exists in the exact resolved path
-            try:
-                Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-            except Exception as _mk2:
-                logger.debug(f"Secondary ensure for ChaChaNotes parent failed softly: {_mk2}")
-            logger.info(f"Initializing CharactersRAGDB instance for user {user_id} at path: {db_path}")
-
-            db_instance = CharactersRAGDB(db_path=str(db_path), client_id=str(current_user.id))
-
-            # Ensure optional auxiliary table for message metadata (safe no-op if exists)
-            try:
-                db_instance.execute_query(
-                    """
-                    CREATE TABLE IF NOT EXISTS message_metadata(
-                      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
-                      tool_calls_json TEXT,
-                      extra_json TEXT,
-                      last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    )
-                    """,
-                    script=False,
-                    commit=True,
-                )
-            except Exception as _aux:
-                logger.debug(f"Optional table ensure (message_metadata) skipped: {_aux}")
-
-            # +++ Ensure default character exists after DB instance is created +++
-            # Run synchronous function in thread pool to avoid blocking async context
-            default_char_id = await asyncio.to_thread(_ensure_default_character, db_instance)
-            if default_char_id is None:
-                # This is a problem, the application might not function correctly without a default.
-                logger.error(f"Failed to ensure default character for user {user_id}. This might impact functionality.")
-                # Depending on strictness, you could raise an HTTPException here.
-                # For now, we'll log and proceed, but chat saving might fail if it relies on this.
-
-            _chacha_db_instances[cache_key] = db_instance
-            logger.info(f"CharactersRAGDB instance created and cached successfully for user {user_id}")
-
-        except (CharactersRAGDBError, SchemaError, InputError, ConflictError) as e:
-            log_path_str = str(db_path) if db_path else f"directory for user_id {user_id}"
-            logger.error(f"Failed to initialize CharactersRAGDB for user {user_id} at {log_path_str}: {e}",
-                          exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Could not initialize character & notes database for user: {e}"
-            ) from e
-        except IOError as e:  # Catch error from _get_chacha_db_path_for_user
-            logger.error(f"Failed to get CharactersRAGDB path for user {user_id}: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=str(e)
-            ) from e
-        except Exception as e:
-            log_path_str = str(db_path) if db_path else f"directory for user_id {user_id}"
-            logger.error(f"Unexpected error initializing CharactersRAGDB for user {user_id} at {log_path_str}: {e}",
-                          exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An unexpected error occurred during character & notes database setup for user."
-            ) from e
+    db_instance = await _get_or_init_db_instance(user_id, str(current_user.id))
+    task = asyncio.create_task(_ensure_default_character_async(db_instance, user_id))
+    _chacha_default_char_tasks.add(task)
+    task.add_done_callback(_chacha_default_char_tasks.discard)
     return db_instance
 
 
@@ -351,6 +465,15 @@ def close_all_chacha_db_instances():
                 logger.error(f"Error closing ChaChaNotesDB instance for user {user_id}: {e}", exc_info=True)
         _chacha_db_instances.clear()
         logger.info("All ChaChaNotesDB instances closed and cache cleared.")
+
+
+def shutdown_chacha_executor(wait: bool = False) -> None:
+    """Shut down the ChaChaNotes executor to avoid lingering threads on shutdown."""
+    try:
+        _CHACHA_EXECUTOR.shutdown(wait=wait, cancel_futures=True)
+    except Exception as e:
+        logger.debug(f"ChaChaNotes executor shutdown error: {e}")
+
 
 # Example of how to register for shutdown event in FastAPI:
 # from fastapi import FastAPI
