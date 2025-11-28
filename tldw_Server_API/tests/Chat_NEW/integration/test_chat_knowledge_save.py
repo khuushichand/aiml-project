@@ -1,3 +1,5 @@
+"""Integration tests for the chat knowledge save endpoint."""
+
 from __future__ import annotations
 
 import pytest
@@ -150,4 +152,3 @@ def test_save_chat_knowledge_rolls_back_on_flashcard_error(
     finally:
         chacha_db.add_flashcard = original_add_flashcard  # type: ignore[assignment]
         test_client.app.dependency_overrides.pop(get_chacha_db_for_user, None)
-

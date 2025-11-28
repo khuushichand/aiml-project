@@ -517,10 +517,17 @@ class SttProviderRegistry:
             return provider, "", None
 
         try:
-            raw_provider, model, variant = parse_transcription_model(model_name)
+            normalized_name = (model_name or "").strip()
+            lowered = normalized_name.lower()
+            # Preserve legacy alias: bare "qwen" maps to Qwen2Audio.
+            if lowered == "qwen":
+                provider = SttProviderName.QWEN2AUDIO.value
+                return provider, "qwen2audio", None
+
+            raw_provider, model, variant = parse_transcription_model(normalized_name)
         except Exception:
             # Defensive: treat unknown models as Whisper-family
-            raw_provider, model, variant = "whisper", model_name, None
+            raw_provider, model, variant = "whisper", (model_name or "").strip(), None
 
         provider = _normalize_provider_name(raw_provider)
         if provider == "whisper":

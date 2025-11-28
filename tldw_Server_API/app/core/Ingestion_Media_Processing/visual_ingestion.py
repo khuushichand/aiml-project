@@ -1,3 +1,11 @@
+"""
+Helpers for Visual RAG ingestion.
+
+This module loads Visual RAG configuration from environment and config files,
+then persists visual detections (currently from PDF VLM summaries) into the
+Media DB as VisualDocuments rows for downstream retrieval and analysis.
+"""
+
 from __future__ import annotations
 
 import json
@@ -49,8 +57,10 @@ def _visual_rag_settings() -> Dict[str, Any]:
                 if raw_max is not None:
                     try:
                         settings["max_images_per_media"] = max(1, int(str(raw_max)))
-                    except Exception:
-                        pass
+                    except (ValueError, TypeError) as exc:
+                        logger.debug(
+                            f"Invalid max_images_per_media in [Visual-RAG] section, using default: {exc}"
+                        )
     except Exception as exc:
         logger.debug(f"visual_ingestion: config load skipped/failed: {exc}")
 
@@ -126,13 +136,19 @@ def persist_visual_documents_from_analysis(
                         extra_metadata=json.dumps(extra),
                     )
                     created += 1
-                except Exception as det_err:
-                    logger.debug(f"visual_ingestion: skipping detection due to error: {det_err}")
+                except (ValueError, TypeError, KeyError, json.JSONDecodeError) as det_err:
+                    logger.debug(f"visual_ingestion: skipping detection due to data error: {det_err}")
                     continue
+                except Exception as det_err:
+                    logger.exception(
+                        "visual_ingestion: unexpected error while persisting detection",  # noqa: TRY401
+                        exc_info=det_err,
+                    )
+                    raise
     finally:
         try:
             db.close_connection()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"visual_ingestion: DB close failed: {exc}")
 
     return created

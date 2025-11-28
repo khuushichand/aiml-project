@@ -2081,7 +2081,13 @@ async def save_chat_knowledge(
         conversation = db.get_conversation_by_id(payload.conversation_id)
         if not conversation or conversation.get("deleted"):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
-        if str(conversation.get("client_id")) != str(current_user.id):
+        conv_client_id = conversation.get("client_id")
+        if conv_client_id is None or current_user.id is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+        try:
+            if int(conv_client_id) != int(current_user.id):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+        except ValueError:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
 
         if payload.message_id:

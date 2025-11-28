@@ -799,18 +799,10 @@ async def create_transcription(
             speech_to_text as fw_speech_to_text,
             strip_whisper_metadata_header,
             is_transcription_error_message as _is_transcription_error_message,
-            parse_transcription_model,
         )
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import (
             Audio_Files as audio_files,
         )
-
-        model_lower = (model or "").strip().lower()
-        # Preserve legacy aliases first (e.g., "qwen" → "qwen2audio")
-        if model_lower == "qwen":
-            provider_raw = "qwen2audio"
-        else:
-            provider_raw, _, _ = parse_transcription_model(model)
 
         # Use the shared STT provider registry so that REST STT and other
         # subsystems resolve providers/models consistently.
@@ -934,10 +926,7 @@ async def create_transcription(
                     transcribed_text = artifact.get("text", "")
                 except Exception as e:
                     logger.error(
-                        "Transcription failed for provider=%s, model=%s: %s",
-                        provider,
-                        provider_model_name or model,
-                        e,
+                        f"Transcription failed for provider={provider}, model={provider_model_name or model}: {e}"
                     )
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1076,16 +1065,13 @@ async def create_transcription(
             duration = duration_seconds
             response_data["duration"] = duration
 
-            # Segments (prefer real segments when Whisper used)
+            # Segments (prefer real segments when available, especially for Whisper)
             if "segment" in granularity_tokens:
-                if (
-                    provider == "faster-whisper"
-                    and "segments_list" in locals()
-                    and isinstance(segments_list, list)
-                    and segments_list
-                ):
+                if provider == "faster-whisper" and segments_for_timing:
                     segs = []
-                    for i, seg in enumerate(segments_list):
+                    for i, seg in enumerate(segments_for_timing):
+                        if not isinstance(seg, dict):
+                            continue
                         start = float(seg.get("start_seconds", 0.0))
                         end = float(seg.get("end_seconds", duration))
                         seg_obj: Dict[str, Any] = {

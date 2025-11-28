@@ -282,13 +282,14 @@ class MLXSessionRegistry:
         acquired = sema.acquire(blocking=False)
         if not acquired:
             raise ChatRateLimitError(provider="mlx", message="MLX busy (max concurrency reached)")
+        counted = False
         try:
             with self._lock:
                 if not self._session:
                     raise ChatBadRequestError(provider="mlx", message="No active MLX model; load one first")
                 session = self._session
-            with self._lock:
                 self._inflight += 1
+                counted = True
                 try:
                     set_gauge("mlx_requests_inflight", float(self._inflight))
                     set_gauge("mlx_queue_depth", 0.0)
@@ -296,16 +297,18 @@ class MLXSessionRegistry:
                     pass
             yield session
         finally:
-            try:
-                sema.release()
-            except Exception:
-                pass
-            with self._lock:
-                self._inflight = max(0, self._inflight - 1)
+            if acquired:
                 try:
-                    set_gauge("mlx_requests_inflight", float(self._inflight))
+                    sema.release()
                 except Exception:
                     pass
+            if counted:
+                with self._lock:
+                    self._inflight = max(0, self._inflight - 1)
+                    try:
+                        set_gauge("mlx_requests_inflight", float(self._inflight))
+                    except Exception:
+                        pass
 
     def status(self) -> Dict[str, Any]:
         with self._lock:
