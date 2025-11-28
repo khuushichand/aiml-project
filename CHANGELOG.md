@@ -7,6 +7,14 @@ and this project adheres to Some kind of Versioning
     
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+### Removed
+
+### Fixed
+
 ## [0.1.10] - 2025-11-27
 
 ### Added
