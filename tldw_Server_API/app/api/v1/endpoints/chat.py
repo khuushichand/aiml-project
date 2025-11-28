@@ -2076,19 +2076,22 @@ async def save_chat_knowledge(
     current_user: User = Depends(get_request_user),
 ):
     """Persist a snippet from a conversation into Notes (and optional Flashcard)."""
-    try:
-        # Validate conversation ownership and optional message linkage before mutating.
-        conversation = db.get_conversation_by_id(payload.conversation_id)
-        if not conversation or conversation.get("deleted"):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+	    try:
+	        # Validate conversation ownership and optional message linkage before mutating.
+	        conversation = db.get_conversation_by_id(payload.conversation_id)
+	        if not conversation or conversation.get("deleted"):
+	            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
         conv_client_id = conversation.get("client_id")
         if conv_client_id is None or current_user.id is None:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
-        try:
-            if int(conv_client_id) != int(current_user.id):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
-        except ValueError:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+	        try:
+	            if int(conv_client_id) != int(current_user.id):
+	                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+	        except ValueError:
+	            raise HTTPException(
+	                status_code=status.HTTP_403_FORBIDDEN,
+	                detail="Forbidden for this conversation",
+	            ) from None
 
         if payload.message_id:
             message = db.get_message_by_id(payload.message_id)

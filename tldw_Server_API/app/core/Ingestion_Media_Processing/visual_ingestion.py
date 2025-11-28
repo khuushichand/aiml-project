@@ -101,8 +101,7 @@ def persist_visual_documents_from_analysis(
     max_images = int(settings.get("max_images_per_media") or 32)
     created = 0
 
-    db = MediaDatabase(db_path=db_path, client_id=client_id)
-    try:
+    with MediaDatabase(db_path=db_path, client_id=client_id) as db:
         for entry in by_page:
             if created >= max_images:
                 break
@@ -129,7 +128,7 @@ def persist_visual_documents_from_analysis(
                         ocr_text=None,
                         tags=tags,
                         location=f"page:{page_no}" if page_no is not None else None,
-                        page_number=int(page_no) if isinstance(page_no, int) else None,
+                        page_number=int(page_no) if page_no is not None and isinstance(page_no, (int, float)) else None,
                         frame_index=None,
                         timestamp_seconds=None,
                         thumbnail_path=None,
@@ -145,10 +144,5 @@ def persist_visual_documents_from_analysis(
                         exc_info=det_err,
                     )
                     raise
-    finally:
-        try:
-            db.close_connection()
-        except Exception as exc:
-            logger.debug(f"visual_ingestion: DB close failed: {exc}")
 
     return created
