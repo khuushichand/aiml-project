@@ -8,18 +8,11 @@ principal for a request. It intentionally reuses existing AuthNZ helpers
 so that behavior stays aligned with current authentication flows.
 """
 
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from fastapi import HTTPException, Request, status
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
-    User,
-    get_request_user,
-    get_single_user_instance,
-    verify_jwt_and_fetch_user,
-    verify_single_user_api_key,
-)
 from tldw_Server_API.app.core.AuthNZ.principal_model import (
     AuthContext,
     AuthPrincipal,
@@ -29,6 +22,10 @@ from tldw_Server_API.app.core.AuthNZ.settings import (
     get_settings,
     is_single_user_mode,
 )
+
+if TYPE_CHECKING:
+    # Imported only for type checking to avoid circular imports at runtime.
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 
 
 def _extract_bearer_token(request: Request) -> Optional[str]:
@@ -55,7 +52,7 @@ def _extract_api_key(request: Request) -> Optional[str]:
 
 
 def _build_principal_from_user(
-    user: User,
+    user: "User",
     *,
     kind: PrincipalKind,
     request: Request,
@@ -157,11 +154,16 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
     if isinstance(existing, AuthContext):
         return existing.principal
 
-    settings = get_settings()
-
     # Single-user mode: validate fixed API key and map to single_user principal
     try:
         if is_single_user_mode():
+            # Local import to avoid circular import at module import time
+            from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+                User,
+                get_single_user_instance,
+                verify_single_user_api_key,
+            )
+
             api_key = _extract_api_key(request)
             authorization = request.headers.get("Authorization") if getattr(request, "headers", None) else None
 
@@ -195,6 +197,8 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                 request.state.user_id = user.id
                 request.state.team_ids = []
                 request.state.org_ids = []
+                # Cache the resolved user for downstream dependencies
+                setattr(request.state, "_auth_user", user)
             except Exception:
                 pass
 
@@ -238,6 +242,12 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
     # JWT path
     if token:
         try:
+            # Local import to avoid circular import at module import time
+            from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+                User,
+                verify_jwt_and_fetch_user,
+            )
+
             user = await verify_jwt_and_fetch_user(request, token)
         except HTTPException:
             raise
@@ -260,6 +270,8 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
         ctx = _build_context(principal, request)
         try:
             request.state.auth = ctx
+            # Cache the resolved user for downstream dependencies
+            setattr(request.state, "_auth_user", user)
         except Exception:
             pass
         return principal
@@ -267,9 +279,14 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
     # API key path
     if api_key:
         try:
-            # Reuse existing logic that validates API keys and attaches
-            # request.state.user_id, api_key_id, org_ids, team_ids.
-            user = await get_request_user(request, token="", api_key=api_key)
+            # Local import to avoid circular import at module import time
+            from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+                User,
+                authenticate_api_key_user,
+            )
+
+            # Validate API key and attach user/context via shared helper
+            user = await authenticate_api_key_user(request, api_key)
         except HTTPException:
             raise
         except Exception as exc:
@@ -298,6 +315,8 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
         ctx = _build_context(principal, request)
         try:
             request.state.auth = ctx
+            # Cache the resolved user for downstream dependencies
+            setattr(request.state, "_auth_user", user)
         except Exception:
             pass
         return principal
@@ -308,4 +327,3 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-
