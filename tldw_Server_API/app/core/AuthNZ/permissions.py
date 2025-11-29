@@ -52,12 +52,21 @@ def check_permission(user: User, permission: str) -> bool:
     # re-querying the RBAC store and to ensure consistency with the token's
     # authenticated context (especially in tests where multiple DB pools may
     # exist).
+    perms = None
     try:
         perms = getattr(user, "permissions", None)
-        if isinstance(perms, list) and permission in perms:
-            return True
     except Exception:
-        pass
+        perms = None
+
+    if isinstance(perms, list):
+        # Claims are authoritative when present; if the permission is not listed,
+        # treat it as absent without hitting the DB.
+        return permission in perms
+
+    # For caller contexts that do not provide claim lists at all (perms is None),
+    # fall back to the UserDatabase for compatibility with older code paths.
+    if perms is not None:
+        return False
 
     try:
         user_db = get_user_database()
@@ -91,12 +100,21 @@ def check_role(user: User, role: str) -> bool:
     # Prefer role claims already attached to the request user for fast-path
     # checks and to avoid depending on a potentially stale UserDatabase
     # singleton that may point at a different backend during tests.
+    roles = None
     try:
         roles = getattr(user, "roles", None)
-        if isinstance(roles, list) and role in roles:
-            return True
     except Exception:
-        pass
+        roles = None
+
+    if isinstance(roles, list):
+        # Claims are authoritative when present; if the role is not listed,
+        # treat it as absent without hitting the DB.
+        return role in roles
+
+    # For caller contexts that do not provide claim lists at all (roles is None),
+    # fall back to the UserDatabase for compatibility with older code paths.
+    if roles is not None:
+        return False
 
     try:
         user_db = get_user_database()

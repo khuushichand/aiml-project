@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from typing import Optional
-import hmac
-import hashlib
 
 from fastapi import Request, HTTPException
 import os
 
+from loguru import logger
+
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
-from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits, is_key_over_budget
-from loguru import logger
+from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 
 
 async def enforce_llm_budget(request: Request) -> None:
@@ -77,13 +77,57 @@ async def enforce_llm_budget(request: Request) -> None:
             logger.debug("LLM guard: skipping budget enforcement (no api_key_id)")
         return
 
-    limits = await get_key_limits(int(key_id))
+    # Construct an AuthPrincipal for governance decisions. Prefer an existing
+    # AuthContext when available; otherwise derive a minimal principal from
+    # request.state.
+    principal: Optional[AuthPrincipal] = None
+    existing_ctx = getattr(request.state, "auth", None)
+    if isinstance(existing_ctx, AuthContext):
+        principal = existing_ctx.principal
+    if principal is None:
+        # Best-effort principal derived from request.state attributes
+        user_id_value = getattr(request.state, "user_id", None)
+        try:
+            user_id_int = int(user_id_value) if user_id_value is not None else None
+        except Exception:
+            user_id_int = None
+        org_ids = []
+        team_ids = []
+        try:
+            raw_org_ids = getattr(request.state, "org_ids", None)
+            if isinstance(raw_org_ids, (list, tuple)):
+                org_ids = [int(o) for o in raw_org_ids if o is not None]
+        except Exception:
+            org_ids = []
+        try:
+            raw_team_ids = getattr(request.state, "team_ids", None)
+            if isinstance(raw_team_ids, (list, tuple)):
+                team_ids = [int(t) for t in raw_team_ids if t is not None]
+        except Exception:
+            team_ids = []
+        principal = AuthPrincipal(
+            kind="api_key",
+            user_id=user_id_int,
+            api_key_id=int(key_id),
+            subject=None,
+            token_type="api_key",
+            jti=None,
+            roles=[],
+            permissions=[],
+            is_admin=False,
+            org_ids=org_ids,
+            team_ids=team_ids,
+        )
+
+    auth_gov = await get_auth_governor()
+    result = await auth_gov.check_llm_budget_for_api_key(principal, int(key_id))
+
+    limits = result.get("limits") or {}
     if not limits or not limits.get("is_virtual"):
         if _dbg:
             logger.debug(f"LLM guard: key {key_id} not virtual or limits missing; skipping")
         return
 
-    result = await is_key_over_budget(int(key_id))
     if _dbg:
         limits = result.get('limits', {}) or {}
         subset = {

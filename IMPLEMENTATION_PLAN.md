@@ -47,3 +47,15 @@
 - New unit tests for at least one extracted phase (e.g., retrieval or guardrails) to validate behavior in isolation.
 **Status**: Not Started
 
+## Stage 5: AuthNZ Principal Skeleton
+**Goal**: Introduce `AuthPrincipal` / `AuthContext` types and a stable `principal_id` helper as the foundation for the AuthNZ refactor PRDs (Principal-Governance, User-Auth-Deps, User-Unification).
+**Success Criteria**:
+- `AuthPrincipal` and `AuthContext` models exist in `tldw_Server_API/app/core/AuthNZ/principal_model.py`.
+- A helper `compute_principal_id(kind, subject_key)` computes a stable, pseudonymous identifier derived from the principal kind and subject key.
+- A resolver module `tldw_Server_API/app/core/AuthNZ/auth_principal_resolver.py` exposes `get_auth_principal(request)` that reuses existing AuthNZ helpers to derive an `AuthPrincipal`.
+- Legacy dependencies (`User_DB_Handling.verify_jwt_and_fetch_user`, `User_DB_Handling.get_request_user`, `auth_deps.get_current_user`) populate `request.state.auth` with an `AuthContext` built from their resolved user and request metadata without changing external behavior.
+- Unit tests validate model construction, resolver behavior for single-user/JWT/API-key flows, and request-scoped reuse of `AuthContext` without affecting existing AuthNZ code paths.
+**Tests**:
+- New unit tests in `tldw_Server_API/tests/AuthNZ_Unit/test_principal_model.py` cover `compute_principal_id`, `AuthPrincipal`, and `AuthContext`.
+- New unit tests in `tldw_Server_API/tests/AuthNZ_Unit/test_auth_principal_resolver.py` cover `get_auth_principal` for single-user, JWT, API-key, and missing-credentials cases.
+**Status**: Complete

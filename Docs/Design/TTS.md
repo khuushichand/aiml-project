@@ -47,6 +47,10 @@ https://departmentofproduct.substack.com/p/new-ai-voice-features-and-use-cases?t
 https://ai.google.dev/gemini-api/docs/speech-generation
 https://github.com/stepfun-ai/Step-Audio2
 https://github.com/fastrepl/hyprnote
+https://github.com/travisvn/chatterbox-tts-api
+https://huggingface.co/maya-research/maya1
+https://github.com/thxxx/harper?tab=readme-ov-file
+https://github.com/nari-labs/dia2
 https://huggingface.co/nvidia/audio-flamingo-3-chat
 https://deepgram.com/
 https://docs.cartesia.ai/get-started/overview

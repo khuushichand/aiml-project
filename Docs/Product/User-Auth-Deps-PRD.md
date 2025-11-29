@@ -319,7 +319,11 @@ Symptoms:
   - API keys (regular and virtual).
 - Integration tests confirming `User` objects derived from `AuthPrincipal` contain correct roles/permissions.
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- `AuthPrincipal` / `AuthContext` are implemented in `tldw_Server_API/app/core/AuthNZ/principal_model.py`, and `get_auth_principal(request)` is implemented in `tldw_Server_API/app/core/AuthNZ/auth_principal_resolver.py` with unit tests for single-user, JWT, and API-key flows.
+- Core dependencies (`auth_deps.get_current_user`, `User_DB_Handling.verify_jwt_and_fetch_user` / `get_request_user`) now populate `request.state.auth` from their resolved user context so that `AuthPrincipal` can be reused across the stack; full delegation of identity derivation to `get_auth_principal` is not yet complete.
 
 ### Stage 2: Claim-First Permissions
 **Goal**: Make runtime permission and role checks rely solely on claims in the common path.
@@ -334,7 +338,11 @@ Symptoms:
   - User-specific allow/deny overrides.
   - Admin implied permissions.
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- `permissions.py` now treats `user.permissions` / `user.roles` as authoritative when present, returning False without hitting the DB when claims exist but lack the required permission/role.
+- DB-based fallbacks are retained only for caller contexts that do not provide claim lists at all (e.g., legacy user objects without `permissions` / `roles` attributes), reducing database usage on typical, claim-bearing code paths.
 
 ### Stage 3: Unified Dependencies & Adoption
 **Goal**: Provide and adopt unified auth dependencies across a set of key endpoints and middlewares.
@@ -349,7 +357,12 @@ Symptoms:
   - Required permissions/roles are enforced correctly.
   - Usage logging and budget guard see the expected principal data.
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- New claim-first FastAPI dependencies (`get_auth_principal`, `require_permissions`, `require_roles`) are implemented in `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py` with unit tests.
+- A representative media endpoint (`/api/v1/media/add`) and an admin endpoint (`/api/v1/metrics/reset`) now also enforce claims using these dependencies alongside their existing auth checks.
+- `llm_budget_guard` has been updated to consume `AuthPrincipal` (via `AuthContext` / `request.state.auth`) when consulting governance for LLM virtual-key budgets.
 
 ### Stage 4: Cleanup & Documentation
 **Goal**: Remove legacy, overlapping auth dependencies and update documentation.

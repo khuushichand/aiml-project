@@ -331,7 +331,12 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
   - User-bound API key and virtual key.
 - Integration tests asserting `request.state.auth` and `request.state.user_id/api_key_id` are set for representative endpoints.
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- `AuthPrincipal` / `AuthContext` models exist in `tldw_Server_API/app/core/AuthNZ/principal_model.py` with a stable, pseudonymous `principal_id` helper and unit tests.
+- A resolver `get_auth_principal(request)` is implemented in `tldw_Server_API/app/core/AuthNZ/auth_principal_resolver.py` with unit tests for single-user, JWT, and API-key flows.
+- `auth_deps.get_current_user` and `User_DB_Handling` now populate `request.state.auth` / `AuthPrincipal` after resolving the current user; refactoring them to delegate identity derivation directly to `get_auth_principal` remains future work.
 
 ### Stage 2: LLM Budgets via AuthGovernor
 **Goal**: Route virtual-key LLM budget enforcement through `AuthGovernor` using `AuthPrincipal` and existing `llm_usage_log` data.
@@ -348,7 +353,12 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
   - Over-budget key receives 402 with structured detail.
 - Regression tests ensuring non-virtual keys are unaffected.
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- A minimal `AuthGovernor` facade focused on LLM budgets is implemented in `tldw_Server_API/app/core/AuthNZ/auth_governor.py`, wrapping the existing `is_key_over_budget` logic and attaching principal metadata.
+- `tldw_Server_API/app/core/AuthNZ/llm_budget_guard.py` now consults `AuthGovernor.check_llm_budget_for_api_key` using an `AuthPrincipal` derived from `AuthContext` or `request.state`, and 402 responses include structured `details` with principal information while preserving the prior JSON surface.
+- Dedicated under-/over-budget API-level regression tests and alignment checks against `llm_usage_log` remain to be added.
 
 ### Stage 3: Login Lockouts via AuthGovernor
 **Goal**: Replace bespoke login attempt and lockout logic in AuthNZ rate limiter with `AuthGovernor` metrics.

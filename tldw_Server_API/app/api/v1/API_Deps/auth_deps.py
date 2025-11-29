@@ -34,6 +34,10 @@ from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_databa
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
+    get_auth_principal as _resolve_auth_principal,
+)
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
@@ -655,6 +659,41 @@ async def get_current_user(
             is_admin=bool(user.get("is_admin") or ("admin" in (user.get("roles") or []))),
         )
 
+        # Populate AuthContext for compatibility with the new principal model
+        try:
+            from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+
+            roles = list(user.get("roles") or [])
+            perms = list(user.get("permissions") or [])
+            is_admin_flag = bool(user.get("is_admin") or ("admin" in roles))
+
+            principal = AuthPrincipal(
+                kind="user",
+                user_id=int(user_id),
+                api_key_id=None,
+                subject=None,
+                token_type="access",
+                jti=None,
+                roles=roles,
+                permissions=perms,
+                is_admin=is_admin_flag,
+                org_ids=org_ids,
+                team_ids=team_ids,
+            )
+            ip = request.client.host if getattr(request, "client", None) else None
+            user_agent = request.headers.get("User-Agent") if getattr(request, "headers", None) else None
+            request_id = (
+                request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None
+            ) or getattr(request.state, "request_id", None)
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=ip,
+                user_agent=user_agent,
+                request_id=request_id,
+            )
+        except Exception as ctx_exc:
+            logger.debug(f"Unable to populate AuthContext in get_current_user: {ctx_exc}")
+
         return user
 
     except TokenExpiredError:
@@ -684,6 +723,72 @@ async def get_current_user(
             detail="Could not validate credentials",
             headers=extra_headers
         )
+
+
+#######################################################################################################################
+#
+# Claim-First Principal Dependencies
+
+
+async def get_auth_principal(
+    request: Request,
+) -> AuthPrincipal:
+    """
+    FastAPI dependency that returns the AuthPrincipal for the current request.
+
+    This delegates to the core auth_principal_resolver and reuses any existing
+    AuthContext attached to request.state.auth when present.
+    """
+    return await _resolve_auth_principal(request)
+
+
+def require_permissions(*permissions: str):
+    """
+    Dependency factory that enforces required permission claims on the principal.
+
+    Admin principals (principal.is_admin) are allowed regardless of specific
+    permissions. On failure, raises HTTP 403 with a descriptive message.
+    """
+
+    perms = [str(p) for p in permissions if str(p).strip()]
+
+    async def _checker(principal: AuthPrincipal = Depends(get_auth_principal)) -> AuthPrincipal:
+        if principal.is_admin:
+            return principal
+        missing = [p for p in perms if p not in principal.permissions]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission denied. Required: {', '.join(missing)}",
+            )
+        return principal
+
+    return _checker
+
+
+def require_roles(*roles: str):
+    """
+    Dependency factory that enforces required role claims on the principal.
+
+    Admin principals (principal.is_admin) are allowed regardless of specific
+    roles. On failure, raises HTTP 403 with a descriptive message.
+    """
+
+    role_list = [str(r) for r in roles if str(r).strip()]
+
+    async def _checker(principal: AuthPrincipal = Depends(get_auth_principal)) -> AuthPrincipal:
+        if principal.is_admin:
+            return principal
+        if not role_list:
+            return principal
+        if not any(r in principal.roles for r in role_list):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied. Required role(s): {', '.join(role_list)}",
+            )
+        return principal
+
+    return _checker
 
 
 async def get_current_active_user(

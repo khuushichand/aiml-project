@@ -2,9 +2,9 @@
 
 This plan coordinates the implementation of the three AuthNZ PRDs:
 
-- `Docs/Design/Principal-Governance-PRD.md`
-- `Docs/Design/User-Unification-PRD.md`
-- `Docs/Design/User-Auth-Deps-PRD.md`
+- `Docs/Product/Principal-Governance-PRD.md`
+- `Docs/Product/User-Unification-PRD.md`
+- `Docs/Product/User-Auth-Deps-PRD.md`
 
 The stages are designed to be incremental and backwards-compatible. Each stage should result in a compilable, test-passing system with a clear, testable outcome.
 
@@ -31,7 +31,11 @@ The stages are designed to be incremental and backwards-compatible. Each stage s
 **PRDs Touched**:
 - Used for reference only; no edits expected in this stage.
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- Initial invariant tests exist in `tldw_Server_API/tests/AuthNZ_Unit/test_authnz_invariants.py` to assert 401 behavior and headers for missing-credential cases in `auth_deps.get_current_user` and `User_DB_Handling.get_request_user`, as well as successful single-user API-key auth wiring `request.state.user_id`.
+%- Broader integration coverage (multi-user JWT/API-key flows across backends) remains future work and will build on existing AuthNZ integration suites.
 
 ---
 
@@ -70,7 +74,12 @@ The stages are designed to be incremental and backwards-compatible. Each stage s
 - User-Auth-Deps:
   - Stage 1: AuthPrincipal + Claim Invariants.
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- `AuthPrincipal` / `AuthContext` implemented in `tldw_Server_API/app/core/AuthNZ/principal_model.py` with unit tests.
+- `get_auth_principal(request)` implemented in `tldw_Server_API/app/core/AuthNZ/auth_principal_resolver.py` with unit tests covering single-user, JWT, and API-key flows.
+- `auth_deps.get_current_user` and `User_DB_Handling.verify_jwt_and_fetch_user` / `get_request_user` now populate `request.state.auth` from their resolved user context; delegation of identity derivation to `get_auth_principal` is still pending (PR 4).
 
 ### Stage 1 – Suggested PR Breakdown
 
@@ -217,7 +226,12 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
 - Principal-Governance:
   - G1: Unified Principal Model (dependencies now use it).
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- New FastAPI dependencies `get_auth_principal`, `require_permissions`, and `require_roles` are implemented in `API_Deps/auth_deps.py` with unit tests.
+- Representative media (`/media/add`) and admin (`/metrics/reset`) endpoints now also enforce claims via `require_permissions` / `require_roles` alongside existing dependencies.
+- `llm_budget_guard` has been updated to derive an `AuthPrincipal` (via `request.state.auth` when available) and now uses that principal when consulting governance for LLM budgets.
 
 ---
 
@@ -256,4 +270,9 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
 - User-Auth-Deps:
   - Middleware adoption of `AuthPrincipal` for guardrails.
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- A minimal `AuthGovernor` facade for LLM budgets is implemented in `tldw_Server_API/app/core/AuthNZ/auth_governor.py`, decorating `is_key_over_budget` with principal metadata.
+- `llm_budget_guard.enforce_llm_budget` now calls `AuthGovernor.check_llm_budget_for_api_key` using an `AuthPrincipal` (from `AuthContext` or derived from `request.state`) and preserves existing 402 response semantics while adding structured principal details.
+- Rate-limit and login-lockout paths are not yet routed through `AuthGovernor`; they remain TODO for later stages.

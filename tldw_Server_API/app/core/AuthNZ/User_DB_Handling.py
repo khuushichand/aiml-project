@@ -19,6 +19,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenE
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 # Utils
 from loguru import logger
 # API Dependencies
@@ -404,6 +405,35 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         else:
             logger.debug(f"Failed to set scope context for user {user.id}: {scope_exc}")
 
+    # Populate AuthContext for compatibility with the new principal model
+    try:
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=user.id_int,
+            api_key_id=None,
+            subject=None,
+            token_type="access",
+            jti=None,
+            roles=list(user.roles or []),
+            permissions=list(user.permissions or []),
+            is_admin=bool(user.is_admin),
+            org_ids=org_ids,
+            team_ids=team_ids,
+        )
+        ip = request.client.host if getattr(request, "client", None) else None
+        user_agent = request.headers.get("User-Agent") if getattr(request, "headers", None) else None
+        request_id = (
+            request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None
+        ) or getattr(request.state, "request_id", None)
+        request.state.auth = AuthContext(
+            principal=principal,
+            ip=ip,
+            user_agent=user_agent,
+            request_id=request_id,
+        )
+    except Exception as ctx_exc:
+        logger.debug(f"Unable to populate AuthContext in verify_jwt_and_fetch_user: {ctx_exc}")
+
     if pii_redact_logs:
         logger.info("Authenticated active user (details redacted)")
     else:
@@ -549,6 +579,36 @@ async def get_request_user(
             )
         except Exception:
             pass
+
+        # Populate AuthContext for single-user compatibility
+        try:
+            principal = AuthPrincipal(
+                kind="single_user",
+                user_id=user.id_int,
+                api_key_id=None,
+                subject=None,
+                token_type="api_key",
+                jti=None,
+                roles=list(user.roles or []),
+                permissions=list(user.permissions or []),
+                is_admin=True,
+                org_ids=[],
+                team_ids=[],
+            )
+            ip = request.client.host if getattr(request, "client", None) else None
+            user_agent = request.headers.get("User-Agent") if getattr(request, "headers", None) else None
+            request_id = (
+                request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None
+            ) or getattr(request.state, "request_id", None)
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=ip,
+                user_agent=user_agent,
+                request_id=request_id,
+            )
+        except Exception as ctx_exc:
+            logger.debug(f"Unable to populate AuthContext in single-user get_request_user: {ctx_exc}")
+
         return user
     else:
         # Multi-User Mode: Prefer Bearer token, but allow X-API-KEY for SQLite multi-user setups.
@@ -558,7 +618,9 @@ async def get_request_user(
                 logger.debug("Multi-User Mode: Attempting to verify bearer token (redacted)")
             else:
                 logger.debug(f"Multi-User Mode: Attempting to verify token: '{token[:15]}...'")
-            return await verify_jwt_and_fetch_user(request, token)
+            user = await verify_jwt_and_fetch_user(request, token)
+            # verify_jwt_and_fetch_user already sets request.state.auth; return user
+            return user
 
         # If no Bearer token but an API key is provided, validate via API key manager
         if api_key:
@@ -639,6 +701,42 @@ async def get_request_user(
                     )
                 except Exception as scope_exc:
                     logger.debug(f"Scope context setup failed for API key user {user_id}: {scope_exc}")
+
+                # Populate AuthContext for API-key-based principals
+                try:
+                    api_key_id_val = None
+                    raw_key_id = key_info.get("id")
+                    if raw_key_id is not None:
+                        try:
+                            api_key_id_val = int(raw_key_id)
+                        except Exception:
+                            api_key_id_val = None
+                    principal = AuthPrincipal(
+                        kind="api_key",
+                        user_id=user_obj.id_int,
+                        api_key_id=api_key_id_val,
+                        subject=None,
+                        token_type="api_key",
+                        jti=None,
+                        roles=list(user_obj.roles or []),
+                        permissions=list(user_obj.permissions or []),
+                        is_admin=bool(user_obj.is_admin),
+                        org_ids=org_ids,
+                        team_ids=team_ids,
+                    )
+                    ip = request.client.host if getattr(request, "client", None) else None
+                    user_agent = request.headers.get("User-Agent") if getattr(request, "headers", None) else None
+                    request_id = (
+                        request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None
+                    ) or getattr(request.state, "request_id", None)
+                    request.state.auth = AuthContext(
+                        principal=principal,
+                        ip=ip,
+                        user_agent=user_agent,
+                        request_id=request_id,
+                    )
+                except Exception as ctx_exc:
+                    logger.debug(f"Unable to populate AuthContext in API-key get_request_user: {ctx_exc}")
 
                 return user_obj
             except HTTPException:
