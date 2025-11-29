@@ -443,6 +443,186 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
 
 # --- Combined Primary Authentication Dependency ---
 
+
+async def authenticate_api_key_user(request: Request, api_key: str) -> User:
+    """
+    Validate an API key in multi-user mode and return the associated User.
+
+    This helper centralizes API-key authentication so that both legacy
+    dependencies (get_request_user) and the AuthPrincipal resolver can
+    share the same behavior and context population.
+    """
+    settings = get_settings()
+
+    try:
+        api_mgr = await get_api_key_manager()
+        client_ip = None
+        try:
+            client = getattr(request, "client", None)
+            if client is not None:
+                client_ip = getattr(client, "host", None)
+        except Exception:
+            client_ip = None
+
+        key_info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
+        if not key_info:
+            logger.warning("Multi-User Mode: Invalid X-API-KEY presented.")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid API key",
+            )
+
+        user_id = key_info.get("user_id")
+        if not isinstance(user_id, int):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid API key",
+            )
+
+        from tldw_Server_API.app.core.DB_Management.Users_DB import (
+            get_user_by_id as _get_user,
+        )
+
+        user_data = await _get_user(user_id)
+        if not user_data:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+            )
+
+        # Normalize active flag
+        is_active_value = user_data.get("is_active", True)
+        is_active_normalized = bool(is_active_value)
+        user_data["is_active"] = is_active_normalized
+        if not is_active_normalized:
+            if settings.PII_REDACT_LOGS:
+                logger.warning("Authentication attempt by inactive user (API key)")
+            else:
+                logger.warning(
+                    f"Authentication attempt by inactive user (API key): {user_data.get('username', user_id)}"
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Inactive user",
+            )
+
+        if user_data.get("is_superuser"):
+            user_data.setdefault("is_admin", True)
+
+        # Attach context for downstream consumers
+        try:
+            request.state.user_id = user_id
+            request.state.api_key_id = key_info.get("id")
+            # Attach org/team context if present (virtual keys)
+            try:
+                if key_info.get("org_id") is not None:
+                    request.state.org_id = key_info.get("org_id")
+                if key_info.get("team_id") is not None:
+                    request.state.team_id = key_info.get("team_id")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        user_obj = User(**user_data)
+
+        team_ids: List[int] = []
+        org_ids: List[int] = []
+        try:
+            memberships = await list_memberships_for_user(int(user_id))
+            team_ids = [
+                m.get("team_id")
+                for m in memberships
+                if m.get("team_id") is not None
+            ]
+            org_ids = sorted(
+                {m.get("org_id") for m in memberships if m.get("org_id") is not None}
+            )
+            try:
+                request.state.team_ids = team_ids
+                request.state.org_ids = org_ids
+            except Exception:
+                pass
+        except Exception:
+            try:
+                request.state.team_ids = []
+                request.state.org_ids = []
+            except Exception:
+                pass
+
+        try:
+            set_scope(
+                user_id=user_obj.id_int,
+                org_ids=org_ids,
+                team_ids=team_ids,
+                is_admin=bool(user_obj.is_admin),
+            )
+        except Exception as scope_exc:
+            logger.debug(
+                f"Scope context setup failed for API key user {user_id}: {scope_exc}"
+            )
+
+        # Populate AuthContext for API-key-based principals
+        try:
+            api_key_id_val = None
+            raw_key_id = key_info.get("id")
+            if raw_key_id is not None:
+                try:
+                    api_key_id_val = int(raw_key_id)
+                except Exception:
+                    api_key_id_val = None
+
+            principal = AuthPrincipal(
+                kind="api_key",
+                user_id=user_obj.id_int,
+                api_key_id=api_key_id_val,
+                subject=None,
+                token_type="api_key",
+                jti=None,
+                roles=list(user_obj.roles or []),
+                permissions=list(user_obj.permissions or []),
+                is_admin=bool(user_obj.is_admin),
+                org_ids=org_ids,
+                team_ids=team_ids,
+            )
+            ip = request.client.host if getattr(request, "client", None) else None
+            user_agent = (
+                request.headers.get("User-Agent")
+                if getattr(request, "headers", None)
+                else None
+            )
+            request_id = (
+                request.headers.get("X-Request-ID")
+                if getattr(request, "headers", None)
+                else None
+            ) or getattr(request.state, "request_id", None)
+
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=ip,
+                user_agent=user_agent,
+                request_id=request_id,
+            )
+            # Cache the resolved user for downstream adapters
+            try:
+                setattr(request.state, "_auth_user", user_obj)
+            except Exception:
+                pass
+        except Exception as ctx_exc:
+            logger.debug(
+                f"Unable to populate AuthContext in authenticate_api_key_user: {ctx_exc}"
+            )
+
+        return user_obj
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error validating API key in multi-user mode: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed",
+        )
+
 async def get_request_user(
     request: Request,
     api_key: Optional[str] = Header(None, alias="X-API-KEY"),
@@ -617,136 +797,25 @@ async def get_request_user(
             if settings.PII_REDACT_LOGS:
                 logger.debug("Multi-User Mode: Attempting to verify bearer token (redacted)")
             else:
-                logger.debug(f"Multi-User Mode: Attempting to verify token: '{token[:15]}...'")
+                logger.debug(
+                    f"Multi-User Mode: Attempting to verify token: '{token[:15]}...'"
+                )
             user = await verify_jwt_and_fetch_user(request, token)
             # verify_jwt_and_fetch_user already sets request.state.auth; return user
+            try:
+                setattr(request.state, "_auth_user", user)
+            except Exception:
+                pass
             return user
 
-        # If no Bearer token but an API key is provided, validate via API key manager
+        # If no Bearer token but an API key is provided, validate via shared helper
         if api_key:
-            try:
-                api_mgr = await get_api_key_manager()
-                client_ip = None
-                try:
-                    client = getattr(request, "client", None)
-                    if client is not None:
-                        client_ip = getattr(client, "host", None)
-                except Exception:
-                    client_ip = None
-                key_info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
-                if not key_info:
-                    logger.warning("Multi-User Mode: Invalid X-API-KEY presented.")
-                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
-
-                user_id = key_info.get("user_id")
-                if not isinstance(user_id, int):
-                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
-
-                from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
-                user_data = await _get_user(user_id)
-                if not user_data:
-                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-                # Normalize active flag
-                is_active_value = user_data.get("is_active", True)
-                is_active_normalized = bool(is_active_value)
-                user_data["is_active"] = is_active_normalized
-                if not is_active_normalized:
-                    if settings.PII_REDACT_LOGS:
-                        logger.warning("Authentication attempt by inactive user (API key)")
-                    else:
-                        logger.warning(f"Authentication attempt by inactive user (API key): {user_data.get('username', user_id)}")
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
-                if user_data.get("is_superuser"):
-                    user_data.setdefault("is_admin", True)
-                # Attach context for downstream
-                try:
-                    request.state.user_id = user_id
-                    request.state.api_key_id = key_info.get("id")
-                    # Attach org/team context if present (virtual keys)
-                    try:
-                        if key_info.get("org_id") is not None:
-                            request.state.org_id = key_info.get("org_id")
-                        if key_info.get("team_id") is not None:
-                            request.state.team_id = key_info.get("team_id")
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-
-                user_obj = User(**user_data)
-                team_ids: List[int] = []
-                org_ids: List[int] = []
-                try:
-                    memberships = await list_memberships_for_user(int(user_id))
-                    team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
-                    org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
-                    try:
-                        request.state.team_ids = team_ids
-                        request.state.org_ids = org_ids
-                    except Exception:
-                        pass
-                except Exception:
-                    try:
-                        request.state.team_ids = []
-                        request.state.org_ids = []
-                    except Exception:
-                        pass
-
-                try:
-                    set_scope(
-                        user_id=user_obj.id_int,
-                        org_ids=org_ids,
-                        team_ids=team_ids,
-                        is_admin=bool(user_obj.is_admin),
-                    )
-                except Exception as scope_exc:
-                    logger.debug(f"Scope context setup failed for API key user {user_id}: {scope_exc}")
-
-                # Populate AuthContext for API-key-based principals
-                try:
-                    api_key_id_val = None
-                    raw_key_id = key_info.get("id")
-                    if raw_key_id is not None:
-                        try:
-                            api_key_id_val = int(raw_key_id)
-                        except Exception:
-                            api_key_id_val = None
-                    principal = AuthPrincipal(
-                        kind="api_key",
-                        user_id=user_obj.id_int,
-                        api_key_id=api_key_id_val,
-                        subject=None,
-                        token_type="api_key",
-                        jti=None,
-                        roles=list(user_obj.roles or []),
-                        permissions=list(user_obj.permissions or []),
-                        is_admin=bool(user_obj.is_admin),
-                        org_ids=org_ids,
-                        team_ids=team_ids,
-                    )
-                    ip = request.client.host if getattr(request, "client", None) else None
-                    user_agent = request.headers.get("User-Agent") if getattr(request, "headers", None) else None
-                    request_id = (
-                        request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None
-                    ) or getattr(request.state, "request_id", None)
-                    request.state.auth = AuthContext(
-                        principal=principal,
-                        ip=ip,
-                        user_agent=user_agent,
-                        request_id=request_id,
-                    )
-                except Exception as ctx_exc:
-                    logger.debug(f"Unable to populate AuthContext in API-key get_request_user: {ctx_exc}")
-
-                return user_obj
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"Error validating API key in multi-user mode: {e}")
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication failed")
+            return await authenticate_api_key_user(request, api_key)
 
         # Neither Bearer token nor API key provided
-        logger.warning("Multi-User Mode: No credentials provided (missing Bearer token or X-API-KEY).")
+        logger.warning(
+            "Multi-User Mode: No credentials provided (missing Bearer token or X-API-KEY)."
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated (provide Bearer token or X-API-KEY)",

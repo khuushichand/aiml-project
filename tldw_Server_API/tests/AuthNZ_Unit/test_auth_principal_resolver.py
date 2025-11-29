@@ -131,7 +131,7 @@ async def test_get_auth_principal_api_key_path(monkeypatch):
     def _fake_is_single_user_mode() -> bool:
         return False
 
-    async def _fake_get_request_user(request, token: str = "", api_key: str | None = None) -> User:
+    async def _fake_authenticate_api_key_user(request, api_key: str) -> User:
         request.state.user_id = 7
         request.state.api_key_id = 100
         request.state.org_ids = [1, 2]
@@ -154,8 +154,8 @@ async def test_get_auth_principal_api_key_path(monkeypatch):
         _fake_is_single_user_mode,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.auth_principal_resolver.get_request_user",
-        _fake_get_request_user,
+        "tldw_Server_API.app.core.AuthNZ.auth_principal_resolver.authenticate_api_key_user",
+        _fake_authenticate_api_key_user,
     )
 
     req = _make_request(headers={"X-API-KEY": "vk-key"})
@@ -191,4 +191,3 @@ async def test_get_auth_principal_missing_credentials_raises_401(monkeypatch):
         await get_auth_principal(req)
 
     assert exc_info.value.status_code == 401
-
