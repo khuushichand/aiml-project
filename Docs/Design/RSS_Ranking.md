@@ -14,6 +14,9 @@ https://towardsdatascience.com/making-news-recommendations-explainable-with-larg
 https://blog.det.life/from-scrolls-to-similarity-search-building-a-movie-recommender-with-duckdb-vss-8122e4d2e486?gi=c094d02d0993
 https://9to5google.com/2025/01/08/google-discover-daily-listen/
 https://www.dogesec.com/blog/full_text_rss_atom_blog_feeds/
+https://engineering.fyi/?utm_source=www.hivefive.community&utm_medium=newsletter&utm_campaign=hive-five-237-different-kinds-of-smart
+
+
 https://arxiv.org/abs/2411.19352
 <https://buttondown.com/blog/ringo-email-as-an-ai-interface>
 <https://www.gnoosic.com/faves.php>

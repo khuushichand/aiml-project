@@ -808,13 +808,22 @@ async def unified_rag_pipeline(
             # Prefer SemanticCache (test patches target this). Use Adaptive only if SemanticCache unavailable.
             if SemanticCache:
                 try:
-                    cache = SemanticCache(similarity_threshold=cache_threshold, ttl=cache_ttl)
+                    cache = SemanticCache(
+                        similarity_threshold=cache_threshold,
+                        ttl=cache_ttl,
+                        # Use a lightweight namespace to avoid cross-tenant collisions
+                        namespace=index_namespace or (user_id or None),
+                    )
                 except TypeError:
                     # Fallback if patched constructor signature differs
                     cache = SemanticCache(similarity_threshold=cache_threshold)
             elif AdaptiveCache and adaptive_cache:
                 try:
-                    cache = AdaptiveCache(similarity_threshold=cache_threshold, ttl=cache_ttl)
+                    cache = AdaptiveCache(
+                        similarity_threshold=cache_threshold,
+                        ttl=cache_ttl,
+                        namespace=index_namespace or (user_id or None),
+                    )
                 except TypeError:
                     cache = AdaptiveCache(similarity_threshold=cache_threshold)
             else:
@@ -1425,6 +1434,7 @@ async def unified_rag_pipeline(
                         answer=result.generated_answer or "",
                         reason="retrieval_error",
                         user_id=user_id,
+                        namespace=index_namespace,
                     )
                 except Exception:
                     pass
@@ -2124,6 +2134,7 @@ async def unified_rag_pipeline(
                         answer=result.generated_answer or "",
                         reason="reranking_error",
                         user_id=user_id,
+                        namespace=index_namespace,
                     )
                 except Exception:
                     pass
@@ -2490,6 +2501,7 @@ async def unified_rag_pipeline(
                         answer=result.generated_answer or "",
                         reason="generation_error",
                         user_id=user_id,
+                        namespace=index_namespace,
                     )
                 except Exception:
                     pass
@@ -2520,6 +2532,7 @@ async def unified_rag_pipeline(
                     answer=result.generated_answer or "",
                     reason="generation_gated",
                     user_id=user_id,
+                    namespace=index_namespace,
                 )
             except Exception:
                 pass
@@ -2943,7 +2956,14 @@ async def unified_rag_pipeline(
                 try:
                     if low_confidence:
                         from .payload_exemplars import maybe_record_exemplar
-                        maybe_record_exemplar(query=query, documents=result.documents or [], answer=result.generated_answer or "", reason="post_verification_low_confidence", user_id=user_id)
+                        maybe_record_exemplar(
+                            query=query,
+                            documents=result.documents or [],
+                            answer=result.generated_answer or "",
+                            reason="post_verification_low_confidence",
+                            user_id=user_id,
+                            namespace=index_namespace,
+                        )
                 except Exception:
                     pass
 
@@ -3218,12 +3238,20 @@ async def unified_rag_pipeline(
                 # Store in cache for future use
                 if SemanticCache:
                     try:
-                        cache = SemanticCache(similarity_threshold=cache_threshold, ttl=cache_ttl)
+                        cache = SemanticCache(
+                            similarity_threshold=cache_threshold,
+                            ttl=cache_ttl,
+                            namespace=index_namespace or (user_id or None),
+                        )
                     except TypeError:
                         cache = SemanticCache(similarity_threshold=cache_threshold)
                 elif AdaptiveCache and adaptive_cache:
                     try:
-                        cache = AdaptiveCache(similarity_threshold=cache_threshold, ttl=cache_ttl)
+                        cache = AdaptiveCache(
+                            similarity_threshold=cache_threshold,
+                            ttl=cache_ttl,
+                            namespace=index_namespace or (user_id or None),
+                        )
                     except TypeError:
                         cache = AdaptiveCache(similarity_threshold=cache_threshold)
                 else:
