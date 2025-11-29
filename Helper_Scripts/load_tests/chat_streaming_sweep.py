@@ -191,7 +191,7 @@ async def _run_sweep(args: argparse.Namespace) -> int:
         all_steps.append(_metrics_to_dict(metrics))
 
         if idx != len(args.concurrency_steps) - 1 and args.sleep_between > 0:
-            time.sleep(args.sleep_between)
+            await asyncio.sleep(args.sleep_between)
 
     if args.json_out:
         payload = {
