@@ -659,6 +659,20 @@ async def get_request_user(
                 setattr(get_request_user, "_warned_testflags_prod", True)
     except Exception:
         pass
+
+    # Fast-path: if an AuthPrincipal has already been resolved in multi-user mode,
+    # reuse the cached _auth_user instead of re-running authentication logic.
+    try:
+        if not is_single_user_mode():
+            existing_ctx = getattr(request.state, "auth", None)
+            cached_user = getattr(request.state, "_auth_user", None)
+            if isinstance(existing_ctx, AuthContext) and isinstance(cached_user, User):
+                logger.debug("get_request_user: Reusing cached AuthPrincipal/_auth_user in multi-user mode.")
+                return cached_user
+    except Exception:
+        # Fall through to normal auth paths on any issues
+        pass
+
     #print(f"DEBUGPRINT: Inside get_request_user. api_key from header: '{api_key}', token from scheme: '{token}'") #DEBUGPRINT
     # Check mode from the settings
     settings = get_settings()

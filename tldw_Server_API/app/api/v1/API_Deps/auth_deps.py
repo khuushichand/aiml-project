@@ -34,7 +34,7 @@ from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_databa
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
     get_auth_principal as _resolve_auth_principal,
 )
@@ -345,6 +345,43 @@ async def get_current_user(
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
             logger.info(f"get_current_user: has_bearer={bool(credentials)} has_api_key={bool(x_api_key)} path={request.url.path}")
     except Exception:
+        pass
+
+    # Fast-path: in multi-user mode, if an AuthPrincipal/AuthContext has already been
+    # resolved for this request (e.g., via get_auth_principal or budget guards),
+    # reuse the cached user representation instead of re-running JWT/API-key logic.
+    try:
+        if not is_single_user_mode():
+            existing_ctx = getattr(request.state, "auth", None)
+            cached_user = getattr(request.state, "_auth_user", None)
+            if isinstance(existing_ctx, AuthContext) and cached_user is not None:
+                logger.debug("get_current_user: Reusing cached AuthPrincipal/_auth_user in multi-user mode.")
+                # Normalize to a plain dict to preserve existing return shape
+                if hasattr(cached_user, "dict"):
+                    user_dict: Dict[str, Any] = dict(cached_user.dict())
+                else:
+                    user_dict = dict(cached_user)
+                # Ensure request.state.user_id is populated for downstream consumers
+                try:
+                    uid = user_dict.get("id")
+                    if uid is not None:
+                        request.state.user_id = int(uid)
+                except Exception:
+                    pass
+                # Scope context should already be set by upstream auth, but be defensive
+                try:
+                    _activate_scope_context(
+                        request,
+                        user_id=getattr(existing_ctx.principal, "user_id", None),
+                        org_ids=getattr(request.state, "org_ids", None),
+                        team_ids=getattr(request.state, "team_ids", None),
+                        is_admin=bool(getattr(existing_ctx.principal, "is_admin", False)),
+                    )
+                except Exception:
+                    pass
+                return user_dict
+    except Exception:
+        # Fall through to standard auth behavior if any issue occurs
         pass
 
     # Helper: IP allowlist check for single-user mode
