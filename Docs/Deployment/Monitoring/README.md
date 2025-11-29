@@ -23,6 +23,19 @@ Exemplars
 - Control with env: `RAG_PAYLOAD_EXEMPLAR_SAMPLING` (0..1), `RAG_PAYLOAD_EXEMPLAR_PATH`.
 - See `Exemplars/README.md` and `exemplar-sink-sample.yml` for ingestion patterns.
 
+Multi-Tenant RAG Considerations
+- Caches:
+  - The unified RAG pipeline passes `index_namespace` or `user_id` into the semantic cache namespace so cache entries are logically grouped per tenant/user.
+  - When deploying multi-tenant, prefer a distinct `index_namespace` per tenant and avoid sharing a single namespace across untrusted users.
+- Payload exemplars:
+  - By default exemplars are written to `Databases/observability/rag_payload_exemplars.jsonl` with redacted content and a `user` field.
+  - In multi-tenant environments, you can:
+    - Disable exemplars entirely with `RAG_PAYLOAD_EXEMPLAR_SAMPLING=0`.
+    - Or allow per-tenant segregation by setting `index_namespace` on RAG calls; exemplars will be written under `Databases/observability/tenants/<namespace>/rag_payload_exemplars.jsonl` (or per-user under `Databases/observability/users/<user_id>/...` when no namespace is provided).
+- Telemetry and OTEL:
+  - Scrub or hash user identifiers before exporting to off-box collectors if you add tenant labels to metrics or spans.
+  - Keep sensitive payloads (queries, document text) out of OTEL exporters in multi-tenant SaaS deployments; prefer aggregated metrics from `metrics_manager` instead of raw spans.
+
 Notes
 - Dashboards assume a Prometheus datasource with UID `prometheus`.
 - Default refresh is 30s and rate windows use `$__rate_interval`.

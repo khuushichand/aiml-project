@@ -15,6 +15,20 @@ and this project adheres to Some kind of Versioning
 
 ### Fixed
 
+
+## [0.1.11] - 2025-11-27
+
+### Added
+- Guidance on stress testing chat server
+
+### Changed
+- RAG Documentation
+
+### Removed
+
+### Fixed
+
+
 ## [0.1.10] - 2025-11-27
 
 ### Added

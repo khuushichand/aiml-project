@@ -21,10 +21,22 @@ from loguru import logger
 SINK = Path("Databases/observability/rag_payload_exemplars.jsonl")
 
 
-def _safe_sink() -> Path:
+def _safe_sink(user_id: Optional[str] = None, namespace: Optional[str] = None) -> Path:
     try:
+        # Prefer explicit override when provided
         p = os.getenv("RAG_PAYLOAD_EXEMPLAR_PATH")
-        sink = Path(p) if p else SINK
+        if p:
+            sink = Path(p)
+        else:
+            # In multi-tenant setups, segregate exemplars per user/namespace
+            if namespace:
+                safe_namespace = "".join(c for c in str(namespace) if c.isalnum() or c in ('-', '_', '.'))
+                sink = Path("Databases/observability") / "tenants" / safe_namespace / "rag_payload_exemplars.jsonl"
+            elif user_id:
+                safe_user_id = "".join(c for c in str(user_id) if c.isalnum() or c in ('-', '_', '.'))
+                sink = Path("Databases/observability") / "users" / safe_user_id / "rag_payload_exemplars.jsonl"
+            else:
+                sink = SINK
         sink.parent.mkdir(parents=True, exist_ok=True)
         return sink
     except Exception:
@@ -53,6 +65,7 @@ def maybe_record_exemplar(
     answer: str,
     reason: str,
     user_id: Optional[str] = None,
+    namespace: Optional[str] = None,
 ) -> None:
     """Sample and persist a redacted exemplar of the payload.
 
@@ -65,11 +78,12 @@ def maybe_record_exemplar(
     try:
         if random.random() > max(0.0, min(1.0, rate)):
             return
-        sink = _safe_sink()
+        sink = _safe_sink(user_id=user_id, namespace=namespace)
         sample = {
             "ts": time.time(),
             "reason": reason,
             "user": user_id or "",
+            "namespace": namespace or "",
             "query": _redact(query or ""),
             "answer": _redact(answer or ""),
             "docs": [

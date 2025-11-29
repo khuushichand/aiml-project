@@ -11,6 +11,14 @@ from .rag_service.unified_pipeline import (
     simple_search,
     advanced_search,
 )
+from .rag_service.profiles import (
+    RAGProfile,
+    list_profiles,
+    get_profile,
+    get_profile_kwargs,
+    apply_profile_to_kwargs,
+    get_multi_tenant_safe_kwargs,
+)
 
 __all__ = [
     'DataSource',
@@ -20,4 +28,10 @@ __all__ = [
     'unified_batch_pipeline',
     'simple_search',
     'advanced_search',
+    'RAGProfile',
+    'list_profiles',
+    'get_profile',
+    'get_profile_kwargs',
+    'apply_profile_to_kwargs',
+    'get_multi_tenant_safe_kwargs',
 ]

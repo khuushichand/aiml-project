@@ -29,3 +29,5 @@ def test_exemplar_writes(tmp_path, monkeypatch):
     data = [json.loads(line) for line in sink.read_text().splitlines() if line.strip()]
     assert len(data) >= 1
     assert data[-1]["reason"] == "test"
+    # When explicit path override is used, namespace is still recorded but does not affect sink
+    assert "namespace" in data[-1]

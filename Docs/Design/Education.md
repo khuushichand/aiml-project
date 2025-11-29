@@ -12,6 +12,7 @@ https://github.com/presenton/presenton
 https://arxiv.org/abs/2412.02035
 https://aclanthology.org/2025.inlg-demos.2.pdf
 https://chalkie.ai/us/pricing
+https://github.com/richardr1126/OpenReader-WebUI
 
 https://github.com/andreamust/NEON-GPT
 https://fortelabs.com/blog/my-4-stage-system-for-learning-anything-new/

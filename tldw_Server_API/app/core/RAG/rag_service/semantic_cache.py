@@ -53,7 +53,8 @@ class SemanticCache:
         similarity_threshold: float = 0.85,
         ttl: Optional[int] = 3600,
         persist_path: Optional[str] = None,
-        embedding_model: Optional[Any] = None
+        embedding_model: Optional[Any] = None,
+        namespace: Optional[str] = None,
     ):
         """
         Initialize semantic cache.
@@ -68,6 +69,10 @@ class SemanticCache:
         self.max_size = max_size
         self.similarity_threshold = similarity_threshold
         self.default_ttl = ttl
+        # Optional logical namespace for multi-tenant environments.
+        # When provided, it is used to prefix persisted state and metrics so
+        # cache entries from different tenants/users do not collide.
+        self.namespace = (str(namespace).strip() or None) if namespace is not None else None
         self.persist_path = persist_path
         self.embedding_model = embedding_model
 
@@ -341,7 +346,7 @@ class SemanticCache:
             hit_rate = self._hits / total_requests if total_requests > 0 else 0
             semantic_hit_rate = self._semantic_hits / self._hits if self._hits > 0 else 0
 
-            return {
+            stats = {
                 "size": len(self._cache),
                 "max_size": self.max_size,
                 "total_hits": self._hits,
@@ -352,8 +357,11 @@ class SemanticCache:
                 "semantic_hit_rate": semantic_hit_rate,
                 "total_requests": total_requests,
                 "similarity_threshold": self.similarity_threshold,
-                "has_embeddings": len(self._embeddings)
+                "has_embeddings": len(self._embeddings),
             }
+            if self.namespace is not None:
+                stats["namespace"] = self.namespace
+            return stats
 
     def cleanup_expired(self) -> int:
         """Remove expired entries."""

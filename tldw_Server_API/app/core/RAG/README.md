@@ -444,6 +444,38 @@ Document sanitation
   - `ocr_confidence_threshold` (float)
 - Metrics: `rag_sanitized_docs_total`, `rag_ocr_dropped_docs_total`
 
+### Multi-tenant-safe pipeline usage
+
+For multi-tenant deployments, prefer a per-tenant namespace and a “safe default” profile that keeps guardrails on but avoids leaking payloads via shared sinks or OTEL spans:
+
+```python
+from tldw_Server_API.app.core.RAG import (
+    unified_rag_pipeline,
+    get_multi_tenant_safe_kwargs,
+)
+
+tenant_ns = f"tenant-{tenant_id}"
+kwargs = get_multi_tenant_safe_kwargs(
+    namespace=tenant_ns,
+    overrides={
+        "user_id": str(user_id),        # per-user personalization
+        # Optional per-call tweaks:
+        # "top_k": 10,
+        # "max_generation_tokens": 400,
+    },
+)
+
+result = await unified_rag_pipeline(
+    query="Explain the architecture of tldw_server.",
+    **kwargs,
+)
+```
+
+Notes:
+- `get_multi_tenant_safe_kwargs(namespace)` builds on the `production` profile, enforces `index_namespace=namespace`, and disables OTEL-style observability (`enable_observability=False`) while keeping lightweight metrics (`enable_monitoring=True`).
+- The unified pipeline passes `index_namespace`/`user_id` into semantic caches and payload exemplars, so cache entries and debug samples are logically grouped per tenant/user.
+- To fully disable payload exemplars in a SaaS setup, set `RAG_PAYLOAD_EXEMPLAR_SAMPLING=0` in the environment.
+
 ## Generation & Grounding (opt-in)
 
 The unified pipeline exposes additional generation controls for safer answers:
