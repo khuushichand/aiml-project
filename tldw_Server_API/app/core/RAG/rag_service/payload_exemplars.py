@@ -30,9 +30,11 @@ def _safe_sink(user_id: Optional[str] = None, namespace: Optional[str] = None) -
         else:
             # In multi-tenant setups, segregate exemplars per user/namespace
             if namespace:
-                sink = Path("Databases/observability") / "tenants" / namespace / "rag_payload_exemplars.jsonl"
+                safe_namespace = "".join(c for c in str(namespace) if c.isalnum() or c in ('-', '_', '.'))
+                sink = Path("Databases/observability") / "tenants" / safe_namespace / "rag_payload_exemplars.jsonl"
             elif user_id:
-                sink = Path("Databases/observability") / "users" / user_id / "rag_payload_exemplars.jsonl"
+                safe_user_id = "".join(c for c in str(user_id) if c.isalnum() or c in ('-', '_', '.'))
+                sink = Path("Databases/observability") / "users" / safe_user_id / "rag_payload_exemplars.jsonl"
             else:
                 sink = SINK
         sink.parent.mkdir(parents=True, exist_ok=True)
