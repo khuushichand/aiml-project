@@ -1054,14 +1054,9 @@ async def get_current_user_info(
     Returns:
         UserResponse with current user details
     """
-    # Ensure UUID is a string
-    user_uuid = current_user.get('uuid')
-    if user_uuid and not isinstance(user_uuid, str):
-        user_uuid = str(user_uuid)
-
     return UserResponse(
         id=current_user['id'],
-        uuid=user_uuid or '',  # Provide empty string if missing
+        uuid=current_user.get('uuid') or '',  # Provide empty string if missing
         username=current_user['username'],
         email=current_user['email'],
         role=current_user['role'],

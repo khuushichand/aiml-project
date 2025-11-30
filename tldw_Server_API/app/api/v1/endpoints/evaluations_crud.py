@@ -39,6 +39,8 @@ class CreateRunSimpleRequest(BaseModel):
 
 
 crud_router = APIRouter()
+# Define once so dependency overrides work reliably in tests and downstream apps
+RBAC_EVALS_CREATE = rbac_rate_limit("evals.create")
 
 
 @crud_router.post(
@@ -46,7 +48,7 @@ crud_router = APIRouter()
     response_model=EvaluationResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[
-        Depends(rbac_rate_limit("evals.create")),
+        Depends(RBAC_EVALS_CREATE),
         Depends(require_permissions(EVALS_MANAGE)),
     ],
 )

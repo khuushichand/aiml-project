@@ -11,7 +11,8 @@ full ResourceGovernor integration is rolled out.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+import os
+from typing import Any, Dict, Tuple
 
 from loguru import logger
 
@@ -34,6 +35,8 @@ class AuthGovernor:
         self,
         principal: AuthPrincipal,
         api_key_id: int,
+        *,
+        fail_open: bool | None = None,
     ) -> Dict[str, Any]:
         """
         Check LLM budget state for a given API key and principal.
@@ -42,12 +45,32 @@ class AuthGovernor:
         `principal` field that includes a stable, non-PII identifier and
         selected identity metadata for observability.
         """
+        if fail_open is None:
+            env_val = os.getenv("AUTH_BUDGET_FAIL_OPEN", "1").lower()
+            fail_open = env_val in {"1", "true", "yes", "on", "y"}
         try:
             result = await is_key_over_budget(api_key_id)
         except Exception as exc:
             logger.error(f"AuthGovernor: error during is_key_over_budget for key {api_key_id}: {exc}")
-            # Fail open for budget checks if underlying inspection fails; callers
-            # can choose to enforce stricter behavior later if desired.
+            if not fail_open:
+                return {
+                    "over": True,
+                    "reasons": ["budget_check_failed"],
+                    "day": {},
+                    "month": {},
+                    "limits": {},
+                    "principal": {
+                        "principal_id": principal.principal_id,
+                        "kind": principal.kind,
+                        "user_id": principal.user_id,
+                        "api_key_id": principal.api_key_id,
+                        "org_ids": principal.org_ids,
+                        "team_ids": principal.team_ids,
+                    },
+                    "error": str(exc),
+                }
+            # Fail open for budget checks if underlying inspection fails; callers can
+            # switch to fail-closed via AUTH_BUDGET_FAIL_OPEN=0.
             return {
                 "over": False,
                 "reasons": [],
@@ -83,7 +106,7 @@ class AuthGovernor:
         *,
         attempt_type: str = "login",
         rate_limiter=None,
-    ):
+    ) -> Tuple[bool, Any]:
         """
         Check lockout status for an identifier using the existing rate limiter.
 
@@ -99,7 +122,10 @@ class AuthGovernor:
 
         if limiter and getattr(limiter, "enabled", False):
             try:
-                return await limiter.check_lockout(identifier)
+                try:
+                    return await limiter.check_lockout(identifier, attempt_type=attempt_type)
+                except TypeError:
+                    return await limiter.check_lockout(identifier)
             except Exception as exc:
                 logger.debug(f"AuthGovernor lockout check failed for {identifier}: {exc}")
         return False, None

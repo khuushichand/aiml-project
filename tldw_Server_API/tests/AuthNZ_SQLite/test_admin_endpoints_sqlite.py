@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from loguru import logger
 
 
 @pytest.mark.asyncio
@@ -65,8 +66,8 @@ async def test_admin_endpoints_basic_sqlite(tmp_path):
                     user_agent=None,
                     request_id=None,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Could not set request.state.auth in test override: {e}")
         return principal
 
     app.dependency_overrides[require_admin] = _pass_admin

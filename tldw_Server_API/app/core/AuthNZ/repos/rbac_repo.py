@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Dict, Any
+from typing import List, TypedDict
 
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
+
+
+class RolePermissionsResult(TypedDict):
+    role_name: str
+    permissions: List[str]
+    tool_permissions: List[str]
+    all_permissions: List[str]
 
 
 @dataclass
@@ -36,7 +43,7 @@ class AuthnzRbacRepo:
         db = self._db()
         return db.has_permission(user_id, permission)
 
-    def get_role_effective_permissions(self, role_id: int) -> Dict[str, Any]:
+    def get_role_effective_permissions(self, role_id: int) -> RolePermissionsResult:
         """
         Return effective permissions for a role, split into regular and tool permissions.
 

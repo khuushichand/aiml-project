@@ -33,6 +33,45 @@ class AuthnzUsersRepo:
         await db.initialize()
         return db
 
+    @staticmethod
+    def _normalize_user_record(row: Any) -> Dict[str, Any]:
+        """
+        Normalize backend-specific row types to a consistent dict with
+        JSON-friendly UUID strings and primitive types.
+        """
+        try:
+            base = dict(row) if hasattr(row, "keys") or isinstance(row, dict) else dict(row or {})
+        except Exception:
+            base = {}
+        user_dict: Dict[str, Any] = dict(base)
+        if "id" in user_dict:
+            try:
+                user_dict["id"] = int(user_dict["id"])
+            except Exception:
+                pass
+        if "uuid" in user_dict and user_dict["uuid"] is not None:
+            try:
+                user_dict["uuid"] = str(user_dict["uuid"])
+            except Exception:
+                pass
+        for field in ("is_active", "is_verified", "is_superuser"):
+            if field in user_dict:
+                try:
+                    user_dict[field] = bool(user_dict[field])
+                except Exception:
+                    pass
+        if "storage_quota_mb" in user_dict and user_dict["storage_quota_mb"] is not None:
+            try:
+                user_dict["storage_quota_mb"] = int(user_dict["storage_quota_mb"])
+            except Exception:
+                pass
+        if "storage_used_mb" in user_dict and user_dict["storage_used_mb"] is not None:
+            try:
+                user_dict["storage_used_mb"] = float(user_dict["storage_used_mb"])
+            except Exception:
+                pass
+        return user_dict
+
     async def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
         """
         Fetch a user row by integer id.
@@ -42,7 +81,10 @@ class AuthnzUsersRepo:
         """
         db = await self._users_db()
         try:
-            return await db.get_user_by_id(user_id)
+            row = await db.get_user_by_id(user_id)
+            if row is None:
+                return None
+            return self._normalize_user_record(row)
         except UserNotFoundError:
             return None
         except DatabaseError:
@@ -55,7 +97,10 @@ class AuthnzUsersRepo:
         """Fetch a user row by username."""
         db = await self._users_db()
         try:
-            return await db.get_user_by_username(username)
+            row = await db.get_user_by_username(username)
+            if row is None:
+                return None
+            return self._normalize_user_record(row)
         except DatabaseError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
@@ -66,7 +111,10 @@ class AuthnzUsersRepo:
         """Fetch a user row by UUID string."""
         db = await self._users_db()
         try:
-            return await db.get_user_by_uuid(user_uuid)
+            row = await db.get_user_by_uuid(user_uuid)
+            if row is None:
+                return None
+            return self._normalize_user_record(row)
         except DatabaseError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
@@ -111,10 +159,11 @@ class AuthnzUsersRepo:
             search_pattern = f"%{search}%"
             if is_pg:
                 conditions.append(f"(username ILIKE ${param_count} OR email ILIKE ${param_count})")
+                params.append(search_pattern)
             else:
                 conditions.append("(username LIKE ? OR email LIKE ?)")
                 params.append(search_pattern)
-            params.append(search_pattern)
+                params.append(search_pattern)
 
         where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 

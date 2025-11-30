@@ -384,18 +384,18 @@ Symptoms:
     - 403 responses for principals that are authenticated but lack the required `evals.read` / `evals.manage` permissions on list endpoints.
     - 200 responses for principals with appropriate evaluation permissions while the underlying evaluation service is stubbed, ensuring claim-based allow paths behave as expected without touching the real Evaluations DB.
     - The existing `require_admin` helper for heavy evaluations remains the admin gate for `/api/v1/evaluations/admin/idempotency/cleanup`, and the test file documents its behavior as an admin-only compatibility shim independent of the new `require_permissions` wiring on CRUD routes.
- - Workflow scheduler admin endpoints now also participate in the unified, claim-first dependency stack:
-   - `tldw_Server_API/app/core/AuthNZ/permissions.py` defines `WORKFLOWS_ADMIN = "workflows.admin"` as the canonical permission for scheduler administration.
-   - `tldw_Server_API/app/api/v1/endpoints/scheduler_workflows.py::admin_rescan` now depends on both:
-     - `require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.admin_rescan")` for token-scoped gating, and
-     - `require_permissions(WORKFLOWS_ADMIN)` for claim-first enforcement via `AuthPrincipal`.
-   - Route-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_scheduler_workflows_permissions_claims.py` build a small FastAPI app around the scheduler router and stub:
-     - `get_auth_principal` to attach an `AuthContext` with different principal kinds (`user`, `service`).
-     - `get_request_user` and `require_token_scope` to avoid touching real DB/scope logic.
-     - `get_workflows_scheduler` to a fake scheduler that records `_rescan_once` calls.
-   - The tests assert that:
-     - Non-admin principals without scheduler claims receive 403 for `POST /api/v1/scheduler/workflows/admin/rescan`.
-     - User and service principals with `is_admin=True` succeed (200) and trigger the fake scheduler’s rescan call, confirming that admin-style claims (via `is_admin`) remain the primary gate while also flowing through the `require_permissions` / `AuthPrincipal` stack for observability and future fine-grained permissions.
+- Workflow scheduler admin endpoints now also participate in the unified, claim-first dependency stack:
+  - `tldw_Server_API/app/core/AuthNZ/permissions.py` defines `WORKFLOWS_ADMIN = "workflows.admin"` as the canonical permission for scheduler administration.
+  - `tldw_Server_API/app/api/v1/endpoints/scheduler_workflows.py::admin_rescan` now depends on both:
+    - `require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.admin_rescan")` for token-scoped gating, and
+    - `require_permissions(WORKFLOWS_ADMIN)` for claim-first enforcement via `AuthPrincipal`.
+  - Route-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_scheduler_workflows_permissions_claims.py` build a small FastAPI app around the scheduler router and stub:
+    - `get_auth_principal` to attach an `AuthContext` with different principal kinds (`user`, `service`).
+    - `get_request_user` and `require_token_scope` to avoid touching real DB/scope logic.
+    - `get_workflows_scheduler` to a fake scheduler that records `_rescan_once` calls.
+  - The tests assert that:
+    - Non-admin principals without scheduler claims receive 403 for `POST /api/v1/scheduler/workflows/admin/rescan`.
+    - User and service principals with `is_admin=True` succeed (200) and trigger the fake scheduler’s rescan call, confirming that admin-style claims (via `is_admin`) remain the primary gate while also flowing through the `require_permissions` / `AuthPrincipal` stack for observability and future fine-grained permissions.
 
 ### Stage 4: Cleanup & Documentation
 **Goal**: Remove legacy, overlapping auth dependencies and update documentation.

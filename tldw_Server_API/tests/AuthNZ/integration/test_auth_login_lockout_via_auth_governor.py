@@ -7,8 +7,7 @@ limiter dependency. The underlying database remains Postgres via the
 `isolated_test_environment` fixture.
 """
 
-from datetime import datetime, timedelta
-from types import SimpleNamespace
+from datetime import datetime, timedelta, timezone
 
 import asyncpg
 import pytest
@@ -44,7 +43,7 @@ class _StubLimiter:
     async def check_lockout(self, identifier: str):
         if identifier in self._locked_ids:
             # Provide a synthetic expiry time for HTTP 429 headers
-            return True, datetime.utcnow() + timedelta(minutes=15)
+            return True, datetime.now(timezone.utc) + timedelta(minutes=15)
         return False, None
 
     async def record_failed_attempt(self, *, identifier: str, attempt_type: str):
@@ -145,6 +144,9 @@ class TestAuthLoginLockoutViaAuthGovernor:
 
         yield
 
+        # Cleanup: remove the dependency override
+        _app.dependency_overrides.pop(auth_deps.get_rate_limiter_dep, None)
+
     def test_repeated_invalid_logins_lead_to_lockout(self):
         # First attempt: invalid password, should be 401 (no lockout yet)
         r1 = self.client.post(
@@ -170,7 +172,7 @@ class TestAuthLoginLockoutViaAuthGovernor:
         body = r3.json()
         assert "Too many failed login attempts" in body.get("detail", "")
         retry_after = int(r3.headers.get("Retry-After", "0"))
-        assert retry_after >= 0
+        assert retry_after > 0, "Expected positive Retry-After when locked out"
 
     def test_successful_login_after_lockout_expires(self):
         # Drive the identifier into a locked state via repeated failures.
@@ -193,4 +195,3 @@ class TestAuthLoginLockoutViaAuthGovernor:
         payload = success.json()
         assert payload.get("token_type") == "bearer"
         assert "access_token" in payload
-

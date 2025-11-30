@@ -28,7 +28,6 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     MEDIA_CREATE,
-    PermissionChecker,
 )
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
     get_process_videos_form,
@@ -58,7 +57,6 @@ router = APIRouter()
     summary="Transcribe / chunk / analyse videos and return the full artefacts (no DB write)",
     tags=["Media Processing (No DB)"],
     dependencies=[
-        Depends(PermissionChecker(MEDIA_CREATE)),
         Depends(require_permissions(MEDIA_CREATE)),
         Depends(rbac_rate_limit("media.create")),
     ],

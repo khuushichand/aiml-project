@@ -1,16 +1,15 @@
-import os
 from pathlib import Path
 
 import pytest
 
 
 @pytest.mark.asyncio
-async def test_single_user_bootstrap_creates_admin_user_and_primary_key(tmp_path):
+async def test_single_user_bootstrap_creates_admin_user_and_primary_key(tmp_path, monkeypatch):
     # Configure single-user SQLite AuthNZ
     db_path = tmp_path / "users.db"
-    os.environ["AUTH_MODE"] = "single_user"
-    os.environ["DATABASE_URL"] = f"sqlite:///{db_path}"
-    os.environ["SINGLE_USER_API_KEY"] = "test_single_user_primary_key_123"
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test_single_user_primary_key_123")
 
     # Reset AuthNZ singletons and ensure core tables exist
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
@@ -71,12 +70,12 @@ async def test_single_user_bootstrap_creates_admin_user_and_primary_key(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_single_user_bootstrap_reuses_preseeded_primary_key(tmp_path):
+async def test_single_user_bootstrap_reuses_preseeded_primary_key(tmp_path, monkeypatch):
     # Configure single-user SQLite AuthNZ with a deterministic key
     db_path = tmp_path / "users_preseeded.db"
-    os.environ["AUTH_MODE"] = "single_user"
-    os.environ["DATABASE_URL"] = f"sqlite:///{db_path}"
-    os.environ["SINGLE_USER_API_KEY"] = "test_single_user_preseeded_key_123"
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test_single_user_preseeded_key_123")
 
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings, get_settings
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
@@ -127,9 +126,9 @@ async def test_single_user_bootstrap_reuses_preseeded_primary_key(tmp_path):
         )
         try:
             await conn.commit()  # type: ignore[attr-defined]
-        except Exception:
+        except Exception as e:
             # Some adapters commit implicitly on context exit
-            pass
+            logger.debug(f"Explicit commit skipped (adapter may auto-commit): {e}")
 
     before_rows = await pool.fetch(
         "SELECT id, user_id, key_hash, scope, status, is_virtual FROM api_keys WHERE key_hash = ?",

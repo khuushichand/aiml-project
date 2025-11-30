@@ -66,8 +66,7 @@ def _make_principal(
     )
 
 
-@pytest.mark.asyncio
-async def test_check_permission_uses_claims_true(monkeypatch):
+def test_check_permission_uses_claims_true(monkeypatch):
     # Not in single-user mode
     monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: False)
 
@@ -85,8 +84,7 @@ async def test_check_permission_uses_claims_true(monkeypatch):
     assert fake_db.calls == []
 
 
-@pytest.mark.asyncio
-async def test_check_permission_uses_claims_false_without_db(monkeypatch):
+def test_check_permission_uses_claims_false_without_db(monkeypatch):
     monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: False)
 
     user = _make_user(permissions=["media.read"])
@@ -100,8 +98,7 @@ async def test_check_permission_uses_claims_false_without_db(monkeypatch):
     assert fake_db.calls == []
 
 
-@pytest.mark.asyncio
-async def test_check_permission_uses_claims_even_if_db_unavailable(monkeypatch):
+def test_check_permission_uses_claims_even_if_db_unavailable(monkeypatch):
     monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: False)
 
     def _broken_get_user_database():
@@ -114,8 +111,7 @@ async def test_check_permission_uses_claims_even_if_db_unavailable(monkeypatch):
     assert perms_mod.check_permission(user, "media.read") is True
 
 
-@pytest.mark.asyncio
-async def test_check_permission_falls_back_to_db_when_permissions_absent(monkeypatch):
+def test_check_permission_falls_back_to_db_when_permissions_absent(monkeypatch):
     monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: False)
 
     fake_db = _FakeUserDB()
@@ -133,8 +129,7 @@ async def test_check_permission_falls_back_to_db_when_permissions_absent(monkeyp
     assert fake_db.calls == [("perm", 5, "media.read")]
 
 
-@pytest.mark.asyncio
-async def test_check_role_uses_claims_true(monkeypatch):
+def test_check_role_uses_claims_true(monkeypatch):
     monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: False)
 
     fake_db = _FakeUserDB()
@@ -150,8 +145,7 @@ async def test_check_role_uses_claims_true(monkeypatch):
     assert fake_db.calls == []
 
 
-@pytest.mark.asyncio
-async def test_check_role_uses_claims_false_without_db(monkeypatch):
+def test_check_role_uses_claims_false_without_db(monkeypatch):
     monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: False)
 
     user = _make_user(roles=["user"])
@@ -164,8 +158,7 @@ async def test_check_role_uses_claims_false_without_db(monkeypatch):
     assert fake_db.calls == []
 
 
-@pytest.mark.asyncio
-async def test_check_role_uses_claims_even_if_db_unavailable(monkeypatch):
+def test_check_role_uses_claims_even_if_db_unavailable(monkeypatch):
     monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: False)
 
     def _broken_get_user_database():
@@ -178,8 +171,7 @@ async def test_check_role_uses_claims_even_if_db_unavailable(monkeypatch):
     assert perms_mod.check_role(user, "editor") is True
 
 
-@pytest.mark.asyncio
-async def test_check_role_falls_back_to_db_when_roles_absent(monkeypatch):
+def test_check_role_falls_back_to_db_when_roles_absent(monkeypatch):
     monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: False)
 
     fake_db = _FakeUserDB()

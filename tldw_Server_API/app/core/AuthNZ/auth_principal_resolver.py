@@ -36,7 +36,7 @@ def _extract_bearer_token(request: Request) -> Optional[str]:
         if scheme.lower() != "bearer" or not credential:
             return None
         return credential.strip()
-    except Exception:
+    except (AttributeError, TypeError):
         return None
 
 
@@ -45,7 +45,7 @@ def _extract_api_key(request: Request) -> Optional[str]:
     try:
         api_key = request.headers.get("X-API-KEY")
         return api_key.strip() if isinstance(api_key, str) and api_key.strip() else None
-    except Exception:
+    except (AttributeError, TypeError):
         return None
 
 
@@ -68,6 +68,7 @@ def _build_principal_from_user(
     try:
         user_id_int = user.id_int
     except Exception:
+        logger.debug("Could not extract numeric user_id from user object")
         user_id_int = None
 
     # Membership/context from request.state (if present)
@@ -188,15 +189,15 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                 request.state.user_id = user.id
                 request.state.team_ids = []
                 request.state.org_ids = []
-                # Cache the resolved user for downstream dependencies
-                setattr(request.state, "_auth_user", user)
-            except Exception:
-                pass
+            # Cache the resolved user for downstream dependencies
+            request.state._auth_user = user
+        except Exception as exc:
+            logger.debug(f"Unable to set request.state for single-user principal: {exc}")
 
-            principal = _build_principal_from_user(
-                user=user,
-                kind="single_user",
-                request=request,
+        principal = _build_principal_from_user(
+            user=user,
+            kind="single_user",
+            request=request,
                 token_type="api_key",
                 jti=None,
                 api_key_id=None,
@@ -242,7 +243,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate credentials",
                 headers={"WWW-Authenticate": "Bearer"},
-            )
+            ) from exc
 
         principal = _build_principal_from_user(
             user=user,
@@ -256,9 +257,9 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
         try:
             request.state.auth = ctx
             # Cache the resolved user for downstream dependencies
-            setattr(request.state, "_auth_user", user)
-        except Exception:
-            pass
+            request.state._auth_user = user
+        except Exception as exc:
+            logger.debug(f"Unable to cache auth context/user: {exc}")
         return principal
 
     # API key path
@@ -272,7 +273,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Authentication failed",
-            )
+            ) from exc
 
         api_key_id: Optional[int] = None
         try:
@@ -294,9 +295,9 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
         try:
             request.state.auth = ctx
             # Cache the resolved user for downstream dependencies
-            setattr(request.state, "_auth_user", user)
-        except Exception:
-            pass
+            request.state._auth_user = user
+        except Exception as exc:
+            logger.debug(f"Unable to cache auth context/user: {exc}")
         return principal
 
     # Fallback (should not be reached)

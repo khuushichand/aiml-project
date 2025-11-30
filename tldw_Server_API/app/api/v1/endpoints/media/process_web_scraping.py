@@ -23,7 +23,6 @@ router = APIRouter()
 @router.post(
     "/process-web-scraping",
     dependencies=[
-        Depends(PermissionChecker(MEDIA_CREATE)),
         Depends(require_permissions(MEDIA_CREATE)),
         Depends(rbac_rate_limit("media.create")),
     ],

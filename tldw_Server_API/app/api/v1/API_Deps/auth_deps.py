@@ -39,6 +39,8 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthC
 from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
     get_auth_principal as _resolve_auth_principal,
 )
+from tldw_Server_API.app.core.External_Sources.connectors_service import get_policy
+from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
@@ -383,7 +385,7 @@ async def get_current_user(
                 return user_dict
     except Exception:
         # Fall through to standard auth behavior if any issue occurs
-        pass
+        logger.debug("Fast-path AuthContext reuse failed, falling back to standard auth")
 
     # Helper: IP allowlist check for single-user mode
     def _ip_allowed_single_user(client_ip: Optional[str]) -> bool:
@@ -855,6 +857,41 @@ async def get_current_active_user(
         )
 
     return current_user
+
+
+async def get_user_org_policy(
+    db=Depends(get_db_transaction),
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """
+    Resolve the active org policy for the current user and fail closed on errors.
+    """
+    memberships = current_user.get("org_memberships") or []
+    if memberships:
+        org_id = memberships[0].get("org_id")
+    elif is_single_user_mode():
+        org_id = 1
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User has no organization memberships",
+        )
+    if org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Organization membership is missing org_id",
+        )
+    try:
+        pol = await get_policy(db, org_id)
+        if not pol:
+            pol = get_default_policy_from_env(org_id)
+        return pol
+    except Exception as exc:
+        logger.exception(f"Failed to load organization policy for org_id={org_id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to load organization policy",
+        ) from exc
 
 
 async def require_admin(

@@ -1,7 +1,10 @@
 import pytest
 from unittest.mock import patch
+from typing import Optional
+
 from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -24,7 +27,7 @@ class _QStub:
         return [{"id": 1, "status": "ok", "limit": limit}]
 
 
-async def _principal_override(request=None):  # type: ignore[override]
+async def _principal_override(request: Optional[Request] = None):  # type: ignore[override]
     principal = AuthPrincipal(
         kind="user",
         user_id=1,
@@ -39,19 +42,16 @@ async def _principal_override(request=None):  # type: ignore[override]
         team_ids=[],
     )
     if request is not None:
-        try:
-            request.state.auth = AuthContext(
-                principal=principal,
-                ip=None,
-                user_agent=None,
-                request_id=None,
-            )
-        except Exception:
-            pass
+        request.state.auth = AuthContext(
+            principal=principal,
+            ip=None,
+            user_agent=None,
+            request_id=None,
+        )
     return principal
 
 
-async def _limited_principal_override(request=None):  # type: ignore[override]
+async def _limited_principal_override(request: Optional[Request] = None):  # type: ignore[override]
     principal = AuthPrincipal(
         kind="user",
         user_id=2,
@@ -66,15 +66,12 @@ async def _limited_principal_override(request=None):  # type: ignore[override]
         team_ids=[],
     )
     if request is not None:
-        try:
-            request.state.auth = AuthContext(
-                principal=principal,
-                ip=None,
-                user_agent=None,
-                request_id=None,
-            )
-        except Exception:
-            pass
+        request.state.auth = AuthContext(
+            principal=principal,
+            ip=None,
+            user_agent=None,
+            request_id=None,
+        )
     return principal
 
 

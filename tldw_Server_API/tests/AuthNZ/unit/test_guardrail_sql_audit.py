@@ -9,10 +9,14 @@ quotas, migrations, initialize) within the AuthNZ core package.
 
 from pathlib import Path
 
+import pytest
 
+
+@pytest.mark.unit
 def test_guardrail_tables_used_only_in_core_authnz_modules():
     project_root = Path(__file__).resolve().parents[3]
     authnz_core = project_root / "app" / "core" / "AuthNZ"
+    assert authnz_core.exists(), f"Expected AuthNZ core path not found: {authnz_core}"
 
     allowed_files = {
         "app/core/AuthNZ/rate_limiter.py",
@@ -39,4 +43,3 @@ def test_guardrail_tables_used_only_in_core_authnz_modules():
             offending.append(rel)
 
     assert offending == [], f"Guardrail tables referenced in unexpected modules: {offending}"
-

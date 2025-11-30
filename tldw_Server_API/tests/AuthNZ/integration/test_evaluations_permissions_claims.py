@@ -9,7 +9,10 @@ from starlette.requests import Request
 from starlette.types import Scope
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
-from tldw_Server_API.app.api.v1.endpoints.evaluations_crud import crud_router
+from tldw_Server_API.app.api.v1.endpoints.evaluations_crud import (
+    RBAC_EVALS_CREATE,
+    crud_router,
+)
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
 
@@ -71,7 +74,7 @@ def _build_app_with_overrides(principal: AuthPrincipal):
     async def _noop_rbac_rate_limit(*_args, **_kwargs) -> None:
         return None
 
-    app.dependency_overrides[auth_deps.rbac_rate_limit("evals.create")] = _noop_rbac_rate_limit
+    app.dependency_overrides[RBAC_EVALS_CREATE] = _noop_rbac_rate_limit
 
     return app
 

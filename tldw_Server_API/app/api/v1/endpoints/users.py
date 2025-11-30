@@ -70,14 +70,9 @@ async def get_current_user_profile(
     Returns:
         UserResponse with user details
     """
-    # Convert UUID to string if it's a UUID object
-    user_uuid = current_user.get('uuid', '')
-    if user_uuid and not isinstance(user_uuid, str):
-        user_uuid = str(user_uuid)
-
     return UserResponse(
         id=current_user['id'],
-        uuid=user_uuid,
+        uuid=current_user.get('uuid', ''),
         username=current_user['username'],
         email=current_user.get('email', ''),
         role=current_user.get('role', 'user'),

@@ -1401,7 +1401,7 @@ async def unified_search_stream_endpoint(
     - Performance analysis
     """,
     response_description="Full search results with analysis",
-    dependencies=[Depends(check_rate_limit)]
+    dependencies=[Depends(check_rate_limit), Depends(require_permissions(MEDIA_READ))]
 )
 async def advanced_search_endpoint(
     request: Request,

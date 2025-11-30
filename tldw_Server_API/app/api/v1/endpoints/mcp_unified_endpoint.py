@@ -479,10 +479,26 @@ async def get_server_metrics(
     return ServerMetricsResponse(**metrics)
 
 
+def _is_prometheus_public() -> bool:
+    """Flag indicating whether Prometheus metrics should be exposed without auth."""
+    return os.getenv("MCP_PROMETHEUS_PUBLIC", "").lower() in {"1", "true", "yes"}
+
+
+async def require_admin_unless_public(
+    public: bool = Depends(_is_prometheus_public),
+    user: TokenData = Depends(require_user),
+) -> Optional[TokenData]:
+    """
+    Enforce admin requirement unless explicitly configured as public.
+    """
+    if public:
+        return None
+    return await require_admin(user)
+
+
 @router.get("/metrics/prometheus")
 async def get_prometheus_metrics(
-    credentials: HTTPAuthorizationCredentials = Security(security),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    _admin: Optional[TokenData] = Depends(require_admin_unless_public),
     _guard: None = Depends(enforce_http_security),
 ):
     """
@@ -493,15 +509,6 @@ async def get_prometheus_metrics(
     exposed only on trusted networks or behind an ingress/proxy that enforces
     authentication in production environments.
     """
-    import os
-    public = os.getenv("MCP_PROMETHEUS_PUBLIC", "").lower() in {"1", "true", "yes"}
-    if not public:
-        # Require admin
-        user = await get_current_user(credentials, x_api_key)
-        if not user:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-        if UserRole.ADMIN.value not in (user.roles or []):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
     collector = get_metrics_collector()
     content = collector.get_prometheus_metrics()
     # Use standard Prometheus content type regardless of availability

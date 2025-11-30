@@ -393,8 +393,10 @@ def client_with_single_user(monkeypatch):
                     user_agent=None,
                     request_id=None,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                # Best-effort; don't fail tests if state attachment fails
+                import logging
+                logging.getLogger(__name__).debug("Failed to set request.state.auth: %s", e)
         return principal
 
     fastapi_app.dependency_overrides[get_request_user] = _override_user

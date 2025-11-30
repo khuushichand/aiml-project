@@ -7,7 +7,7 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from enum import Enum
 #
 # 3rd-party imports
@@ -21,6 +21,9 @@ from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
     derive_hmac_key,
     derive_hmac_key_candidates,
 )
+
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
 
 #######################################################################################################################
 #
@@ -52,7 +55,7 @@ class APIKeyManager:
     def __init__(self, db_pool: Optional[DatabasePool] = None):
         """Initialize API key manager"""
         self.db_pool = db_pool
-        self._repo = None
+        self._repo: Optional["AuthnzApiKeysRepo"] = None
         self._initialized = False
         self.settings = get_settings()
         self.key_prefix = "tldw_"  # Prefix for identifying our API keys
@@ -67,12 +70,15 @@ class APIKeyManager:
         except Exception:
             self._hmac_key_fingerprint = ""
 
-    def _get_repo(self):
+    def _get_repo(self) -> "AuthnzApiKeysRepo":
         """
         Lazily construct an AuthnzApiKeysRepo bound to the current db_pool.
 
         Import is local to avoid circular dependencies between the manager
         and the repository module.
+
+        Raises:
+            DatabaseError: If no database pool has been configured.
         """
         if not self.db_pool:
             raise DatabaseError("APIKeyManager database pool is not initialized")

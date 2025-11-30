@@ -16,7 +16,7 @@ router = APIRouter(prefix="/claims", tags=["claims"])
 @router.get("/status")
 def claims_rebuild_status(
     current_user: User = Depends(get_request_user),
-    principal: AuthPrincipal = Depends(require_roles("admin")),
+    _principal: AuthPrincipal = Depends(require_roles("admin")),  # admin role enforced via dependency; value unused
 ) -> Dict[str, Any]:
     """Return statistics about the claims rebuild worker. Admin only."""
     try:

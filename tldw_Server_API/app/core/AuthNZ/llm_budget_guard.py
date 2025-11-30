@@ -91,20 +91,17 @@ async def enforce_llm_budget(request: Request) -> None:
             user_id_int = int(user_id_value) if user_id_value is not None else None
         except (TypeError, ValueError):
             user_id_int = None
-        org_ids = []
-        team_ids = []
-        try:
-            raw_org_ids = getattr(request.state, "org_ids", None)
-            if isinstance(raw_org_ids, (list, tuple)):
-                org_ids = [int(o) for o in raw_org_ids if o is not None]
-        except (TypeError, ValueError):
-            org_ids = []
-        try:
-            raw_team_ids = getattr(request.state, "team_ids", None)
-            if isinstance(raw_team_ids, (list, tuple)):
-                team_ids = [int(t) for t in raw_team_ids if t is not None]
-        except (TypeError, ValueError):
-            team_ids = []
+
+        def _coerce_int_list(raw):
+            try:
+                if isinstance(raw, (list, tuple)):
+                    return [int(x) for x in raw if x is not None]
+            except (TypeError, ValueError):
+                pass
+            return []
+
+        org_ids = _coerce_int_list(getattr(request.state, "org_ids", None))
+        team_ids = _coerce_int_list(getattr(request.state, "team_ids", None))
         principal = AuthPrincipal(
             kind="api_key",
             user_id=user_id_int,

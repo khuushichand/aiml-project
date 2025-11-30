@@ -115,7 +115,6 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
 )
 from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError, DuplicateTeamError, DuplicateRoleError
-from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError
 from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrganizationCreateRequest,
     OrganizationResponse,
@@ -178,7 +177,7 @@ _authnz_migration_lock = asyncio.Lock()
 router = APIRouter(
     prefix="/admin",
     tags=["admin"],
-    dependencies=[Depends(require_admin), Depends(require_roles("admin"))],  # All endpoints require admin role
+    dependencies=[Depends(require_roles("admin"))],  # All endpoints require admin role
     responses={403: {"description": "Not authorized"}}
 )
 
@@ -1088,11 +1087,9 @@ async def get_user_details(
         if not user:
             raise UserNotFoundError(f"User {user_id}")
 
-        # Remove sensitive fields and normalize UUID for JSON responses
+        # Remove sensitive fields; repository normalizes backend-specific types
         user_dict: Dict[str, Any] = dict(user)
         user_dict.pop("password_hash", None)
-        if "uuid" in user_dict and user_dict["uuid"] and not isinstance(user_dict["uuid"], str):
-            user_dict["uuid"] = str(user_dict["uuid"])
 
         return user_dict
 
