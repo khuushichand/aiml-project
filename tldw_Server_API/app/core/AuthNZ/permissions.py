@@ -52,11 +52,7 @@ def check_permission(user: User, permission: str) -> bool:
     # re-querying the RBAC store and to ensure consistency with the token's
     # authenticated context (especially in tests where multiple DB pools may
     # exist).
-    perms = None
-    try:
-        perms = getattr(user, "permissions", None)
-    except Exception:
-        perms = None
+    perms = getattr(user, "permissions", None)
 
     if isinstance(perms, list):
         # Claims are authoritative when present; if the permission is not listed,
@@ -65,7 +61,13 @@ def check_permission(user: User, permission: str) -> bool:
 
     # For caller contexts that do not provide claim lists at all (perms is None),
     # fall back to the UserDatabase for compatibility with older code paths.
+    # If a non-list value is present (e.g., string, dict), treat that as an
+    # explicitly unsupported shape and fail closed without reaching into the DB.
     if perms is not None:
+        logger.debug(
+            "check_permission: non-list permissions attribute encountered on user; "
+            "treating as no permissions and skipping DB lookup"
+        )
         return False
 
     try:
@@ -100,11 +102,7 @@ def check_role(user: User, role: str) -> bool:
     # Prefer role claims already attached to the request user for fast-path
     # checks and to avoid depending on a potentially stale UserDatabase
     # singleton that may point at a different backend during tests.
-    roles = None
-    try:
-        roles = getattr(user, "roles", None)
-    except Exception:
-        roles = None
+    roles = getattr(user, "roles", None)
 
     if isinstance(roles, list):
         # Claims are authoritative when present; if the role is not listed,
@@ -113,7 +111,13 @@ def check_role(user: User, role: str) -> bool:
 
     # For caller contexts that do not provide claim lists at all (roles is None),
     # fall back to the UserDatabase for compatibility with older code paths.
+    # If a non-list value is present, treat that as an explicit "no roles"
+    # state and avoid hitting the DB.
     if roles is not None:
+        logger.debug(
+            "check_role: non-list roles attribute encountered on user; "
+            "treating as no roles and skipping DB lookup"
+        )
         return False
 
     try:
@@ -504,6 +508,10 @@ API_RATE_LIMIT_OVERRIDE = "api.rate_limit_override"
 # Workflows permissions
 WORKFLOWS_RUNS_READ = "workflows.runs.read"
 WORKFLOWS_RUNS_CONTROL = "workflows.runs.control"
+
+# Notes / graph permissions
+NOTES_GRAPH_READ = "notes.graph.read"
+NOTES_GRAPH_WRITE = "notes.graph.write"
 
 # Role names
 ROLE_ADMIN = "admin"

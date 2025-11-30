@@ -37,9 +37,10 @@ def _make_principal(
     is_admin: bool = False,
     roles: list[str] | None = None,
     permissions: list[str] | None = None,
+    kind: str = "user",
 ) -> AuthPrincipal:
     return AuthPrincipal(
-        kind="user",
+        kind=kind,
         user_id=1,
         api_key_id=None,
         subject=None,
@@ -144,3 +145,33 @@ async def test_require_roles_http_200_for_admin_flag_even_without_role(monkeypat
     resp = local_client.get("/role-protected")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_require_permissions_respects_service_principal_with_claims(monkeypatch):
+    async def _stub_get_auth_principal(request):  # type: ignore[override]
+        return _make_principal(kind="service", permissions=["media.read"], roles=["worker"])
+
+    monkeypatch.setattr(
+        auth_deps, "_resolve_auth_principal", _stub_get_auth_principal, raising=True
+    )
+
+    local_client = TestClient(app)
+    resp = local_client.get("/perm-protected")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_require_permissions_denies_anonymous_principal_without_claims(monkeypatch):
+    async def _stub_get_auth_principal(request):  # type: ignore[override]
+        return _make_principal(kind="anonymous", permissions=[], roles=[])
+
+    monkeypatch.setattr(
+        auth_deps, "_resolve_auth_principal", _stub_get_auth_principal, raising=True
+    )
+
+    local_client = TestClient(app)
+    resp = local_client.get("/perm-protected")
+    assert resp.status_code == 403
+    assert "media.read" in resp.json().get("detail", "")

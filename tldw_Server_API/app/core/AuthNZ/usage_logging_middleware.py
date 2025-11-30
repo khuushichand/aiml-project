@@ -13,6 +13,7 @@ import hashlib
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext
 
 
 class UsageLoggingMiddleware(BaseHTTPMiddleware):
@@ -56,8 +57,23 @@ class UsageLoggingMiddleware(BaseHTTPMiddleware):
         finally:
             try:
                 duration_ms = int((monotonic() - start) * 1000)
-                user_id = getattr(request.state, "user_id", None)
-                api_key_id = getattr(request.state, "api_key_id", None)
+                # Prefer AuthPrincipal from AuthContext when present so usage
+                # logs stay aligned with unified principal governance, while
+                # preserving legacy request.state fallbacks for compatibility.
+                user_id = None
+                api_key_id = None
+                try:
+                    existing_ctx = getattr(request.state, "auth", None)
+                    if isinstance(existing_ctx, AuthContext):
+                        principal = existing_ctx.principal
+                        user_id = principal.user_id
+                        api_key_id = principal.api_key_id
+                    else:
+                        user_id = getattr(request.state, "user_id", None)
+                        api_key_id = getattr(request.state, "api_key_id", None)
+                except Exception:
+                    user_id = getattr(request.state, "user_id", None)
+                    api_key_id = getattr(request.state, "api_key_id", None)
                 endpoint = f"{request.method}:{path}"
                 bytes_out = None
                 bytes_in = None

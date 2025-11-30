@@ -960,6 +960,104 @@ async def create_admin_user():
         print(f"❌ Failed to create admin user: {e}")
         return False
 
+
+async def bootstrap_single_user_profile() -> bool:
+    """
+    Bootstrap single-user profile using normal AuthNZ flows.
+
+    This helper is idempotent and ensures:
+    - A single admin user exists with id = SINGLE_USER_FIXED_ID.
+    - A primary API key exists for that user matching SINGLE_USER_API_KEY
+      (hashed via the centralized API key HMAC logic).
+    """
+    settings = get_settings()
+    if settings.AUTH_MODE != "single_user":
+        return True
+
+    print("\n👤 Bootstrapping single-user profile (admin user + primary API key)...")
+
+    # Ensure RBAC seed for the single-user account (roles, permissions, user row)
+    try:
+        await ensure_single_user_rbac_seed_if_needed()
+    except Exception as e:
+        print(f"⚠️  Single-user RBAC seed failed (continuing): {e}")
+
+    api_key_value = settings.SINGLE_USER_API_KEY or ""
+    if not api_key_value or api_key_value == "CHANGE_ME_TO_SECURE_API_KEY":
+        print(
+            "⚠️  SINGLE_USER_API_KEY is not set or uses the default placeholder; "
+            "skipping primary API key bootstrap."
+        )
+        return True
+
+    try:
+        # Use APIKeyManager to ensure tables and compute key hash
+        from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+
+        manager = APIKeyManager()
+        await manager.initialize()
+
+        key_hash = manager.hash_api_key(api_key_value)
+        key_prefix = (api_key_value[:10] + "...") if len(api_key_value) > 10 else api_key_value
+
+        pool = await get_db_pool()
+        async with pool.transaction() as conn:
+            if hasattr(conn, "fetchval"):
+                # Postgres: upsert by key_hash
+                await conn.execute(
+                    """
+                    INSERT INTO api_keys (user_id, key_hash, key_prefix, name, description, scope, status, is_virtual)
+                    VALUES ($1, $2, $3, $4, $5, $6, 'active', 0)
+                    ON CONFLICT (key_hash) DO UPDATE SET
+                        user_id = EXCLUDED.user_id,
+                        key_prefix = EXCLUDED.key_prefix,
+                        scope = EXCLUDED.scope,
+                        status = EXCLUDED.status,
+                        is_virtual = EXCLUDED.is_virtual
+                    """,
+                    settings.SINGLE_USER_FIXED_ID,
+                    key_hash,
+                    key_prefix,
+                    "single-user primary key",
+                    "Primary API key for single-user profile",
+                    "admin",
+                )
+            else:
+                # SQLite: emulate upsert by key_hash
+                await conn.execute(
+                    """
+                    INSERT OR REPLACE INTO api_keys (
+                        id, user_id, key_hash, key_prefix, name, description, scope, status, is_virtual
+                    )
+                    VALUES (
+                        COALESCE(
+                            (SELECT id FROM api_keys WHERE key_hash = ?),
+                            (SELECT MAX(id) + 1 FROM api_keys)
+                        ),
+                        ?, ?, ?, ?, ?, ?, 'active', 0
+                    )
+                    """,
+                    (
+                        key_hash,
+                        settings.SINGLE_USER_FIXED_ID,
+                        key_hash,
+                        key_prefix,
+                        "single-user primary key",
+                        "Primary API key for single-user profile",
+                        "admin",
+                    ),
+                )
+            try:
+                await conn.commit()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+        print("✅ Single-user primary API key ensured in AuthNZ store")
+        return True
+    except Exception as e:
+        print(f"⚠️  Failed to bootstrap single-user primary API key (continuing): {e}")
+        return False
+
 async def test_authentication():
     """Test authentication system"""
     print("\n🧪 Testing authentication system...")
@@ -1048,7 +1146,7 @@ async def main():
         print("\n❌ Database setup failed")
         sys.exit(1)
 
-    # Step 4: Create admin user (multi-user mode)
+    # Step 4: Create admin user / bootstrap profile
     settings = get_settings()
     if settings.AUTH_MODE == "multi_user":
         # Check if any users exist
@@ -1068,6 +1166,9 @@ async def main():
             response = input("\n📝 Create admin user? (Y/n): ").strip().lower()
             if response != 'n':
                 await create_admin_user()
+    else:
+        # Single-user profile: ensure bootstrap user + primary API key
+        await bootstrap_single_user_profile()
 
     # Step 5: Test authentication
     if not await test_authentication():

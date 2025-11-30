@@ -356,7 +356,7 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
   - Over-budget key receives 402 with structured detail.
 - Regression tests ensuring non-virtual keys are unaffected.
 
-**Status**: In Progress
+**Status**: Done
 
 **Notes**:
 - A minimal `AuthGovernor` facade focused on LLM budgets is implemented in `tldw_Server_API/app/core/AuthNZ/auth_governor.py`, wrapping the existing `is_key_over_budget` logic and attaching principal metadata.
@@ -364,7 +364,7 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
 - API-level coverage now includes:
   - Guard dependency exercised over HTTP with a virtual key (`tests/AuthNZ/integration/test_llm_budget_guard_http.py`) asserting `details.principal` in the 402 response.
   - Middleware over-budget regression with principal assertions (`tests/AuthNZ_SQLite/test_llm_budget_402_sqlite.py::test_llm_budget_middleware_returns_402_on_overage` and `::test_llm_budget_middleware_returns_402_on_embeddings_overage`, which also validates the `llm_usage_log` day tokens/USD summaries in the 402 details).
-- Dedicated under-budget success paths remain to be added.
+  - Under-budget guard and middleware success paths in unit tests (`tests/AuthNZ_Unit/test_auth_governor_budget.py` and `tests/AuthNZ/unit/test_llm_budget_middleware.py`) ensuring requests proceed when budgets are within limits while still populating principal metadata.
 
 ### Stage 3: Login Lockouts via AuthGovernor
 **Goal**: Replace bespoke login attempt and lockout logic in AuthNZ rate limiter with `AuthGovernor` metrics.
@@ -380,10 +380,16 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
   - Repeated failures lead to lockout and a clear response payload.
   - Successful login after lockout expiry works.
 
-**Status**: In Progress
+**Status**: Done
 
 **Notes**:
-- `AuthGovernor` now exposes `check_lockout` / `record_auth_failure` wrappers over the existing rate limiter, and `/auth/login` routes its lockout checks and failure counters through this facade (while preserving current thresholds and error payloads). Test coverage for lockout semantics is still pending.
+- `AuthGovernor` now exposes `check_lockout` / `record_auth_failure` wrappers over the existing rate limiter, and `/auth/login` routes its lockout checks and failure counters through this facade (while preserving current thresholds and error payloads).
+- Unit coverage for lockout wrappers lives alongside the LLM budget tests in `tldw_Server_API/tests/AuthNZ_Unit/test_auth_governor_budget.py`:
+  - `test_auth_governor_lockout_checks_rate_limiter` and `test_auth_governor_record_auth_failure_respects_limiter` exercise the happy path when a rate limiter is available and enabled.
+  - `test_auth_governor_lockout_fallback_when_limiter_missing` verifies the fail-open behavior (no hard lockout) when the limiter cannot be resolved.
+- Lower-level lockout threshold and window-reset semantics remain validated by the existing rate limiter unit suite (`tldw_Server_API/tests/AuthNZ/unit/test_rate_limiter_lockout_reset.py`), and the combination with `AuthGovernor` is exercised over HTTP in `tldw_Server_API/tests/AuthNZ/integration/test_auth_login_lockout_via_auth_governor.py`:
+  - `test_repeated_invalid_logins_lead_to_lockout` drives repeated bad `/api/v1/auth/login` attempts and asserts the transition from 401 to 429 with a clear payload and `Retry-After` header.
+  - `test_successful_login_after_lockout_expires` uses a stub limiter to simulate expiry and confirms that a subsequent valid login succeeds with a 200 response and bearer tokens.
 
 ### Stage 4: Consolidation & Clean-up
 **Goal**: Remove duplicated guardrail logic and ensure all AuthNZ guardrails use `AuthPrincipal` + `AuthGovernor`.
@@ -398,4 +404,8 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
 - Static/code-level checks (or targeted tests) to ensure no remaining direct SQL manipulation of guardrail tables outside repositories/governor.
 - End-to-end tests for representative guarded routes (auth, chat, embeddings) verifying combined behavior.
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- A guardrail audit test (`tldw_Server_API/tests/AuthNZ/unit/test_guardrail_sql_audit.py`) now enforces that low-level tables used for guardrails (`failed_attempts`, `account_lockouts`, `vk_jwt_counters`, `vk_api_key_counters`) are only referenced from core AuthNZ infrastructure modules (`rate_limiter.py`, `quotas.py`, `migrations.py`, `initialize.py`) within `tldw_Server_API/app/core/AuthNZ`. This provides an automated safety net to prevent new direct SQL usages from bypassing the governance layer.
+- Additional consolidation work (e.g., migrating any remaining ad-hoc guardrail logic to repositories/governor facades and expanding end-to-end coverage) remains TODO but is now guarded by the audit test to keep new code aligned with this stage.

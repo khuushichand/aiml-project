@@ -13,13 +13,8 @@ from typing import Optional
 from fastapi import HTTPException, Request, status
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
-    User,
-    authenticate_api_key_user,
-    get_single_user_instance,
-    verify_jwt_and_fetch_user,
-    verify_single_user_api_key,
-)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.AuthNZ import User_DB_Handling
 from tldw_Server_API.app.core.AuthNZ.principal_model import (
     AuthContext,
     AuthPrincipal,
@@ -164,13 +159,13 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             authorization = request.headers.get("Authorization") if getattr(request, "headers", None) else None
 
             # Reuse existing verification helper to honor all existing semantics
-            await verify_single_user_api_key(
+            await User_DB_Handling.verify_single_user_api_key(
                 request,
                 api_key=api_key,
                 authorization=authorization,
             )
 
-            base_user = get_single_user_instance()
+            base_user = User_DB_Handling.get_single_user_instance()
             # Mirror the claims semantics from get_request_user's single-user branch
             user = User(
                 id=base_user.id,
@@ -238,7 +233,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
     # JWT path
     if token:
         try:
-            user = await verify_jwt_and_fetch_user(request, token)
+            user = await User_DB_Handling.verify_jwt_and_fetch_user(request, token)
         except HTTPException:
             raise
         except Exception as exc:
@@ -269,7 +264,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
     # API key path
     if api_key:
         try:
-            user = await authenticate_api_key_user(request, api_key)
+            user = await User_DB_Handling.authenticate_api_key_user(request, api_key)
         except HTTPException:
             raise
         except Exception as exc:

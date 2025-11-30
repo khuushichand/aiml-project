@@ -23,7 +23,7 @@ def _make_request(headers: dict[str, str] | None = None, *, path: str = "/api/v1
 
 @pytest.mark.asyncio
 async def test_auth_governor_decorates_over_budget_result_with_principal(monkeypatch):
-    async def _fake_is_key_over_budget(key_id: int):
+    async def _fake_is_key_over_budget(_key_id: int):
         return {
             "over": True,
             "reasons": ["day_tokens_exceeded:100/10"],
@@ -63,6 +63,47 @@ async def test_auth_governor_decorates_over_budget_result_with_principal(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_auth_governor_under_budget_includes_principal(monkeypatch):
+    async def _fake_is_key_over_budget(_key_id: int):
+        return {
+            "over": False,
+            "reasons": [],
+            "day": {"tokens": 10, "usd": 0.01},
+            "month": {"tokens": 100, "usd": 0.1},
+            "limits": {"is_virtual": True},
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.auth_governor.is_key_over_budget",
+        _fake_is_key_over_budget,
+    )
+
+    principal = AuthPrincipal(
+        kind="api_key",
+        user_id=2,
+        api_key_id=456,
+        subject=None,
+        token_type="api_key",
+        jti=None,
+        roles=[],
+        permissions=[],
+        is_admin=False,
+        org_ids=[],
+        team_ids=[],
+    )
+
+    gov = AuthGovernor()
+    result = await gov.check_llm_budget_for_api_key(principal, 456)
+
+    assert result["over"] is False
+    assert result["limits"]["is_virtual"] is True
+    meta = result.get("principal") or {}
+    assert meta.get("principal_id")
+    assert meta.get("api_key_id") == 456
+    assert meta.get("user_id") == 2
+
+
+@pytest.mark.asyncio
 async def test_enforce_llm_budget_uses_auth_governor_and_raises_402(monkeypatch):
     # Settings with budget enforcement enabled and virtual keys enabled
     fake_settings = SimpleNamespace(
@@ -74,11 +115,13 @@ async def test_enforce_llm_budget_uses_auth_governor_and_raises_402(monkeypatch)
         return fake_settings
 
     async def _fake_resolve_api_key_by_hash(api_key: str, settings=None):
+        # settings is accepted for signature compatibility but ignored.
+        _ = settings
         return {"id": 123, "user_id": 7}
 
     async def _fake_get_auth_governor():
         class _FakeGov:
-            async def check_llm_budget_for_api_key(self, principal, api_key_id: int):
+            async def check_llm_budget_for_api_key(self, principal, _api_key_id: int):
                 return {
                     "over": True,
                     "reasons": ["day_tokens_exceeded:100/10"],
@@ -225,6 +268,7 @@ async def test_enforce_llm_budget_allows_under_budget_chat(monkeypatch):
         return fake_settings
 
     async def _fake_resolve_api_key_by_hash(api_key: str, settings=None):
+        _ = settings
         return {"id": 555, "user_id": 9}
 
     async def _fake_get_auth_governor():
@@ -274,6 +318,7 @@ async def test_enforce_llm_budget_allows_under_budget_embeddings(monkeypatch):
         return fake_settings
 
     async def _fake_resolve_api_key_by_hash(api_key: str, settings=None):
+        _ = settings
         return {"id": 777, "user_id": 11}
 
     async def _fake_get_auth_governor():

@@ -45,6 +45,9 @@ async def test_get_auth_principal_single_user_mode(monkeypatch):
         return True
 
     async def _fake_verify_single_user_api_key(request, api_key=None, authorization=None):
+        # Parameters are intentionally ignored; they are present to match the
+        # real dependency signature for keyword-argument calls.
+        _ = (request, api_key, authorization)
         return True
 
     def _fake_get_single_user_instance() -> User:
@@ -59,11 +62,11 @@ async def test_get_auth_principal_single_user_mode(monkeypatch):
         _fake_is_single_user_mode,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.auth_principal_resolver.verify_single_user_api_key",
+        "tldw_Server_API.app.core.AuthNZ.User_DB_Handling.verify_single_user_api_key",
         _fake_verify_single_user_api_key,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.auth_principal_resolver.get_single_user_instance",
+        "tldw_Server_API.app.core.AuthNZ.User_DB_Handling.get_single_user_instance",
         _fake_get_single_user_instance,
     )
 
@@ -86,7 +89,7 @@ async def test_get_auth_principal_jwt_path(monkeypatch):
     def _fake_is_single_user_mode() -> bool:
         return False
 
-    async def _fake_verify_jwt_and_fetch_user(request, token: str = "") -> User:
+    async def _fake_verify_jwt_and_fetch_user(request, _token: str = "") -> User:
         # simulate User with claims and membership already attached to request.state
         request.state.user_id = 42
         request.state.org_ids = [10]
@@ -109,7 +112,7 @@ async def test_get_auth_principal_jwt_path(monkeypatch):
         _fake_is_single_user_mode,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.auth_principal_resolver.verify_jwt_and_fetch_user",
+        "tldw_Server_API.app.core.AuthNZ.User_DB_Handling.verify_jwt_and_fetch_user",
         _fake_verify_jwt_and_fetch_user,
     )
 
@@ -131,7 +134,7 @@ async def test_get_auth_principal_api_key_path(monkeypatch):
     def _fake_is_single_user_mode() -> bool:
         return False
 
-    async def _fake_authenticate_api_key_user(request, api_key: str) -> User:
+    async def _fake_authenticate_api_key_user(request, _api_key: str) -> User:
         request.state.user_id = 7
         request.state.api_key_id = 100
         request.state.org_ids = [1, 2]
@@ -154,7 +157,7 @@ async def test_get_auth_principal_api_key_path(monkeypatch):
         _fake_is_single_user_mode,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.auth_principal_resolver.authenticate_api_key_user",
+        "tldw_Server_API.app.core.AuthNZ.User_DB_Handling.authenticate_api_key_user",
         _fake_authenticate_api_key_user,
     )
 

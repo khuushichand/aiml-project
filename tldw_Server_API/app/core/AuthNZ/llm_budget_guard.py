@@ -89,7 +89,7 @@ async def enforce_llm_budget(request: Request) -> None:
         user_id_value = getattr(request.state, "user_id", None)
         try:
             user_id_int = int(user_id_value) if user_id_value is not None else None
-        except Exception:
+        except (TypeError, ValueError):
             user_id_int = None
         org_ids = []
         team_ids = []
@@ -97,18 +97,18 @@ async def enforce_llm_budget(request: Request) -> None:
             raw_org_ids = getattr(request.state, "org_ids", None)
             if isinstance(raw_org_ids, (list, tuple)):
                 org_ids = [int(o) for o in raw_org_ids if o is not None]
-        except Exception:
+        except (TypeError, ValueError):
             org_ids = []
         try:
             raw_team_ids = getattr(request.state, "team_ids", None)
             if isinstance(raw_team_ids, (list, tuple)):
                 team_ids = [int(t) for t in raw_team_ids if t is not None]
-        except Exception:
+        except (TypeError, ValueError):
             team_ids = []
         principal = AuthPrincipal(
             kind="api_key",
             user_id=user_id_int,
-            api_key_id=int(key_id),
+            api_key_id=key_id,
             subject=None,
             token_type="api_key",
             jti=None,
@@ -120,7 +120,7 @@ async def enforce_llm_budget(request: Request) -> None:
         )
 
     auth_gov = await get_auth_governor()
-    result = await auth_gov.check_llm_budget_for_api_key(principal, int(key_id))
+    result = await auth_gov.check_llm_budget_for_api_key(principal, key_id)
 
     limits = result.get("limits") or {}
     if not limits or not limits.get("is_virtual"):
@@ -129,12 +129,12 @@ async def enforce_llm_budget(request: Request) -> None:
         return
 
     if _dbg:
-        limits = result.get('limits', {}) or {}
+        debug_limits = result.get("limits", {}) or {}
         subset = {
-            'llm_budget_day_tokens': limits.get('llm_budget_day_tokens'),
-            'llm_budget_day_usd': limits.get('llm_budget_day_usd'),
-            'llm_budget_month_tokens': limits.get('llm_budget_month_tokens'),
-            'llm_budget_month_usd': limits.get('llm_budget_month_usd'),
+            "llm_budget_day_tokens": debug_limits.get("llm_budget_day_tokens"),
+            "llm_budget_day_usd": debug_limits.get("llm_budget_day_usd"),
+            "llm_budget_month_tokens": debug_limits.get("llm_budget_month_tokens"),
+            "llm_budget_month_usd": debug_limits.get("llm_budget_month_usd"),
         }
         logger.debug(
             f"LLM guard: over_budget={result.get('over')} reasons={result.get('reasons')} "

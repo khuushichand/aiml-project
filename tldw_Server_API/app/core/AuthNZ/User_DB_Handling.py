@@ -463,8 +463,8 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             user_agent=user_agent,
             request_id=request_id,
         )
-    except Exception as ctx_exc:
-        logger.debug(f"Unable to populate AuthContext in verify_jwt_and_fetch_user: {ctx_exc}")
+    except Exception:
+        logger.exception("Unable to populate AuthContext in verify_jwt_and_fetch_user")
 
     if pii_redact_logs:
         logger.info("Authenticated active user (details redacted)")

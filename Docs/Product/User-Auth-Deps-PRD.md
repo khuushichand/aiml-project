@@ -341,13 +341,14 @@ Symptoms:
   - User-specific allow/deny overrides.
   - Admin implied permissions.
 
-**Status**: In Progress
+**Status**: Done
 
 **Notes**:
 - `permissions.py` now treats `user.permissions` / `user.roles` as authoritative when present, returning False without hitting the DB when claims exist but lack the required permission/role.
-- DB-based fallbacks are retained only for caller contexts that do not provide claim lists at all (e.g., legacy user objects without `permissions` / `roles` attributes), reducing database usage on typical, claim-bearing code paths.
-- Route coverage expanding: admin router now enforces `require_roles("admin")` in addition to legacy `require_admin`, and media ingestion’s `/process-web-scraping` endpoint layers `require_permissions(MEDIA_CREATE)` alongside the legacy `PermissionChecker`. New tests cover claim-first `require_permissions` / `require_roles` matrices and HTTP-level admin 401/403 semantics (`tests/AuthNZ_Unit/test_permissions_claim_first.py`, `tests/AuthNZ/integration/test_rbac_admin_endpoints.py::test_admin_roles_require_auth_and_admin`).
-- API-key authentication now enriches users with roles/permissions from RBAC tables (matching the JWT path) so claim-first checks succeed for X-API-KEY callers.
+- DB-based fallbacks are retained only for caller contexts that do not provide claim lists at all (e.g., legacy user objects without `permissions` / `roles` attributes), reducing database usage on typical, claim-bearing code paths. Additional tests explicitly simulate DB unavailability when claims are present to prove that hot paths remain purely claim-based (`tests/AuthNZ_Unit/test_permissions_claim_first.py::test_check_permission_uses_claims_even_if_db_unavailable` and `::test_check_role_uses_claims_even_if_db_unavailable`).
+- Route coverage expanding: admin router now enforces `require_roles("admin")` in addition to legacy `require_admin`, and media ingestion’s `/process-web-scraping` endpoint layers `require_permissions(MEDIA_CREATE)` alongside the legacy `PermissionChecker`. Claim-first `require_permissions` / `require_roles` matrices and HTTP-level admin 401/403 semantics are covered in `tests/AuthNZ_Unit/test_permissions_claim_first.py` and `tests/AuthNZ/integration/test_rbac_admin_endpoints.py::test_admin_roles_require_auth_and_admin`.
+- API-key authentication now enriches users with roles/permissions from RBAC tables (matching the JWT path) so claim-first checks succeed for X-API-KEY callers on protected routes.
+- Usage logging middleware now derives `user_id` / `api_key_id` from `AuthPrincipal` when `request.state.auth` is present, falling back to legacy `request.state` attributes for compatibility, aligning usage metrics with the unified principal model.
 
 ### Stage 3: Unified Dependencies & Adoption
 **Goal**: Provide and adopt unified auth dependencies across a set of key endpoints and middlewares.
@@ -368,7 +369,8 @@ Symptoms:
 - New claim-first FastAPI dependencies (`get_auth_principal`, `require_permissions`, `require_roles`) are implemented in `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py` with unit tests.
 - A representative media endpoint (`/api/v1/media/add`) and an admin endpoint (`/api/v1/metrics/reset`) now also enforce claims using these dependencies alongside their existing auth checks.
 - `llm_budget_guard` has been updated to consume `AuthPrincipal` (via `AuthContext` / `request.state.auth`) when consulting governance for LLM virtual-key budgets.
-- RAG search endpoints (`/api/v1/rag/search`, `/search/stream`, `/simple`, `/batch`) and media processing (`/api/v1/media/process-videos`) now depend on `require_permissions`, with new integration coverage (skipped when Postgres is unavailable) in `tests/AuthNZ/integration/test_rag_media_permissions_claims.py` validating 401/403 semantics for JWT and API-key flows.
+- RAG search endpoints (`/api/v1/rag/search`, `/search/stream`, `/simple`, `/batch`) and media processing (`/api/v1/media/process-videos`, `/api/v1/media/process-web-scraping`, `/api/v1/media/add`) now depend on `require_permissions`, with integration coverage (skipped when Postgres is unavailable) in `tests/AuthNZ/integration/test_rag_media_permissions_claims.py` validating 401/403 semantics for JWT and API-key flows.
+- Claim-first route-level semantics are additionally covered by dedicated tests that stub `get_auth_principal` and exercise `require_permissions` / `require_roles` under different principal kinds, including `service` and `anonymous` (`tests/AuthNZ_Unit/test_auth_claim_route_level.py`), ensuring clear 401 vs 403 behavior when principals are missing or lack required claims.
 - SQLite regression coverage mirrors the claim-first HTTP semantics without Postgres by stubbing RAG/media backends in `tests/AuthNZ_SQLite/test_rag_media_permissions_sqlite.py`.
 
 ### Stage 4: Cleanup & Documentation

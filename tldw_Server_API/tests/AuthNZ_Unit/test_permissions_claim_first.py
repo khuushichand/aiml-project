@@ -88,18 +88,29 @@ async def test_check_permission_uses_claims_true(monkeypatch):
 async def test_check_permission_uses_claims_false_without_db(monkeypatch):
     monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: False)
 
-    fake_db = _FakeUserDB()
-
-    def _fake_get_user_database():
-        return fake_db
-
-    monkeypatch.setattr(perms_mod, "get_user_database", _fake_get_user_database)
-
     user = _make_user(permissions=["media.read"])
 
     assert perms_mod.check_permission(user, "media.create") is False
-    # Claims present but missing; DB should not be hit
+    # Claims present but missing; DB should not be hit even if available
+    fake_db = _FakeUserDB()
+    def _fake_get_user_database():
+        return fake_db
+    monkeypatch.setattr(perms_mod, "get_user_database", _fake_get_user_database)
     assert fake_db.calls == []
+
+
+@pytest.mark.asyncio
+async def test_check_permission_uses_claims_even_if_db_unavailable(monkeypatch):
+    monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: False)
+
+    def _broken_get_user_database():
+        pytest.fail("get_user_database should not be called when permissions claims are present")
+
+    monkeypatch.setattr(perms_mod, "get_user_database", _broken_get_user_database)
+
+    user = _make_user(permissions=["media.read", "media.create"])
+
+    assert perms_mod.check_permission(user, "media.read") is True
 
 
 @pytest.mark.asyncio
@@ -142,17 +153,28 @@ async def test_check_role_uses_claims_true(monkeypatch):
 async def test_check_role_uses_claims_false_without_db(monkeypatch):
     monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: False)
 
-    fake_db = _FakeUserDB()
-
-    def _fake_get_user_database():
-        return fake_db
-
-    monkeypatch.setattr(perms_mod, "get_user_database", _fake_get_user_database)
-
     user = _make_user(roles=["user"])
 
     assert perms_mod.check_role(user, "admin") is False
+    fake_db = _FakeUserDB()
+    def _fake_get_user_database():
+        return fake_db
+    monkeypatch.setattr(perms_mod, "get_user_database", _fake_get_user_database)
     assert fake_db.calls == []
+
+
+@pytest.mark.asyncio
+async def test_check_role_uses_claims_even_if_db_unavailable(monkeypatch):
+    monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: False)
+
+    def _broken_get_user_database():
+        pytest.fail("get_user_database should not be called when role claims are present")
+
+    monkeypatch.setattr(perms_mod, "get_user_database", _broken_get_user_database)
+
+    user = _make_user(roles=["user", "editor"])
+
+    assert perms_mod.check_role(user, "editor") is True
 
 
 @pytest.mark.asyncio
@@ -177,10 +199,8 @@ async def test_check_role_falls_back_to_db_when_roles_absent(monkeypatch):
 async def test_check_permission_single_user_mode_always_true(monkeypatch):
     monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: True)
 
-    fake_db = _FakeUserDB()
-
     def _fake_get_user_database():
-        raise AssertionError("DB should not be used in single-user mode")
+        pytest.fail("DB should not be used in single-user mode")
 
     monkeypatch.setattr(perms_mod, "get_user_database", _fake_get_user_database)
 
@@ -193,10 +213,8 @@ async def test_check_permission_single_user_mode_always_true(monkeypatch):
 async def test_check_role_single_user_mode_treats_as_admin(monkeypatch):
     monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: True)
 
-    fake_db = _FakeUserDB()
-
     def _fake_get_user_database():
-        raise AssertionError("DB should not be used in single-user mode")
+        pytest.fail("DB should not be used in single-user mode")
 
     monkeypatch.setattr(perms_mod, "get_user_database", _fake_get_user_database)
 

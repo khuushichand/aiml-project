@@ -28,7 +28,7 @@ async def test_get_current_user_missing_credentials_returns_401(monkeypatch):
     monkeypatch.setattr(deps, "is_single_user_mode", lambda: False)
 
     # Dummy session manager and db pool (unreachable in this path)
-    fake_session = SimpleNamespace(is_token_blacklisted=lambda *args, **kwargs: False)
+    fake_session = SimpleNamespace(is_token_blacklisted=lambda *_args, **_kwargs: False)
     fake_db_pool = SimpleNamespace(pool=None)
 
     request = _make_request()
@@ -114,4 +114,3 @@ async def test_get_request_user_single_user_valid_api_key_sets_user_id(monkeypat
 
     assert int(user.id) == fake_settings.SINGLE_USER_FIXED_ID
     assert getattr(request.state, "user_id", None) == fake_settings.SINGLE_USER_FIXED_ID
-
