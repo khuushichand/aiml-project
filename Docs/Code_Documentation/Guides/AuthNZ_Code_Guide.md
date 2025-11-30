@@ -185,14 +185,21 @@ Notes:
 
 - Permissions helpers: `tldw_Server_API/app/core/AuthNZ/permissions.py`.
 - Org/team context: DI attaches `request.state.user_id`, plus memberships from `orgs_teams.list_memberships_for_user` and a content scope token via `scope_context.set_scope` for downstream DB access.
-- Use `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker` in route dependencies to enforce access.
-- Admin routes use stricter checks and separate admin endpoints (see `.../endpoints/admin.py`).
+- **Modern pattern (preferred)**: use claim-first dependencies from `auth_deps`:
+  - `get_auth_principal` → returns `AuthPrincipal` with `roles`/`permissions` claims.
+  - `require_permissions("perm")` / `require_roles("role")` → enforce claims and return the principal.
+  - Representative usage exists on media, RAG, notes graph, and evaluations CRUD endpoints.
+- **Legacy shims (compatibility)**:
+  - `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker` in `permissions.py` remain supported for existing routes but should not be used on new ones.
+  - `require_admin` in `evaluations_auth.py` is an admin-only guard for heavy evaluations flows; new admin surfaces should prefer `require_roles("admin")` / `require_permissions(...)` on top of `get_auth_principal`.
 
 References:
-- `tldw_Server_API/app/core/AuthNZ/permissions.py:159` (PermissionChecker)
-- `tldw_Server_API/app/core/AuthNZ/permissions.py:222` (RoleChecker)
-- `tldw_Server_API/app/core/AuthNZ/permissions.py:270` (AnyPermissionChecker)
-- `tldw_Server_API/app/core/AuthNZ/permissions.py:318` (AllPermissionsChecker)
+- `tldw_Server_API/app/core/AuthNZ/permissions.py:159` (PermissionChecker – legacy shim)
+- `tldw_Server_API/app/core/AuthNZ/permissions.py:222` (RoleChecker – legacy shim)
+- `tldw_Server_API/app/core/AuthNZ/permissions.py:270` (AnyPermissionChecker – legacy shim)
+- `tldw_Server_API/app/core/AuthNZ/permissions.py:318` (AllPermissionsChecker – legacy shim)
+- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:760` (get_auth_principal)
+- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:781` (require_permissions / require_roles)
 
 ## Rate Limiting & Quotas
 

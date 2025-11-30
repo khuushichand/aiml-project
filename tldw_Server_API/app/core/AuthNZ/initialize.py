@@ -1001,56 +1001,18 @@ async def bootstrap_single_user_profile() -> bool:
         key_prefix = (api_key_value[:10] + "...") if len(api_key_value) > 10 else api_key_value
 
         pool = await get_db_pool()
-        async with pool.transaction() as conn:
-            if hasattr(conn, "fetchval"):
-                # Postgres: upsert by key_hash
-                await conn.execute(
-                    """
-                    INSERT INTO api_keys (user_id, key_hash, key_prefix, name, description, scope, status, is_virtual)
-                    VALUES ($1, $2, $3, $4, $5, $6, 'active', 0)
-                    ON CONFLICT (key_hash) DO UPDATE SET
-                        user_id = EXCLUDED.user_id,
-                        key_prefix = EXCLUDED.key_prefix,
-                        scope = EXCLUDED.scope,
-                        status = EXCLUDED.status,
-                        is_virtual = EXCLUDED.is_virtual
-                    """,
-                    settings.SINGLE_USER_FIXED_ID,
-                    key_hash,
-                    key_prefix,
-                    "single-user primary key",
-                    "Primary API key for single-user profile",
-                    "admin",
-                )
-            else:
-                # SQLite: emulate upsert by key_hash
-                await conn.execute(
-                    """
-                    INSERT OR REPLACE INTO api_keys (
-                        id, user_id, key_hash, key_prefix, name, description, scope, status, is_virtual
-                    )
-                    VALUES (
-                        COALESCE(
-                            (SELECT id FROM api_keys WHERE key_hash = ?),
-                            (SELECT MAX(id) + 1 FROM api_keys)
-                        ),
-                        ?, ?, ?, ?, ?, ?, 'active', 0
-                    )
-                    """,
-                    (
-                        key_hash,
-                        settings.SINGLE_USER_FIXED_ID,
-                        key_hash,
-                        key_prefix,
-                        "single-user primary key",
-                        "Primary API key for single-user profile",
-                        "admin",
-                    ),
-                )
-            try:
-                await conn.commit()  # type: ignore[attr-defined]
-            except Exception:
-                pass
+        from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
+
+        repo = AuthnzApiKeysRepo(pool)
+        await repo.upsert_primary_key(
+            user_id=settings.SINGLE_USER_FIXED_ID,
+            key_hash=key_hash,
+            key_prefix=key_prefix,
+            name="single-user primary key",
+            description="Primary API key for single-user profile",
+            scope="admin",
+            is_virtual=False,
+        )
 
         print("✅ Single-user primary API key ensured in AuthNZ store")
         return True

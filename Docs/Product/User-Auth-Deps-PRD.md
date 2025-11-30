@@ -349,6 +349,8 @@ Symptoms:
 - Route coverage expanding: admin router now enforces `require_roles("admin")` in addition to legacy `require_admin`, and media ingestion’s `/process-web-scraping` endpoint layers `require_permissions(MEDIA_CREATE)` alongside the legacy `PermissionChecker`. Claim-first `require_permissions` / `require_roles` matrices and HTTP-level admin 401/403 semantics are covered in `tests/AuthNZ_Unit/test_permissions_claim_first.py` and `tests/AuthNZ/integration/test_rbac_admin_endpoints.py::test_admin_roles_require_auth_and_admin`.
 - API-key authentication now enriches users with roles/permissions from RBAC tables (matching the JWT path) so claim-first checks succeed for X-API-KEY callers on protected routes.
 - Usage logging middleware now derives `user_id` / `api_key_id` from `AuthPrincipal` when `request.state.auth` is present, falling back to legacy `request.state` attributes for compatibility, aligning usage metrics with the unified principal model.
+- Additional matrix coverage has been added for the “any” / “all” helpers to ensure they also remain claim-first when claims are attached, even if the RBAC DB is unavailable:
+  - `tests/AuthNZ_Unit/test_permissions_claim_first.py::test_check_any_permission_uses_claims_even_if_db_unavailable` and `::test_check_all_permissions_uses_claims_even_if_db_unavailable` validate that `check_any_permission` / `check_all_permissions` never call `get_user_database` when `user.permissions` is a list, and instead rely purely on the claim set.
 
 ### Stage 3: Unified Dependencies & Adoption
 **Goal**: Provide and adopt unified auth dependencies across a set of key endpoints and middlewares.
@@ -371,7 +373,29 @@ Symptoms:
 - `llm_budget_guard` has been updated to consume `AuthPrincipal` (via `AuthContext` / `request.state.auth`) when consulting governance for LLM virtual-key budgets.
 - RAG search endpoints (`/api/v1/rag/search`, `/search/stream`, `/simple`, `/batch`) and media processing (`/api/v1/media/process-videos`, `/api/v1/media/process-web-scraping`, `/api/v1/media/add`) now depend on `require_permissions`, with integration coverage (skipped when Postgres is unavailable) in `tests/AuthNZ/integration/test_rag_media_permissions_claims.py` validating 401/403 semantics for JWT and API-key flows.
 - Claim-first route-level semantics are additionally covered by dedicated tests that stub `get_auth_principal` and exercise `require_permissions` / `require_roles` under different principal kinds, including `service` and `anonymous` (`tests/AuthNZ_Unit/test_auth_claim_route_level.py`), ensuring clear 401 vs 403 behavior when principals are missing or lack required claims.
+- Notes graph endpoints now adopt `require_permissions` for claim-first enforcement in addition to token scopes: `tldw_Server_API/app/api/v1/endpoints/notes_graph.py` uses `require_permissions(NOTES_GRAPH_READ)` / `require_permissions(NOTES_GRAPH_WRITE)` alongside `require_token_scope("notes", ...)` and rate limiting. Integration coverage is provided by `tldw_Server_API/tests/Notes_NEW/integration/test_notes_graph_rbac.py`, which:
+  - Asserts that a virtual key with the wrong `scope` receives 403 for both read (`GET /api/v1/notes/graph`) and write (`POST /api/v1/notes/{note_id}/links`) operations.
+  - Asserts that a virtual key with `scope="notes"` and a principal with appropriate graph permissions succeeds (200) for both read and write paths.
 - SQLite regression coverage mirrors the claim-first HTTP semantics without Postgres by stubbing RAG/media backends in `tests/AuthNZ_SQLite/test_rag_media_permissions_sqlite.py`.
+- Evaluations CRUD and runs endpoints are now wired through claim-first dependencies as a high-value administrative surface. `tldw_Server_API/app/api/v1/endpoints/evaluations_crud.py` imports `require_permissions` and uses dedicated permissions (`EVALS_READ`, `EVALS_MANAGE`) from `tldw_Server_API/app/core/AuthNZ/permissions.py`:
+  - Read-oriented routes (`GET /api/v1/evaluations/`, `GET /api/v1/evaluations/{eval_id}`, and list/read run endpoints) depend on `require_permissions(EVALS_READ)` in addition to existing API-key checks.
+  - Mutating routes (`POST /api/v1/evaluations/`, `PATCH /api/v1/evaluations/{eval_id}`, `DELETE /api/v1/evaluations/{eval_id}`, `POST /api/v1/evaluations/{eval_id}/runs`, and `POST /api/v1/evaluations/runs/{run_id}/cancel`) depend on `require_permissions(EVALS_MANAGE)` alongside the existing RBAC rate limits and auth helpers.
+  - Route-level tests in `tldw_Server_API/tests/AuthNZ/integration/test_evaluations_permissions_claims.py` stub `get_auth_principal`, `verify_api_key`, and `get_request_user` to assert:
+    - 403 responses for principals that are authenticated but lack the required `evals.read` / `evals.manage` permissions on list endpoints.
+    - 200 responses for principals with appropriate evaluation permissions while the underlying evaluation service is stubbed, ensuring claim-based allow paths behave as expected without touching the real Evaluations DB.
+    - The existing `require_admin` helper for heavy evaluations remains the admin gate for `/api/v1/evaluations/admin/idempotency/cleanup`, and the test file documents its behavior as an admin-only compatibility shim independent of the new `require_permissions` wiring on CRUD routes.
+ - Workflow scheduler admin endpoints now also participate in the unified, claim-first dependency stack:
+   - `tldw_Server_API/app/core/AuthNZ/permissions.py` defines `WORKFLOWS_ADMIN = "workflows.admin"` as the canonical permission for scheduler administration.
+   - `tldw_Server_API/app/api/v1/endpoints/scheduler_workflows.py::admin_rescan` now depends on both:
+     - `require_token_scope("workflows", require_if_present=True, endpoint_id="scheduler.workflows.admin_rescan")` for token-scoped gating, and
+     - `require_permissions(WORKFLOWS_ADMIN)` for claim-first enforcement via `AuthPrincipal`.
+   - Route-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_scheduler_workflows_permissions_claims.py` build a small FastAPI app around the scheduler router and stub:
+     - `get_auth_principal` to attach an `AuthContext` with different principal kinds (`user`, `service`).
+     - `get_request_user` and `require_token_scope` to avoid touching real DB/scope logic.
+     - `get_workflows_scheduler` to a fake scheduler that records `_rescan_once` calls.
+   - The tests assert that:
+     - Non-admin principals without scheduler claims receive 403 for `POST /api/v1/scheduler/workflows/admin/rescan`.
+     - User and service principals with `is_admin=True` succeed (200) and trigger the fake scheduler’s rescan call, confirming that admin-style claims (via `is_admin`) remain the primary gate while also flowing through the `require_permissions` / `AuthPrincipal` stack for observability and future fine-grained permissions.
 
 ### Stage 4: Cleanup & Documentation
 **Goal**: Remove legacy, overlapping auth dependencies and update documentation.
@@ -383,4 +407,17 @@ Symptoms:
 **Tests**:
 - Documentation lint/checks where applicable, plus smoke tests for routes updated to the new dependencies.
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- `Docs/Code_Documentation/Guides/AuthNZ_Code_Guide.md` explicitly documents the split between modern claim-first dependencies and legacy compatibility shims:
+  - Modern pattern:
+    - `get_auth_principal` → returns `AuthPrincipal` with roles/permissions.
+    - `require_permissions` / `require_roles` → enforce claims and return the principal; representative usage is called out for media, RAG, notes graph, evaluations CRUD, and scheduler workflows admin.
+  - Legacy shims:
+    - `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker` in `permissions.py` are described as maintained for existing routes but not recommended for new endpoints.
+    - `require_admin` in evaluations auth is documented as an admin-only gate for heavy evaluations flows, while new admin surfaces should prefer `get_auth_principal` plus `require_permissions` / `require_roles`.
+- The code guide now includes a short “securing a new route” example that shows:
+  - Defining a permission constant in `permissions.py`.
+  - Applying `Depends(require_permissions("your.permission"))` to an endpoint.
+  - Overriding `get_auth_principal` in tests to exercise 401 vs 403 semantics, reusing patterns from `tests/AuthNZ_Unit/test_auth_claim_route_level.py` and `tests/AuthNZ_Unit/test_scheduler_workflows_permissions_claims.py`.

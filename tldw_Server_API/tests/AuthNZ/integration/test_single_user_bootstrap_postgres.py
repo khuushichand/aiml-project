@@ -1,42 +1,45 @@
 import os
-from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
+
+
+pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio
-async def test_single_user_bootstrap_creates_admin_user_and_primary_key(tmp_path):
-    # Configure single-user SQLite AuthNZ
-    db_path = tmp_path / "users.db"
-    os.environ["AUTH_MODE"] = "single_user"
-    os.environ["DATABASE_URL"] = f"sqlite:///{db_path}"
-    os.environ["SINGLE_USER_API_KEY"] = "test_single_user_primary_key_123"
+async def test_single_user_bootstrap_creates_admin_user_and_primary_key_postgres(
+    isolated_test_environment,
+    monkeypatch,
+):
+    # Use the isolated Postgres-backed AuthNZ environment
+    client, _db_name = isolated_test_environment
+    assert isinstance(client, TestClient)
 
-    # Reset AuthNZ singletons and ensure core tables exist
-    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    # Switch to single-user profile while keeping the Postgres DATABASE_URL
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test_single_user_primary_key_pg_123")
+
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings, get_settings
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
-    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.initialize import bootstrap_single_user_profile
 
+    # Ensure AuthNZ settings and pool pick up the single-user profile
     reset_settings()
     await reset_db_pool()
 
     pool = await get_db_pool()
-    ensure_authnz_tables(Path(pool.db_path))
 
     # Run the single-user bootstrap helper twice to assert idempotency
-    from tldw_Server_API.app.core.AuthNZ.initialize import bootstrap_single_user_profile
-
     ok_first = await bootstrap_single_user_profile()
     ok_second = await bootstrap_single_user_profile()
     assert ok_first is True
     assert ok_second is True
 
-    # Verify the single-user admin row exists with the fixed ID
-    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-
     settings = get_settings()
     single_user_id = settings.SINGLE_USER_FIXED_ID
 
+    # Verify the single-user admin row exists with the fixed ID
     user_rows = await pool.fetch(
         "SELECT id, username, role, is_active, is_verified FROM users WHERE id = ?",
         single_user_id,
@@ -66,28 +69,31 @@ async def test_single_user_bootstrap_creates_admin_user_and_primary_key(tmp_path
     assert row["key_hash"] == key_hash
     assert row["scope"] == "admin"
     assert row["status"] == "active"
-    # SQLite uses 0/1 for booleans
+    # Postgres uses boolean; SQLite uses 0/1 - normalize via int(...)
     assert int(row["is_virtual"]) == 0
 
 
 @pytest.mark.asyncio
-async def test_single_user_bootstrap_reuses_preseeded_primary_key(tmp_path):
-    # Configure single-user SQLite AuthNZ with a deterministic key
-    db_path = tmp_path / "users_preseeded.db"
-    os.environ["AUTH_MODE"] = "single_user"
-    os.environ["DATABASE_URL"] = f"sqlite:///{db_path}"
-    os.environ["SINGLE_USER_API_KEY"] = "test_single_user_preseeded_key_123"
+async def test_single_user_bootstrap_reuses_preseeded_primary_key_postgres(
+    isolated_test_environment,
+    monkeypatch,
+):
+    # Use the isolated Postgres-backed AuthNZ environment
+    client, _db_name = isolated_test_environment
+    assert isinstance(client, TestClient)
+
+    # Switch to single-user profile while keeping the Postgres DATABASE_URL
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test_single_user_preseeded_key_pg_123")
 
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings, get_settings
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
-    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.initialize import bootstrap_single_user_profile
 
     reset_settings()
     await reset_db_pool()
 
     pool = await get_db_pool()
-    ensure_authnz_tables(Path(pool.db_path))
-
     settings = get_settings()
     single_user_id = settings.SINGLE_USER_FIXED_ID
 
@@ -101,35 +107,33 @@ async def test_single_user_bootstrap_reuses_preseeded_primary_key(tmp_path):
     key_prefix = (key_value[:10] + "...") if len(key_value) > 10 else key_value
 
     # Pre-seed a primary key row for SINGLE_USER_API_KEY to simulate an existing deployment
-    async with pool.transaction() as conn:  # type: ignore[attr-defined]
+    async with pool.transaction() as conn:
         await conn.execute(
             """
-            INSERT OR IGNORE INTO users (id, username, email, password_hash, is_active, is_verified, role)
-            VALUES (?, ?, ?, ?, 1, 1, 'admin')
+            INSERT INTO users (id, username, email, password_hash, is_active, is_verified, role)
+            VALUES (?, ?, ?, ?, TRUE, TRUE, 'admin')
+            ON CONFLICT (id) DO NOTHING
             """,
-            (single_user_id, "single_user", "single_user@example.local", ""),
+            single_user_id,
+            "single_user",
+            "single_user@example.local",
+            "",
         )
         await conn.execute(
             """
             INSERT INTO api_keys (
                 user_id, key_hash, key_prefix, name, description,
                 scope, status, is_virtual
-            ) VALUES (?, ?, ?, ?, ?, ?, 'active', 0)
+            ) VALUES (?, ?, ?, ?, ?, ?, 'active', FALSE)
+            ON CONFLICT (key_hash) DO NOTHING
             """,
-            (
-                single_user_id,
-                key_hash,
-                key_prefix,
-                "legacy primary key",
-                "Pre-seeded primary API key row",
-                "read",
-            ),
+            single_user_id,
+            key_hash,
+            key_prefix,
+            "legacy primary key",
+            "Pre-seeded primary API key row",
+            "read",
         )
-        try:
-            await conn.commit()  # type: ignore[attr-defined]
-        except Exception:
-            # Some adapters commit implicitly on context exit
-            pass
 
     before_rows = await pool.fetch(
         "SELECT id, user_id, key_hash, scope, status, is_virtual FROM api_keys WHERE key_hash = ?",
@@ -141,9 +145,6 @@ async def test_single_user_bootstrap_reuses_preseeded_primary_key(tmp_path):
     assert int(existing["user_id"]) == single_user_id
     assert existing["scope"] == "read"
     assert existing["status"] == "active"
-
-    # Run bootstrap; it should upsert the existing row rather than creating a new one
-    from tldw_Server_API.app.core.AuthNZ.initialize import bootstrap_single_user_profile
 
     ok = await bootstrap_single_user_profile()
     assert ok is True

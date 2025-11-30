@@ -161,14 +161,31 @@ class DatabasePool:
                 raise DatabaseError(f"Database initialization failed: {e}")
 
     def _should_use_postgres(self) -> bool:
-        """Return True if the configured DATABASE_URL resolves to PostgreSQL."""
-        if self.settings.AUTH_MODE != "multi_user":
-            return False
+        """Return True if the configured DATABASE_URL resolves to PostgreSQL.
+
+        In production, PostgreSQL is only used when AUTH_MODE is ``multi_user``.
+        For test contexts (``TEST_MODE=1``) we allow exercising single-user
+        bootstrap and RBAC seed paths against a Postgres backend when a
+        Postgres DSN is configured. This keeps local single-user deployments
+        safely on SQLite by default while enabling the User-Unification
+        Postgres test coverage.
+        """
         parsed = urlparse(self.settings.DATABASE_URL)
         scheme = (parsed.scheme or "").lower()
-        if not scheme:
+        if not scheme or not scheme.startswith("postgres"):
             return False
-        return scheme.startswith("postgres")
+
+        mode = getattr(self.settings, "AUTH_MODE", "multi_user")
+        if mode == "multi_user":
+            return True
+
+        # Allow Postgres in single-user mode only in explicit test contexts,
+        # so production single-user profiles continue to fall back to SQLite.
+        try:
+            test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "y", "on"}
+        except Exception:
+            test_mode = False
+        return test_mode
 
     @staticmethod
     def _resolve_sqlite_paths(url: str) -> tuple[str, bool, Optional[str]]:

@@ -52,6 +52,7 @@ class APIKeyManager:
     def __init__(self, db_pool: Optional[DatabasePool] = None):
         """Initialize API key manager"""
         self.db_pool = db_pool
+        self._repo = None
         self._initialized = False
         self.settings = get_settings()
         self.key_prefix = "tldw_"  # Prefix for identifying our API keys
@@ -65,6 +66,21 @@ class APIKeyManager:
             self._hmac_key_fingerprint = (key_material[:32])
         except Exception:
             self._hmac_key_fingerprint = ""
+
+    def _get_repo(self):
+        """
+        Lazily construct an AuthnzApiKeysRepo bound to the current db_pool.
+
+        Import is local to avoid circular dependencies between the manager
+        and the repository module.
+        """
+        if not self.db_pool:
+            raise DatabaseError("APIKeyManager database pool is not initialized")
+        from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
+
+        if self._repo is None or getattr(self._repo, "db_pool", None) is not self.db_pool:
+            self._repo = AuthnzApiKeysRepo(self.db_pool)
+        return self._repo
 
     async def initialize(self):
         """Initialize database connection and ensure tables exist"""
@@ -586,44 +602,8 @@ class APIKeyManager:
             return None
 
         try:
-            # Get key information (dialect-aware placeholders)
-            if getattr(self.db_pool, 'pool', None) is not None:
-                result = await self.db_pool.fetchone(
-                    """
-                    SELECT id, user_id, name, scope, status, expires_at,
-                           rate_limit, allowed_ips, usage_count, key_hash,
-                           COALESCE(is_virtual, FALSE) AS is_virtual,
-                           parent_key_id, org_id, team_id,
-                           llm_budget_day_tokens, llm_budget_month_tokens,
-                           llm_budget_day_usd, llm_budget_month_usd,
-                           llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
-                           metadata
-                    FROM api_keys
-                    WHERE key_hash = ANY($1::text[]) AND status = $2
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """,
-                    hash_candidates, APIKeyStatus.ACTIVE.value
-                )
-            else:
-                placeholders = ",".join("?" for _ in hash_candidates)
-                query = f"""
-                    SELECT id, user_id, name, scope, status, expires_at,
-                           rate_limit, allowed_ips, usage_count, key_hash,
-                           COALESCE(is_virtual, 0) AS is_virtual,
-                           parent_key_id, org_id, team_id,
-                           llm_budget_day_tokens, llm_budget_month_tokens,
-                           llm_budget_day_usd, llm_budget_month_usd,
-                           llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
-                           metadata
-                    FROM api_keys
-                    WHERE key_hash IN ({placeholders}) AND status = ?
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """
-                params = (*hash_candidates, APIKeyStatus.ACTIVE.value)
-                result = await self.db_pool.fetchone(query, params)
-
+            repo = self._get_repo()
+            result = await repo.fetch_active_by_hash_candidates(hash_candidates)
             if not result:
                 return None
 
@@ -886,19 +866,8 @@ class APIKeyManager:
             await self.initialize()
 
         try:
-            if include_revoked:
-                query = "SELECT * FROM api_keys WHERE user_id = ? ORDER BY created_at DESC"
-            else:
-                query = """
-                    SELECT * FROM api_keys
-                    WHERE user_id = ? AND status = ?
-                    ORDER BY created_at DESC
-                """
-
-            if include_revoked:
-                results = await self.db_pool.fetchall(query, user_id)
-            else:
-                results = await self.db_pool.fetchall(query, user_id, APIKeyStatus.ACTIVE.value)
+            repo = self._get_repo()
+            results = await repo.list_user_keys(user_id=user_id, include_revoked=include_revoked)
 
             keys = []
             for row in results:

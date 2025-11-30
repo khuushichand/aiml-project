@@ -44,14 +44,10 @@ def check_permission(user: User, permission: str) -> bool:
     Returns:
         bool: True if user has permission
     """
-    # In single-user mode, always return True
-    if is_single_user_mode():
-        return True
-
     # Prefer permission claims already attached to the request user to avoid
     # re-querying the RBAC store and to ensure consistency with the token's
     # authenticated context (especially in tests where multiple DB pools may
-    # exist).
+    # exist). This applies in both single-user and multi-user modes.
     perms = getattr(user, "permissions", None)
 
     if isinstance(perms, list):
@@ -69,6 +65,12 @@ def check_permission(user: User, permission: str) -> bool:
             "treating as no permissions and skipping DB lookup"
         )
         return False
+
+    # When no claims are attached, preserve the historical single-user behavior
+    # of treating the sole single-user account as fully privileged, while
+    # multi-user callers still fall back to the RBAC store.
+    if is_single_user_mode():
+        return True
 
     try:
         user_db = get_user_database()
@@ -95,18 +97,18 @@ def check_role(user: User, role: str) -> bool:
     Returns:
         bool: True if user has role
     """
-    # In single-user mode, treat as admin
-    if is_single_user_mode():
-        return role in ['admin', 'user']
-
     # Prefer role claims already attached to the request user for fast-path
     # checks and to avoid depending on a potentially stale UserDatabase
-    # singleton that may point at a different backend during tests.
+    # singleton that may point at a different backend during tests. This applies
+    # in both single-user and multi-user modes.
     roles = getattr(user, "roles", None)
 
     if isinstance(roles, list):
         # Claims are authoritative when present; if the role is not listed,
-        # treat it as absent without hitting the DB.
+        # treat it as absent without hitting the DB. In single-user mode an
+        # explicit "admin" claim implies both admin- and user-level access.
+        if is_single_user_mode() and "admin" in roles and role in ["admin", "user"]:
+            return True
         return role in roles
 
     # For caller contexts that do not provide claim lists at all (roles is None),
@@ -119,6 +121,12 @@ def check_role(user: User, role: str) -> bool:
             "treating as no roles and skipping DB lookup"
         )
         return False
+
+    # When no claim set is attached, preserve the historical single-user behavior
+    # of treating the sole account as both 'admin' and 'user', while multi-user
+    # callers still fall back to the RBAC store.
+    if is_single_user_mode():
+        return role in ['admin', 'user']
 
     try:
         user_db = get_user_database()
@@ -145,10 +153,6 @@ def check_any_permission(user: User, permissions: List[str]) -> bool:
     Returns:
         bool: True if user has at least one permission
     """
-    # In single-user mode, always return True
-    if is_single_user_mode():
-        return True
-
     for permission in permissions:
         if check_permission(user, permission):
             return True
@@ -165,10 +169,6 @@ def check_all_permissions(user: User, permissions: List[str]) -> bool:
     Returns:
         bool: True if user has all permissions
     """
-    # In single-user mode, always return True
-    if is_single_user_mode():
-        return True
-
     for permission in permissions:
         if not check_permission(user, permission):
             return False
@@ -508,10 +508,15 @@ API_RATE_LIMIT_OVERRIDE = "api.rate_limit_override"
 # Workflows permissions
 WORKFLOWS_RUNS_READ = "workflows.runs.read"
 WORKFLOWS_RUNS_CONTROL = "workflows.runs.control"
+WORKFLOWS_ADMIN = "workflows.admin"
 
 # Notes / graph permissions
 NOTES_GRAPH_READ = "notes.graph.read"
 NOTES_GRAPH_WRITE = "notes.graph.write"
+
+# Evaluations permissions
+EVALS_MANAGE = "evals.manage"
+EVALS_READ = "evals.read"
 
 # Role names
 ROLE_ADMIN = "admin"

@@ -872,13 +872,17 @@ async def require_admin(
     Raises:
         HTTPException: If user is not admin
     """
-    # In single-user mode treat the sole user as admin
-    try:
-        if is_single_user_mode():
-            return current_user
-    except Exception:
-        pass
-    if current_user.get("role") != "admin":
+    # Prefer explicit admin-style claims over global mode checks so that both
+    # single-user and multi-user profiles rely on the same RBAC surface:
+    # - is_admin flag
+    # - primary role == 'admin'
+    # - roles list contains 'admin'
+    is_admin_flag = bool(
+        current_user.get("is_admin")
+        or current_user.get("role") == "admin"
+        or ("admin" in (current_user.get("roles") or []))
+    )
+    if not is_admin_flag:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required"

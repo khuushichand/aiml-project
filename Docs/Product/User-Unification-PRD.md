@@ -364,7 +364,26 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
   - Start from an existing single-user database with `SINGLE_USER_API_KEY` set and verify that bootstrap adopts the existing key rather than generating a new one.
   - Re-run bootstrap on an already bootstrapped database to confirm it is idempotent (no duplicate users/keys).
 
-**Status**: Not Started
+**Status**: Done
+
+**Notes**:
+- The async helper `bootstrap_single_user_profile()` is implemented in `tldw_Server_API/app/core/AuthNZ/initialize.py`. It:
+  - Ensures the single-user admin row (`SINGLE_USER_FIXED_ID`) and RBAC seed via `ensure_single_user_rbac_seed_if_needed()` when `AUTH_MODE=single_user`.
+  - Uses `APIKeyManager` and the configured `SINGLE_USER_API_KEY` to upsert a non-virtual primary API key row keyed by `key_hash`, with `scope='admin'` and `status='active'`, for both Postgres and SQLite backends.
+- SQLite regression coverage for the bootstrap path is provided by `tldw_Server_API/tests/AuthNZ_SQLite/test_single_user_bootstrap_sqlite.py`, which:
+  - Configures `AUTH_MODE=single_user` and a SQLite `DATABASE_URL`, runs bootstrap twice, and asserts:
+    - A single admin user row exists with `id = SINGLE_USER_FIXED_ID`, `username='single_user'`, `role='admin'`, and an active/verified status.
+    - A single non-virtual `api_keys` row exists whose `key_hash` matches `hash_api_key(SINGLE_USER_API_KEY)`, with `scope='admin'` and `status='active'`.
+  - Re-running bootstrap is idempotent (no duplicate user/key rows).
+- Postgres-backed regression coverage for the bootstrap path is provided by `tldw_Server_API/tests/AuthNZ/integration/test_single_user_bootstrap_postgres.py`, which:
+  - Uses the `isolated_test_environment` fixture to provision a per-test Postgres AuthNZ database.
+  - Switches to `AUTH_MODE=single_user` (with `TEST_MODE=1`), runs `bootstrap_single_user_profile()` twice, and asserts the same single-user admin and primary key invariants as the SQLite test.
+- A higher-level claims test, `tldw_Server_API/tests/AuthNZ/integration/test_single_user_claims_permissions.py`, exercises:
+  - RBAC seeding via `bootstrap_single_user_profile()` on SQLite.
+  - Single-user `get_request_user` + `get_auth_principal` + `require_permissions/roles` using the bootstrapped admin's API key to reach protected endpoints.
+ - Additional bootstrap invariants around existing deployments are covered by:
+   - `tldw_Server_API/tests/AuthNZ_SQLite/test_single_user_bootstrap_sqlite.py::test_single_user_bootstrap_reuses_preseeded_primary_key`, which starts from a SQLite AuthNZ database with a pre-seeded `api_keys` row for `SINGLE_USER_API_KEY` and confirms `bootstrap_single_user_profile()` reuses and upgrades that row (instead of creating a duplicate).
+   - `tldw_Server_API/tests/AuthNZ/integration/test_single_user_bootstrap_postgres.py::test_single_user_bootstrap_reuses_preseeded_primary_key_postgres`, which mirrors the same invariant on a Postgres-backed AuthNZ database via the `isolated_test_environment` fixture.
 
 ### Stage 2: Claims-Based Single-User Permissions
 **Goal**: Replace mode-based permission allowances with claim-based admin role for the bootstrapped user.
@@ -378,7 +397,19 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
   - Admin user in single-user profile can perform privileged operations.
   - Non-admin users (if any are created) are constrained by RBAC as expected.
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- `tldw_Server_API/app/core/AuthNZ/permissions.py` now:
+  - Prefers `user.permissions` / `user.roles` claim lists in both single-user and multi-user modes.
+  - Uses `is_single_user_mode()` only as a fallback when no claims are attached, preserving legacy behavior for callers that do not yet supply claims.
+- `require_admin` in `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py` no longer special-cases `is_single_user_mode()` and instead relies on `is_admin`, `role == "admin"`, or `roles` containing `"admin"`.
+- `tldw_Server_API/tests/AuthNZ/integration/test_single_user_claims_permissions.py` verifies that, in single-user mode:
+  - `bootstrap_single_user_profile()` seeds the admin user and primary key on an isolated SQLite database.
+  - The bootstrapped admin can call permission- and role-protected endpoints via `get_request_user`, `get_auth_principal`, `require_permissions`, and `require_roles` using the configured single-user API key.
+- `tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py` includes additional coverage for single-user claim-first behavior:
+  - Claims govern access when present (DB is not consulted).
+  - An explicit `"admin"` role in single-user mode implies both `admin` and `user` checks while still rejecting unrelated roles.
 
 ### Stage 3: Repository Introduction
 **Goal**: Introduce AuthNZ repositories and migrate API-key and core user/RBAC operations to them.
@@ -393,7 +424,15 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
 - Failure-path tests for repository methods (uniqueness violations, missing rows) to ensure consistent exception mapping.
 - Existing API-key and RBAC tests pass unchanged.
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- A minimal `AuthnzApiKeysRepo` has been introduced at `tldw_Server_API/app/core/AuthNZ/repos/api_keys_repo.py` with three initial methods:
+  - `fetch_active_by_hash_candidates(...)` used by `APIKeyManager.validate_api_key`.
+  - `list_user_keys(...)` used by `APIKeyManager.list_user_keys`.
+  - `upsert_primary_key(...)` used by `bootstrap_single_user_profile()` to seed the single-user primary API key for both SQLite and Postgres backends.
+- `APIKeyManager` now constructs the repository lazily via a private `_get_repo()` helper, keeping the manager API unchanged while centralizing the most important `api_keys` queries behind the repository.
+- DDL creation for `api_keys` / `api_key_audit_log` still lives in `APIKeyManager._create_tables`; moving this into migrations or dedicated repository helpers remains future work for this stage.
 
 ### Stage 4: Backend Drift Reduction
 **Goal**: Reduce inline dialect branching in high-impact AuthNZ modules using repositories.

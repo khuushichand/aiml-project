@@ -404,8 +404,12 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
 - Static/code-level checks (or targeted tests) to ensure no remaining direct SQL manipulation of guardrail tables outside repositories/governor.
 - End-to-end tests for representative guarded routes (auth, chat, embeddings) verifying combined behavior.
 
-**Status**: In Progress
+**Status**: Done
 
 **Notes**:
 - A guardrail audit test (`tldw_Server_API/tests/AuthNZ/unit/test_guardrail_sql_audit.py`) now enforces that low-level tables used for guardrails (`failed_attempts`, `account_lockouts`, `vk_jwt_counters`, `vk_api_key_counters`) are only referenced from core AuthNZ infrastructure modules (`rate_limiter.py`, `quotas.py`, `migrations.py`, `initialize.py`) within `tldw_Server_API/app/core/AuthNZ`. This provides an automated safety net to prevent new direct SQL usages from bypassing the governance layer.
-- Additional consolidation work (e.g., migrating any remaining ad-hoc guardrail logic to repositories/governor facades and expanding end-to-end coverage) remains TODO but is now guarded by the audit test to keep new code aligned with this stage.
+- Virtual-key quota enforcement continues to flow exclusively through `tldw_Server_API/app/core/AuthNZ/quotas.py` and the LLM budget / virtual-key call paths (`llm_budget_guard`, `llm_budget_middleware`, and AuthGovernor), and there are no remaining direct references to the underlying `vk_*_counters` tables outside these infrastructure modules and migrations.
+- Combined guardrail behavior is now exercised end-to-end in addition to the focused tests:
+  - Login lockouts via AuthGovernor and a stubbed limiter are validated over HTTP in `tldw_Server_API/tests/AuthNZ/integration/test_auth_login_lockout_via_auth_governor.py`.
+  - LLM budget enforcement for virtual keys is driven through the chat completions endpoint in `tldw_Server_API/tests/AuthNZ/integration/test_llm_budget_guard_http.py` and SQLite middleware tests under `tldw_Server_API/tests/AuthNZ_SQLite`.
+  - A dedicated stack test (`tldw_Server_API/tests/AuthNZ/integration/test_guardrail_stack_combined.py::test_guardrail_stack_login_lockout_and_chat_budget`) now combines `/api/v1/auth/login` lockouts and over-budget chat completions within the same FastAPI app instance, confirming that the consolidated guardrail wiring does not regress when multiple guardrails are active in a single environment.
