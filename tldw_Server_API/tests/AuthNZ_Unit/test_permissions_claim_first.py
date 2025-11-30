@@ -49,9 +49,10 @@ def _make_principal(
     roles=None,
     permissions=None,
     is_admin: bool = False,
+    kind: str = "user",
 ) -> AuthPrincipal:
     return AuthPrincipal(
-        kind="user",
+        kind=kind,
         user_id=user_id,
         api_key_id=api_key_id,
         subject="test-user",
@@ -290,3 +291,31 @@ async def test_require_roles_checks_claims_and_allows_admin():
 
     admin_override = _make_principal(roles=["viewer"], permissions=[], is_admin=True)
     assert await checker(admin_override) is admin_override
+
+
+@pytest.mark.asyncio
+async def test_require_permissions_denies_single_user_principal_without_claim():
+    checker = require_permissions("media.create")
+    principal = _make_principal(
+        kind="single_user",
+        roles=["user"],
+        permissions=["media.read"],
+        is_admin=False,
+    )
+    with pytest.raises(HTTPException) as exc:
+        await checker(principal)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_require_roles_denies_single_user_principal_without_admin_role():
+    checker = require_roles("admin")
+    principal = _make_principal(
+        kind="single_user",
+        roles=["user"],
+        permissions=["media.read"],
+        is_admin=False,
+    )
+    with pytest.raises(HTTPException) as exc:
+        await checker(principal)
+    assert exc.value.status_code == 403

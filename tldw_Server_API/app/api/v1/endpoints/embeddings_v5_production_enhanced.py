@@ -1695,13 +1695,12 @@ async def create_embeddings_batch_async(
 
 def require_admin(user: User) -> None:
     """Require admin privileges for endpoint"""
-    # In single-user mode, the sole user is considered admin for admin-only ops
-    try:
-        if is_single_user_mode():
-            return
-    except Exception:
-        pass
-    if not user or not getattr(user, 'is_admin', False):
+    is_admin_flag = bool(
+        getattr(user, "is_admin", False)
+        or getattr(user, "role", None) == "admin"
+        or ("admin" in (getattr(user, "roles", None) or []))
+    )
+    if not user or not is_admin_flag:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required"
@@ -2368,8 +2367,7 @@ class PriorityBumpRequest(BaseModel):
 
 @router.post("/embeddings/job/priority/bump", summary="Override/bump job priority for routing into priority queues (best-effort)")
 async def bump_job_priority(req: PriorityBumpRequest, current_user: User = Depends(get_request_user)) -> Dict[str, Any]:
-    if not getattr(current_user, 'is_admin', False) and not is_single_user_mode():
-        raise HTTPException(status_code=403, detail="Admin privileges required")
+    require_admin(current_user)
     pr = (req.priority or "").strip().lower()
     if pr not in ("high", "normal", "low"):
         raise HTTPException(status_code=400, detail="priority must be one of: high|normal|low")

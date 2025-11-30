@@ -410,6 +410,7 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
 - `tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py` includes additional coverage for single-user claim-first behavior:
   - Claims govern access when present (DB is not consulted).
   - An explicit `"admin"` role in single-user mode implies both `admin` and `user` checks while still rejecting unrelated roles.
+  - New tests exercise negative paths for single-user principals without sufficient claims: `require_permissions` / `require_roles` return HTTP 403 for `kind="single_user"` principals lacking the required permission/role, matching multi-user semantics.
 
 ### Stage 3: Repository Introduction
 **Goal**: Introduce AuthNZ repositories and migrate API-key and core user/RBAC operations to them.
@@ -433,6 +434,8 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
   - `upsert_primary_key(...)` used by `bootstrap_single_user_profile()` to seed the single-user primary API key for both SQLite and Postgres backends.
 - `APIKeyManager` now constructs the repository lazily via a private `_get_repo()` helper, keeping the manager API unchanged while centralizing the most important `api_keys` queries behind the repository.
 - DDL creation for `api_keys` / `api_key_audit_log` still lives in `APIKeyManager._create_tables`; moving this into migrations or dedicated repository helpers remains future work for this stage.
+- A minimal `AuthnzUsersRepo` has been added at `tldw_Server_API/app/core/AuthNZ/repos/users_repo.py` wrapping the existing `UsersDB` abstraction and exposing `get_user_by_id` / `get_user_by_username` / `get_user_by_uuid` (and a paginated `list_users` helper) against the shared `DatabasePool`. Integration tests exercise this repo against both SQLite (`tests/AuthNZ_SQLite/test_authnz_users_repo_sqlite.py`) and Postgres (`tests/AuthNZ/integration/test_authnz_users_repo_postgres.py`) backends, and the admin `GET /api/v1/admin/users/{user_id}` and `GET /api/v1/admin/users` endpoints are covered by SQLite/Postgres admin endpoint tests.
+- A thin `AuthnzRbacRepo` at `tldw_Server_API/app/core/AuthNZ/repos/rbac_repo.py` now centralizes calls into `UserDatabase_v2` for RBAC permission checks. The higher-level helpers in `tldw_Server_API/app/core/AuthNZ/rbac.py` have been refactored to delegate to this repo, and `AuthnzRbacRepo.get_role_effective_permissions` backs the admin `GET /api/v1/admin/roles/{role_id}/permissions/effective` endpoint. Broader migration of RBAC/DDL logic into repository helpers remains future work for this stage.
 
 ### Stage 4: Backend Drift Reduction
 **Goal**: Reduce inline dialect branching in high-impact AuthNZ modules using repositories.

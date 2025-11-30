@@ -1,20 +1,19 @@
-"""
-RBAC effective permission helpers for AuthNZ.
+"""RBAC effective permission helpers for AuthNZ.
 
-This module centralizes read-only calculation of effective permissions and a simple
-checker that builds on the configured UserDatabase implementation. It aligns with
-AuthNZ/permissions.py which already exposes FastAPI dependencies.
+This module centralizes read-only calculation of effective permissions and a
+simple checker that builds on the configured UserDatabase implementation. It
+aligns with AuthNZ/permissions.py which already exposes FastAPI dependencies
+and now uses the AuthnzRbacRepo facade for database access.
 """
 
 from typing import List
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
+from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
-def _user_db():
-    return get_configured_user_database(client_id="rbac_service")
+_RBAC_REPO = AuthnzRbacRepo()
 
 
 def get_effective_permissions(user_id: int) -> List[str]:
@@ -24,8 +23,7 @@ def get_effective_permissions(user_id: int) -> List[str]:
     existing UserDatabase logic.
     """
     try:
-        db = _user_db()
-        return db.get_user_permissions(user_id)
+        return _RBAC_REPO.get_effective_permissions(user_id)
     except Exception as e:
         try:
             redact_logs = get_settings().PII_REDACT_LOGS
@@ -41,8 +39,7 @@ def get_effective_permissions(user_id: int) -> List[str]:
 def user_has_permission(user_id: int, permission: str) -> bool:
     """Check if a user has a given permission code."""
     try:
-        db = _user_db()
-        return db.has_permission(user_id, permission)
+        return _RBAC_REPO.has_permission(user_id, permission)
     except Exception as e:
         try:
             redact_logs = get_settings().PII_REDACT_LOGS

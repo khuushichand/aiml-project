@@ -227,14 +227,14 @@ async def _apply_rate_limit_headers(limiter, user_id: str, response: Response, m
 
 
 def require_admin(user: User) -> None:
-    try:
-        if is_single_user_mode():
-            return
-    except Exception:
-        pass
     if os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in ("true", "1", "yes"):
         return
-    if not user or not getattr(user, "is_admin", False):
+    is_admin_flag = bool(
+        getattr(user, "is_admin", False)
+        or getattr(user, "role", None) == "admin"
+        or ("admin" in (getattr(user, "roles", None) or []))
+    )
+    if not user or not is_admin_flag:
         raise HTTPException(status_code=403, detail="Admin privileges required for heavy evaluations")
 
 

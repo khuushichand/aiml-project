@@ -138,7 +138,7 @@ class AuthnzApiKeysRepo:
                         VALUES (
                             COALESCE(
                                 (SELECT id FROM api_keys WHERE key_hash = ?),
-                                (SELECT MAX(id) + 1 FROM api_keys)
+                                COALESCE((SELECT MAX(id) FROM api_keys), 0) + 1
                             ),
                             ?, ?, ?, ?, ?, ?, 'active', ?
                         )
@@ -154,11 +154,8 @@ class AuthnzApiKeysRepo:
                             1 if is_virtual else 0,
                         ),
                     )
-                try:
+                if hasattr(conn, "commit"):
                     await conn.commit()  # type: ignore[attr-defined]
-                except Exception:
-                    # Some adapters commit implicitly on context exit
-                    pass
             except Exception as exc:  # pragma: no cover - surfaced via higher layers
                 logger.error(f"AuthnzApiKeysRepo.upsert_primary_key failed: {exc}")
                 raise
@@ -195,4 +192,3 @@ class AuthnzApiKeysRepo:
         except Exception as exc:  # pragma: no cover - surfaced via higher layers
             logger.error(f"AuthnzApiKeysRepo.list_user_keys failed: {exc}")
             raise
-

@@ -113,6 +113,7 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     update_org_member_role,
     list_org_memberships_for_user,
 )
+from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError, DuplicateTeamError, DuplicateRoleError
 from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError
 from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
@@ -252,7 +253,6 @@ async def list_users(
     role: Optional[str] = None,
     is_active: Optional[bool] = None,
     search: Optional[str] = None,
-    db=Depends(get_db_transaction)
 ) -> UserListResponse:
     """
     List all users with pagination and filters
@@ -272,127 +272,37 @@ async def list_users(
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
             try:
                 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+
                 pool = await get_db_pool()
                 db_backend = "postgres" if getattr(pool, "pool", None) is not None else "sqlite"
                 response.headers["X-TLDW-Admin-DB"] = db_backend
                 response.headers["X-TLDW-Admin-Req"] = "ok"
-                # Log presence of Authorization header for debugging
                 from loguru import logger as _logger
+
                 auth_hdr = request.headers.get("Authorization")
                 _logger.info(f"Admin list_users TEST_MODE: Authorization present={bool(auth_hdr)}")
             except Exception as _e:
                 response.headers["X-TLDW-Admin-Diag-Error"] = str(_e)
     except Exception:
         pass
+
     try:
-        is_pg = await is_postgres_backend()
         offset = (page - 1) * limit
-
-        # Build query conditions
-        conditions = []
-        params = []
-        param_count = 0
-
-        if role:
-            param_count += 1
-            conditions.append(f"role = ${param_count}" if is_pg else "role = ?")
-            params.append(role)
-
-        if is_active is not None:
-            param_count += 1
-            conditions.append(f"is_active = ${param_count}" if is_pg else "is_active = ?")
-            params.append(is_active)
-
-        if search:
-            param_count += 1
-            search_pattern = f"%{search}%"
-            if is_pg:
-                conditions.append(f"(username ILIKE ${param_count} OR email ILIKE ${param_count})")
-            else:
-                conditions.append("(username LIKE ? OR email LIKE ?)")
-                params.append(search_pattern)  # Add twice for SQLite
-            params.append(search_pattern)
-
-        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
-
-        # Get total count
-        if is_pg:
-            # PostgreSQL
-            count_query = f"SELECT COUNT(*) FROM users{where_clause}"
-            total = await db.fetchval(count_query, *params)
-
-            # Get users
-            query = f"""
-                SELECT id, uuid, username, email, role, is_active, is_verified,
-                       created_at, last_login, storage_quota_mb, storage_used_mb
-                FROM users{where_clause}
-                ORDER BY created_at DESC
-                LIMIT ${param_count + 1} OFFSET ${param_count + 2}
-            """
-            params.extend([limit, offset])
-            rows = await db.fetch(query, *params)
-        else:
-            # SQLite
-            count_query = f"SELECT COUNT(*) FROM users{where_clause}"
-            cursor = await db.execute(count_query, params)
-            total = (await cursor.fetchone())[0]
-
-            # Get users
-            query = f"""
-                SELECT id, uuid, username, email, role, is_active, is_verified,
-                       created_at, last_login, storage_quota_mb, storage_used_mb
-                FROM users{where_clause}
-                ORDER BY created_at DESC
-                LIMIT ? OFFSET ?
-            """
-            params.extend([limit, offset])
-            cursor = await db.execute(query, params)
-            rows = await cursor.fetchall()
-
-        # Normalize rows into Pydantic-friendly dicts (works for Postgres and SQLite)
-        users = []
-        for row in rows:
-            if hasattr(row, 'keys') or isinstance(row, dict):  # Mapping/Record (Postgres path)
-                r = dict(row)
-                user_dict = {
-                    "id": int(r.get("id")),
-                    "uuid": str(r.get("uuid")) if r.get("uuid") is not None else None,
-                    "username": r.get("username"),
-                    "email": r.get("email"),
-                    "role": r.get("role"),
-                    "is_active": bool(r.get("is_active")),
-                    "is_verified": bool(r.get("is_verified")),
-                    "created_at": r.get("created_at"),
-                    "last_login": r.get("last_login"),
-                    "storage_quota_mb": int(r.get("storage_quota_mb") or 0),
-                    "storage_used_mb": float(r.get("storage_used_mb") or 0.0),
-                }
-                users.append(user_dict)
-            else:  # Tuple (SQLite path)
-                user_dict = {
-                    "id": int(row[0]),
-                    "uuid": str(row[1]) if row[1] is not None else None,
-                    "username": row[2],
-                    "email": row[3],
-                    "role": row[4],
-                    "is_active": bool(row[5]),
-                    "is_verified": bool(row[6]),
-                    "created_at": row[7],
-                    "last_login": row[8],
-                    "storage_quota_mb": int(row[9] or 0),
-                    "storage_used_mb": float(row[10] or 0.0),
-                }
-                users.append(user_dict)
-
-        result = UserListResponse(
+        repo = await AuthnzUsersRepo.from_pool()
+        users, total = await repo.list_users(
+            offset=offset,
+            limit=limit,
+            role=role,
+            is_active=is_active,
+            search=search,
+        )
+        return UserListResponse(
             users=users,
             total=total,
             page=page,
             limit=limit,
-            pages=(total + limit - 1) // limit
+            pages=(total + limit - 1) // limit if limit else 0,
         )
-        return result
-
     except Exception as e:
         logger.error(f"Failed to list users: {e}")
         try:
@@ -402,7 +312,7 @@ async def list_users(
             pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve users"
+            detail="Failed to retrieve users",
         )
 
 
@@ -1159,10 +1069,12 @@ async def set_notes_title_settings(payload: NotesTitleSettingsUpdate) -> Dict[st
 @router.get("/users/{user_id}")
 async def get_user_details(
     user_id: int,
-    db=Depends(get_db_transaction)
 ) -> Dict[str, Any]:
     """
-    Get detailed information about a specific user
+    Get detailed information about a specific user.
+
+    Delegates to the AuthnzUsersRepo so that backend differences and schema
+    details are encapsulated in the AuthNZ data access layer.
 
     Args:
         user_id: User ID
@@ -1171,52 +1083,29 @@ async def get_user_details(
         User details including all fields
     """
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            # PostgreSQL
-            user = await db.fetchrow(
-                "SELECT * FROM users WHERE id = $1",
-                user_id
-            )
-        else:
-            # SQLite
-            cursor = await db.execute(
-                "SELECT * FROM users WHERE id = ?",
-                (user_id,)
-            )
-            user = await cursor.fetchone()
-
+        repo = await AuthnzUsersRepo.from_pool()
+        user = await repo.get_user_by_id(user_id)
         if not user:
             raise UserNotFoundError(f"User {user_id}")
 
-        # Convert to dict
-        if not isinstance(user, dict):
-            columns = ['id', 'uuid', 'username', 'email', 'password_hash', 'role',
-                      'is_active', 'is_verified', 'is_locked', 'locked_until',
-                      'failed_login_attempts', 'created_at', 'updated_at',
-                      'last_login', 'email_verified_at', 'password_changed_at',
-                      'preferences', 'storage_quota_mb', 'storage_used_mb']
-            user = dict(zip(columns[:len(user)], user))
+        # Remove sensitive fields and normalize UUID for JSON responses
+        user_dict: Dict[str, Any] = dict(user)
+        user_dict.pop("password_hash", None)
+        if "uuid" in user_dict and user_dict["uuid"] and not isinstance(user_dict["uuid"], str):
+            user_dict["uuid"] = str(user_dict["uuid"])
 
-        # Remove sensitive fields
-        user.pop('password_hash', None)
-
-        # Convert UUID to string if needed
-        if 'uuid' in user and user['uuid'] and not isinstance(user['uuid'], str):
-            user['uuid'] = str(user['uuid'])
-
-        return user
+        return user_dict
 
     except UserNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"User {user_id} not found"
+            detail=f"User {user_id} not found",
         )
     except Exception as e:
         logger.error(f"Failed to get user {user_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve user details"
+            detail="Failed to retrieve user details",
         )
 
 
@@ -2225,70 +2114,14 @@ async def delete_user_override(user_id: int, permission_id: int, db=Depends(get_
 
 @router.get("/users/{user_id}/effective-permissions", response_model=EffectivePermissionsResponse)
 async def get_effective_permissions_admin(user_id: int, db=Depends(get_db_transaction)) -> EffectivePermissionsResponse:
-    """Compute effective permissions for a user using the request-scoped DB.
+    """Compute effective permissions for a user.
 
-    This avoids relying on global user DB singletons which may point at a different
-    database in test environments (e.g., single-user SQLite).
+    Delegates to the central RBAC helper, which in turn uses the AuthNZ
+    repository layer (`AuthnzRbacRepo` / `UserDatabase_v2`) so that both
+    SQLite and Postgres backends share the same logic.
     """
     try:
-        perms: set[str] = set()
-        # Role-derived permissions
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            rows = await db.fetch(
-                """
-                SELECT DISTINCT p.name
-                FROM permissions p
-                JOIN role_permissions rp ON p.id = rp.permission_id
-                JOIN user_roles ur ON rp.role_id = ur.role_id
-                WHERE ur.user_id = $1 AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
-                """,
-                user_id,
-            )
-            perms |= {str(r['name']) for r in rows}
-            drows = await db.fetch(
-                """
-                SELECT p.name, up.granted
-                FROM permissions p
-                JOIN user_permissions up ON p.id = up.permission_id
-                WHERE up.user_id = $1 AND (up.expires_at IS NULL OR up.expires_at > CURRENT_TIMESTAMP)
-                """,
-                user_id,
-            )
-            for r in drows:
-                if bool(r['granted']):
-                    perms.add(str(r['name']))
-                else:
-                    perms.discard(str(r['name']))
-        else:
-            cur = await db.execute(
-                """
-                SELECT DISTINCT p.name
-                FROM permissions p
-                JOIN role_permissions rp ON p.id = rp.permission_id
-                JOIN user_roles ur ON rp.role_id = ur.role_id
-                WHERE ur.user_id = ? AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
-                """,
-                (user_id,),
-            )
-            rows = await cur.fetchall()
-            perms |= {str(r[0]) for r in rows}
-            cur2 = await db.execute(
-                """
-                SELECT p.name, up.granted
-                FROM permissions p
-                JOIN user_permissions up ON p.id = up.permission_id
-                WHERE up.user_id = ? AND (up.expires_at IS NULL OR up.expires_at > CURRENT_TIMESTAMP)
-                """,
-                (user_id,),
-            )
-            drows = await cur2.fetchall()
-            for name, granted in drows:
-                if bool(granted):
-                    perms.add(str(name))
-                else:
-                    perms.discard(str(name))
-
+        perms = get_effective_permissions(user_id)
         return EffectivePermissionsResponse(user_id=user_id, permissions=sorted(perms))
     except Exception as e:
         logger.error(f"Failed to compute effective permissions for user {user_id}: {e}")
@@ -2296,7 +2129,7 @@ async def get_effective_permissions_admin(user_id: int, db=Depends(get_db_transa
 
 
 @router.get("/roles/{role_id}/permissions/effective", response_model=RoleEffectivePermissionsResponse)
-async def get_role_effective_permissions(role_id: int, db=Depends(get_db_transaction)) -> RoleEffectivePermissionsResponse:
+async def get_role_effective_permissions(role_id: int) -> RoleEffectivePermissionsResponse:
     """Return a convenience view combining a role's granted permissions and tool permissions.
 
     - permissions: non-tool permission names (e.g., media.read)
@@ -2304,59 +2137,17 @@ async def get_role_effective_permissions(role_id: int, db=Depends(get_db_transac
     - all_permissions: union of both, sorted
     """
     try:
-        is_pg = await is_postgres_backend()
-        # Fetch role information
-        role_name: Optional[str] = None
-        # Defensive: normalize role_id to plain int
-        if isinstance(role_id, (tuple, list)):
-            role_id = role_id[0]
-        role_id = int(role_id)
-        if is_pg:
-            r = await db.fetchrow("SELECT id, name FROM roles WHERE id = $1", role_id)
-            if not r:
-                raise HTTPException(status_code=404, detail="Role not found")
-            role_name = r['name']
-            rows = await db.fetch(
-                """
-                SELECT p.name
-                FROM permissions p
-                JOIN role_permissions rp ON p.id = rp.permission_id
-                WHERE rp.role_id = $1
-                ORDER BY p.name
-                """,
-                role_id,
-            )
-            names = [str(rr['name']) for rr in rows]
-        else:
-            cur = await db.execute("SELECT id, name FROM roles WHERE id = ?", (role_id,))
-            r = await cur.fetchone()
-            if not r:
-                raise HTTPException(status_code=404, detail="Role not found")
-            role_name = str(r[1])
-            cur2 = await db.execute(
-                """
-                SELECT p.name
-                FROM permissions p
-                JOIN role_permissions rp ON p.id = rp.permission_id
-                WHERE rp.role_id = ?
-                ORDER BY p.name
-                """,
-                (role_id,),
-            )
-            rows2 = await cur2.fetchall()
-            names = [str(x[0]) for x in rows2]
-
-        tool_prefix = 'tools.execute:'
-        tool_permissions = [n for n in names if n.startswith(tool_prefix)]
-        permissions = [n for n in names if not n.startswith(tool_prefix)]
-        all_permissions = sorted(set(tool_permissions) | set(permissions))
+        repo = AuthnzRbacRepo()
+        data = repo.get_role_effective_permissions(role_id=int(role_id))
         return RoleEffectivePermissionsResponse(
             role_id=role_id,
-            role_name=role_name or "",
-            permissions=permissions,
-            tool_permissions=tool_permissions,
-            all_permissions=all_permissions,
+            role_name=data.get("role_name", ""),
+            permissions=data.get("permissions", []),
+            tool_permissions=data.get("tool_permissions", []),
+            all_permissions=data.get("all_permissions", []),
         )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Role not found")
     except HTTPException:
         raise
     except Exception as e:

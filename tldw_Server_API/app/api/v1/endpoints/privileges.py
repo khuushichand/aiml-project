@@ -40,8 +40,6 @@ router = APIRouter(prefix="/privileges", tags=["privileges"])
 async def require_privilege_admin(
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
-    if is_single_user_mode():
-        return current_user
     role = (current_user or {}).get("role")
     if current_user.get("is_admin") or role in {"admin", "owner", "platform_admin"}:
         return current_user
@@ -55,8 +53,6 @@ async def require_privilege_admin_or_self(
     user_id: str,
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
-    if is_single_user_mode():
-        return current_user
     if current_user.get("is_admin") or str(current_user.get("id")) == str(user_id):
         return current_user
     raise HTTPException(

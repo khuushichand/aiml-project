@@ -132,3 +132,135 @@ async def test_single_user_bootstrapped_admin_uses_claims_for_permissions(tmp_pa
     assert role_payload["is_admin"] is True
     assert "admin" in role_payload["roles"]
 
+
+@pytest.mark.asyncio
+async def test_single_user_non_admin_principal_denied_on_role(tmp_path, monkeypatch):
+    # Reuse the same single-user bootstrap flow but override get_auth_principal
+    # to simulate a principal with limited claims.
+    db_path = Path(tmp_path) / "users_limited_role.db"
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test_single_user_claims_key_limited")
+    monkeypatch.setenv("TEST_MODE", "true")
+
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings, get_settings
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.initialize import bootstrap_single_user_profile
+    from fastapi import Request
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(pool.db_path))
+
+    ok_first = await bootstrap_single_user_profile()
+    ok_second = await bootstrap_single_user_profile()
+    assert ok_first is True
+    assert ok_second is True
+
+    settings = get_settings()
+    single_user_key = settings.SINGLE_USER_API_KEY
+
+    async def _limited_principal(request: Request):
+        principal = AuthPrincipal(
+            kind="single_user",
+            user_id=settings.SINGLE_USER_FIXED_ID,
+            api_key_id=None,
+            subject=None,
+            token_type="api_key",
+            jti=None,
+            roles=["user"],
+            permissions=[],
+            is_admin=False,
+            org_ids=[],
+            team_ids=[],
+        )
+        try:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip="127.0.0.1",
+                user_agent="pytest-agent",
+                request_id="single-user-limited",
+            )
+        except Exception:
+            pass
+        return principal
+
+    app = _build_single_user_app()
+    app.dependency_overrides[get_auth_principal] = _limited_principal
+    client = TestClient(app)
+
+    resp_role = client.get(
+        "/api/v1/single-user/protected/role",
+        headers={"X-API-KEY": single_user_key},
+    )
+    assert resp_role.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_single_user_non_admin_principal_denied_on_permission(tmp_path, monkeypatch):
+    # Same setup as above, but exercise permission-based gating.
+    db_path = Path(tmp_path) / "users_limited_perm.db"
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test_single_user_claims_key_limited_perm")
+    monkeypatch.setenv("TEST_MODE", "true")
+
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings, get_settings
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    from tldw_Server_API.app.core.AuthNZ.initialize import bootstrap_single_user_profile
+    from fastapi import Request
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
+
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(pool.db_path))
+
+    ok_first = await bootstrap_single_user_profile()
+    ok_second = await bootstrap_single_user_profile()
+    assert ok_first is True
+    assert ok_second is True
+
+    settings = get_settings()
+    single_user_key = settings.SINGLE_USER_API_KEY
+
+    async def _limited_principal(request: Request):
+        principal = AuthPrincipal(
+            kind="single_user",
+            user_id=settings.SINGLE_USER_FIXED_ID,
+            api_key_id=None,
+            subject=None,
+            token_type="api_key",
+            jti=None,
+            roles=["user"],
+            permissions=[],
+            is_admin=False,
+            org_ids=[],
+            team_ids=[],
+        )
+        try:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip="127.0.0.1",
+                user_agent="pytest-agent",
+                request_id="single-user-limited-perm",
+            )
+        except Exception:
+            pass
+        return principal
+
+    app = _build_single_user_app()
+    app.dependency_overrides[get_auth_principal] = _limited_principal
+    client = TestClient(app)
+
+    resp_perm = client.get(
+        "/api/v1/single-user/protected/perm",
+        headers={"X-API-KEY": single_user_key},
+    )
+    assert resp_perm.status_code == 403

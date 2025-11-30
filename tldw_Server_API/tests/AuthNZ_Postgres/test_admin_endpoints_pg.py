@@ -138,6 +138,14 @@ async def test_admin_endpoints_pg(test_db_pool):
         arr = r.json()
         assert any(k['id'] == vk['id'] for k in arr)
 
+        # Fetch user details via admin endpoint (AuthnzUsersRepo-backed)
+        r = client.get(f"/api/v1/admin/users/{user_id}")
+        assert r.status_code == 200, r.text
+        detail = r.json()
+        assert detail.get("id") == user_id
+        assert detail.get("username") == "pgadmin"
+        assert "password_hash" not in detail
+
     app.dependency_overrides.pop(require_admin, None)
 
 

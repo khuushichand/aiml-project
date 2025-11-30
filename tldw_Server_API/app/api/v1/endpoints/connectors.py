@@ -73,24 +73,24 @@ async def oauth_callback(
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ) -> ConnectorAccount:
     conn = get_connector_by_name(provider)
-    # Enforce org-level account linking role only in multi-user mode
-    if not is_single_user_mode():
-        try:
-            memberships = current_user.get("org_memberships") or []
-            # pick active org or first membership
-            org_id = memberships[0]["org_id"] if memberships else 1
-            pol = await get_policy(db, org_id)
-            if not pol:
-                pol = get_default_policy_from_env(org_id)
-            role = str(current_user.get("role", "member")).lower()
-            required = str(pol.get("account_linking_role", "admin")).lower()
-            # Admin bypass
-            if role != "admin" and required and role != required:
-                raise HTTPException(status_code=403, detail="Account linking not permitted for your role")
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.debug(f"Policy enforcement error on callback: {e}")
+    # Enforce org-level account linking role based on org policy; single-user
+    # callers pass via their role/admin claims rather than global mode checks.
+    try:
+        memberships = current_user.get("org_memberships") or []
+        # pick active org or first membership
+        org_id = memberships[0]["org_id"] if memberships else 1
+        pol = await get_policy(db, org_id)
+        if not pol:
+            pol = get_default_policy_from_env(org_id)
+        role = str(current_user.get("role", "member")).lower()
+        required = str(pol.get("account_linking_role", "admin")).lower()
+        # Admin bypass
+        if role != "admin" and required and role != required:
+            raise HTTPException(status_code=403, detail="Account linking not permitted for your role")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.debug(f"Policy enforcement error on callback: {e}")
 
     # Exchange code with redirect derived from env base + this path
     import os as _os
@@ -114,27 +114,27 @@ async def oauth_callback(
             pass
     elif provider == 'notion':
         notion_workspace_id = tokens.get('workspace_id')
-    # Enforce additional org policy constraints at callback in multi-user mode
-    if not is_single_user_mode():
-        try:
-            memberships = current_user.get("org_memberships") or []
-            org_id = memberships[0]["org_id"] if memberships else 1
-            pol = await get_policy(db, org_id)
-            if not pol:
-                pol = get_default_policy_from_env(org_id)
-            ok, why = evaluate_policy_constraints(
-                pol,
-                provider=provider,
-                remote_path=None,
-                notion_workspace_id=notion_workspace_id,
-                account_email=acct_email,
-            )
-            if not ok:
-                raise HTTPException(status_code=403, detail=why or "Account not permitted by org policy")
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.debug(f"Callback constraint evaluation failed: {e}")
+    # Enforce additional org policy constraints at callback across modes using
+    # the same org policy surface.
+    try:
+        memberships = current_user.get("org_memberships") or []
+        org_id = memberships[0]["org_id"] if memberships else 1
+        pol = await get_policy(db, org_id)
+        if not pol:
+            pol = get_default_policy_from_env(org_id)
+        ok, why = evaluate_policy_constraints(
+            pol,
+            provider=provider,
+            remote_path=None,
+            notion_workspace_id=notion_workspace_id,
+            account_email=acct_email,
+        )
+        if not ok:
+            raise HTTPException(status_code=403, detail=why or "Account not permitted by org policy")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.debug(f"Callback constraint evaluation failed: {e}")
 
     acct = await create_account(
         db,
@@ -211,21 +211,21 @@ async def add_source(
     path = payload.path
     options = payload.options or {}
 
-    # Enforce org policy on provider/path only in multi-user mode
-    if not is_single_user_mode():
-        try:
-            memberships = current_user.get("org_memberships") or []
-            org_id = memberships[0]["org_id"] if memberships else 1
-            pol = await get_policy(db, org_id)
-            if not pol:
-                pol = get_default_policy_from_env(org_id)
-            ok, why = evaluate_policy_constraints(pol, provider=provider, remote_path=path)
-            if not ok:
-                raise HTTPException(status_code=403, detail=why or "Source denied by org policy")
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.debug(f"Policy evaluation failed: {e}")
+    # Enforce org policy on provider/path for all modes; single-user callers
+    # rely on their admin/role claims rather than mode flags.
+    try:
+        memberships = current_user.get("org_memberships") or []
+        org_id = memberships[0]["org_id"] if memberships else 1
+        pol = await get_policy(db, org_id)
+        if not pol:
+            pol = get_default_policy_from_env(org_id)
+        ok, why = evaluate_policy_constraints(pol, provider=provider, remote_path=path)
+        if not ok:
+            raise HTTPException(status_code=403, detail=why or "Source denied by org policy")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.debug(f"Policy evaluation failed: {e}")
 
     row = await create_source(
         db,
@@ -305,26 +305,26 @@ async def import_source(
     current_user: Dict[str, Any] = Depends(get_current_active_user),
     request: Request = None,
 ) -> ImportJob:
-    # Enforce per-role daily quota from org policy (multi-user only)
-    if not is_single_user_mode():
-        try:
-            role = str(current_user.get("role", "member")).lower()
-            memberships = current_user.get("org_memberships") or []
-            org_id = memberships[0]["org_id"] if memberships else 1
-            pol = await get_policy(db, org_id)
-            if not pol:
-                pol = get_default_policy_from_env(org_id)
-            qpr = pol.get("quotas_per_role") or {}
-            limits = qpr.get(role) or {}
-            max_jobs = int(limits.get("max_jobs_per_day") or 0)
-            if max_jobs > 0:
-                today_count = count_connectors_jobs_today(int(current_user.get("id")))
-                if today_count >= max_jobs:
-                    raise HTTPException(status_code=429, detail="Daily import quota reached for your role")
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.debug(f"Quota check error: {e}")
+    # Enforce per-role daily quota from org policy for all modes; single-user
+    # admin callers naturally bypass via their configured role/quotas.
+    try:
+        role = str(current_user.get("role", "member")).lower()
+        memberships = current_user.get("org_memberships") or []
+        org_id = memberships[0]["org_id"] if memberships else 1
+        pol = await get_policy(db, org_id)
+        if not pol:
+            pol = get_default_policy_from_env(org_id)
+        qpr = pol.get("quotas_per_role") or {}
+        limits = qpr.get(role) or {}
+        max_jobs = int(limits.get("max_jobs_per_day") or 0)
+        if max_jobs > 0:
+            today_count = count_connectors_jobs_today(int(current_user.get("id")))
+            if today_count >= max_jobs:
+                raise HTTPException(status_code=429, detail="Daily import quota reached for your role")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.debug(f"Quota check error: {e}")
     # Correlate request → job
     rid = ensure_request_id(request) if request is not None else None
     tp = ensure_traceparent(request) if request is not None else ""

@@ -413,7 +413,7 @@ Symptoms:
 - `Docs/Code_Documentation/Guides/AuthNZ_Code_Guide.md` explicitly documents the split between modern claim-first dependencies and legacy compatibility shims:
   - Modern pattern:
     - `get_auth_principal` → returns `AuthPrincipal` with roles/permissions.
-    - `require_permissions` / `require_roles` → enforce claims and return the principal; representative usage is called out for media, RAG, notes graph, evaluations CRUD, and scheduler workflows admin.
+    - `require_permissions` / `require_roles` → enforce claims and return the principal; representative usage is called out for media, RAG, notes graph, evaluations CRUD, scheduler workflows admin, and chat queue diagnostics (`system.logs`).
   - Legacy shims:
     - `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker` in `permissions.py` are described as maintained for existing routes but not recommended for new endpoints.
     - `require_admin` in evaluations auth is documented as an admin-only gate for heavy evaluations flows, while new admin surfaces should prefer `get_auth_principal` plus `require_permissions` / `require_roles`.
@@ -421,3 +421,4 @@ Symptoms:
   - Defining a permission constant in `permissions.py`.
   - Applying `Depends(require_permissions("your.permission"))` to an endpoint.
   - Overriding `get_auth_principal` in tests to exercise 401 vs 403 semantics, reusing patterns from `tests/AuthNZ_Unit/test_auth_claim_route_level.py` and `tests/AuthNZ_Unit/test_scheduler_workflows_permissions_claims.py`.
+- Selected RBAC helpers now use `AuthnzRbacRepo`, and the admin `GET /api/v1/admin/roles/{role_id}/permissions/effective` endpoint delegates to `AuthnzRbacRepo.get_role_effective_permissions`, with behavior locked in by SQLite and Postgres-backed admin endpoint tests.

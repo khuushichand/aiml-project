@@ -192,6 +192,11 @@ Notes:
 - **Legacy shims (compatibility)**:
   - `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker` in `permissions.py` remain supported for existing routes but should not be used on new ones.
   - `require_admin` in `evaluations_auth.py` is an admin-only guard for heavy evaluations flows; new admin surfaces should prefer `require_roles("admin")` / `require_permissions(...)` on top of `get_auth_principal`.
+  - A minimal repository layer exists for AuthNZ:
+    - `AuthnzApiKeysRepo` (`app/core/AuthNZ/repos/api_keys_repo.py`) centralizes `api_keys` read/write paths and is used by `APIKeyManager` and single-user bootstrap.
+    - `AuthnzUsersRepo` (`app/core/AuthNZ/repos/users_repo.py`) wraps `UsersDB` for user lookups and is exercised against both SQLite and Postgres in AuthNZ tests.
+    - `AuthnzRbacRepo` (`app/core/AuthNZ/repos/rbac_repo.py`) fronts `UserDatabase_v2` for RBAC permission checks; higher-level helpers in `app/core/AuthNZ/rbac.py` delegate to it.
+  - New code MUST NOT introduce fresh `is_single_user_mode()` branches in endpoint/business logic. Mode checks are confined to a small number of coordination points (bootstrap, DB selection, and legacy compatibility helpers); authorization should flow through `AuthPrincipal` + claim-first dependencies instead.
 
 References:
 - `tldw_Server_API/app/core/AuthNZ/permissions.py:159` (PermissionChecker – legacy shim)

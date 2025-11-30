@@ -115,10 +115,15 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     execute_non_stream_call,
     queue_is_active,
 )
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    rbac_rate_limit,
+    require_token_scope,
+    require_permissions,
+)
 from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
@@ -1970,28 +1975,10 @@ async def create_chat_completion(
     summary="Chat request queue status",
     tags=["chat"]
 )
-async def get_chat_queue_status(request: Request):
+async def get_chat_queue_status(
+    _principal=Depends(require_permissions(SYSTEM_LOGS)),
+):
     """Expose raw chat request queue metrics for diagnostics."""
-    # Enforce RBAC only in multi-user mode; allow in single-user for convenience/testing
-    try:
-        if not is_single_user_mode():
-            # Extract auth headers and resolve user via existing dependency logic
-            api_key = request.headers.get("X-API-KEY")
-            legacy_token = request.headers.get("Token")
-            auth_header = request.headers.get("Authorization", "")
-            token_val = None
-            if isinstance(auth_header, str) and auth_header.lower().startswith("bearer "):
-                token_val = auth_header[len("Bearer "):].strip()
-            # Use get_request_user directly with explicit args (bypasses DI)
-            user_obj = await get_request_user(request, api_key=api_key, token=token_val, legacy_token_header=legacy_token)
-            if not user_has_permission(user_obj.id, "system.logs"):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied: system.logs")
-    except HTTPException:
-        raise
-    except Exception as _e:
-        # Fail closed in multi-user mode if auth context cannot be resolved
-        if not is_single_user_mode():
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     try:
         queue = get_request_queue()
     except Exception:
@@ -2010,25 +1997,10 @@ async def get_chat_queue_status(request: Request):
     summary="Recent chat queue activity",
     tags=["chat"]
 )
-async def get_chat_queue_activity(limit: int = 50, request: Request = None):
-    # Enforce RBAC only in multi-user mode; allow in single-user for convenience/testing
-    try:
-        if not is_single_user_mode():
-            # Extract auth headers and resolve user via existing dependency logic
-            api_key = request.headers.get("X-API-KEY") if request else None
-            legacy_token = request.headers.get("Token") if request else None
-            auth_header = request.headers.get("Authorization", "") if request else ""
-            token_val = None
-            if isinstance(auth_header, str) and auth_header.lower().startswith("bearer "):
-                token_val = auth_header[len("Bearer "):].strip()
-            user_obj = await get_request_user(request, api_key=api_key, token=token_val, legacy_token_header=legacy_token)
-            if not user_has_permission(user_obj.id, "system.logs"):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied: system.logs")
-    except HTTPException:
-        raise
-    except Exception:
-        if not is_single_user_mode():
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+async def get_chat_queue_activity(
+    limit: int = 50,
+    _principal=Depends(require_permissions(SYSTEM_LOGS)),
+):
     """Expose a rolling sample of recent queue activity (last N jobs)."""
     # Guardrail: enforce sane bounds for limit
     if limit is None:

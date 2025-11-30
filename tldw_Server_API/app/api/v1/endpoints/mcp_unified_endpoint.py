@@ -187,12 +187,7 @@ async def require_admin(
     user: TokenData = Depends(require_user)
 ) -> TokenData:
     """Require admin role"""
-    try:
-        if is_single_user_mode():
-            return user
-    except Exception:
-        pass
-    if UserRole.ADMIN.value not in user.roles:
+    if UserRole.ADMIN.value not in (user.roles or []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin role required"
@@ -289,7 +284,7 @@ async def mcp_request(
         except Exception:
             pass
 
-    # Derive user id with a robust single-user fallback
+    # Derive user id; prefer the authenticated token user when present.
     derived_user_id: Optional[str] = user.sub if user else None
     if derived_user_id is None:
         try:
@@ -327,12 +322,6 @@ async def mcp_request(
             metadata.setdefault("roles", user.roles)
         if user.permissions:
             metadata.setdefault("permissions", user.permissions)
-    elif derived_user_id is not None:
-        try:
-            if is_single_user_mode():
-                metadata.setdefault("roles", [UserRole.ADMIN.value])
-        except Exception:
-            pass
 
     if mcp_session_id:
         metadata["session_id"] = mcp_session_id
@@ -399,7 +388,7 @@ async def mcp_request_batch(
         except Exception as e:
             logger.debug(f"Batch API key metadata attach failed: {e}")
 
-    # Derive user id with a robust single-user fallback
+    # Derive user id; prefer the authenticated token user when present.
     derived_user_id: Optional[str] = user.sub if user else None
     if derived_user_id is None:
         try:
@@ -428,12 +417,6 @@ async def mcp_request_batch(
             metadata.setdefault("roles", user.roles)
         if user.permissions:
             metadata.setdefault("permissions", user.permissions)
-    elif derived_user_id is not None:
-        try:
-            if is_single_user_mode():
-                metadata.setdefault("roles", [UserRole.ADMIN.value])
-        except Exception:
-            pass
 
     ctx = RequestContext(
         request_id="http_batch",
@@ -517,16 +500,8 @@ async def get_prometheus_metrics(
         user = await get_current_user(credentials, x_api_key)
         if not user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-        try:
-            if is_single_user_mode():
-                pass
-            else:
-                if UserRole.ADMIN.value not in (user.roles or []):
-                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
-        except Exception:
-            # If settings not available, fall back to role check only
-            if UserRole.ADMIN.value not in (user.roles or []):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
+        if UserRole.ADMIN.value not in (user.roles or []):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
     collector = get_metrics_collector()
     content = collector.get_prometheus_metrics()
     # Use standard Prometheus content type regardless of availability
@@ -730,12 +705,6 @@ async def list_modules(
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
-    else:
-        try:
-            if is_single_user_mode():
-                metadata["roles"] = [UserRole.ADMIN.value]
-        except Exception:
-            pass
 
     response = await server.handle_http_request(
         request,
@@ -811,12 +780,6 @@ async def list_resources(
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
-    else:
-        try:
-            if is_single_user_mode():
-                metadata["roles"] = [UserRole.ADMIN.value]
-        except Exception:
-            pass
 
     response = await server.handle_http_request(
         request,
@@ -857,12 +820,6 @@ async def list_prompts(
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
-    else:
-        try:
-            if is_single_user_mode():
-                metadata["roles"] = [UserRole.ADMIN.value]
-        except Exception:
-            pass
 
     response = await server.handle_http_request(
         request,

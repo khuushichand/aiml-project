@@ -117,14 +117,16 @@ def _allowed_providers() -> Optional[List[str]]:
 def require_admin(user: User) -> None:
     """Admin guard for vector store admin endpoints.
 
-    In single-user mode, the sole user is treated as admin.
+    Uses the same admin-style claims as the core auth
+    dependencies so that single-user and multi-user profiles
+    share the same RBAC surface.
     """
-    try:
-        if is_single_user_mode():
-            return
-    except Exception:
-        pass
-    if not user or not getattr(user, 'is_admin', False):
+    is_admin_flag = bool(
+        getattr(user, "is_admin", False)
+        or getattr(user, "role", None) == "admin"
+        or ("admin" in (getattr(user, "roles", None) or []))
+    )
+    if not user or not is_admin_flag:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
 
 
@@ -1389,19 +1391,11 @@ async def list_vector_batches(
     user_id: Optional[str] = Query(None, description="Admin-only: override user id to view their batches"),
     current_user: User = Depends(get_request_user)
 ):
-    # Default to current user
-    requested_user_id = str(getattr(current_user,'id','1'))
-    # If an override is requested, require admin
+    # Default to current user; admin callers may override user_id regardless of
+    # auth mode, while non-admins are restricted to their own batches.
+    requested_user_id = str(getattr(current_user, "id", "1"))
     if user_id is not None and user_id != requested_user_id:
-        # Allow in single-user mode; otherwise require admin
-        allow_override = False
-        try:
-            if is_single_user_mode():
-                allow_override = True
-        except Exception:
-            pass
-        if not allow_override and not getattr(current_user, 'is_admin', False):
-            raise HTTPException(status_code=403, detail="Admin privileges required to view other users' batches")
+        require_admin(current_user)
         requested_user_id = str(user_id)
     rows = db_list_batches(user_id=requested_user_id, status=status, limit=limit, offset=offset)
     return { 'data': rows, 'pagination': { 'limit': limit, 'offset': offset, 'count': len(rows) } }
