@@ -81,6 +81,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_rbac_schemas import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_admin,
+    require_roles,
     get_db_transaction,
     get_storage_service_dep
 )
@@ -176,7 +177,7 @@ _authnz_migration_lock = asyncio.Lock()
 router = APIRouter(
     prefix="/admin",
     tags=["admin"],
-    dependencies=[Depends(require_admin)],  # All endpoints require admin role
+    dependencies=[Depends(require_admin), Depends(require_roles("admin"))],  # All endpoints require admin role
     responses={403: {"description": "Not authorized"}}
 )
 

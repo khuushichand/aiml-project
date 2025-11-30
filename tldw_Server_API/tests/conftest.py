@@ -361,8 +361,9 @@ def client_with_single_user(monkeypatch):
     # Import the FastAPI app and dependencies lazily to avoid heavy imports during test collection
     from tldw_Server_API.app.main import app as fastapi_app
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin, get_auth_principal
     from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
     async def _override_user():
         return User(id=1, username="tester", email=None, is_active=True)
@@ -370,8 +371,35 @@ def client_with_single_user(monkeypatch):
     def _override_logger():
         return usage_logger
 
+    async def _override_principal(request=None):
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject="single-user",
+            token_type="single_user",
+            jti=None,
+            roles=["admin"],
+            permissions=["media.create"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        if request is not None:
+            try:
+                request.state.auth = AuthContext(
+                    principal=principal,
+                    ip=None,
+                    user_agent=None,
+                    request_id=None,
+                )
+            except Exception:
+                pass
+        return principal
+
     fastapi_app.dependency_overrides[get_request_user] = _override_user
     fastapi_app.dependency_overrides[get_usage_event_logger] = _override_logger
+    fastapi_app.dependency_overrides[get_auth_principal] = _override_principal
     # Bypass admin guard in tests by treating the test user as admin
     fastapi_app.dependency_overrides[require_admin] = lambda: {
         "id": 1,
@@ -386,6 +414,7 @@ def client_with_single_user(monkeypatch):
 
     fastapi_app.dependency_overrides.pop(get_request_user, None)
     fastapi_app.dependency_overrides.pop(get_usage_event_logger, None)
+    fastapi_app.dependency_overrides.pop(get_auth_principal, None)
     fastapi_app.dependency_overrides.pop(require_admin, None)
 
 

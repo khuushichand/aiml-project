@@ -16,6 +16,7 @@ from typing import Any, Dict
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import is_key_over_budget
 
 
@@ -76,6 +77,61 @@ class AuthGovernor:
         }
         return out
 
+    async def check_lockout(
+        self,
+        identifier: str,
+        *,
+        attempt_type: str = "login",
+        rate_limiter=None,
+    ):
+        """
+        Check lockout status for an identifier using the existing rate limiter.
+
+        Returns a tuple of (is_locked, lockout_expires) when the rate limiter
+        is available; otherwise fails open with (False, None).
+        """
+        limiter = rate_limiter
+        if limiter is None:
+            try:
+                limiter = await get_rate_limiter()
+            except Exception:
+                limiter = None
+
+        if limiter and getattr(limiter, "enabled", False):
+            try:
+                return await limiter.check_lockout(identifier)
+            except Exception as exc:
+                logger.debug(f"AuthGovernor lockout check failed for {identifier}: {exc}")
+        return False, None
+
+    async def record_auth_failure(
+        self,
+        identifier: str,
+        *,
+        attempt_type: str = "login",
+        rate_limiter=None,
+    ) -> Dict[str, Any]:
+        """
+        Record an authentication failure via the existing rate limiter.
+
+        Returns the limiter result structure or a permissive default when
+        the limiter is unavailable.
+        """
+        limiter = rate_limiter
+        if limiter is None:
+            try:
+                limiter = await get_rate_limiter()
+            except Exception:
+                limiter = None
+
+        if limiter and getattr(limiter, "enabled", False):
+            try:
+                return await limiter.record_failed_attempt(identifier=identifier, attempt_type=attempt_type)
+            except Exception as exc:
+                logger.debug(f"AuthGovernor record failure failed for {identifier}: {exc}")
+
+        return {"is_locked": False, "remaining_attempts": 5}
+
 
 _AUTH_GOVERNOR_SINGLETON: AuthGovernor | None = None
 
@@ -92,4 +148,3 @@ async def get_auth_governor() -> AuthGovernor:
     if _AUTH_GOVERNOR_SINGLETON is None:
         _AUTH_GOVERNOR_SINGLETON = AuthGovernor()
     return _AUTH_GOVERNOR_SINGLETON
-

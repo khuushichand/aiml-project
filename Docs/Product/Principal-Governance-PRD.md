@@ -331,12 +331,15 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
   - User-bound API key and virtual key.
 - Integration tests asserting `request.state.auth` and `request.state.user_id/api_key_id` are set for representative endpoints.
 
-**Status**: In Progress
+**Status**: Done
 
 **Notes**:
 - `AuthPrincipal` / `AuthContext` models exist in `tldw_Server_API/app/core/AuthNZ/principal_model.py` with a stable, pseudonymous `principal_id` helper and unit tests.
 - A resolver `get_auth_principal(request)` is implemented in `tldw_Server_API/app/core/AuthNZ/auth_principal_resolver.py` with unit tests for single-user, JWT, and API-key flows.
-- `auth_deps.get_current_user` and `User_DB_Handling` now populate `request.state.auth` / `AuthPrincipal` after resolving the current user; refactoring them to delegate identity derivation directly to `get_auth_principal` remains future work.
+- `auth_deps.get_current_user` and `User_DB_Handling.get_request_user` now populate `request.state.auth` / `AuthPrincipal` after resolving the current user and, in multi-user flows, reuse an existing `AuthContext`/`AuthPrincipal` when present instead of re-running JWT/API-key logic, while keeping 401/403 behavior and return shapes stable.
+- Integration coverage includes:
+  - `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_state_consistency.py` – asserts that `request.state.auth.principal` matches `request.state.user_id/api_key_id` and that missing-credential 401 semantics remain unchanged when `get_current_user` and `get_auth_principal` coexist.
+  - `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_jwt_happy_path.py` – exercises a full multi-user JWT flow (register → login → protected endpoint) and verifies that `AuthPrincipal` remains aligned with `get_current_user` and `request.state` on authenticated requests.
 
 ### Stage 2: LLM Budgets via AuthGovernor
 **Goal**: Route virtual-key LLM budget enforcement through `AuthGovernor` using `AuthPrincipal` and existing `llm_usage_log` data.
@@ -357,8 +360,11 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
 
 **Notes**:
 - A minimal `AuthGovernor` facade focused on LLM budgets is implemented in `tldw_Server_API/app/core/AuthNZ/auth_governor.py`, wrapping the existing `is_key_over_budget` logic and attaching principal metadata.
-- `tldw_Server_API/app/core/AuthNZ/llm_budget_guard.py` now consults `AuthGovernor.check_llm_budget_for_api_key` using an `AuthPrincipal` derived from `AuthContext` or `request.state`, and 402 responses include structured `details` with principal information while preserving the prior JSON surface.
-- Dedicated under-/over-budget API-level regression tests and alignment checks against `llm_usage_log` remain to be added.
+- `tldw_Server_API/app/core/AuthNZ/llm_budget_guard.py` now consults `AuthGovernor.check_llm_budget_for_api_key` using an `AuthPrincipal` derived from `AuthContext` or `request.state`, and 402 responses include structured `details` with principal information while preserving the prior JSON surface. `LLMBudgetMiddleware` has been routed through the same facade so middleware responses also carry principal metadata.
+- API-level coverage now includes:
+  - Guard dependency exercised over HTTP with a virtual key (`tests/AuthNZ/integration/test_llm_budget_guard_http.py`) asserting `details.principal` in the 402 response.
+  - Middleware over-budget regression with principal assertions (`tests/AuthNZ_SQLite/test_llm_budget_402_sqlite.py::test_llm_budget_middleware_returns_402_on_overage` and `::test_llm_budget_middleware_returns_402_on_embeddings_overage`, which also validates the `llm_usage_log` day tokens/USD summaries in the 402 details).
+- Dedicated under-budget success paths remain to be added.
 
 ### Stage 3: Login Lockouts via AuthGovernor
 **Goal**: Replace bespoke login attempt and lockout logic in AuthNZ rate limiter with `AuthGovernor` metrics.
@@ -374,7 +380,10 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
   - Repeated failures lead to lockout and a clear response payload.
   - Successful login after lockout expiry works.
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- `AuthGovernor` now exposes `check_lockout` / `record_auth_failure` wrappers over the existing rate limiter, and `/auth/login` routes its lockout checks and failure counters through this facade (while preserving current thresholds and error payloads). Test coverage for lockout semantics is still pending.
 
 ### Stage 4: Consolidation & Clean-up
 **Goal**: Remove duplicated guardrail logic and ensure all AuthNZ guardrails use `AuthPrincipal` + `AuthGovernor`.

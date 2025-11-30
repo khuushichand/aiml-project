@@ -14,6 +14,7 @@ from loguru import logger
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService, get_password_service
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService, get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager, get_session_manager
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
@@ -698,8 +699,6 @@ async def get_current_user(
 
         # Populate AuthContext for compatibility with the new principal model
         try:
-            from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
-
             roles = list(user.get("roles") or [])
             perms = list(user.get("permissions") or [])
             is_admin_flag = bool(user.get("is_admin") or ("admin" in roles))

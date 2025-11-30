@@ -35,7 +35,7 @@ The stages are designed to be incremental and backwards-compatible. Each stage s
 
 **Notes**:
 - Initial invariant tests exist in `tldw_Server_API/tests/AuthNZ_Unit/test_authnz_invariants.py` to assert 401 behavior and headers for missing-credential cases in `auth_deps.get_current_user` and `User_DB_Handling.get_request_user`, as well as successful single-user API-key auth wiring `request.state.user_id`.
-%- Broader integration coverage (multi-user JWT/API-key flows across backends) remains future work and will build on existing AuthNZ integration suites.
+- Broader integration coverage (multi-user JWT/API-key flows across backends) remains future work and will build on existing AuthNZ integration suites.
 
 ---
 
@@ -74,12 +74,15 @@ The stages are designed to be incremental and backwards-compatible. Each stage s
 - User-Auth-Deps:
   - Stage 1: AuthPrincipal + Claim Invariants.
 
-**Status**: In Progress
+**Status**: Done
 
 **Notes**:
 - `AuthPrincipal` / `AuthContext` implemented in `tldw_Server_API/app/core/AuthNZ/principal_model.py` with unit tests.
 - `get_auth_principal(request)` implemented in `tldw_Server_API/app/core/AuthNZ/auth_principal_resolver.py` with unit tests covering single-user, JWT, and API-key flows.
-- `auth_deps.get_current_user` and `User_DB_Handling.verify_jwt_and_fetch_user` / `get_request_user` now populate `request.state.auth` from their resolved user context; delegation of identity derivation to `get_auth_principal` is still pending (PR 4).
+- `User_DB_Handling.authenticate_api_key_user` centralizes multi-user API key authentication and is reused by both `get_request_user` and `get_auth_principal`.
+- `auth_deps.get_current_user` and `User_DB_Handling.get_request_user` populate `request.state.auth` / `request.state._auth_user` and, in multi-user flows, reuse an existing `AuthContext`/`AuthPrincipal` when present instead of re-running JWT/API-key logic, while preserving existing 401/403 semantics.
+- Integration coverage added in `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_state_consistency.py` to assert that `request.state.auth.principal` stays aligned with `request.state.user_id` and that 401 behaviors for `get_current_user` vs `get_auth_principal` remain stable.
+- Budget guard/middleware paths now reuse `AuthPrincipal`/`AuthContext` and carry principal metadata in 402 responses; regression coverage lives in `tests/AuthNZ/integration/test_auth_principal_jwt_happy_path.py`, `tests/AuthNZ/integration/test_llm_budget_guard_http.py`, and `tests/AuthNZ_SQLite/test_llm_budget_402_sqlite.py`.
 
 ### Stage 1 – Suggested PR Breakdown
 
@@ -230,8 +233,10 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
 
 **Notes**:
 - New FastAPI dependencies `get_auth_principal`, `require_permissions`, and `require_roles` are implemented in `API_Deps/auth_deps.py` with unit tests.
-- Representative media (`/media/add`) and admin (`/metrics/reset`) endpoints now also enforce claims via `require_permissions` / `require_roles` alongside existing dependencies.
-- `llm_budget_guard` has been updated to derive an `AuthPrincipal` (via `request.state.auth` when available) and now uses that principal when consulting governance for LLM budgets.
+- Representative media (`/media/add`, `/media/process-videos`) and admin (`/metrics/reset`) endpoints now enforce claims via `require_permissions` / `require_roles` alongside existing dependencies; RAG search routes (`/rag/search`, `/search/stream`, `/simple`, `/batch`) are also claim-first.
+- Integration coverage for claim-first HTTP semantics is expanding in `tests/AuthNZ/integration/test_rag_media_permissions_claims.py` (skips when Postgres is unavailable) for JWT and API-key flows.
+- SQLite regression coverage mirrors the claim-first HTTP semantics (RAG + media) in `tests/AuthNZ_SQLite/test_rag_media_permissions_sqlite.py` using dependency overrides to isolate auth behavior.
+- `llm_budget_guard` derives an `AuthPrincipal` (via `request.state.auth` when available) and now uses that principal when consulting governance for LLM budgets; middleware and dependency paths include embeddings/chat overage regressions with principal metadata.
 
 ---
 
@@ -273,6 +278,6 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
 **Status**: In Progress
 
 **Notes**:
-- A minimal `AuthGovernor` facade for LLM budgets is implemented in `tldw_Server_API/app/core/AuthNZ/auth_governor.py`, decorating `is_key_over_budget` with principal metadata.
-- `llm_budget_guard.enforce_llm_budget` now calls `AuthGovernor.check_llm_budget_for_api_key` using an `AuthPrincipal` (from `AuthContext` or derived from `request.state`) and preserves existing 402 response semantics while adding structured principal details.
-- Rate-limit and login-lockout paths are not yet routed through `AuthGovernor`; they remain TODO for later stages.
+- A minimal `AuthGovernor` facade for LLM budgets is implemented in `tldw_Server_API/app/core/AuthNZ/auth_governor.py`, decorating `is_key_over_budget` with principal metadata and over-budget detail.
+- `llm_budget_guard.enforce_llm_budget` and `LLMBudgetMiddleware` call `AuthGovernor.check_llm_budget_for_api_key` using an `AuthPrincipal` (from `AuthContext` or derived from `request.state`) and preserve 402 semantics while adding structured principal details; coverage now includes chat and embeddings overage regressions.
+- Login lockout flows in `/auth/login` now route lockout checks and failed-attempt counters through `AuthGovernor.check_lockout` / `record_auth_failure` (wrapping the existing rate limiter). Broader rate-limit consolidation remains TODO.

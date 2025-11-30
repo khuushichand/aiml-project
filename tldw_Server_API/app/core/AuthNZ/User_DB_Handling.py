@@ -325,6 +325,38 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
                 base_perms.add(str(pname))
             else:
                 base_perms.discard(str(pname))
+        # Fallback: honor legacy role column when user_roles table is empty
+        if not roles:
+            implicit_role = user_data.get("role")
+            if implicit_role:
+                try:
+                    rname = str(implicit_role)
+                    roles.append(rname)
+                    if rname == "admin":
+                        is_admin = True
+                    role_row_id = await pool.fetchval(
+                        "SELECT id FROM roles WHERE name = ?",
+                        rname,
+                    )
+                    if role_row_id is not None:
+                        rp_rows_fallback = await pool.fetchall(
+                            """
+                            SELECT p.name AS perm
+                            FROM role_permissions rp
+                            JOIN permissions p ON p.id = rp.permission_id
+                            WHERE rp.role_id = ?
+                            """,
+                            role_row_id,
+                        )
+                        for rp in rp_rows_fallback or []:
+                            pname = rp["perm"] if isinstance(rp, dict) else rp[0]
+                            if pname:
+                                base_perms.add(str(pname))
+                except Exception as _rb_fallback_exc:  # pragma: no cover - fallback best-effort
+                    if pii_redact_logs:
+                        logger.debug("RBAC fallback (role column) failed [redacted]")
+                    else:
+                        logger.debug(f"RBAC fallback (role column) failed for role {implicit_role}: {_rb_fallback_exc}")
         perms = sorted(base_perms)
         # Admin implies system.configure
         if is_admin:
@@ -508,6 +540,120 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
 
         if user_data.get("is_superuser"):
             user_data.setdefault("is_admin", True)
+
+        # Enrich roles/permissions for claim-first checks (mirrors JWT path)
+        roles: List[str] = []
+        perms: List[str] = []
+        is_admin_flag = bool(user_data.get("is_superuser") or user_data.get("is_admin"))
+        try:
+            from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+
+            pool = await get_db_pool()
+            # Roles
+            r_rows = await pool.fetchall(
+                """
+                SELECT r.name AS role
+                FROM user_roles ur
+                JOIN roles r ON r.id = ur.role_id
+                WHERE ur.user_id = ?
+                """,
+                user_id,
+            )
+            for rrow in r_rows or []:
+                rname = rrow["role"] if isinstance(rrow, dict) else rrow[0]
+                if rname and rname not in roles:
+                    roles.append(str(rname))
+            if "admin" in roles:
+                is_admin_flag = True
+
+            # Role permissions
+            rp_rows = await pool.fetchall(
+                """
+                SELECT DISTINCT p.name AS perm
+                FROM user_roles ur
+                JOIN role_permissions rp ON rp.role_id = ur.role_id
+                JOIN permissions p ON p.id = rp.permission_id
+                WHERE ur.user_id = ?
+                """,
+                user_id,
+            )
+            base_perms = set()
+            for rp in rp_rows or []:
+                pname = rp["perm"] if isinstance(rp, dict) else rp[0]
+                if pname:
+                    base_perms.add(str(pname))
+
+            # User-level overrides
+            up_rows = await pool.fetchall(
+                """
+                SELECT p.name AS perm, up.granted
+                FROM user_permissions up
+                JOIN permissions p ON p.id = up.permission_id
+                WHERE up.user_id = ?
+                """,
+                user_id,
+            )
+            for up in up_rows or []:
+                pname = up["perm"] if isinstance(up, dict) else up[0]
+                granted = up.get("granted", 1) if isinstance(up, dict) else (up[1] if len(up) > 1 else 1)
+                if not pname:
+                    continue
+                if granted:
+                    base_perms.add(str(pname))
+                else:
+                    base_perms.discard(str(pname))
+            # Fallback: honor legacy role column when user_roles entries are absent
+            if not roles:
+                implicit_role = user_data.get("role")
+                if implicit_role:
+                    try:
+                        rname = str(implicit_role)
+                        roles.append(rname)
+                        if rname == "admin":
+                            is_admin_flag = True
+                        role_row_id = await pool.fetchval(
+                            "SELECT id FROM roles WHERE name = ?",
+                            rname,
+                        )
+                        if role_row_id is not None:
+                            rp_rows_fallback = await pool.fetchall(
+                                """
+                                SELECT p.name AS perm
+                                FROM role_permissions rp
+                                JOIN permissions p ON p.id = rp.permission_id
+                                WHERE rp.role_id = ?
+                                """,
+                                role_row_id,
+                            )
+                            for rp in rp_rows_fallback or []:
+                                pname = rp["perm"] if isinstance(rp, dict) else rp[0]
+                                if pname:
+                                    base_perms.add(str(pname))
+                    except Exception as rb_exc_fallback:  # pragma: no cover - fallback best-effort
+                        try:
+                            pii_redact_logs = getattr(settings, "PII_REDACT_LOGS", False)
+                            if pii_redact_logs:
+                                logger.debug("RBAC fallback (role column) failed for API key user [redacted]")
+                            else:
+                                logger.debug(f"RBAC fallback (role column) failed for API key user {user_id}: {rb_exc_fallback}")
+                        except Exception:
+                            pass
+
+            perms = sorted(base_perms)
+            if is_admin_flag:
+                perms = sorted(set(perms) | {"system.configure"})
+        except Exception as rb_exc:
+            try:
+                if settings.PII_REDACT_LOGS:
+                    logger.debug(f"RBAC enrichment failed for API key user (details redacted): {rb_exc}")
+                else:
+                    logger.debug(f"RBAC enrichment failed for API key user {user_id}: {rb_exc}")
+            except Exception:
+                pass
+
+        user_data["roles"] = roles
+        user_data["permissions"] = perms
+        user_data["is_admin"] = bool(is_admin_flag)
 
         # Attach context for downstream consumers
         try:

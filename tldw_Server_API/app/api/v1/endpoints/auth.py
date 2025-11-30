@@ -44,6 +44,7 @@ from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.input_validation import get_input_validator
 from tldw_Server_API.app.services.registration_service import RegistrationService
+from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
@@ -261,6 +262,7 @@ async def login(
     """
     start_time = time.perf_counter()
     log_counter("auth_login_attempt")
+    auth_gov = await get_auth_governor()
     try:
         # Get client info
         client_ip = request.client.host if request.client else "unknown"
@@ -275,7 +277,11 @@ async def login(
         is_locked = False
         lockout_expires = None
         if getattr(rate_limiter, 'enabled', False):
-            is_locked, lockout_expires = await rate_limiter.check_lockout(client_ip)
+            is_locked, lockout_expires = await auth_gov.check_lockout(
+                client_ip,
+                attempt_type="login",
+                rate_limiter=rate_limiter,
+            )
         if is_locked:
             logger.warning(f"Login attempt from locked IP: {client_ip}")
             log_counter("auth_login_locked_ip")
@@ -320,9 +326,10 @@ async def login(
 
             # Track failed attempt by IP (only when rate limiting is enabled)
             if getattr(rate_limiter, 'enabled', False):
-                await rate_limiter.record_failed_attempt(
+                await auth_gov.record_auth_failure(
                     identifier=client_ip,
-                    attempt_type="login"
+                    attempt_type="login",
+                    rate_limiter=rate_limiter,
                 )
 
             log_counter("auth_login_user_not_found")
@@ -391,13 +398,15 @@ async def login(
             ip_result = {"is_locked": False, "remaining_attempts": 5}
             user_result = {"is_locked": False, "remaining_attempts": 5}
             if getattr(rate_limiter, 'enabled', False):
-                ip_result = await rate_limiter.record_failed_attempt(
+                ip_result = await auth_gov.record_auth_failure(
                     identifier=client_ip,
-                    attempt_type="login"
+                    attempt_type="login",
+                    rate_limiter=rate_limiter,
                 )
-                user_result = await rate_limiter.record_failed_attempt(
+                user_result = await auth_gov.record_auth_failure(
                     identifier=user['username'],
-                    attempt_type="login"
+                    attempt_type="login",
+                    rate_limiter=rate_limiter,
                 )
 
             # Provide informative error if locked out

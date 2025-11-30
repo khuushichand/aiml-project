@@ -100,6 +100,25 @@ def _admin_headers(client, db_name: str):
     return {"Authorization": f"Bearer {token}"}
 
 
+def _user_headers(client, suffix: str = ""):
+    """Register/login a non-admin user and return Authorization headers."""
+    username = f"user_{suffix or 'perm'}"
+    email = f"{username}@example.com"
+    password = "User@Pass#2024!"
+    rr = client.post(
+        "/api/v1/auth/register",
+        json={"username": username, "email": email, "password": password},
+    )
+    assert rr.status_code == 200, rr.text
+    lr = client.post(
+        "/api/v1/auth/login",
+        data={"username": username, "password": password},
+    )
+    assert lr.status_code == 200, lr.text
+    token = lr.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_list_roles_contains_seeded_roles(isolated_test_environment):
     client, db_name = isolated_test_environment
     headers = _admin_headers(client, db_name)
@@ -144,3 +163,18 @@ def test_create_permission_and_assign_to_role(isolated_test_environment):
     # Cleanup: delete role (non-system)
     dr = client.delete(f"/api/v1/admin/roles/{role_id}", headers=headers)
     assert dr.status_code == 200, dr.text
+
+
+def test_admin_roles_require_auth_and_admin(isolated_test_environment):
+    client, db_name = isolated_test_environment
+    anon = client.get("/api/v1/admin/roles")
+    assert anon.status_code == 401
+
+    user_headers = _user_headers(client, suffix="claims")
+    as_user = client.get("/api/v1/admin/roles", headers=user_headers)
+    assert as_user.status_code == 403
+
+    admin_headers = _admin_headers(client, db_name)
+    as_admin = client.get("/api/v1/admin/roles", headers=admin_headers)
+    assert as_admin.status_code == 200, as_admin.text
+    assert isinstance(as_admin.json(), list)

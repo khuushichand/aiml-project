@@ -12,7 +12,9 @@ from fastapi import HTTPException
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, get_settings_generation
 from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
-from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits, is_key_over_budget
+from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits
+from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 
 
 class LLMBudgetMiddleware(BaseHTTPMiddleware):
@@ -279,9 +281,48 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
 
         # Budget enforcement
         try:
-            result = await is_key_over_budget(int(key_id))
+            principal: AuthPrincipal | None = None
+            existing_ctx = getattr(request.state, "auth", None)
+            if isinstance(existing_ctx, AuthContext):
+                principal = existing_ctx.principal
+            if principal is None:
+                user_id_value = getattr(request.state, "user_id", None)
+                try:
+                    user_id_int = int(user_id_value) if user_id_value is not None else None
+                except Exception:
+                    user_id_int = None
+                org_ids: list[int] = []
+                team_ids: list[int] = []
+                try:
+                    raw_org_ids = getattr(request.state, "org_ids", None)
+                    if isinstance(raw_org_ids, (list, tuple)):
+                        org_ids = [int(o) for o in raw_org_ids if o is not None]
+                except Exception:
+                    org_ids = []
+                try:
+                    raw_team_ids = getattr(request.state, "team_ids", None)
+                    if isinstance(raw_team_ids, (list, tuple)):
+                        team_ids = [int(t) for t in raw_team_ids if t is not None]
+                except Exception:
+                    team_ids = []
+                principal = AuthPrincipal(
+                    kind="api_key",
+                    user_id=user_id_int,
+                    api_key_id=int(key_id),
+                    subject=None,
+                    token_type="api_key",
+                    jti=None,
+                    roles=[],
+                    permissions=[],
+                    is_admin=False,
+                    org_ids=org_ids,
+                    team_ids=team_ids,
+                )
+
+            auth_gov = await get_auth_governor()
+            result = await auth_gov.check_llm_budget_for_api_key(principal, int(key_id))
+            limits = result.get("limits") or {}
             if _mw_debug:
-                limits = result.get('limits', {}) or {}
                 subset = {
                     'llm_budget_day_tokens': limits.get('llm_budget_day_tokens'),
                     'llm_budget_day_usd': limits.get('llm_budget_day_usd'),

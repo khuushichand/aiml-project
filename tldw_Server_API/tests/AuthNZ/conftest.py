@@ -566,6 +566,49 @@ async def isolated_test_environment(monkeypatch):
             ('user','Standard user', TRUE)
             ON CONFLICT (name) DO NOTHING
         """)
+        # Seed baseline permissions for default roles to align with application migrations
+        perm_defs = [
+            ("media.read", "Read media", "media"),
+            ("media.create", "Create media", "media"),
+        ]
+        for name, desc, cat in perm_defs:
+            await test_conn.execute(
+                """
+                INSERT INTO permissions (name, description, category)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (name) DO NOTHING
+                """,
+                name,
+                desc,
+                cat,
+            )
+
+        role_rows = await test_conn.fetch("SELECT id, name FROM roles WHERE name IN ('admin','user')")
+        perm_rows = await test_conn.fetch("SELECT id, name FROM permissions WHERE name IN ('media.read','media.create')")
+        role_id = {r["name"]: r["id"] for r in role_rows or []}
+        perm_id = {p["name"]: p["id"] for p in perm_rows or []}
+
+        for pname in ("media.read", "media.create"):
+            if "user" in role_id and pname in perm_id:
+                await test_conn.execute(
+                    """
+                    INSERT INTO role_permissions (role_id, permission_id)
+                    VALUES ($1, $2)
+                    ON CONFLICT (role_id, permission_id) DO NOTHING
+                    """,
+                    role_id["user"],
+                    perm_id[pname],
+                )
+            if "admin" in role_id and pname in perm_id:
+                await test_conn.execute(
+                    """
+                    INSERT INTO role_permissions (role_id, permission_id)
+                    VALUES ($1, $2)
+                    ON CONFLICT (role_id, permission_id) DO NOTHING
+                    """,
+                    role_id["admin"],
+                    perm_id[pname],
+                )
 
         logger.info(f"Created schema in test database: {db_name}")
     finally:

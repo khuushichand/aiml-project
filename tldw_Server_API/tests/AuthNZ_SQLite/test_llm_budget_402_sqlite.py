@@ -74,7 +74,11 @@ async def test_llm_budget_middleware_returns_402_on_overage(tmp_path):
             json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
         )
         assert r.status_code == 402, r.text
-        assert "budget_exceeded" in r.text
+        body = r.json()
+        assert body.get("error") == "budget_exceeded"
+        principal = (body.get("details") or {}).get("principal") or {}
+        assert principal.get("api_key_id") == key_id
+        assert principal.get("user_id") == user_id
 
 
 @pytest.mark.asyncio
@@ -227,3 +231,76 @@ async def test_llm_budget_middleware_enforces_usd_budgets_sqlite(tmp_path):
         )
         assert r.status_code == 402, r.text
         assert "budget_exceeded" in r.text
+
+
+@pytest.mark.asyncio
+async def test_llm_budget_middleware_returns_402_on_embeddings_overage(tmp_path):
+    os.environ['AUTH_MODE'] = 'multi_user'
+    os.environ['JWT_SECRET_KEY'] = 'test-secret-key-for-embeddings-402-12345678901234567890'
+    db_path = tmp_path / 'users_embeddings.db'
+    os.environ['DATABASE_URL'] = f'sqlite:///{db_path}'
+
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+    reset_settings()
+    await reset_db_pool()
+
+    pool = await get_db_pool()
+    ensure_authnz_tables(Path(pool.db_path))
+
+    async with pool.transaction() as conn:
+        await conn.execute(
+            "INSERT INTO users (username, email, password_hash, is_active) VALUES (?, ?, ?, 1)",
+            ("embeduser", "embeduser@example.com", "x"),
+        )
+    user_id = await pool.fetchval("SELECT id FROM users WHERE username = ?", "embeduser")
+
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+    mgr = APIKeyManager()
+    await mgr.initialize()
+    vk = await mgr.create_virtual_key(
+        user_id=user_id,
+        name="vk-embed-budget",
+        allowed_endpoints=["embeddings"],
+        budget_day_tokens=50,
+    )
+    key_id = vk['id']
+    vkey = vk['key']
+
+    async with pool.transaction() as conn:
+        await conn.execute(
+            """
+            INSERT INTO llm_usage_log (
+                ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms,
+                prompt_tokens, completion_tokens, total_tokens,
+                prompt_cost_usd, completion_cost_usd, total_cost_usd, currency, estimated
+            ) VALUES (
+                CURRENT_TIMESTAMP, ?, ?, 'api', 'embeddings', 'openai', 'text-embedding-3-small', 200, 80,
+                30, 30, 60,
+                0.01, 0.02, 0.03, 'USD', 0
+            )
+            """,
+            (user_id, key_id),
+        )
+
+    from tldw_Server_API.app.main import app
+    from tldw_Server_API.app.core.config import settings as app_settings
+    app_settings['CSRF_ENABLED'] = False
+
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/v1/embeddings",
+            headers={"X-API-KEY": vkey, "Content-Type": "application/json"},
+            json={"model": "text-embedding-3-small", "input": "hello world"},
+        )
+        assert r.status_code == 402, r.text
+        body = r.json()
+        assert body.get("error") == "budget_exceeded"
+        details = body.get("details") or {}
+        principal = details.get("principal") or {}
+        assert principal.get("api_key_id") == key_id
+        assert principal.get("user_id") == user_id
+        day = details.get("day") or {}
+        assert day.get("tokens") in (60, "60", 60.0)
+        assert day.get("usd") in (0.03, "0.03", 0.03)

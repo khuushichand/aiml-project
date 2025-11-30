@@ -5,6 +5,8 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.services.claims_rebuild_service import get_claims_rebuild_service
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.config import settings
 
@@ -14,6 +16,7 @@ router = APIRouter(prefix="/claims", tags=["claims"])
 @router.get("/status")
 def claims_rebuild_status(
     current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(require_roles("admin")),
 ) -> Dict[str, Any]:
     """Return statistics about the claims rebuild worker. Admin only."""
     try:

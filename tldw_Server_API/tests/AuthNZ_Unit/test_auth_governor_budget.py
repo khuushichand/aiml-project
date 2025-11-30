@@ -10,11 +10,11 @@ from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
 
-def _make_request(headers: dict[str, str] | None = None) -> Request:
+def _make_request(headers: dict[str, str] | None = None, *, path: str = "/api/v1/chat/completions") -> Request:
     scope: Scope = {
         "type": "http",
         "method": "POST",
-        "path": "/api/v1/chat/completions",
+        "path": path,
         "headers": [(k.lower().encode("latin-1"), v.encode("latin-1")) for k, v in (headers or {}).items()],
         "client": ("127.0.0.1", 12345),
     }
@@ -139,3 +139,174 @@ async def test_enforce_llm_budget_uses_auth_governor_and_raises_402(monkeypatch)
     assert detail.get("error") == "budget_exceeded"
     assert detail.get("details", {}).get("over") is True
 
+
+@pytest.mark.asyncio
+async def test_auth_governor_lockout_checks_rate_limiter(monkeypatch):
+    calls = {}
+
+    class _Limiter:
+        enabled = True
+
+        async def check_lockout(self, identifier):
+            calls["identifier"] = identifier
+            return True, "soon"
+
+    async def _fake_get_rate_limiter():
+        return _Limiter()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.auth_governor.get_rate_limiter",
+        _fake_get_rate_limiter,
+    )
+
+    gov = AuthGovernor()
+    locked, expires = await gov.check_lockout("1.2.3.4")
+    assert locked is True
+    assert expires == "soon"
+    assert calls.get("identifier") == "1.2.3.4"
+
+
+@pytest.mark.asyncio
+async def test_auth_governor_record_auth_failure_respects_limiter(monkeypatch):
+    calls = {}
+
+    class _Limiter:
+        enabled = True
+
+        async def record_failed_attempt(self, *, identifier, attempt_type):
+            calls["identifier"] = identifier
+            calls["attempt_type"] = attempt_type
+            return {"is_locked": False, "remaining_attempts": 2}
+
+    async def _fake_get_rate_limiter():
+        return _Limiter()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.auth_governor.get_rate_limiter",
+        _fake_get_rate_limiter,
+    )
+
+    gov = AuthGovernor()
+    result = await gov.record_auth_failure("bad-user", attempt_type="login")
+    assert result["is_locked"] is False
+    assert result["remaining_attempts"] == 2
+    assert calls.get("identifier") == "bad-user"
+    assert calls.get("attempt_type") == "login"
+
+
+@pytest.mark.asyncio
+async def test_auth_governor_lockout_fallback_when_limiter_missing(monkeypatch):
+    async def _fake_get_rate_limiter():
+        raise RuntimeError("no limiter")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.auth_governor.get_rate_limiter",
+        _fake_get_rate_limiter,
+    )
+
+    gov = AuthGovernor()
+    locked, expires = await gov.check_lockout("noop")
+    assert locked is False
+    assert expires is None
+
+    result = await gov.record_auth_failure("noop")
+    assert result["is_locked"] is False
+    assert result["remaining_attempts"] == 5
+
+
+@pytest.mark.asyncio
+async def test_enforce_llm_budget_allows_under_budget_chat(monkeypatch):
+    fake_settings = SimpleNamespace(
+        VIRTUAL_KEYS_ENABLED=True,
+        LLM_BUDGET_ENFORCE=True,
+    )
+
+    def _fake_get_settings():
+        return fake_settings
+
+    async def _fake_resolve_api_key_by_hash(api_key: str, settings=None):
+        return {"id": 555, "user_id": 9}
+
+    async def _fake_get_auth_governor():
+        class _Gov:
+            async def check_llm_budget_for_api_key(self, principal, api_key_id: int):
+                return {
+                    "over": False,
+                    "limits": {"is_virtual": True},
+                    "principal": {
+                        "principal_id": principal.principal_id,
+                        "api_key_id": api_key_id,
+                        "user_id": principal.user_id,
+                    },
+                }
+
+        return _Gov()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.llm_budget_guard.get_settings",
+        _fake_get_settings,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.llm_budget_guard.resolve_api_key_by_hash",
+        _fake_resolve_api_key_by_hash,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.llm_budget_guard.get_auth_governor",
+        _fake_get_auth_governor,
+    )
+
+    req = _make_request(headers={"X-API-KEY": "vk-allowed"}, path="/api/v1/chat/completions")
+
+    await enforce_llm_budget(req)
+
+    assert getattr(req.state, "api_key_id", None) == 555
+    assert getattr(req.state, "user_id", None) == 9
+
+
+@pytest.mark.asyncio
+async def test_enforce_llm_budget_allows_under_budget_embeddings(monkeypatch):
+    fake_settings = SimpleNamespace(
+        VIRTUAL_KEYS_ENABLED=True,
+        LLM_BUDGET_ENFORCE=True,
+    )
+
+    def _fake_get_settings():
+        return fake_settings
+
+    async def _fake_resolve_api_key_by_hash(api_key: str, settings=None):
+        return {"id": 777, "user_id": 11}
+
+    async def _fake_get_auth_governor():
+        class _Gov:
+            async def check_llm_budget_for_api_key(self, principal, api_key_id: int):
+                return {
+                    "over": False,
+                    "limits": {"is_virtual": True},
+                    "principal": {
+                        "principal_id": principal.principal_id,
+                        "api_key_id": api_key_id,
+                        "user_id": principal.user_id,
+                    },
+                }
+
+        return _Gov()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.llm_budget_guard.get_settings",
+        _fake_get_settings,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.llm_budget_guard.resolve_api_key_by_hash",
+        _fake_resolve_api_key_by_hash,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.llm_budget_guard.get_auth_governor",
+        _fake_get_auth_governor,
+    )
+
+    req = _make_request(headers={"X-API-KEY": "vk-embed"}, path="/api/v1/embeddings")
+
+    await enforce_llm_budget(req)
+
+    assert getattr(req.state, "api_key_id", None) == 777
+    assert getattr(req.state, "user_id", None) == 11

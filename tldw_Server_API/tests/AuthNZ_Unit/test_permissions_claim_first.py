@@ -1,9 +1,12 @@
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ import permissions as perms_mod
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_permissions, require_roles
 
 
 class _FakeUserDB:
@@ -36,6 +39,29 @@ def _make_user(roles=None, permissions=None, is_admin: bool = False) -> User:
         roles=list(roles or []),
         permissions=list(permissions or []),
         is_admin=is_admin,
+    )
+
+
+def _make_principal(
+    *,
+    user_id: int = 7,
+    api_key_id: int | None = None,
+    roles=None,
+    permissions=None,
+    is_admin: bool = False,
+) -> AuthPrincipal:
+    return AuthPrincipal(
+        kind="user",
+        user_id=user_id,
+        api_key_id=api_key_id,
+        subject="test-user",
+        token_type="access",
+        jti=None,
+        roles=list(roles or []),
+        permissions=list(permissions or []),
+        is_admin=is_admin,
+        org_ids=[],
+        team_ids=[],
     )
 
 
@@ -181,3 +207,33 @@ async def test_check_role_single_user_mode_treats_as_admin(monkeypatch):
     # Non-admin/user roles still rejected
     assert perms_mod.check_role(user, "viewer") is False
 
+
+@pytest.mark.asyncio
+async def test_require_permissions_respects_claims_and_admin_bypass():
+    checker = require_permissions("media.create")
+    admin_principal = _make_principal(roles=["user"], permissions=[], is_admin=True)
+    assert await checker(admin_principal) is admin_principal
+
+    limited_principal = _make_principal(roles=["user"], permissions=["media.read"], is_admin=False)
+    with pytest.raises(HTTPException) as exc:
+        await checker(limited_principal)
+    assert exc.value.status_code == 403
+
+    permitted_principal = _make_principal(permissions=["media.create"], roles=["user"], is_admin=False)
+    assert await checker(permitted_principal) is permitted_principal
+
+
+@pytest.mark.asyncio
+async def test_require_roles_checks_claims_and_allows_admin():
+    checker = require_roles("admin")
+
+    user_principal = _make_principal(roles=["user"], permissions=[])
+    with pytest.raises(HTTPException) as exc:
+        await checker(user_principal)
+    assert exc.value.status_code == 403
+
+    editor_principal = _make_principal(roles=["editor", "admin"], permissions=[])
+    assert await checker(editor_principal) is editor_principal
+
+    admin_override = _make_principal(roles=["viewer"], permissions=[], is_admin=True)
+    assert await checker(admin_override) is admin_override
