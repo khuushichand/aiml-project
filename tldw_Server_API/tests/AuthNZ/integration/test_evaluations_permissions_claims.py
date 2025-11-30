@@ -175,8 +175,11 @@ async def test_evaluations_admin_cleanup_respects_require_admin(monkeypatch):
     guard is enabled. This exercises the gating helper directly rather than the full
     HTTP stack, which also depends on AUTH_MODE and bootstrap state.
     """
+    from fastapi import HTTPException
     from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import require_admin
 
     user = SimpleNamespace(is_admin=False)
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
-    assert require_admin(user) is None
+    with pytest.raises(HTTPException) as excinfo:
+        require_admin(user)
+    assert excinfo.value.status_code == 403

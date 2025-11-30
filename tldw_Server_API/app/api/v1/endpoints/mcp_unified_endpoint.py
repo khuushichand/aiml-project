@@ -486,13 +486,15 @@ def _is_prometheus_public() -> bool:
 
 async def require_admin_unless_public(
     public: bool = Depends(_is_prometheus_public),
-    user: TokenData = Depends(require_user),
+    credentials: HTTPAuthorizationCredentials = Security(security),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
 ) -> Optional[TokenData]:
     """
     Enforce admin requirement unless explicitly configured as public.
     """
     if public:
         return None
+    user = await require_user(credentials, x_api_key)
     return await require_admin(user)
 
 

@@ -4,20 +4,17 @@ Integration tests covering single-user claims/permissions wiring.
 These tests validate that the single-user bootstrap populates admin claims and
 permissions, and that claim-first dependencies (`require_permissions`,
 `require_roles`, `get_auth_principal`) respect the single-user API key across
-protected routes. Assumes pytest integration marker and isolated SQLite DB per
-test via tmp_path.
+protected routes. Assumes pytest integration marker and the shared
+`isolated_test_environment` fixture for DB setup/teardown.
 """
 
-import os
-from pathlib import Path
 from typing import Any, Dict
 
 import pytest
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings, get_settings
-from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
-from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
 from tldw_Server_API.app.core.AuthNZ.initialize import bootstrap_single_user_profile
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
@@ -112,21 +109,18 @@ def _build_single_user_app() -> FastAPI:
 
 
 @pytest.mark.asyncio
-async def test_single_user_bootstrapped_admin_uses_claims_for_permissions(tmp_path, monkeypatch):
+async def test_single_user_bootstrapped_admin_uses_claims_for_permissions(
+    isolated_test_environment, monkeypatch
+):
     """Verify single-user bootstrapped admin uses claims for permissions."""
-    # Configure single-user SQLite AuthNZ with an isolated DB file
-    db_path = Path(tmp_path) / "users.db"
+    _client, _db_name = isolated_test_environment
     monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("SINGLE_USER_API_KEY", "test_single_user_claims_key_123")
     monkeypatch.setenv("TEST_MODE", "true")
 
     # Ensure settings and DB pool see the single-user profile and isolated DB
     reset_settings()
     await reset_db_pool()
-
-    pool = await get_db_pool()
-    ensure_authnz_tables(Path(pool.db_path))
 
     # Seed the single-user admin and primary key via the shared bootstrap helper
     ok_first = await bootstrap_single_user_profile()
@@ -176,21 +170,19 @@ async def test_single_user_bootstrapped_admin_uses_claims_for_permissions(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_single_user_non_admin_principal_denied_on_role(tmp_path, monkeypatch):
+async def test_single_user_non_admin_principal_denied_on_role(
+    isolated_test_environment, monkeypatch
+):
     """Ensure non-admin single-user principal is denied role-based access."""
     # Reuse the same single-user bootstrap flow but override get_auth_principal
     # to simulate a principal with limited claims.
-    db_path = Path(tmp_path) / "users_limited_role.db"
+    _client, _db_name = isolated_test_environment
     monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("SINGLE_USER_API_KEY", "test_single_user_claims_key_limited")
     monkeypatch.setenv("TEST_MODE", "true")
 
     reset_settings()
     await reset_db_pool()
-
-    pool = await get_db_pool()
-    ensure_authnz_tables(Path(pool.db_path))
 
     ok_first = await bootstrap_single_user_profile()
     ok_second = await bootstrap_single_user_profile()
@@ -214,20 +206,18 @@ async def test_single_user_non_admin_principal_denied_on_role(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_single_user_non_admin_principal_denied_on_permission(tmp_path, monkeypatch):
+async def test_single_user_non_admin_principal_denied_on_permission(
+    isolated_test_environment, monkeypatch
+):
     """Ensure non-admin single-user principal is denied permission-based access."""
     # Same setup as above, but exercise permission-based gating.
-    db_path = Path(tmp_path) / "users_limited_perm.db"
+    _client, _db_name = isolated_test_environment
     monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("SINGLE_USER_API_KEY", "test_single_user_claims_key_limited_perm")
     monkeypatch.setenv("TEST_MODE", "true")
 
     reset_settings()
     await reset_db_pool()
-
-    pool = await get_db_pool()
-    ensure_authnz_tables(Path(pool.db_path))
 
     ok_first = await bootstrap_single_user_profile()
     ok_second = await bootstrap_single_user_profile()

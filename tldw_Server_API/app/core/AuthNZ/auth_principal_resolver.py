@@ -189,15 +189,15 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                 request.state.user_id = user.id
                 request.state.team_ids = []
                 request.state.org_ids = []
-            # Cache the resolved user for downstream dependencies
-            request.state._auth_user = user
-        except Exception as exc:
-            logger.debug(f"Unable to set request.state for single-user principal: {exc}")
+                # Cache the resolved user for downstream dependencies
+                request.state._auth_user = user
+            except Exception as exc:
+                logger.debug(f"Unable to set request.state for single-user principal: {exc}")
 
-        principal = _build_principal_from_user(
-            user=user,
-            kind="single_user",
-            request=request,
+            principal = _build_principal_from_user(
+                user=user,
+                kind="single_user",
+                request=request,
                 token_type="api_key",
                 jti=None,
                 api_key_id=None,
