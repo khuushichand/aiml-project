@@ -62,6 +62,10 @@ class StubPool:
     def transaction(self):
         return StubTransaction(self.conn)
 
+    def acquire(self):
+        # Match DatabasePool.acquire() context manager shape for repo helpers
+        return StubTransaction(self.conn)
+
 
 class StubConn:
     def __init__(self, expected_hash, session_id, user_id):

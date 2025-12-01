@@ -82,8 +82,8 @@ class AuthnzOrgsTeamsRepo:
                             d["created_at"] = d["created_at"].isoformat()
                         if isinstance(d.get("updated_at"), datetime):
                             d["updated_at"] = d["updated_at"].isoformat()
-                    except Exception:
-                        pass
+                    except (TypeError, ValueError, AttributeError) as exc:
+                        logger.debug(f"Skipping datetime normalization for org row: {exc}")
                     return d
 
                 # SQLite / aiosqlite path
@@ -178,8 +178,8 @@ class AuthnzOrgsTeamsRepo:
                             d["created_at"] = d["created_at"].isoformat()
                         if isinstance(d.get("updated_at"), datetime):
                             d["updated_at"] = d["updated_at"].isoformat()
-                    except Exception:
-                        pass
+                    except (TypeError, ValueError, AttributeError) as exc:
+                        logger.debug(f"Skipping datetime normalization for team row: {exc}")
                     return d
 
                 # SQLite path
@@ -585,7 +585,7 @@ class AuthnzOrgsTeamsRepo:
                 "user_id": int(user_id),
                 "removed": bool(removed),
             }
-        except Exception as exc:  # pragma: no cover - surfaced via callers
+        except Exception:  # pragma: no cover - surfaced via callers
             logger.exception(
                 "AuthnzOrgsTeamsRepo.remove_team_member failed for team_id=%s user_id=%s",
                 team_id,
@@ -790,8 +790,19 @@ class AuthnzOrgsTeamsRepo:
                                 "user_id": row[1],
                                 "role": row[2],
                             }
-                        except Exception:
-                            result = dict(row)
+                        except Exception as exc:
+                            logger.debug(f"Could not unpack org member row; falling back to dict: {exc}")
+                            try:
+                                result = dict(row)
+                            except Exception as inner_exc:
+                                logger.debug(
+                                    f"dict() fallback failed for org member row; using defaults: {inner_exc}"
+                                )
+                                result = {
+                                    "org_id": int(org_id),
+                                    "user_id": int(user_id),
+                                    "role": role,
+                                }
                     else:
                         result = {
                             "org_id": int(org_id),
@@ -1107,8 +1118,19 @@ class AuthnzOrgsTeamsRepo:
                             "user_id": row2[1],
                             "role": row2[2],
                         }
-                    except Exception:
-                        return dict(row2)
+                    except Exception as exc:
+                        logger.debug(f"Could not unpack updated org member row; falling back to dict: {exc}")
+                        try:
+                            return dict(row2)
+                        except Exception as inner_exc:
+                            logger.debug(
+                                f"dict() fallback failed for updated org member row; using defaults: {inner_exc}"
+                            )
+                            return {
+                                "org_id": int(org_id),
+                                "user_id": int(user_id),
+                                "role": role,
+                            }
                 return None
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(

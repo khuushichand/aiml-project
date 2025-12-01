@@ -5,17 +5,17 @@ from pathlib import Path
 
 import pytest
 
+from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
+from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import (
+    AuthnzRateLimitsRepo,
+)
+from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
 
 @pytest.mark.asyncio
 async def test_authnz_rate_limits_repo_lockout_and_cleanup_sqlite(tmp_path, monkeypatch):
     """AuthnzRateLimitsRepo lockout + rate_limits helpers should work on SQLite."""
-    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
-    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
-    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
-    from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import (
-        AuthnzRateLimitsRepo,
-    )
-
     db_path = tmp_path / "users.db"
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
@@ -49,7 +49,7 @@ async def test_authnz_rate_limits_repo_lockout_and_cleanup_sqlite(tmp_path, monk
 
     # get_active_lockout should not error even if no lock is present yet
     locked_until = await repo.get_active_lockout(identifier=identifier, now=now)
-    assert locked_until is None or isinstance(locked_until, datetime)
+    assert locked_until is None
 
     # After moving past the lockout window and clearing failed attempts, lockout should be gone
     future = now + timedelta(minutes=duration + 1)
@@ -83,7 +83,7 @@ async def test_authnz_rate_limits_repo_lockout_and_cleanup_sqlite(tmp_path, monk
     )
     assert fetched == 2
 
-    # list/delete helpers should see and remove the rows
+    # list/cleanup helpers should see and remove the rows
     endpoints = await repo.list_rate_limit_endpoints_for_identifier(
         identifier=identifier
     )
@@ -98,3 +98,11 @@ async def test_authnz_rate_limits_repo_lockout_and_cleanup_sqlite(tmp_path, monk
     cutoff_future = window_start + timedelta(minutes=10)
     deleted_future = await repo.cleanup_rate_limits_older_than(cutoff_future)
     assert deleted_future >= 1
+
+    # Explicit delete helper should remove any remaining buckets for the identifier
+    deleted_all = await repo.delete_rate_limits_for_identifier(identifier=identifier)
+    assert deleted_all >= 0
+    endpoints_after_delete = await repo.list_rate_limit_endpoints_for_identifier(
+        identifier=identifier
+    )
+    assert not endpoints_after_delete

@@ -38,7 +38,9 @@ async def get_key_limits(key_id: int) -> Optional[Dict[str, Any]]:
     return await repo.fetch_key_limits(key_id)
 
 
-async def summarize_usage_for_key_day(key_id: int, day_iso: Optional[str] = None) -> Dict[str, Any]:
+async def summarize_usage_for_key_day(
+    key_id: int, day_iso: Optional[str | date] = None
+) -> Dict[str, Any]:
     """
     Summarizes total tokens and USD cost for a given API key on a specific UTC day.
 

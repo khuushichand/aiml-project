@@ -4,6 +4,7 @@ from typing import Any, Dict, Coroutine, List
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.api.v1.schemas.tools import (
     ToolListResponse,
     ExecuteToolRequest,
@@ -59,7 +60,10 @@ async def list_tools_endpoint(current_user: User = Depends(get_request_user)) ->
     "/tools/execute",
     response_model=ExecuteToolResult,
     summary="Execute a tool via the server",
-    dependencies=[Depends(PermissionChecker("tools.execute:*"))],
+    dependencies=[
+        Depends(PermissionChecker("tools.execute:*")),
+        Depends(auth_deps.require_permissions("tools.execute:*")),
+    ],
 )
 async def execute_tool_endpoint(
     req: ExecuteToolRequest,

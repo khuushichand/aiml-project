@@ -248,12 +248,13 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
 **Implementation Status (AuthNZ v0.1, internal)**:
 - Repository introduction (Stage 3) is in progress:
   - `AuthnzUsersRepo`, `AuthnzApiKeysRepo`, and `AuthnzRbacRepo` are implemented and used by `User_DB_Handling`, `APIKeyManager`, and RBAC helpers.
-  - New repositories `AuthnzOrgsTeamsRepo`, `AuthnzUsageRepo`, and `AuthnzRateLimitsRepo` encapsulate orgs/teams membership, usage/LLM-usage tables, and AuthNZ rate-limiter storage respectively, with cross-backend tests.
+  - New repositories `AuthnzOrgsTeamsRepo`, `AuthnzUsageRepo`, `AuthnzRateLimitsRepo`, `AuthnzSessionsRepo`, and `AuthnzTokenBlacklistRepo` encapsulate orgs/teams membership, usage/LLM-usage tables, AuthNZ rate-limiter storage, session persistence, and token blacklist storage respectively, with cross-backend tests where applicable.
 - Backend drift reduction (Stage 4) is partially complete:
   - `virtual_keys` budget and usage paths delegate to `AuthnzApiKeysRepo` / `AuthnzUsageRepo` instead of embedding dialect-specific SQL.
   - `orgs_teams` is now a thin orchestration layer over `AuthnzOrgsTeamsRepo` for organization, team, and membership operations (including default-team handling).
   - `rate_limiter` uses `AuthnzRateLimitsRepo` for all DB-backed rate-limiter tables (`rate_limits`, `failed_attempts`, `account_lockouts`), and the AuthNZ scheduler prunes usage tables via `AuthnzUsageRepo`.
-- Remaining inline SQL touching users, sessions, MFA, and token blacklist is intentionally left for later phases; it is documented in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` as out-of-scope for this iteration.
+  - `session_manager` delegates session creation, validation, refresh, listing, and cleanup to `AuthnzSessionsRepo`, and token blacklist operations (`revoke_token`, blacklist checks, cleanup, stats) use `AuthnzTokenBlacklistRepo` for all `token_blacklist` table access.
+- Remaining inline SQL touching MFA and selected bootstrap/monitoring paths is intentionally left for later phases; it is documented in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` as out-of-scope for this iteration (e.g., MFA factor storage/verification and a small amount of session revocation logic embedded in `token_blacklist.revoke_all_user_tokens`).
 
 ### Out of Scope (v1)
 

@@ -886,80 +886,76 @@ class SessionManager:
 
         try:
             db_pool = await self._ensure_db_pool()
-            async with db_pool.acquire() as conn:
-                session_data: Optional[Dict[str, Any]] = None
+            repo = AuthnzSessionsRepo(db_pool)
+            session_data: Optional[Dict[str, Any]] = None
 
-                # Attempt to reuse cached session_id to minimize lookups,
-                # but always verify current DB state.
-                if cached and cached.get("session_id") is not None:
-                    session_data = await self._fetch_session_record(
-                        conn,
-                        session_id=int(cached["session_id"]),
+            # Attempt to reuse cached session_id to minimize lookups,
+            # but always verify current DB state.
+            if cached and cached.get("session_id") is not None:
+                session_data = await repo.fetch_session_for_validation_by_id(
+                    int(cached["session_id"])
+                )
+                if session_data:
+                    matched_hash = session_data.get("token_hash")
+                if not session_data and cached.get("session_id") is not None:
+                    # Cache is stale; purge it.
+                    await self._clear_session_cache(int(cached["session_id"]))
+
+            if not session_data:
+                for candidate_hash in token_hash_candidates:
+                    session_data = (
+                        await repo.fetch_session_for_validation_by_token_hash(
+                            candidate_hash
+                        )
                     )
                     if session_data:
-                        matched_hash = session_data.get("token_hash")
-                    if not session_data and cached.get("session_id") is not None:
-                        # Cache is stale; purge it.
-                        await self._clear_session_cache(int(cached["session_id"]))
-
-                if not session_data:
-                    for candidate_hash in token_hash_candidates:
-                        session_data = await self._fetch_session_record(
-                            conn,
-                            token_hash=candidate_hash,
+                        matched_hash = (
+                            session_data.get("token_hash") or candidate_hash
                         )
-                        if session_data:
-                            matched_hash = session_data.get("token_hash") or candidate_hash
-                            break
+                        break
 
-                if not session_data:
-                    return None
+            if not session_data:
+                return None
 
-                if matched_hash is None:
-                    matched_hash = session_data.get("token_hash")
+            if matched_hash is None:
+                matched_hash = session_data.get("token_hash")
 
-                user_active = bool(session_data.get("user_active"))
-                revoked_flag = bool(session_data.get("revoked_at"))
-                if not user_active:
-                    if self.settings.PII_REDACT_LOGS:
-                        logger.warning("Session valid but user is inactive [redacted]")
-                    else:
-                        logger.warning(f"Session valid but user {session_data['user_id']} is inactive")
-                    return None
+            user_active = bool(session_data.get("user_active"))
+            revoked_flag = bool(session_data.get("revoked_at"))
+            if not user_active:
+                if self.settings.PII_REDACT_LOGS:
+                    logger.warning("Session valid but user is inactive [redacted]")
+                else:
+                    logger.warning(
+                        f"Session valid but user {session_data['user_id']} is inactive"
+                    )
+                return None
 
-                if revoked_flag:
-                    if self.settings.PII_REDACT_LOGS:
-                        logger.warning("Session revoked [redacted]")
-                    else:
-                        logger.warning(f"Session {session_data['id']} was revoked")
-                    raise SessionRevokedException()
+            if revoked_flag:
+                if self.settings.PII_REDACT_LOGS:
+                    logger.warning("Session revoked [redacted]")
+                else:
+                    logger.warning(f"Session {session_data['id']} was revoked")
+                raise SessionRevokedException()
 
-                if matched_hash and matched_hash != token_hash_primary:
-                    try:
-                        if hasattr(conn, "fetchrow"):
-                            await conn.execute(
-                                "UPDATE sessions SET token_hash = $1 WHERE id = $2",
-                                token_hash_primary,
-                                session_data["id"],
-                            )
-                        else:
-                            await conn.execute(
-                                "UPDATE sessions SET token_hash = ? WHERE id = ?",
-                                (token_hash_primary, session_data["id"]),
-                            )
-                            await conn.commit()
-                        session_data["token_hash"] = token_hash_primary
-                        cache_normalize_required = True
-                    except Exception as normalize_exc:
-                        logger.warning(
-                            "Failed to normalize session token hash for session %s: %s",
-                            session_data.get("id"),
-                            normalize_exc,
-                        )
+            if matched_hash and matched_hash != token_hash_primary:
+                try:
+                    await repo.normalize_session_token_hash(
+                        session_id=session_data["id"],
+                        new_token_hash=token_hash_primary,
+                    )
+                    session_data["token_hash"] = token_hash_primary
+                    cache_normalize_required = True
+                except Exception as normalize_exc:
+                    logger.warning(
+                        "Failed to normalize session token hash for session %s: %s",
+                        session_data.get("id"),
+                        normalize_exc,
+                    )
 
-                await self._update_last_activity(session_data['id'], conn)
+            await repo.update_last_activity(session_data["id"])
 
-            # Outside of the DB context - refresh cache with validation status
+            # Outside of DB operations - refresh cache with validation status
             expires_at = session_data.get('expires_at')
             if isinstance(expires_at, str):
                 expires_at_dt = datetime.fromisoformat(expires_at)
@@ -1095,159 +1091,57 @@ class SessionManager:
 
         try:
             db_pool = await self._ensure_db_pool()
-            async with db_pool.transaction() as conn:
-                matched_refresh_hash: Optional[str] = None
-                session_data: Optional[Dict[str, Any]] = None
+            repo = AuthnzSessionsRepo(db_pool)
 
-                # Locate session using any legacy hash candidate
-                if hasattr(conn, "fetchrow"):
-                    for candidate_hash in refresh_hash_candidates:
-                        session_row = await conn.fetchrow(
-                            """
-                            SELECT id, user_id FROM sessions
-                            WHERE refresh_token_hash = $1
-                            AND is_active = TRUE
-                            """,
-                            candidate_hash,
-                        )
-                        if session_row:
-                            session_data = dict(session_row)
-                            matched_refresh_hash = candidate_hash
-                            break
-                else:
-                    for candidate_hash in refresh_hash_candidates:
-                        cursor = await conn.execute(
-                            """
-                            SELECT id, user_id FROM sessions
-                            WHERE refresh_token_hash = ?
-                            AND is_active = 1
-                            """,
-                            (candidate_hash,),
-                        )
-                        row = await cursor.fetchone()
-                        if row:
-                            session_data = {"id": row[0], "user_id": row[1]}
-                            matched_refresh_hash = candidate_hash
-                            break
+            # Locate session using any legacy hash candidate
+            session_data = await repo.find_active_session_by_refresh_hash_candidates(
+                refresh_hash_candidates
+            )
+            if not session_data:
+                raise InvalidSessionError()
 
-                if not session_data or matched_refresh_hash is None:
-                    raise InvalidSessionError()
+            if new_refresh_token:
+                refresh_hash_update = self.hash_token(new_refresh_token)
+                encrypted_refresh_token = self.encrypt_token(new_refresh_token)
+            else:
+                refresh_hash_update = primary_refresh_hash
+                encrypted_refresh_token = self.encrypt_token(refresh_token)
 
-                if new_refresh_token:
-                    refresh_hash_update = self.hash_token(new_refresh_token)
-                    encrypted_refresh_token = self.encrypt_token(new_refresh_token)
-                else:
-                    refresh_hash_update = primary_refresh_hash
-                    encrypted_refresh_token = self.encrypt_token(refresh_token)
+            # Update session with new tokens
+            await repo.update_session_tokens_for_refresh(
+                session_id=session_data["id"],
+                new_access_hash=new_access_hash,
+                access_jti=access_jti,
+                expires_at=expires_at,
+                encrypted_access_token=encrypted_access_token,
+                refresh_hash_update=refresh_hash_update,
+                refresh_jti=refresh_jti,
+                refresh_expires_at=refresh_expires_at,
+                encrypted_refresh_token=encrypted_refresh_token,
+            )
 
-                # Update session with new tokens
-                if hasattr(conn, "fetchrow"):
-                    await conn.execute(
-                        """
-                        UPDATE sessions
-                        SET token_hash = $2,
-                            access_jti = COALESCE($3, access_jti),
-                            expires_at = $4,
-                            encrypted_token = $5,
-                            refresh_token_hash = COALESCE($6, refresh_token_hash),
-                            refresh_jti = COALESCE($7, refresh_jti),
-                            refresh_expires_at = COALESCE($8, refresh_expires_at),
-                            encrypted_refresh = COALESCE($9, encrypted_refresh),
-                            last_activity = CURRENT_TIMESTAMP
-                        WHERE id = $1
-                        """,
-                        session_data["id"],
-                        new_access_hash,
-                        access_jti,
-                        expires_at,
-                        encrypted_access_token,
-                        refresh_hash_update,
-                        refresh_jti,
-                        refresh_expires_at,
-                        encrypted_refresh_token,
-                    )
-                else:
-                    try:
-                        await conn.execute(
-                            """
-                            UPDATE sessions
-                            SET token_hash = ?,
-                                access_jti = COALESCE(?, access_jti),
-                                expires_at = ?,
-                                encrypted_token = ?,
-                                refresh_token_hash = COALESCE(?, refresh_token_hash),
-                                refresh_jti = COALESCE(?, refresh_jti),
-                                refresh_expires_at = COALESCE(?, refresh_expires_at),
-                                encrypted_refresh = COALESCE(?, encrypted_refresh),
-                                last_activity = datetime('now')
-                            WHERE id = ?
-                            """,
-                            (
-                                new_access_hash,
-                                access_jti,
-                                expires_at.isoformat(),
-                                encrypted_access_token,
-                                refresh_hash_update,
-                                refresh_jti,
-                                refresh_expires_at.isoformat() if refresh_expires_at else None,
-                                encrypted_refresh_token,
-                                session_data["id"],
-                            ),
-                        )
-                    except Exception as exc:
-                        msg = str(exc).lower()
-                        if "no such column" in msg and "last_activity" in msg:
-                            await conn.execute(
-                                """
-                                UPDATE sessions
-                                SET token_hash = ?,
-                                    access_jti = COALESCE(?, access_jti),
-                                    expires_at = ?,
-                                    encrypted_token = ?,
-                                    refresh_token_hash = COALESCE(?, refresh_token_hash),
-                                    refresh_jti = COALESCE(?, refresh_jti),
-                                    refresh_expires_at = COALESCE(?, refresh_expires_at),
-                                    encrypted_refresh = COALESCE(?, encrypted_refresh)
-                                WHERE id = ?
-                                """,
-                                (
-                                    new_access_hash,
-                                    access_jti,
-                                    expires_at.isoformat(),
-                                    encrypted_access_token,
-                                    refresh_hash_update,
-                                    refresh_jti,
-                                    refresh_expires_at.isoformat() if refresh_expires_at else None,
-                                    encrypted_refresh_token,
-                                    session_data["id"],
-                                ),
-                            )
-                        else:
-                            raise
-                    await conn.commit()
+            # Update cache
+            if self.redis_client:
+                await self._clear_session_cache(session_data["id"])
+                await self._cache_session(
+                    new_access_hash,
+                    session_data["user_id"],
+                    session_data["id"],
+                    expires_at,
+                    user_active=True,
+                    revoked=False,
+                )
 
-                # Update cache
-                if self.redis_client:
-                    await self._clear_session_cache(session_data['id'])
-                    await self._cache_session(
-                        new_access_hash,
-                        session_data['user_id'],
-                        session_data['id'],
-                        expires_at,
-                        user_active=True,
-                        revoked=False,
-                    )
+            if self.settings.PII_REDACT_LOGS:
+                logger.info("Refreshed session [redacted]")
+            else:
+                logger.info(f"Refreshed session {session_data['id']}")
 
-                if self.settings.PII_REDACT_LOGS:
-                    logger.info("Refreshed session [redacted]")
-                else:
-                    logger.info(f"Refreshed session {session_data['id']}")
-
-                return {
-                    "session_id": session_data['id'],
-                    "user_id": session_data['user_id'],
-                    "expires_at": expires_at.isoformat()
-                }
+            return {
+                "session_id": session_data["id"],
+                "user_id": session_data["user_id"],
+                "expires_at": expires_at.isoformat(),
+            }
 
         except InvalidSessionError:
             raise
@@ -1538,89 +1432,6 @@ class SessionManager:
             return 0
 
     # Redis cache helpers
-    async def _fetch_session_record(
-        self,
-        conn,
-        *,
-        token_hash: Optional[str] = None,
-        session_id: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Fetch session metadata joined with user state and active/expiry filters."""
-        if token_hash is None and session_id is None:
-            raise ValueError("Must provide token_hash or session_id")
-
-        if hasattr(conn, "fetchrow"):
-            # PostgreSQL
-            if session_id is not None:
-                row = await conn.fetchrow(
-                    """
-                    SELECT s.id, s.token_hash, s.user_id, s.expires_at, s.is_active,
-                           s.revoked_at, u.username, u.role, u.is_active as user_active
-                    FROM sessions s
-                    JOIN users u ON s.user_id = u.id
-                    WHERE s.id = $1
-                    AND s.is_active = TRUE
-                    AND s.expires_at > CURRENT_TIMESTAMP
-                    """,
-                    session_id,
-                )
-            else:
-                row = await conn.fetchrow(
-                    """
-                    SELECT s.id, s.token_hash, s.user_id, s.expires_at, s.is_active,
-                           s.revoked_at, u.username, u.role, u.is_active as user_active
-                    FROM sessions s
-                    JOIN users u ON s.user_id = u.id
-                    WHERE s.token_hash = $1
-                    AND s.is_active = TRUE
-                    AND s.expires_at > CURRENT_TIMESTAMP
-                    """,
-                    token_hash,
-                )
-            return dict(row) if row else None
-
-        # SQLite path
-        if session_id is not None:
-            cursor = await conn.execute(
-                """
-                SELECT s.id, s.token_hash, s.user_id, s.expires_at, s.is_active,
-                       s.revoked_at, u.username, u.role, u.is_active as user_active
-                FROM sessions s
-                JOIN users u ON s.user_id = u.id
-                WHERE s.id = ?
-                AND s.is_active = 1
-                AND datetime(s.expires_at) > datetime('now')
-                """,
-                (session_id,),
-            )
-        else:
-            cursor = await conn.execute(
-                """
-                SELECT s.id, s.token_hash, s.user_id, s.expires_at, s.is_active,
-                       s.revoked_at, u.username, u.role, u.is_active as user_active
-                FROM sessions s
-                JOIN users u ON s.user_id = u.id
-                WHERE s.token_hash = ?
-                AND s.is_active = 1
-                AND datetime(s.expires_at) > datetime('now')
-                """,
-                (token_hash,),
-            )
-        row = await cursor.fetchone()
-        if not row:
-            return None
-        return {
-            "id": row[0],
-            "token_hash": row[1],
-            "user_id": row[2],
-            "expires_at": row[3],
-            "is_active": row[4],
-            "revoked_at": row[5],
-            "username": row[6],
-            "role": row[7],
-            "user_active": row[8],
-        }
-
     async def _cache_session(
         self,
         token_hash: str,
@@ -1739,30 +1550,6 @@ class SessionManager:
 
         except RedisError as e:
             logger.warning(f"Redis cache cleanup failed: {e}")
-
-    async def _update_last_activity(self, session_id: int, conn):
-        """Update last activity timestamp for a session"""
-        try:
-            if hasattr(conn, 'fetchrow'):
-                # PostgreSQL
-                await conn.execute(
-                    "UPDATE sessions SET last_activity = CURRENT_TIMESTAMP WHERE id = $1",
-                    session_id
-                )
-            else:
-                # SQLite
-                await conn.execute(
-                    "UPDATE sessions SET last_activity = datetime('now') WHERE id = ?",
-                    (session_id,)
-                )
-                try:
-                    await conn.commit()
-                except Exception:
-                    # Best effort for SQLite acquire() contexts where autocommit is disabled
-                    pass
-        except Exception:
-            # Don't fail on activity update
-            pass
 
     @staticmethod
     def _coerce_datetime(value: Optional[Any]) -> Optional[datetime]:

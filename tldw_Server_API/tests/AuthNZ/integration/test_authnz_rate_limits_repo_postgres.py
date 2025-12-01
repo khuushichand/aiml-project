@@ -57,9 +57,12 @@ async def test_authnz_rate_limits_repo_lockout_postgres(test_db_pool):
         attempt_type="login",
     )
 
-    # Move time forward logically for the check
-    future = datetime.now(timezone.utc) + timedelta(minutes=settings.LOCKOUT_DURATION_MINUTES + 1)
-    locked_after_reset = await repo.get_active_lockout(identifier=identifier, now=future)
+    # Use a pre-expiry timestamp so a lingering lockout would still be visible
+    pre_expiry = locked_until - timedelta(seconds=1)
+    locked_after_reset = await repo.get_active_lockout(
+        identifier=identifier,
+        now=pre_expiry,
+    )
     assert locked_after_reset is None
 
 
@@ -106,4 +109,3 @@ async def test_authnz_rate_limits_repo_rate_window_postgres(test_db_pool):
     cutoff_future = window_start + timedelta(minutes=10)
     deleted_future = await repo.cleanup_rate_limits_older_than(cutoff_future)
     assert deleted_future >= 1
-

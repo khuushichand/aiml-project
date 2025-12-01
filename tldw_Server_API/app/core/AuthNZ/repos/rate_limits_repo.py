@@ -209,15 +209,18 @@ class AuthnzRateLimitsRepo:
         *,
         identifier: str,
         endpoint: Optional[str] = None,
-    ) -> None:
+    ) -> int:
         """
         Delete ``rate_limits`` rows for an identifier (optionally scoped to an endpoint).
+
+        Returns the number of rows deleted (best-effort).
         """
         try:
             async with self.db_pool.transaction() as conn:
+                deleted = 0
                 if hasattr(conn, "fetchrow"):
                     if endpoint:
-                        await conn.execute(
+                        result = await conn.execute(
                             """
                             DELETE FROM rate_limits
                             WHERE identifier = $1 AND endpoint = $2
@@ -226,16 +229,24 @@ class AuthnzRateLimitsRepo:
                             endpoint,
                         )
                     else:
-                        await conn.execute(
+                        result = await conn.execute(
                             """
                             DELETE FROM rate_limits
                             WHERE identifier = $1
                             """,
                             identifier,
                         )
+                    try:
+                        deleted = (
+                            int(result.split()[-1])
+                            if isinstance(result, str)
+                            else 0
+                        )
+                    except Exception:
+                        deleted = 0
                 else:
                     if endpoint:
-                        await conn.execute(
+                        cursor = await conn.execute(
                             """
                             DELETE FROM rate_limits
                             WHERE identifier = ? AND endpoint = ?
@@ -243,13 +254,19 @@ class AuthnzRateLimitsRepo:
                             (identifier, endpoint),
                         )
                     else:
-                        await conn.execute(
+                        cursor = await conn.execute(
                             """
                             DELETE FROM rate_limits
                             WHERE identifier = ?
                             """,
                             (identifier,),
                         )
+                    deleted = getattr(cursor, "rowcount", 0) or 0
+                    try:
+                        await conn.commit()
+                    except Exception:
+                        pass
+            return int(deleted)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzRateLimitsRepo.delete_rate_limits_for_identifier failed: {exc}"
