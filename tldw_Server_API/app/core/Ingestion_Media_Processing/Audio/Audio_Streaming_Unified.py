@@ -228,7 +228,7 @@ class UnifiedStreamingConfig(StreamingConfig):
     model_variant: str = 'standard'  # For Parakeet: 'standard', 'onnx', 'mlx'
     language: Optional[str] = None  # Language code for transcription
     auto_detect_language: bool = False  # Auto-detect language
-    enable_vad: bool = False  # Voice Activity Detection
+    enable_vad: bool = True  # Voice Activity Detection default on for lower latency
     vad_threshold: float = 0.5
     vad_min_silence_ms: int = 250  # Silence window before considering EOS
     vad_turn_stop_secs: float = 0.2  # Wall clock silence duration to finalize a turn
@@ -1950,7 +1950,7 @@ async def handle_unified_websocket(
                 config.auto_detect_language = config_data.get("auto_detect_language", False)
                 config.chunk_duration = config_data.get("chunk_duration", 2.0)
                 config.enable_partial = config_data.get("enable_partial", True)
-                config.enable_vad = config_data.get("enable_vad", False)
+                config.enable_vad = bool(config_data.get("enable_vad", config.enable_vad))
                 config.vad_threshold = _clamp_float(
                     config_data.get("vad_threshold", config.vad_threshold),
                     default=config.vad_threshold,

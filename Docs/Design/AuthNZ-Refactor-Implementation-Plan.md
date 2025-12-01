@@ -240,6 +240,9 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
 - Route-level tests:
   - Endpoints guarded by `require_permissions` / `require_roles` enforce claims correctly.
   - Behavior for unauthorized vs unauthenticated callers matches documented 401/403 semantics.
+  - Metrics/admin and Resource-Governor admin surfaces are fully claim-first and covered by HTTP-level claim tests:
+    - `POST /api/v1/metrics/reset` – `tldw_Server_API/tests/AuthNZ_Unit/test_metrics_permissions_claims.py`.
+    - `/api/v1/resource-governor/policy*`, `/api/v1/resource-governor/diag/*` – `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` plus the existing `Resource_Governance` integration tests.
 - Middleware tests:
   - Usage logging and LLM budget guard see expected principal data via `request.state.auth`.
 
@@ -249,6 +252,8 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
   - Stage 3: Unified Dependencies & Adoption.
 - Principal-Governance:
   - G1: Unified Principal Model (dependencies now use it).
+- Resource-Governor:
+  - Admin policy and diagnostics endpoints are claim-first and wired via `get_auth_principal` + `require_roles("admin")`, with HTTP-level tests covering 401/403/200 semantics for `/api/v1/resource-governor/policy*` and `/api/v1/resource-governor/diag/*`.
 
 **Status**: In Progress
 
@@ -258,6 +263,9 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
 - The Evaluations admin idempotency-cleanup endpoint (`/evaluations/admin/idempotency/cleanup`) now uses `require_roles("admin")` in addition to the existing `require_admin` helper, and is covered by HTTP-level claim tests in `tests/AuthNZ/integration/test_evaluations_permissions_claims.py` to ensure 401/403/200 semantics remain stable.
 - Integration coverage for claim-first HTTP semantics is expanding in `tests/AuthNZ/integration/test_rag_media_permissions_claims.py` (skips when Postgres is unavailable) for JWT and API-key flows.
 - SQLite regression coverage mirrors the claim-first HTTP semantics (RAG + media) in `tests/AuthNZ_SQLite/test_rag_media_permissions_sqlite.py` using dependency overrides to isolate auth behavior.
+- Resource-Governor admin/config endpoints (`/api/v1/resource-governor/policy`, `/policies`, `/policy/{policy_id}`) and diagnostics endpoints (`/diag/peek`, `/diag/query`, `/diag/capabilities`) now use `require_roles("admin")` instead of `RoleChecker("admin")`. Their behavior is locked in by:
+  - `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` (claim-first 401/403/200 matrix via `get_auth_principal`).
+  - `tldw_Server_API/tests/Resource_Governance/test_rg_capabilities_endpoint.py` and `test_resource_governor_endpoint.py` (single-user API-key flows and policy admin integration) to confirm no behavior drift in existing RG tests.
 - `llm_budget_guard` derives an `AuthPrincipal` (via `request.state.auth` when available) and now uses that principal when consulting governance for LLM budgets; middleware and dependency paths include embeddings/chat overage regressions with principal metadata.
 
 ---

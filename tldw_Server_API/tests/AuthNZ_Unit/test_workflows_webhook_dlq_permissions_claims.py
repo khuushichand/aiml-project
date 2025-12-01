@@ -102,7 +102,7 @@ async def test_workflows_webhook_dlq_forbidden_for_non_admin_principal():
 async def test_workflows_webhook_dlq_allowed_for_admin_role(monkeypatch):
     principal = _make_principal(
         roles=["admin"],
-        permissions=[],
+        permissions=["workflows.runs.control"],
         is_admin=True,
     )
     dlq_rows: List[Dict[str, Any]] = [

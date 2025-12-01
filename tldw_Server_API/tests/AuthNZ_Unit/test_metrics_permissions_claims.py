@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+from typing import Any, Optional
+
+import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from starlette.requests import Request
+
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.api.v1.endpoints import metrics as metrics_mod
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+
+
+def _make_principal(
+    *,
+    kind: str = "user",
+    is_admin: bool = False,
+    roles: Optional[list[str]] = None,
+    permissions: Optional[list[str]] = None,
+) -> AuthPrincipal:
+    return AuthPrincipal(
+        kind=kind,
+        user_id=1,
+        api_key_id=None,
+        subject=None,
+        token_type="access",
+        jti=None,
+        roles=roles or [],
+        permissions=permissions or [],
+        is_admin=is_admin,
+        org_ids=[],
+        team_ids=[],
+    )
+
+
+def _build_app_with_overrides(
+    principal: Optional[AuthPrincipal],
+    *,
+    fail_with_401: bool = False,
+) -> FastAPI:
+    app = FastAPI()
+    app.include_router(metrics_mod.router, prefix="/api/v1")
+
+    async def _fake_get_auth_principal(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        if fail_with_401:
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        assert principal is not None
+        ip = request.client.host if getattr(request, "client", None) else None
+        ua = request.headers.get("User-Agent") if getattr(request, "headers", None) else None
+        request_id = request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None
+        request.state.auth = AuthContext(
+            principal=principal,
+            ip=ip,
+            user_agent=ua,
+            request_id=request_id,
+        )
+        return principal
+
+    app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
+
+    async def _fake_require_admin() -> Any:
+        # Bypass legacy admin dependency so tests focus on roles("admin")
+        return {"id": 1, "username": "admin"}
+
+    app.dependency_overrides[auth_deps.require_admin] = _fake_require_admin
+
+    return app
+
+
+@pytest.mark.asyncio
+async def test_metrics_reset_401_when_principal_unavailable():
+    app = _build_app_with_overrides(principal=None, fail_with_401=True)
+
+    with TestClient(app) as client:
+        resp = client.post("/api/v1/metrics/reset")
+
+    assert resp.status_code == 401
+    assert "Authentication required" in resp.json().get("detail", "")
+
+
+@pytest.mark.asyncio
+async def test_metrics_reset_403_when_missing_admin_role():
+    principal = _make_principal(
+        is_admin=False,
+        roles=["user"],
+        permissions=[],
+    )
+    app = _build_app_with_overrides(principal=principal)
+
+    with TestClient(app) as client:
+        resp = client.post("/api/v1/metrics/reset")
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_metrics_reset_200_for_admin_principal():
+    principal = _make_principal(
+        is_admin=True,
+        roles=["admin"],
+        permissions=[],
+    )
+    app = _build_app_with_overrides(principal=principal)
+
+    with TestClient(app) as client:
+        resp = client.post("/api/v1/metrics/reset")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body.get("status") == "success"
+    assert "message" in body
+

@@ -258,6 +258,16 @@ class MetricsRegistry:
                 buckets=buckets_s,
             )
         )
+        self.register_metric(
+            MetricDefinition(
+                name="audio_chat_latency_seconds",
+                type=MetricType.HISTOGRAM,
+                description="End-to-end latency for non-streaming audio chat turns",
+                unit="s",
+                labels=["stt_provider", "llm_provider", "tts_provider"],
+                buckets=buckets_s,
+            )
+        )
 
         # Audio streaming health counters
         self.register_metric(

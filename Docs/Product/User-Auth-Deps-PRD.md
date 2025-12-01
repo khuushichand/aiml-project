@@ -20,6 +20,7 @@ The goal is to make authentication/authorization dependencies predictable, effic
 - `Docs/Design/Principal-Governance-PRD.md` – defines `AuthPrincipal` / `AuthContext` and AuthNZ guardrails.
 - `Docs/Design/User-Unification-PRD.md` – defines deployment profiles (`local-single-user`, `multi-user-postgres`) and bootstrap semantics.
 - `Docs/Design/Resource_Governor_PRD.md` – describes global resource governance integrated with AuthNZ via `AuthGovernor`.
+  - Admin and diagnostics surfaces under `/api/v1/resource-governor/*` are now guarded via claim-first dependencies (`get_auth_principal` + `require_roles("admin")`), with existing integration tests preserved.
 
 ---
 
@@ -74,6 +75,7 @@ Symptoms:
     - `get_current_user` → returns `User` (wrapped principal).
     - `require_permissions`, `require_roles`, etc. built on top of claims.
   - Make all endpoints and middlewares rely on these instead of ad-hoc auth handling.
+  - Resource-Governor admin/config endpoints and diagnostics routes are explicit adopters of this stack: they use `require_roles("admin")` (admin role or `principal.is_admin`) as the gate, and reuse the same 401/403 semantics as other claim-first admin surfaces (connectors admin policy, tools admin, embeddings model-management, workflows DLQ).
 
 ### Secondary Goals
 
@@ -264,16 +266,23 @@ Symptoms:
 ### Phase 2: Claim-First Permissions
 
 - Update `permissions.py` to rely on claims first.
+- Ensure `is_single_user_mode()` is not used as an “allow-all” shortcut:
+  - When `user.permissions` / `user.roles` are present, they are authoritative in both single-user and multi-user profiles (no DB lookup, no mode-based bypass).
+  - When claims are absent, `check_permission` / `check_role` fall back to the configured `UserDatabase` for both profiles instead of auto-allowing in single-user mode.
 - Add tests covering:
   - Multiple roles and overlapping permissions.
   - User-specific allow/deny overrides.
   - Admin implied permissions.
+  - Single-user principals with insufficient claims receiving 403 from `require_permissions` / `require_roles`, matching multi-user semantics.
 
 ### Phase 3: Unified Dependencies & Adoption
 
 - Implement `require_permissions` / `require_roles` dependencies.
 - Migrate a set of key endpoints (auth admin, media admin, RAG admin) to use them.
 - Update `UsageLoggingMiddleware` and `llm_budget_guard` to use `AuthPrincipal`.
+  - Metrics/admin and Resource-Governor admin endpoints are part of this adoption and are now **claim-first, tested**:
+    - `POST /api/v1/metrics/reset` is gated via `require_roles("admin")` + `require_admin` and covered by HTTP-level permissions tests in `tldw_Server_API/tests/AuthNZ_Unit/test_metrics_permissions_claims.py`.
+    - Resource-Governor admin and diagnostics endpoints (`/api/v1/resource-governor/policy*`, `/api/v1/resource-governor/diag/*`) are gated via `get_auth_principal` + `require_roles("admin")`, with behavior validated by `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` and the `Resource_Governance` integration suite.
  - Add route-level tests covering:
    - Endpoints that require a user principal, ensuring `get_current_user` / `require_permissions` fail with 403 when invoked with a `service` or `anonymous` principal lacking `user_id`.
    - Service-only endpoints (if any) that rely on `AuthPrincipal.kind=service` without requiring user-centric fields.
@@ -347,6 +356,7 @@ Symptoms:
 - `permissions.py` now treats `user.permissions` / `user.roles` as authoritative when present, returning False without hitting the DB when claims exist but lack the required permission/role.
 - DB-based fallbacks are retained only for caller contexts that do not provide claim lists at all (e.g., legacy user objects without `permissions` / `roles` attributes), reducing database usage on typical, claim-bearing code paths. Additional tests explicitly simulate DB unavailability when claims are present to prove that hot paths remain purely claim-based (`tests/AuthNZ_Unit/test_permissions_claim_first.py::test_check_permission_uses_claims_even_if_db_unavailable` and `::test_check_role_uses_claims_even_if_db_unavailable`).
 - Route coverage expanding: admin router now enforces `require_roles("admin")` in addition to legacy `require_admin`, and media ingestion’s `/process-web-scraping` endpoint layers `require_permissions(MEDIA_CREATE)` alongside the legacy `PermissionChecker`. Claim-first `require_permissions` / `require_roles` matrices and HTTP-level admin 401/403 semantics are covered in `tests/AuthNZ_Unit/test_permissions_claim_first.py` and `tests/AuthNZ/integration/test_rbac_admin_endpoints.py::test_admin_roles_require_auth_and_admin`.
+- Single-user deployments now use the same claim-first semantics as multi-user for permission and role checks: `permissions.py` no longer treats `is_single_user_mode()` as an “allow-all” fallback when claims are missing. New tests in `tests/AuthNZ_Unit/test_permissions_claim_first.py` (e.g., `test_check_permission_single_user_mode_prefers_claims`, `test_check_permission_single_user_mode_without_claims_falls_back_to_db`, `test_check_role_single_user_mode_treats_admin_as_admin_and_user`, `test_check_role_single_user_mode_without_roles_falls_back_to_db`) assert that single-user admins are governed by claims and DB fallbacks rather than global mode flags.
 - API-key authentication now enriches users with roles/permissions from RBAC tables (matching the JWT path) so claim-first checks succeed for X-API-KEY callers on protected routes.
 - Usage logging middleware now derives `user_id` / `api_key_id` from `AuthPrincipal` when `request.state.auth` is present, falling back to legacy `request.state` attributes for compatibility, aligning usage metrics with the unified principal model.
 - Additional matrix coverage has been added for the “any” / “all” helpers to ensure they also remain claim-first when claims are attached, even if the RBAC DB is unavailable:

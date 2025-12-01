@@ -66,12 +66,6 @@ def check_permission(user: User, permission: str) -> bool:
         )
         return False
 
-    # When no claims are attached, preserve the historical single-user behavior
-    # of treating the sole single-user account as fully privileged, while
-    # multi-user callers still fall back to the RBAC store.
-    if is_single_user_mode():
-        return True
-
     try:
         user_db = get_user_database()
         return user_db.has_permission(user.id, permission)
@@ -121,12 +115,6 @@ def check_role(user: User, role: str) -> bool:
             "treating as no roles and skipping DB lookup"
         )
         return False
-
-    # When no claim set is attached, preserve the historical single-user behavior
-    # of treating the sole account as both 'admin' and 'user', while multi-user
-    # callers still fall back to the RBAC store.
-    if is_single_user_mode():
-        return role in ['admin', 'user']
 
     try:
         user_db = get_user_database()

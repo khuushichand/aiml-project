@@ -40,10 +40,11 @@ The goal is to make all request-time AuthNZ decisions flow through a single, exp
 - They:
   - Return dict- or `User`-shaped objects, not `AuthPrincipal`.
   - Write `request.state.user_id/api_key_id/org_ids/team_ids` directly instead of using `AuthContext`.
-  - Contain mode-specific behavior (e.g., synthetic single-user admin, direct `SINGLE_USER_API_KEY` checks).
+  - Contain some mode-specific behavior (e.g., synthetic single-user admin, direct `SINGLE_USER_API_KEY` checks), but authorization decisions are being migrated to rely on claims (`roles`, `permissions`, `is_admin`) on `AuthPrincipal` / `User` instead of `AUTH_MODE` or `is_single_user_mode()` shortcuts.
 - These dependencies MUST be treated as the compatibility surface in v1:
   - Internally, they will be refactored to delegate to `get_auth_principal` / `AuthContext`.
   - Externally, their return shape and core HTTP semantics (401 vs 403, error detail strings) must remain stable unless explicitly versioned.
+  - In single-user deployments, the bootstrapped admin is enforced via roles/permissions claims (and, when those claims are absent, `UserDatabase` fallbacks) rather than global “allow-all” mode checks; this behavior is locked in by unit tests in `tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py`.
 
 ### 2. Fragmented Governance / Guardrails
 
@@ -313,6 +314,16 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
 - Measurable reduction in:
   - Lines of code in `llm_budget_guard`, `quotas`, and AuthNZ rate limiter.
   - Number of code sites manually reading/writing `request.state.user_id/api_key_id/org_ids/team_ids`.
+
+### Admin Surfaces Governed by Principals
+
+- Resource-Governor admin and diagnostics endpoints under `/api/v1/resource-governor/*` are treated as principal-governed admin APIs:
+  - They are gated via the claim-first stack (`get_auth_principal` + `require_roles("admin")`), reusing the same 401/403 semantics as other admin surfaces (e.g., connectors admin policy, tools admin, embeddings model-management, workflows DLQ).
+  - In single-user mode, the configured `SINGLE_USER_API_KEY` maps to an admin principal (`roles=["admin"]`, `is_admin=True`) so the same routes remain reachable for local deployments while still exercising the unified principal/guardrail model.
+  - HTTP-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` and the `Resource_Governance` suite validate these semantics for both API-key and JWT-style callers.
+- Metrics/admin and Resource-Governor admin surfaces are considered **claim-first, tested** in the Stage 3/4 rollout:
+  - Metrics reset (`POST /api/v1/metrics/reset`) is guarded via `require_roles("admin")` + `require_admin` and covered by `tldw_Server_API/tests/AuthNZ_Unit/test_metrics_permissions_claims.py`.
+  - Resource-Governor endpoints share the same claim-first expectations as other admin surfaces and are covered by the tests above.
 
 ## Implementation Plan
 

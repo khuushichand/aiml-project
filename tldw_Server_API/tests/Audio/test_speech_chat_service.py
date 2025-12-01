@@ -12,6 +12,10 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
     SpeechChatLLMConfig,
 )
 from tldw_Server_API.app.core.Streaming.speech_chat_service import run_speech_chat_turn
+from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+from tldw_Server_API.app.core.MCP_unified.modules.registry import reset_module_registry, register_module
+from tldw_Server_API.app.core.MCP_unified.modules.base import BaseModule
+from tldw_Server_API.app.core.MCP_unified.modules.base import ModuleConfig
 
 
 class _StubUser:
@@ -129,6 +133,9 @@ async def test_run_speech_chat_turn_happy_path(monkeypatch):
     db = _StubChatDB()
     tts = _StubTTSService()
 
+    reg = get_metrics_registry()
+    reg.values["audio_chat_latency_seconds"].clear()
+
     resp = await run_speech_chat_turn(
         request_data=req,
         current_user=user,
@@ -139,6 +146,8 @@ async def test_run_speech_chat_turn_happy_path(monkeypatch):
     assert resp.session_id
     assert resp.user_transcript == "hello from audio"
     assert resp.assistant_text == "stub assistant reply"
+    assert resp.action_result is None
+    assert reg.values["audio_chat_latency_seconds"], "Expected audio_chat_latency_seconds metric recorded"
 
 
 @pytest.mark.asyncio
@@ -210,3 +219,132 @@ async def test_run_speech_chat_turn_stt_error_sentinel_raises(monkeypatch):
         )
 
     assert exc_info.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
+@pytest.mark.asyncio
+async def test_run_speech_chat_turn_invokes_action_when_enabled(monkeypatch):
+    from tldw_Server_API.app.core.Streaming import speech_chat_service
+
+    # Enable actions for the duration of the test
+    monkeypatch.setenv("AUDIO_CHAT_ENABLE_ACTIONS", "1")
+
+    # Stub STT/LLM/TTS paths to keep test lean
+    monkeypatch.setattr(
+        speech_chat_service, "transcribe_audio", lambda *a, **k: "action transcript"
+    )
+
+    async def _fake_get_or_create_character_context(db, character_id, loop):
+        return {"id": 1, "name": "Test Character", "system_prompt": "You are helpful."}, 1
+
+    async def _fake_get_or_create_conversation(
+        db, conversation_id, character_id, character_name, client_id, loop
+    ):
+        return conversation_id or "conv-1", conversation_id is None
+
+    async def _fake_load_history(db, conversation_id, character_card, limit=20, loop=None):
+        return []
+
+    monkeypatch.setattr(
+        speech_chat_service,
+        "get_or_create_character_context",
+        _fake_get_or_create_character_context,
+    )
+    monkeypatch.setattr(
+        speech_chat_service,
+        "get_or_create_conversation",
+        _fake_get_or_create_conversation,
+    )
+    monkeypatch.setattr(
+        speech_chat_service,
+        "load_conversation_history",
+        _fake_load_history,
+    )
+
+    async def _fake_chat_api_call_async(**kwargs):
+        return {
+            "choices": [
+                {"message": {"role": "assistant", "content": "assistant with action"}}
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+
+    monkeypatch.setattr(speech_chat_service, "chat_api_call_async", _fake_chat_api_call_async)
+
+    async def _fake_execute_action(action_name, transcript, current_user):
+        return {"action": action_name, "status": "ok", "input": transcript, "user_id": getattr(current_user, "id", None)}
+
+    monkeypatch.setattr(speech_chat_service, "_execute_action_stub", _fake_execute_action)
+
+    user = _StubUser()
+    db = _StubChatDB()
+    tts = _StubTTSService()
+
+    req = SpeechChatRequest(
+        session_id=None,
+        input_audio=_encode_silence_base64(),
+        input_audio_format="wav",
+        llm_config=SpeechChatLLMConfig(model="gpt-4o-mini", api_provider="openai", extra_params={"action": "play_music"}),
+        metadata={"action": "play_music"},
+    )
+
+    resp = await run_speech_chat_turn(
+        request_data=req,
+        current_user=user,
+        chat_db=db,
+        tts_service=tts,
+    )
+
+    assert resp.action_result is not None
+    assert resp.action_result.get("action") == "play_music"
+    assert resp.action_result.get("status") == "ok"
+
+
+@pytest.mark.asyncio
+async def test_run_speech_chat_turn_rejects_large_audio(monkeypatch):
+    from tldw_Server_API.app.core.Streaming import speech_chat_service
+
+    monkeypatch.setenv("AUDIO_CHAT_MAX_BYTES", "1024")
+    req = SpeechChatRequest(
+        session_id=None,
+        input_audio=_encode_silence_base64(duration_sec=0.2, sr=16000),
+        input_audio_format="wav",
+        llm_config=SpeechChatLLMConfig(model="gpt-4o-mini", api_provider="openai"),
+    )
+    user = _StubUser()
+    db = _StubChatDB()
+    tts = _StubTTSService()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await run_speech_chat_turn(
+            request_data=req,
+            current_user=user,
+            chat_db=db,
+            tts_service=tts,
+        )
+    assert exc_info.value.status_code == status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+
+
+@pytest.mark.asyncio
+async def test_run_speech_chat_turn_rejects_long_duration(monkeypatch):
+    from tldw_Server_API.app.core.Streaming import speech_chat_service
+
+    monkeypatch.setenv("AUDIO_CHAT_MAX_DURATION_SEC", "0.05")
+    monkeypatch.setattr(speech_chat_service, "transcribe_audio", lambda *a, **k: "should not run")
+    req = SpeechChatRequest(
+        session_id=None,
+        input_audio=_encode_silence_base64(duration_sec=0.2, sr=16000),
+        input_audio_format="wav",
+        llm_config=SpeechChatLLMConfig(model="gpt-4o-mini", api_provider="openai"),
+    )
+    user = _StubUser()
+    db = _StubChatDB()
+    tts = _StubTTSService()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await run_speech_chat_turn(
+            request_data=req,
+            current_user=user,
+            chat_db=db,
+            tts_service=tts,
+        )
+    assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST

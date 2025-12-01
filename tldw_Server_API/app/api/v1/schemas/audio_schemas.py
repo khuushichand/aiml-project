@@ -399,3 +399,7 @@ class SpeechChatResponse(BaseModel):
         default=None,
         description="Optional metadata echo or server-side annotations.",
     )
+    action_result: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional action/workflow execution result derived from the transcript.",
+    )

@@ -33,8 +33,12 @@ from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
 from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_permissions
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    require_permissions,
+    get_auth_principal,
+)
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])

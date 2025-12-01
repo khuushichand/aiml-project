@@ -20,6 +20,10 @@ def _encode_silence_base64(duration_sec: float = 0.1, sr: int = 16000) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+def _encode_bytes_base64(size_bytes: int) -> str:
+    return base64.b64encode(b"0" * size_bytes).decode("ascii")
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "true")
@@ -50,6 +54,7 @@ def client(monkeypatch):
             timing=SpeechChatTiming(stt_ms=1.0, llm_ms=2.0, tts_ms=3.0),
             token_usage=None,
             metadata={"from_test": True},
+            action_result=None,
         )
 
     monkeypatch.setattr(
@@ -83,3 +88,4 @@ def test_audio_chat_endpoint_success(client: TestClient):
     assert body["assistant_text"] == "stub reply"
     assert body["output_audio"]
     assert body["output_audio_mime_type"].startswith("audio/")
+    assert body.get("action_result") is None

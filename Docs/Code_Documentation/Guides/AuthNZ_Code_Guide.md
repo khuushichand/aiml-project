@@ -277,6 +277,16 @@ async def tight_user(user=Depends(get_current_user)):
     return {"ok": True}
 ```
 
+## Expected Roles/Permissions for Resource-Governor Admin
+
+- Resource-Governor admin and diagnostics endpoints under `/api/v1/resource-governor/*` are treated as AuthNZ admin surfaces and MUST:
+  - Use claim-first dependencies: `principal: AuthPrincipal = Depends(get_auth_principal)` and `dependencies=[Depends(require_roles("admin"))]` on the route.
+  - Rely on `require_roles("admin")` (admin role or `principal.is_admin`) as the gate; do not add new `is_single_user_mode()` / mode-specific bypasses in handlers.
+  - Keep 401/403 semantics aligned with other admin endpoints (401 for missing/invalid credentials, 403 for insufficient roles), as enforced by:
+    - `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py`
+    - `tldw_Server_API/tests/Resource_Governance/test_rg_capabilities_endpoint.py`
+    - `tldw_Server_API/tests/Resource_Governance/test_resource_governor_endpoint.py`
+
 ## Settings & Initialization
 
 - Central source: `settings.py` (via `get_settings()`), with env + optional project config overrides.

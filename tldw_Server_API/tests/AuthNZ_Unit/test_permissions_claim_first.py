@@ -204,6 +204,24 @@ async def test_check_permission_single_user_mode_prefers_claims(monkeypatch):
     assert perms_mod.check_permission(user, "media.create") is False
 
 
+def test_check_permission_single_user_mode_without_claims_falls_back_to_db(monkeypatch):
+    monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: True)
+
+    fake_db = _FakeUserDB()
+    fake_db.set_permission_result(True)
+
+    def _fake_get_user_database():
+        return fake_db
+
+    monkeypatch.setattr(perms_mod, "get_user_database", _fake_get_user_database)
+
+    # Minimal legacy-style user without a permissions attribute
+    user = SimpleNamespace(id=42, username="single-user-legacy", is_active=True)
+
+    assert perms_mod.check_permission(user, "media.read") is True
+    assert fake_db.calls == [("perm", 42, "media.read")]
+
+
 @pytest.mark.asyncio
 async def test_check_role_single_user_mode_treats_admin_as_admin_and_user(monkeypatch):
     monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: True)
@@ -220,6 +238,23 @@ async def test_check_role_single_user_mode_treats_admin_as_admin_and_user(monkey
     assert perms_mod.check_role(user, "user") is True
     # Non-admin/user roles still rejected
     assert perms_mod.check_role(user, "viewer") is False
+
+
+def test_check_role_single_user_mode_without_roles_falls_back_to_db(monkeypatch):
+    monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: True)
+
+    fake_db = _FakeUserDB()
+    fake_db.set_role_result(True)
+
+    def _fake_get_user_database():
+        return fake_db
+
+    monkeypatch.setattr(perms_mod, "get_user_database", _fake_get_user_database)
+
+    user = SimpleNamespace(id=99, username="single-user-legacy", is_active=True)
+
+    assert perms_mod.check_role(user, "admin") is True
+    assert fake_db.calls == [("role", 99, "admin")]
 
 
 @pytest.mark.asyncio

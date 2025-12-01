@@ -10,16 +10,19 @@ import pytest
 
 
 class _DummyWebSocket:
-    def __init__(self, frames):
+    def __init__(self, frames, delays=None):
         self._frames = list(frames)
         self.sent = []
         self.closed = False
         self.close_args = None
+        self._delays = list(delays or [])
 
     async def receive_text(self):
         if not self._frames:
             await asyncio.sleep(0)
             raise asyncio.TimeoutError()
+        if self._delays:
+            await asyncio.sleep(self._delays.pop(0))
         return self._frames.pop(0)
 
     async def send_json(self, payload):
@@ -321,3 +324,104 @@ def test_silero_turn_detector_real_vad_end_to_end():
             break
 
     assert triggered, "Expected SileroTurnDetector to trigger on real VAD with trailing silence"
+
+
+def test_silero_turn_detector_logs_fail_open(monkeypatch, capsys):
+    """
+    When Silero VAD cannot be initialized, we should log a warning and continue without auto-commit.
+    """
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib as vlib
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified as unified
+
+    def _raise_import_error():
+        raise ImportError("silero missing")
+
+    monkeypatch.setattr(vlib, "_lazy_import_silero_vad", _raise_import_error)
+    captured_warnings = []
+
+    def _fake_warning(msg, *args, **kwargs):
+        try:
+            captured_warnings.append(msg.format(*args))
+        except Exception:
+            captured_warnings.append(str(msg))
+
+    monkeypatch.setattr(unified.logger, "warning", _fake_warning)
+
+    detector = unified.SileroTurnDetector(
+        sample_rate=16000,
+        enabled=True,
+        vad_threshold=0.5,
+        min_silence_ms=200,
+        turn_stop_secs=0.1,
+        min_utterance_secs=0.2,
+    )
+
+    assert detector.available is False
+    assert detector.unavailable_reason
+    assert any("Silero VAD" in msg and "continuing without auto-commit" in msg for msg in captured_warnings)
+
+
+@pytest.mark.asyncio
+async def test_ws_streaming_pauses_emit_single_final(monkeypatch):
+    """
+    With VAD enabled by default, a stream with a pause should emit exactly one final quickly.
+    """
+
+    class _StubTranscriber:
+        def __init__(self, config):
+            self.config = config
+
+        def initialize(self):
+            return None
+
+        async def process_audio_chunk(self, audio_bytes: bytes):
+            return {"type": "partial", "text": "hi", "timestamp": time.time(), "is_final": False}
+
+        def get_full_transcript(self):
+            return "pause-final"
+
+        def reset(self):
+            return None
+
+        def cleanup(self):
+            return None
+
+    class _StubTurnDetector:
+        def __init__(self, *args, **kwargs):
+            self.available = True
+            self.unavailable_reason = None
+            self._last_trigger_at = None
+            self._seen = 0
+
+        @property
+        def last_trigger_at(self):
+            return self._last_trigger_at
+
+        def observe(self, audio_bytes: bytes) -> bool:
+            # Trigger on the second audio chunk (after pause)
+            self._seen += 1
+            if self._seen >= 2:
+                self._last_trigger_at = time.time()
+                return True
+            self._last_trigger_at = time.time()
+            return False
+
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified as unified
+
+    monkeypatch.setattr(unified, "UnifiedStreamingTranscriber", _StubTranscriber)
+    monkeypatch.setattr(unified, "SileroTurnDetector", _StubTurnDetector)
+
+    cfg = json.dumps({"type": "config", "model": "parakeet", "sample_rate": 16000})
+    audio_frame = json.dumps({"type": "audio", "data": base64.b64encode(b'1234').decode("ascii")})
+    stop = json.dumps({"type": "stop"})
+    # Insert a pause between two audio frames to mimic silence
+    ws = _DummyWebSocket([cfg, audio_frame, audio_frame, stop], delays=[0.0, 0.3, 0.0, 0.0])
+
+    start = time.time()
+    await unified.handle_unified_websocket(ws, unified.UnifiedStreamingConfig())
+    elapsed = time.time() - start
+
+    finals = [m for m in ws.sent if m.get("type") == "full_transcript"]
+    assert len(finals) == 1, f"Expected single final, saw {ws.sent}"
+    assert finals[0].get("text") == "pause-final"
+    assert elapsed < 1.5, f"Streaming with pause should complete quickly, took {elapsed}s"
