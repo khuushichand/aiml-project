@@ -1,0 +1,53 @@
+# /api/v1/audio/chat (Non-Streaming Speech Chat)
+
+Purpose: speech in → transcript → LLM → speech out (optional action execution) in a single REST call. This is the v1 “voice command” path.
+
+## Request (JSON)
+- `input_audio` (base64, required): raw audio bytes (no data: URI prefix).
+- `input_audio_format` (str, required): `wav|mp3|ogg|opus|aac|flac|webm|m4a`.
+- `session_id` (str, optional): reuse an existing chat session; new session is created when omitted.
+- `stt_config` (optional): provider/language hints (defaults from server).
+- `llm_config` (required): `model` + `api_provider` at minimum; extra params passed to chat orchestrator. Optional `extra_params.action` can hint an action/tool to run.
+- `tts_config` (optional): provider/voice/format/speed; defaults to `mp3` if omitted.
+- `metadata` (optional): arbitrary client metadata; `metadata.action` can also hint an action/tool.
+- `store_audio` (optional): hint to retain raw audio when server-side retention is enabled (default is not to store audio).
+
+## Response
+- `session_id`: resolved chat session.
+- `user_transcript`: text transcript of user audio (STT).
+- `assistant_text`: LLM reply text.
+- `output_audio` / `output_audio_mime_type`: base64 audio of TTS reply.
+- `timing`: ms timings for STT/LLM/TTS.
+- `token_usage`: optional LLM token counts.
+- `metadata`: echo + server annotations.
+- `action_result`: optional structured result when actions are enabled and executed.
+
+## Limits & Validation
+- Size: `AUDIO_CHAT_MAX_BYTES` (default 20MB); oversize → HTTP 413 before STT.
+- Duration: `AUDIO_CHAT_MAX_DURATION_SEC` (default 120s); over-duration → HTTP 400 before STT.
+- Formats: rejects unsupported `input_audio_format` with HTTP 400.
+- Auth: API key or JWT, same as other v1 audio/chat endpoints.
+- Quotas: inherits global rate limiting; per-user concurrency for `/audio/chat` TBD (align with STT quotas if tightened).
+
+## Actions / Tools
+- Disabled by default. Enable with `AUDIO_CHAT_ENABLE_ACTIONS=1`.
+- Action hint: `metadata.action` or `llm_config.extra_params.action`.
+- Execution: routed to MCP modules via `execute_tool(action_name, {"input": transcript}, context)`.
+- Persistence: when present, `action_result` is also saved as a `tool` message in conversation history.
+- If no module provides the action, `action_result.status` is `not_found`; errors are returned as `error` with message.
+
+## Metrics
+- `audio_chat_latency_seconds{stt_provider,llm_provider,tts_provider}`: end-to-end REST turn latency.
+- Reuses existing voice metrics: `stt_final_latency_seconds`, `tts_ttfb_seconds`, `voice_to_voice_seconds`.
+- Correlate with `X-Request-Id` for logs/spans.
+
+## Errors (common)
+- 400: invalid base64, unsupported format, duration exceeded, missing model in `llm_config`.
+- 413: size exceeded.
+- 429: rate limit/quota.
+- 5xx: STT/LLM/TTS/action errors (structured detail; no raw audio logged).
+
+## Testing / Harness
+- Unit: validation, action execution, error mapping.
+- Integration: `tldw_Server_API/tests/Audio/test_audio_chat_endpoint.py`, `test_speech_chat_service.py`.
+- Harness: `python Helper_Scripts/voice_latency_harness/run.py --out out.json --short` (metrics scrape) or run a real turn (omit `--short`; pass `--api-key`/`--base-url` if needed). Outputs p50/p90 for STT/TTS/voice-to-voice/audio_chat latencies.

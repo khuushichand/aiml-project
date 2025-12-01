@@ -14,8 +14,7 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
 from tldw_Server_API.app.core.Streaming.speech_chat_service import run_speech_chat_turn
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.MCP_unified.modules.registry import reset_module_registry, register_module
-from tldw_Server_API.app.core.MCP_unified.modules.base import BaseModule
-from tldw_Server_API.app.core.MCP_unified.modules.base import ModuleConfig
+from tldw_Server_API.app.core.MCP_unified.modules.base import BaseModule, ModuleConfig
 
 
 class _StubUser:
@@ -56,11 +55,38 @@ class _StubChatDB:
             m for m in self._messages.values() if m.get("conversation_id") == conversation_id
         ][offset : offset + limit]
 
+    # Additional helpers used by chat helpers
+    def get_character_card_by_name(self, name: str):
+        return {"id": 1, "name": name, "system_prompt": "You are helpful."}
+
+    def create_character_card(self, name: str, description: str, system_prompt: str, client_id: str):
+        return 1
+
 
 class _StubTTSService:
     async def generate_speech(self, request, provider=None, fallback=True, voice_to_voice_start=None, voice_to_voice_route="audio.speech"):
         # Return a single tiny chunk of bytes
         yield b"stub-audio"
+
+
+class _DummyActionModule(BaseModule):
+    def __init__(self, config: ModuleConfig):
+        super().__init__(config)
+
+    async def on_initialize(self) -> None:
+        return None
+
+    async def on_shutdown(self) -> None:
+        return None
+
+    async def check_health(self) -> Dict[str, bool]:
+        return {"ok": True}
+
+    async def get_tools(self) -> list[Dict[str, Any]]:
+        return [{"name": "play_music", "description": "Play a song"}]
+
+    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
+        return {"played": arguments.get("input"), "ctx_user": getattr(context, "user_id", None)}
 
 
 def _encode_silence_base64(duration_sec: float = 0.1, sr: int = 16000) -> str:
@@ -227,6 +253,9 @@ async def test_run_speech_chat_turn_invokes_action_when_enabled(monkeypatch):
 
     # Enable actions for the duration of the test
     monkeypatch.setenv("AUDIO_CHAT_ENABLE_ACTIONS", "1")
+    monkeypatch.setenv("AUDIO_CHAT_ALLOWED_ACTIONS", "play_music")
+    await reset_module_registry()
+    await register_module("dummy-action", _DummyActionModule, ModuleConfig(name="dummy-action"))
 
     # Stub STT/LLM/TTS paths to keep test lean
     monkeypatch.setattr(
@@ -270,10 +299,84 @@ async def test_run_speech_chat_turn_invokes_action_when_enabled(monkeypatch):
 
     monkeypatch.setattr(speech_chat_service, "chat_api_call_async", _fake_chat_api_call_async)
 
-    async def _fake_execute_action(action_name, transcript, current_user):
-        return {"action": action_name, "status": "ok", "input": transcript, "user_id": getattr(current_user, "id", None)}
+    user = _StubUser()
+    db = _StubChatDB()
+    tts = _StubTTSService()
 
-    monkeypatch.setattr(speech_chat_service, "_execute_action_stub", _fake_execute_action)
+    req = SpeechChatRequest(
+        session_id=None,
+        input_audio=_encode_silence_base64(),
+        input_audio_format="wav",
+        llm_config=SpeechChatLLMConfig(model="gpt-4o-mini", api_provider="openai", extra_params={"action": "play_music"}),
+        metadata={"action": "play_music"},
+    )
+
+    try:
+        resp = await run_speech_chat_turn(
+            request_data=req,
+            current_user=user,
+            chat_db=db,
+            tts_service=tts,
+        )
+    finally:
+        await reset_module_registry()
+
+    assert resp.action_result is not None
+    assert resp.action_result.get("action") == "play_music"
+    assert resp.action_result.get("status") == "ok"
+    assert resp.action_result.get("result", {}).get("played") == "action transcript"
+
+
+@pytest.mark.asyncio
+async def test_run_speech_chat_turn_blocks_disallowed_action(monkeypatch):
+    from tldw_Server_API.app.core.Streaming import speech_chat_service
+
+    monkeypatch.setenv("AUDIO_CHAT_ENABLE_ACTIONS", "1")
+    monkeypatch.setenv("AUDIO_CHAT_ALLOWED_ACTIONS", "do_this")
+    await reset_module_registry()
+    await register_module("dummy-action", _DummyActionModule, ModuleConfig(name="dummy-action"))
+
+    # Stub STT/LLM/TTS
+    monkeypatch.setattr(
+        speech_chat_service, "transcribe_audio", lambda *a, **k: "blocked transcript"
+    )
+
+    async def _fake_get_or_create_character_context(db, character_id, loop):
+        return {"id": 1, "name": "Test Character", "system_prompt": "You are helpful."}, 1
+
+    async def _fake_get_or_create_conversation(
+        db, conversation_id, character_id, character_name, client_id, loop
+    ):
+        return conversation_id or "conv-1", conversation_id is None
+
+    async def _fake_load_history(db, conversation_id, character_card, limit=20, loop=None):
+        return []
+
+    monkeypatch.setattr(
+        speech_chat_service,
+        "get_or_create_character_context",
+        _fake_get_or_create_character_context,
+    )
+    monkeypatch.setattr(
+        speech_chat_service,
+        "get_or_create_conversation",
+        _fake_get_or_create_conversation,
+    )
+    monkeypatch.setattr(
+        speech_chat_service,
+        "load_conversation_history",
+        _fake_load_history,
+    )
+
+    async def _fake_chat_api_call_async(**kwargs):
+        return {
+            "choices": [
+                {"message": {"role": "assistant", "content": "assistant"}}
+            ],
+            "usage": {},
+        }
+
+    monkeypatch.setattr(speech_chat_service, "chat_api_call_async", _fake_chat_api_call_async)
 
     user = _StubUser()
     db = _StubChatDB()
@@ -287,16 +390,18 @@ async def test_run_speech_chat_turn_invokes_action_when_enabled(monkeypatch):
         metadata={"action": "play_music"},
     )
 
-    resp = await run_speech_chat_turn(
-        request_data=req,
-        current_user=user,
-        chat_db=db,
-        tts_service=tts,
-    )
+    try:
+        resp = await run_speech_chat_turn(
+            request_data=req,
+            current_user=user,
+            chat_db=db,
+            tts_service=tts,
+        )
+    finally:
+        await reset_module_registry()
 
     assert resp.action_result is not None
-    assert resp.action_result.get("action") == "play_music"
-    assert resp.action_result.get("status") == "ok"
+    assert resp.action_result.get("status") == "not_allowed"
 
 
 @pytest.mark.asyncio

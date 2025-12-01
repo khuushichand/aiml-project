@@ -89,3 +89,23 @@ def test_audio_chat_endpoint_success(client: TestClient):
     assert body["output_audio"]
     assert body["output_audio_mime_type"].startswith("audio/")
     assert body.get("action_result") is None
+
+
+def test_audio_chat_endpoint_concurrency_limit(monkeypatch, client: TestClient):
+    # Patch can_start_stream to force a quota failure
+    from tldw_Server_API.app.api.v1.endpoints import audio as audio_module
+
+    async def _deny(user_id: int):
+        return False, "Concurrent streams limit reached (1)"
+
+    monkeypatch.setattr(audio_module, "can_start_stream", _deny)
+
+    payload = {
+        "session_id": None,
+        "input_audio": _encode_silence_base64(),
+        "input_audio_format": "wav",
+        "llm_config": {"model": "gpt-4o-mini", "api_provider": "openai"},
+    }
+    r = client.post("/api/v1/audio/chat", json=payload, headers={"X-API-KEY": TEST_API_KEY})
+    assert r.status_code == 429
+    assert "Concurrent" in r.text

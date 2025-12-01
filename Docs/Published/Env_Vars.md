@@ -74,6 +74,11 @@ Egress & Outbound Policy (global + Workflows)
 - `AUDIO_QUOTA_USE_REDIS`: Store active streams/jobs counters in Redis for multi-instance fairness. Defaults to true when `REDIS_URL` is set.
 - `REDIS_URL`: Redis connection string (e.g., `redis://localhost:6379`).
 
+Audio Chat (non-streaming)
+- `AUDIO_CHAT_MAX_BYTES`: Max input audio size (bytes) for `/api/v1/audio/chat` (default `20MB`). Requests exceeding this return HTTP 413 before STT runs.
+- `AUDIO_CHAT_MAX_DURATION_SEC`: Max input duration (seconds) for `/api/v1/audio/chat` (default `120`). Requests exceeding this return HTTP 400 before STT runs.
+- `AUDIO_CHAT_ENABLE_ACTIONS`: Enable action/tool execution for `/api/v1/audio/chat` (default disabled). When true, `metadata.action` or `llm_config.extra_params.action` hints are routed to MCP modules via `execute_tool`; results are returned in `action_result` and persisted as a `tool` message.
+
 Queues
 - CPU stages use `queue=default`.
 - GPU transcription uses dedicated `queue=transcribe` (see GPU worker container stub).

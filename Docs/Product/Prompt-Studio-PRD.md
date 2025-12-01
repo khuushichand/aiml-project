@@ -95,6 +95,9 @@ Prior iterations of Prompt Studio suffered from duplicate submissions, job loss 
 - **Integration (SQLite):** Idempotency, concurrency, leasing (reclaim paths), heartbeat override.
 - **Integration (Postgres):** Advisory lock stress tests, scoped idempotency, dual-backend parity checks.
 - **Fixtures:** PG availability probe ensures Postgres-specific suites are skipped or hard-failed based on env.
+- **AuthNZ Integration:** Prompt Studio user context and permissions are wired through the unified AuthNZ stack:
+  - `get_prompt_studio_user` uses `get_request_user` to obtain a normalized `User` (with roles/permissions/is_admin claims) and derives `user_context.is_admin` / `user_context.permissions` from those claims rather than from `AUTH_MODE`/`is_single_user_mode()`.
+  - HTTP-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_prompt_studio_user_claims.py` validate that admin vs non-admin principals produce the expected `user_context` (including permissions), and `tldw_Server_API/tests/prompt_studio/unit/test_prompt_studio_deps_headers.py` verifies header forwarding and 401 semantics when credentials are missing.
 
 ## 12. Roadmap
 ### Phase 1 - Reliability & Observability (Completed)

@@ -1,0 +1,222 @@
+"""
+phoneme_overrides.py
+
+Utility functions for loading and applying phoneme/lexicon overrides.
+
+Supports YAML or JSON configuration files and request/provider-level overrides.
+Entries are applied on word boundaries by default to avoid partial matches.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Iterable, List, Optional, Sequence
+
+from loguru import logger
+
+try:
+    import yaml  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    yaml = None
+
+
+# Cap the number of override entries to avoid unbounded processing.
+_MAX_OVERRIDE_ENTRIES = 256
+
+
+@dataclass
+class PhonemeOverrideEntry:
+    """Represents a single phoneme override rule."""
+
+    term: str
+    phonemes: str
+    lang: Optional[str] = None
+    boundary: bool = True
+    provider: Optional[str] = None
+
+
+def _resolve_config_path(path_hint: Optional[str]) -> Optional[Path]:
+    """Resolve an optional path hint to an existing config file."""
+    candidates: List[str] = []
+    # Explicit override (arg, env)
+    if path_hint:
+        candidates.append(path_hint)
+    env_path = os.getenv("TTS_PHONEME_OVERRIDES_PATH")
+    if env_path:
+        candidates.append(env_path)
+
+    # Default locations under Config_Files
+    base_dir = Path(__file__).resolve().parents[3] / "Config_Files"
+    for fname in ("tts_phonemes.yaml", "tts_phonemes.yml", "tts_phonemes.json"):
+        candidates.append(str(base_dir / fname))
+
+    for cand in candidates:
+        try:
+            p = Path(cand)
+            if not p.is_absolute():
+                p = (Path.cwd() / p).resolve()
+            if p.exists() and p.is_file():
+                return p
+        except Exception:
+            continue
+    return None
+
+
+def _coerce_entry(raw: Any, provider_hint: Optional[str]) -> Optional[PhonemeOverrideEntry]:
+    """Coerce a raw object into a PhonemeOverrideEntry."""
+    try:
+        if isinstance(raw, PhonemeOverrideEntry):
+            return raw
+        if isinstance(raw, dict):
+            term = raw.get("term") or raw.get("word") or raw.get("token")
+            phonemes = raw.get("phonemes") or raw.get("phoneme") or raw.get("ipa")
+            if not term or not phonemes:
+                return None
+            return PhonemeOverrideEntry(
+                term=str(term).strip(),
+                phonemes=str(phonemes).strip(),
+                lang=(raw.get("lang") or raw.get("language")),
+                boundary=bool(raw.get("boundary", True)),
+                provider=raw.get("provider") or provider_hint,
+            )
+        if isinstance(raw, tuple) and len(raw) >= 2:
+            term, phonemes = raw[0], raw[1]
+            return PhonemeOverrideEntry(term=str(term), phonemes=str(phonemes), provider=provider_hint)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug(f"Failed to parse phoneme override entry: {exc}")
+    return None
+
+
+def parse_override_entries(raw: Any, provider_hint: Optional[str] = None) -> List[PhonemeOverrideEntry]:
+    """
+    Parse user-supplied overrides into normalized entries.
+
+    Accepts:
+      - list[dict] with term/phonemes keys
+      - dict mapping term -> phoneme string
+      - list of (term, phoneme) tuples
+    """
+    entries: List[PhonemeOverrideEntry] = []
+    if raw is None:
+        return entries
+
+    # Dict mapping term -> phoneme
+    if isinstance(raw, dict) and not {"term", "phonemes"} <= set(raw.keys()):
+        for term, phonemes in raw.items():
+            ent = _coerce_entry({"term": term, "phonemes": phonemes}, provider_hint)
+            if ent:
+                entries.append(ent)
+        return entries
+
+    # List/tuple payloads or single dict
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            ent = _coerce_entry(item, provider_hint)
+            if ent:
+                entries.append(ent)
+    else:
+        ent = _coerce_entry(raw, provider_hint)
+        if ent:
+            entries.append(ent)
+
+    return entries[:_MAX_OVERRIDE_ENTRIES]
+
+
+@lru_cache(maxsize=4)
+def load_override_entries(path_hint: Optional[str] = None) -> List[PhonemeOverrideEntry]:
+    """
+    Load phoneme overrides from YAML or JSON.
+
+    Cache is keyed by the resolved path so repeated calls are cheap.
+    """
+    path = _resolve_config_path(path_hint)
+    if not path:
+        return []
+
+    try:
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            if yaml is None:
+                logger.warning("PyYAML not installed; skipping phoneme override load")
+                return []
+            with path.open("r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+        else:
+            with path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+    except Exception as exc:
+        logger.warning(f"Failed to load phoneme overrides from {path}: {exc}")
+        return []
+
+    entries = parse_override_entries(data)
+    if len(entries) > _MAX_OVERRIDE_ENTRIES:
+        logger.warning(
+            f"Phoneme override file {path} has {len(entries)} entries; "
+            f"capping to {_MAX_OVERRIDE_ENTRIES} to avoid performance regressions"
+        )
+        entries = entries[:_MAX_OVERRIDE_ENTRIES]
+    return entries
+
+
+def filter_overrides_for_provider(
+    entries: Sequence[PhonemeOverrideEntry],
+    provider: Optional[str],
+) -> List[PhonemeOverrideEntry]:
+    """Return entries applicable to a given provider (None or case-insensitive match)."""
+    if not provider:
+        return list(entries)
+    pl = provider.lower()
+    return [e for e in entries if not e.provider or str(e.provider).lower() == pl]
+
+
+def merge_override_entries(*entry_sets: Iterable[PhonemeOverrideEntry]) -> List[PhonemeOverrideEntry]:
+    """
+    Merge multiple override sources with later sets taking precedence.
+
+    Keyed by (term_lower, lang_lower) to allow per-language variants.
+    """
+    merged: dict[tuple[str, str], PhonemeOverrideEntry] = {}
+    for entries in entry_sets:
+        for ent in entries:
+            if not ent.term or not ent.phonemes:
+                continue
+            key = (ent.term.lower(), (ent.lang or "").lower())
+            merged[key] = ent
+    return list(merged.values())[:_MAX_OVERRIDE_ENTRIES]
+
+
+def apply_overrides_to_text(
+    text: str,
+    entries: Sequence[PhonemeOverrideEntry],
+    *,
+    lang_hint: Optional[str] = None,
+) -> str:
+    """
+    Apply override entries to text by replacing matches with [[phoneme]] tokens.
+
+    - Respects lang_hint when entry.lang is set (prefix match, case-insensitive).
+    - Uses word-boundary matching by default; set entry.boundary=False to allow mid-word.
+    """
+    if not entries or not text:
+        return text
+
+    lang_prefix = (lang_hint or "").split("-")[0].lower() if lang_hint else None
+    updated = text
+    for ent in entries:
+        if ent.lang and lang_prefix:
+            if not ent.lang.lower().startswith(lang_prefix):
+                continue
+        pattern = re.compile(
+            rf"\b{re.escape(ent.term)}\b" if ent.boundary else re.escape(ent.term),
+            flags=re.IGNORECASE,
+        )
+
+        def _repl(match: re.Match[str]) -> str:
+            # Preserve surrounding whitespace/punctuation by replacing only the term
+            return f"[[{ent.phonemes}]]"
+
+        updated = pattern.sub(_repl, updated)
+    return updated

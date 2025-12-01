@@ -151,6 +151,16 @@ async def _execute_action(action_name: str, transcript: str, current_user: User)
     """
     Execute a tool/workflow via MCP modules when available; fail soft with status.
     """
+    allow_env = os.getenv("AUDIO_CHAT_ALLOWED_ACTIONS", "")
+    if allow_env:
+        allowed = {a.strip() for a in allow_env.split(",") if a.strip()}
+        if allowed and action_name not in allowed:
+            return {
+                "action": action_name,
+                "status": "not_allowed",
+                "message": "Action not allowed",
+                "user_id": getattr(current_user, "id", None),
+            }
     user_id = getattr(current_user, "id", None)
     ctx = RequestContext(
         request_id=str(uuid.uuid4()),

@@ -35,6 +35,14 @@ from ..tts_exceptions import (
 from ..tts_validation import validate_tts_request
 from ..utils import parse_bool
 from ..tts_resource_manager import get_resource_manager
+from ..phoneme_overrides import (
+    apply_overrides_to_text,
+    filter_overrides_for_provider,
+    load_override_entries,
+    merge_override_entries,
+    parse_override_entries,
+    PhonemeOverrideEntry,
+)
 #
 #######################################################################################################################
 #
@@ -171,6 +179,23 @@ class KokoroAdapter(TTSAdapter):
         # Text processing settings
         self.normalize_text = self.config.get("normalize_text", True)
         self.sentence_splitting = self.config.get("sentence_splitting", True)
+        self.enable_phoneme_overrides = parse_bool(
+            self.config.get("kokoro_enable_phoneme_overrides"),
+            default=parse_bool(os.getenv("KOKORO_ENABLE_PHONEME_OVERRIDES"), default=True),
+        )
+        self.phoneme_override_path = (
+            self.config.get("kokoro_phoneme_path")
+            or self.config.get("phoneme_override_path")
+            or os.getenv("TTS_PHONEME_OVERRIDES_PATH")
+        )
+        self._provider_override_entries: List[PhonemeOverrideEntry] = parse_override_entries(
+            self.config.get("kokoro_phoneme_overrides") or self.config.get("phoneme_overrides"),
+            provider_hint="kokoro",
+        )
+        try:
+            self._global_override_entries: List[PhonemeOverrideEntry] = load_override_entries(self.phoneme_override_path)
+        except Exception:
+            self._global_override_entries = []
 
         # Performance settings
         self.sample_rate = self.config.get("sample_rate", 24000)
@@ -548,11 +573,14 @@ class KokoroAdapter(TTSAdapter):
         # Process voice (support for voice mixing like "af_bella(2)+af_sky(1)")
         voice = self._process_voice(request.voice or "af_bella")
 
-        # Preprocess text
-        text = self.preprocess_text(request.text)
-
-        # Determine language from voice
+        # Determine language from voice and apply phoneme overrides before normalization
         lang = self._get_language_from_voice(voice)
+        raw_text = request.text
+        if self._phoneme_overrides_enabled_for_request(request):
+            raw_text = self._apply_phoneme_overrides_to_text(raw_text, request=request, lang_hint=lang)
+
+        # Preprocess text
+        text = self.preprocess_text(raw_text)
 
         logger.info(
             f"{self.provider_name}: Generating speech with voice={voice}, "
@@ -1072,6 +1100,52 @@ class KokoroAdapter(TTSAdapter):
         }
 
         return voice_mappings.get(voice_id.lower(), "af_bella")
+
+    def _phoneme_overrides_enabled_for_request(self, request: TTSRequest) -> bool:
+        """Determine whether phoneme overrides should be applied for this request."""
+        try:
+            extra = getattr(request, "extra_params", {}) or {}
+        except Exception:
+            extra = {}
+        if "phoneme_overrides_enabled" in extra:
+            return parse_bool(extra.get("phoneme_overrides_enabled"), default=self.enable_phoneme_overrides)
+        if parse_bool(extra.get("disable_phoneme_overrides"), default=False):
+            return False
+        return self.enable_phoneme_overrides
+
+    def _collect_phoneme_overrides(self, request: TTSRequest) -> List[PhonemeOverrideEntry]:
+        """Merge global, provider, and request-level overrides (request wins)."""
+        base = filter_overrides_for_provider(self._global_override_entries, "kokoro")
+        provider = filter_overrides_for_provider(self._provider_override_entries, "kokoro")
+        try:
+            extra = getattr(request, "extra_params", {}) or {}
+        except Exception:
+            extra = {}
+        request_overrides_raw = extra.get("phoneme_overrides") or extra.get("phoneme_map")
+        request_entries = parse_override_entries(request_overrides_raw, provider_hint="kokoro")
+        return merge_override_entries(base, provider, request_entries)
+
+    def _apply_phoneme_overrides_to_text(
+        self,
+        text: str,
+        *,
+        request: TTSRequest,
+        lang_hint: Optional[str],
+    ) -> str:
+        """Apply applicable phoneme overrides to the provided text."""
+        try:
+            entries = self._collect_phoneme_overrides(request)
+        except Exception as exc:
+            logger.debug(f"{self.provider_name}: failed to collect phoneme overrides: {exc}")
+            return text
+        if not entries:
+            return text
+        try:
+            updated = apply_overrides_to_text(text, entries, lang_hint=lang_hint)
+            return updated
+        except Exception as exc:
+            logger.debug(f"{self.provider_name}: failed to apply phoneme overrides: {exc}")
+            return text
 
     def preprocess_text(self, text: str, **kwargs) -> str:
         """Preprocess text for Kokoro"""

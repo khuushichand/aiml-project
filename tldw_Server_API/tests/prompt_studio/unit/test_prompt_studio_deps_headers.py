@@ -57,3 +57,15 @@ def test_get_prompt_studio_user_header_forwarding(monkeypatch, headers, expected
     assert calls.get("token") == expected_token
     # Resulting user context reflects fake identity (Bearer preferred when present)
     assert data.get("user_id") == expected_user
+
+
+def test_get_prompt_studio_user_unauthenticated_401(monkeypatch):
+    async def fake_get_request_user(*_args, **_kwargs):
+        raise RuntimeError("should_not_be_called")
+
+    monkeypatch.setattr(deps, "get_request_user", fake_get_request_user, raising=True)
+
+    app = _make_app()
+    client = TestClient(app)
+    r = client.get("/ps/me")
+    assert r.status_code == 401

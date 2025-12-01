@@ -65,9 +65,6 @@ async def test_rbac_enforcement(monkeypatch):
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
     monkeypatch.setenv("CHAT_COMMANDS_REQUIRE_PERMISSIONS", "1")
 
-    # Force multi-user mode for this test
-    monkeypatch.setattr(command_router, "is_single_user_mode", lambda: False)
-
     # Without auth_user_id, permission should be denied for a command requiring permission
     ctx = command_router.CommandContext(user_id="anon", auth_user_id=None)
     denied = await command_router.async_dispatch_command(ctx, "time", None)

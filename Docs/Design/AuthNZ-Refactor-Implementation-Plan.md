@@ -267,6 +267,11 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
   - `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` (claim-first 401/403/200 matrix via `get_auth_principal`).
   - `tldw_Server_API/tests/Resource_Governance/test_rg_capabilities_endpoint.py` and `test_resource_governor_endpoint.py` (single-user API-key flows and policy admin integration) to confirm no behavior drift in existing RG tests.
 - `llm_budget_guard` derives an `AuthPrincipal` (via `request.state.auth` when available) and now uses that principal when consulting governance for LLM budgets; middleware and dependency paths include embeddings/chat overage regressions with principal metadata.
+- Single-user deployments now share the same claim-first + DB-fallback semantics as multi-user for permission and role checks: `permissions.py` no longer treats `is_single_user_mode()` as an “allow-all” shortcut when claims are missing. This behavior is locked in by additional tests in `tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py` (e.g., `test_check_permission_single_user_mode_prefers_claims`, `test_check_permission_single_user_mode_without_claims_falls_back_to_db`, `test_check_role_single_user_mode_treats_admin_as_admin_and_user`, `test_check_role_single_user_mode_without_roles_falls_back_to_db`).
+- A focused audit of `is_single_user_mode()` usages confirms that remaining mode checks are either:
+  - Coordination/governance decisions (startup banners, WebUI configuration, ChaChaNotes warm-up, backpressure/tenant RPS toggles, embedding quotas), or
+  - Profile selection for auth flows (single-user API key vs multi-user JWT/API-key) and diagnostics.
+  The only auth-adjacent exception is the Jobs admin domain-scoped RBAC helper (`_enforce_domain_scope` in `tldw_Server_API/app/api/v1/endpoints/jobs_admin.py`), which bypasses domain filters in single-user mode unless `JOBS_RBAC_FORCE=true`. For this stage it is treated as a deliberate governance exception (single-tenant, local admin), not a general authorization shortcut; future work can migrate this to claim-first (`get_auth_principal` + `require_roles/require_permissions`) if domain-scoped jobs RBAC becomes a first-class product surface.
 
 ---
 

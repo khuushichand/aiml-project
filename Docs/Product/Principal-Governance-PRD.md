@@ -321,9 +321,13 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
   - They are gated via the claim-first stack (`get_auth_principal` + `require_roles("admin")`), reusing the same 401/403 semantics as other admin surfaces (e.g., connectors admin policy, tools admin, embeddings model-management, workflows DLQ).
   - In single-user mode, the configured `SINGLE_USER_API_KEY` maps to an admin principal (`roles=["admin"]`, `is_admin=True`) so the same routes remain reachable for local deployments while still exercising the unified principal/guardrail model.
   - HTTP-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` and the `Resource_Governance` suite validate these semantics for both API-key and JWT-style callers.
-- Metrics/admin and Resource-Governor admin surfaces are considered **claim-first, tested** in the Stage 3/4 rollout:
+- Metrics/admin, Resource-Governor admin, and selected chat/Prompt Studio surfaces are considered **claim-first, tested** in the Stage 3/4 rollout:
   - Metrics reset (`POST /api/v1/metrics/reset`) is guarded via `require_roles("admin")` + `require_admin` and covered by `tldw_Server_API/tests/AuthNZ_Unit/test_metrics_permissions_claims.py`.
   - Resource-Governor endpoints share the same claim-first expectations as other admin surfaces and are covered by the tests above.
+  - Chat slash-command discovery (`GET /api/v1/chat/commands`) and execution paths now treat permissions as data on the principal rather than on `AUTH_MODE`:
+    - The discovery endpoint filters commands using `AuthNZ.rbac.user_has_permission` when `CHAT_COMMANDS_REQUIRE_PERMISSIONS` is enabled, and the async command router consults per-command permissions using `auth_user_id` without any `is_single_user_mode()` bypass.
+    - Tests in `tldw_Server_API/tests/Chat_NEW/unit/test_command_router.py` and `tldw_Server_API/tests/Chat_NEW/integration/test_chat_commands_endpoint.py` assert both denial and success paths when permissions are absent/present, across single-user and multi-user style setups.
+  - Prompt Studio routes obtain their user context from `get_prompt_studio_user`, which in turn delegates to `get_request_user` and derives `is_admin`/`permissions` from `User`/`AuthPrincipal` claims; unit tests in `tldw_Server_API/tests/AuthNZ_Unit/test_prompt_studio_user_claims.py` and `tldw_Server_API/tests/prompt_studio/unit/test_prompt_studio_deps_headers.py` lock in these claim-first semantics and 401 behavior.
 
 ## Implementation Plan
 

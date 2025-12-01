@@ -39,7 +39,7 @@ Goal: deliver Waves 1–3 (stabilize STT, ship non-streaming voice command path,
 
 ## Wave 3 — Hardening + Latency Harness
 - **Metrics & Limits**
-  - Ensure `/audio/chat` emits STT/LLM/TTS durations and voice-turn totals; propagate `X-Request-Id`. Enumerate metric names/labels (e.g., `audio_chat_latency_seconds{provider,model}`, reuse `voice_to_voice_seconds`, `stt_final_latency_seconds`, `tts_ttfb_seconds`), register once. Add test asserting metrics registry exposes expected series.  
+  - Ensure `/audio/chat` emits STT/LLM/TTS durations and voice-turn totals; propagate `X-Request-Id`. Enumerate metric names/labels (e.g., `audio_chat_latency_seconds{stt_provider,llm_provider,tts_provider}`, reuse `voice_to_voice_seconds`, `stt_final_latency_seconds`, `tts_ttfb_seconds`), register once. Add test asserting metrics registry exposes expected series.  
   - Enforce max audio duration/size and per-user concurrency; map errors to clear payloads + WebUI display.  
   - Touchpoints: `audio.py` handler, metrics manager registration, limit helpers; WebUI error surface.
 - **Latency Harness**

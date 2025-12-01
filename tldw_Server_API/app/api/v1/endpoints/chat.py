@@ -121,7 +121,6 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_permissions,
 )
 from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
@@ -319,7 +318,7 @@ async def list_chat_commands(
     # Determine if RBAC filtering is enforced
     require_perms = _cfg_bool_cmds("CHAT_COMMANDS_REQUIRE_PERMISSIONS", "require_permissions", False)
 
-    if not require_perms or is_single_user_mode():
+    if not require_perms:
         # Include required_permission metadata from the registry even if not filtering
         reg = getattr(command_router, "_registry", {})
         items = []

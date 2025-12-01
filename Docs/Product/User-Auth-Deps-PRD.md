@@ -280,9 +280,11 @@ Symptoms:
 - Implement `require_permissions` / `require_roles` dependencies.
 - Migrate a set of key endpoints (auth admin, media admin, RAG admin) to use them.
 - Update `UsageLoggingMiddleware` and `llm_budget_guard` to use `AuthPrincipal`.
-  - Metrics/admin and Resource-Governor admin endpoints are part of this adoption and are now **claim-first, tested**:
+  - Metrics/admin, Resource-Governor admin, and selected chat/Prompt Studio surfaces are part of this adoption and are now **claim-first, tested**:
     - `POST /api/v1/metrics/reset` is gated via `require_roles("admin")` + `require_admin` and covered by HTTP-level permissions tests in `tldw_Server_API/tests/AuthNZ_Unit/test_metrics_permissions_claims.py`.
     - Resource-Governor admin and diagnostics endpoints (`/api/v1/resource-governor/policy*`, `/api/v1/resource-governor/diag/*`) are gated via `get_auth_principal` + `require_roles("admin")`, with behavior validated by `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` and the `Resource_Governance` integration suite.
+    - Chat slash-command discovery (`GET /api/v1/chat/commands`) now performs RBAC filtering purely via `AuthNZ.rbac.user_has_permission` when `CHAT_COMMANDS_REQUIRE_PERMISSIONS` is enabled, and the async command router enforces per-command permissions without any `is_single_user_mode()` bypass; this is locked in by `tldw_Server_API/tests/Chat_NEW/unit/test_command_router.py` and `tldw_Server_API/tests/Chat_NEW/integration/test_chat_commands_endpoint.py`.
+    - Prompt Studio dependencies (`get_prompt_studio_user`) build `user_context.is_admin` and `user_context.permissions` strictly from `User` claims (`roles`, `permissions`, `is_admin`) instead of `AUTH_MODE`; HTTP-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_prompt_studio_user_claims.py` and `tldw_Server_API/tests/prompt_studio/unit/test_prompt_studio_deps_headers.py` cover claim propagation and 401 behavior.
  - Add route-level tests covering:
    - Endpoints that require a user principal, ensuring `get_current_user` / `require_permissions` fail with 403 when invoked with a `service` or `anonymous` principal lacking `user_id`.
    - Service-only endpoints (if any) that rely on `AuthPrincipal.kind=service` without requiring user-centric fields.
@@ -409,6 +411,15 @@ Symptoms:
 - MCP admin diagnostics are beginning to adopt the same pattern: `tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py::get_modules_health` now depends on `require_permissions(SYSTEM_LOGS)` alongside its module-local admin checks, and route-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_mcp_admin_permissions_claims.py` exercise 401 vs 403 vs 200 behavior by overriding `get_auth_principal` for different principals.
 - Topic monitoring admin endpoints (`/api/v1/monitoring/...`) now also enforce claim-first diagnostics permissions: `tldw_Server_API/app/api/v1/endpoints/monitoring.py` adds `dependencies=[Depends(require_permissions(SYSTEM_LOGS))]` on watchlist/alert/notification routes in addition to `require_admin`. Route-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_monitoring_permissions_claims.py` cover 401 (no principal), 403 (principal without `system.logs`), and 200 (admin principal) cases while stubbing the underlying monitoring service.
 - MCP admin diagnostics are beginning to adopt the same pattern: `tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py::get_modules_health` now depends on `require_permissions(SYSTEM_LOGS)` alongside its module-local admin checks, and route-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_mcp_admin_permissions_claims.py` exercise 401 vs 403 vs 200 behavior by overriding `get_auth_principal` for different principals.
+
+### Remaining Mode-Based Decisions
+
+- A targeted `is_single_user_mode()` audit confirms that mode checks are now limited to:
+  - Coordination/governance (startup banners, WebUI API-key injection for local single-user, ChaChaNotes warm-up, backpressure/tenant RPS toggles, embedding quota defaults).
+  - Profile selection for auth flows (single-user API key vs multi-user JWT/API-key) and diagnostics (e.g., MCP single-user API key acceptance), with authorization decisions driven by claims on `AuthPrincipal` / `User`.
+- The only auth-adjacent exception is Jobs admin domain-scoped RBAC:
+  - `_enforce_domain_scope` in `tldw_Server_API/app/api/v1/endpoints/jobs_admin.py` bypasses domain filters in single-user mode unless `JOBS_RBAC_FORCE=true`, treating single-user as implicitly allowed for domain-scoped jobs operations.
+  - For this iteration, this is treated as a deliberate governance exception for single-tenant/local admin deployments; it is documented in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` and may be migrated to claim-first (`get_auth_principal` + `require_roles/require_permissions`) in a future phase if domain-scoped jobs RBAC becomes a primary product surface.
 
 ### Stage 4: Cleanup & Documentation
 **Goal**: Remove legacy, overlapping auth dependencies and update documentation.

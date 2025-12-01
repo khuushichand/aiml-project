@@ -293,20 +293,17 @@ async def get_prompt_studio_user(
         legacy_token_header=hdr_legacy,
     )
 
-    # Build user context from normalized User model
-    try:
-        from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
-        single_user = is_single_user_mode()
-    except Exception:
-        single_user = False
+    # Build user context from normalized User model using claim-first semantics.
+    roles = getattr(current_user, "roles", []) or []
+    perms = getattr(current_user, "permissions", []) or []
+    is_admin = bool(getattr(current_user, "is_admin", False) or ("admin" in roles))
 
     user_context: Dict[str, Any] = {
         "user_id": str(getattr(current_user, "id", "anonymous")),
         "client_id": x_client_id or "web",
         "is_authenticated": True,
-        # In single-user mode treat the sole user as admin for Prompt Studio
-        "is_admin": bool(single_user),
-        "permissions": ["all"] if single_user else []
+        "is_admin": is_admin,
+        "permissions": list(perms),
     }
 
     # Store in request state for downstream use

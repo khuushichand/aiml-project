@@ -255,6 +255,13 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
   - `rate_limiter` uses `AuthnzRateLimitsRepo` for all DB-backed rate-limiter tables (`rate_limits`, `failed_attempts`, `account_lockouts`), and the AuthNZ scheduler prunes usage tables via `AuthnzUsageRepo`.
   - `session_manager` delegates session creation, validation, refresh, listing, and cleanup to `AuthnzSessionsRepo`, and token blacklist operations (`revoke_token`, blacklist checks, cleanup, stats, and revoke-all-tokens flows) use `AuthnzTokenBlacklistRepo` together with `AuthnzSessionsRepo` for all `token_blacklist` and `sessions` table access in logout-all-devices paths.
   - Monitoring metrics, audit pruning, and AuthNZ security dashboards are now fully backed by `AuthnzMonitoringRepo`, with SQLite and Postgres repo tests exercising metric insertion, aggregation, and alert retrieval.
+- Claim-first adoption has been extended to additional high-value surfaces in line with this PRD:
+  - Chat slash commands:
+    - `GET /api/v1/chat/commands` now filters commands by per-command permissions using `AuthNZ.rbac.user_has_permission` when `CHAT_COMMANDS_REQUIRE_PERMISSIONS` is enabled, without any `is_single_user_mode()` shortcut. Single-user deployments participate by virtue of the bootstrapped admin’s claims rather than mode.
+    - The async slash-command router (`tldw_Server_API/app/core/Chat/command_router.py::async_dispatch_command`) enforces per-command permissions using the numeric `auth_user_id` on `CommandContext`, and no longer auto-allows commands in single-user mode. Unit and integration tests in `tldw_Server_API/tests/Chat_NEW/unit/test_command_router.py` and `tldw_Server_API/tests/Chat_NEW/integration/test_chat_commands_endpoint.py` validate permission-denied vs allowed behavior and RBAC filtering semantics.
+  - Prompt Studio:
+    - `get_prompt_studio_user` in `tldw_Server_API/app/api/v1/API_Deps/prompt_studio_deps.py` builds its `user_context` from the normalized `User` object returned by `get_request_user` (claims-first), deriving `is_admin` from `User.is_admin` / `"admin"` in `User.roles` and copying `User.permissions` directly, instead of inferring Prompt Studio admin solely from `AUTH_MODE`/`is_single_user_mode()`.
+    - Unit tests in `tldw_Server_API/tests/AuthNZ_Unit/test_prompt_studio_user_claims.py` exercise admin vs non-admin principals (ensuring `is_admin` and `permissions` flow from claims), and `tldw_Server_API/tests/prompt_studio/unit/test_prompt_studio_deps_headers.py` covers header forwarding and 401 behavior when no credentials are present.
 - Remaining inline SQL touching selected bootstrap paths is intentionally left for later phases; it is documented in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` as out-of-scope for this iteration (e.g., minimal schema backstops in `initialize.py` and API-key bootstrap helpers).
 
 ### Out of Scope (v1)
@@ -427,6 +434,22 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
 - Remaining `is_single_user_mode()` shortcuts are being removed from business/endpoints in favor of claim-based behavior. MCP HTTP diagnostics and persona streaming now derive identity from validated API keys instead of checking `AUTH_MODE` directly:
   - `tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py::mcp_request`, `::mcp_request_batch`, and `::list_tools` no longer branch on `is_single_user_mode()` when computing `user_id`; they rely on `get_current_user`’s `TokenData` (which already encodes the single-user admin) and pass that through to MCP.
   - `tldw_Server_API/app/api/v1/endpoints/persona.py::persona_stream` uses `get_api_key_manager().validate_api_key(...)` to resolve `user_id` from API keys for both single-user and multi-user deployments, rather than comparing against `SINGLE_USER_API_KEY` in the endpoint. This keeps persona’s MCP calls aligned with the unified AuthNZ bootstrap/API-key behavior without introducing new mode-based shortcuts.
+
+### Mode vs Claims – Coverage Snapshot
+
+- Fully claim-first clusters (authorization decisions driven by claims on `AuthPrincipal` / `User`, not `AUTH_MODE`):
+  - Metrics admin: `POST /api/v1/metrics/reset` → `get_auth_principal` + `require_roles("admin")`, with HTTP tests in `tldw_Server_API/tests/AuthNZ_Unit/test_metrics_permissions_claims.py`.
+  - Resource-Governor admin/diagnostics: `/api/v1/resource-governor/policy*`, `/api/v1/resource-governor/diag/*` → `get_auth_principal` + `require_roles("admin")`, with tests in `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` and the `Resource_Governance` suite.
+  - Embeddings model management, workflows DLQ, connectors admin, tools admin, and notes graph admin all use `require_permissions` / `require_roles` on top of `get_auth_principal`, with HTTP-level claim tests under `tldw_Server_API/tests/AuthNZ_Unit/` and the respective feature suites.
+  - Chat slash commands:
+    - Discovery endpoint `GET /api/v1/chat/commands` filters commands using `AuthNZ.rbac.user_has_permission` when `CHAT_COMMANDS_REQUIRE_PERMISSIONS` is enabled; no `is_single_user_mode()` bypass is used. Behavior is validated by `tldw_Server_API/tests/Chat_NEW/unit/test_command_router.py` and `tldw_Server_API/tests/Chat_NEW/integration/test_chat_commands_endpoint.py`.
+    - The async slash-command router (`command_router.async_dispatch_command`) enforces per-command permissions via `auth_user_id` and `_user_has_permission(...)`, independent of `AUTH_MODE`.
+  - Prompt Studio:
+    - `get_prompt_studio_user` in `tldw_Server_API/app/api/v1/API_Deps/prompt_studio_deps.py` derives `user_context.is_admin` and `user_context.permissions` from `User.is_admin`, `User.roles`, and `User.permissions` (via `get_request_user`), rather than from `AUTH_MODE`/`is_single_user_mode()`.
+    - Tests in `tldw_Server_API/tests/AuthNZ_Unit/test_prompt_studio_user_claims.py` and `tldw_Server_API/tests/prompt_studio/unit/test_prompt_studio_deps_headers.py` cover claim propagation, header forwarding, and 401 behavior.
+- Remaining mode-based checks:
+  - Coordination/governance only: startup banners, WebUI config (embedding the single-user API key in non-production), ChaChaNotes warm-up, backpressure and tenant-RPS decisions, embedding quota defaults, and a small number of diagnostics paths use `is_single_user_mode()` to choose profile-specific behavior without bypassing authorization.
+  - Jobs admin domain-scoped RBAC: `_enforce_domain_scope` in `tldw_Server_API/app/api/v1/endpoints/jobs_admin.py` treats single-user mode as implicitly allowed for domain-scoped jobs operations unless `JOBS_RBAC_FORCE=true`. For now this is treated as a governance exception for single-tenant/local admin deployments and is documented in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` as a candidate for a future claim-first migration when domain-scoped jobs RBAC becomes a first-class product surface.
 
 ### Stage 3: Repository Introduction
 **Goal**: Introduce AuthNZ repositories and migrate API-key and core user/RBAC operations to them.

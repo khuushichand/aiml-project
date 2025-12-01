@@ -1,0 +1,21 @@
+# Sample phoneme overrides for Kokoro (and other phoneme-capable TTS engines).
+# Copy to `Config_Files/tts_phonemes.yaml` and adjust as needed.
+#
+# Fields:
+#   term: word or phrase to match (case-insensitive)
+#   phonemes: IPA or engine-specific phoneme sequence
+#   lang: optional language hint (prefix match, e.g., "en" or "en-US")
+#   boundary: when true (default), only match whole words
+#   provider: optional provider filter (e.g., "kokoro")
+#
+# Example: stabilize pronunciation of OpenAI and SQL.
+- term: "OpenAI"
+  phonemes: "oʊ p ən aɪ"
+  lang: "en"
+  boundary: true
+  provider: "kokoro"
+
+- term: "SQL"
+  phonemes: "ˈs iː k w ə l"
+  lang: "en"
+  boundary: true
