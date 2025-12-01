@@ -326,12 +326,16 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
   - Wire into docs and quickstart scripts.
 - Ensure single-user profile passes existing tests (and new ones).
 
+- **Status (v0.1)**: Done — exercised by single-user bootstrap and access flows in `tldw_Server_API/tests/AuthNZ/integration/test_single_user_claims_permissions.py`.
+
 ### Phase 2: Claims-Based Single-User Permissions
 
 - Update permissions code to:
   - Stop special-casing `is_single_user_mode()` for allow-all.
   - Rely on claims from `AuthPrincipal` / `User` (admin role).
 - Add tests verifying that the single-user admin has all needed permissions via claims.
+
+- **Status (v0.1)**: Core claims cleanup Done — `permissions.py`, chat slash commands, and Prompt Studio now use claims-first semantics in single-user and multi-user profiles (see `tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py`, `tests/Chat_NEW/unit/test_command_router.py`, `tests/Chat_NEW/integration/test_chat_commands_endpoint.py`, and `tests/AuthNZ_Unit/test_prompt_studio_user_claims.py`).
 
 ### Phase 3: Repository Introduction
 
@@ -340,10 +344,24 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
   - Some RBAC helpers to use `AuthnzRbacRepo`.
 - Move DDL for API key-related tables into migrations or repositories.
 
+- **Status (v0.1)**: In Progress — core repos (`AuthnzUsersRepo`, `AuthnzApiKeysRepo`, `AuthnzRbacRepo`, `AuthnzUsageRepo`, and others) back primary AuthNZ flows with SQLite/Postgres tests; remaining repo migrations are deferred to the next iteration (see `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`).
+
 ### Phase 4: Backend Drift Reduction
 
 - Identify and refactor 2–3 high-impact modules (e.g., `virtual_keys`, `orgs_teams`, parts of `rate_limiter` that are AuthNZ-specific) to use repositories.
 - Remove duplicated Postgres/SQLite branches that are now redundant.
+
+- **Status (v0.1)**: Partially complete / Next iteration — key modules such as `virtual_keys`, `orgs_teams`, and AuthNZ rate-limiter storage now use repos; remaining drift and mode cleanup is tracked as deferred follow-up in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`.
+
+### Repo Coverage vs Inline SQL (AuthNZ v0.1)
+
+As of the current AuthNZ refactor stage:
+
+- Runtime flows for **users**, **RBAC**, **orgs/teams**, **sessions**, **token blacklist**, **MFA**, **monitoring**, and **registration codes** are fully repo-backed; inline SQL for these concerns is limited to migrations and bootstrap helpers.
+- **API keys** and **usage/LLM-usage** are partially repo-backed: validation, listing, aggregation, and pruning use `AuthnzApiKeysRepo` / `AuthnzUsageRepo`, but `APIKeyManager` and `usage_logging_middleware` still contain backend-specific inline SQL for some runtime operations.
+- Non-MFA inline SQL that uses backend detection (`hasattr(conn, 'fetch*')`) and touches core tables is explicitly marked as deferred or bootstrap-only in the AuthNZ implementation plan (e.g., Postgres bootstrap DDL in `initialize.py`, runtime API-key flows in `api_key_manager.py`).
+
+For a detailed, per-table view across the core AuthNZ tables (users, api_keys, RBAC, orgs/teams, usage/llm_usage, rate_limits/failed_attempts/account_lockouts, sessions, token_blacklist, MFA, monitoring, registration codes), see the **“Repo Coverage Table (AuthNZ core tables)”** section in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`.
 
 ---
 
@@ -435,6 +453,8 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
   - `tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py::mcp_request`, `::mcp_request_batch`, and `::list_tools` no longer branch on `is_single_user_mode()` when computing `user_id`; they rely on `get_current_user`’s `TokenData` (which already encodes the single-user admin) and pass that through to MCP.
   - `tldw_Server_API/app/api/v1/endpoints/persona.py::persona_stream` uses `get_api_key_manager().validate_api_key(...)` to resolve `user_id` from API keys for both single-user and multi-user deployments, rather than comparing against `SINGLE_USER_API_KEY` in the endpoint. This keeps persona’s MCP calls aligned with the unified AuthNZ bootstrap/API-key behavior without introducing new mode-based shortcuts.
 
+**Status snapshot (v0.1)**: Single-user claims cleanup (permissions, chat commands, Prompt Studio) is Done and covered by the tests above; any remaining mode-based shortcuts are treated as future cleanup.
+
 ### Mode vs Claims – Coverage Snapshot
 
 - Fully claim-first clusters (authorization decisions driven by claims on `AuthPrincipal` / `User`, not `AUTH_MODE`):
@@ -449,7 +469,25 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
     - Tests in `tldw_Server_API/tests/AuthNZ_Unit/test_prompt_studio_user_claims.py` and `tldw_Server_API/tests/prompt_studio/unit/test_prompt_studio_deps_headers.py` cover claim propagation, header forwarding, and 401 behavior.
 - Remaining mode-based checks:
   - Coordination/governance only: startup banners, WebUI config (embedding the single-user API key in non-production), ChaChaNotes warm-up, backpressure and tenant-RPS decisions, embedding quota defaults, and a small number of diagnostics paths use `is_single_user_mode()` to choose profile-specific behavior without bypassing authorization.
-  - Jobs admin domain-scoped RBAC: `_enforce_domain_scope` in `tldw_Server_API/app/api/v1/endpoints/jobs_admin.py` treats single-user mode as implicitly allowed for domain-scoped jobs operations unless `JOBS_RBAC_FORCE=true`. For now this is treated as a governance exception for single-tenant/local admin deployments and is documented in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` as a candidate for a future claim-first migration when domain-scoped jobs RBAC becomes a first-class product surface.
+  - Jobs admin routes: `tldw_Server_API/app/api/v1/endpoints/jobs_admin.py` now adopt claim-first admin gating via `dependencies=[Depends(require_roles("admin"))]` on the router, while still using `require_admin` inside endpoints for legacy checks. Domain-scoped RBAC for jobs remains env-driven (`JOBS_DOMAIN_SCOPED_RBAC`, `JOBS_RBAC_FORCE`, `JOBS_DOMAIN_ALLOWLIST_*`) but no longer bypasses enforcement based on `AUTH_MODE`/`is_single_user_mode()`. HTTP-level claim tests in `tldw_Server_API/tests/AuthNZ_Unit/test_jobs_admin_permissions_claims.py` validate 401/403/200 behavior for a representative admin endpoint (`GET /api/v1/jobs/queue/status`) by overriding `get_auth_principal` and `require_admin`.
+
+### Repo vs Inline-SQL Coverage (AuthNZ Tables)
+
+| Area / Tables                                      | Repository                     | Inline SQL (remaining)                                          | Notes                                                                                 |
+|----------------------------------------------------|--------------------------------|------------------------------------------------------------------|---------------------------------------------------------------------------------------|
+| Users (`users`, core user lookups)                 | `AuthnzUsersRepo`              | Bootstrap DDL/migrations in `initialize.py`                      | Runtime lookups for users (id/uuid/username) are repo-backed across SQLite/Postgres. |
+| RBAC (`roles`, `user_roles`, `user_permissions`)   | `AuthnzRbacRepo`               | DDL/migrations only                                              | Effective-permissions and role/override queries are centralized in the repo.         |
+| API keys (`api_keys`, `api_key_audit_log`)         | `AuthnzApiKeysRepo`            | Bootstrap + limited helpers in `api_key_manager.py`              | Runtime validation, listing, primary-key upsert, creation (regular/virtual), and rotation/revocation use the repo; table creation and lightweight usage/audit helpers remain in the manager. |
+| Orgs/Teams (`orgs`, `teams`, memberships)          | `AuthnzOrgsTeamsRepo`          | DDL/migrations only                                              | `orgs_teams.py` orchestrates via the repo; membership/org/team CRUD is repo-backed.  |
+| Usage / Metrics (`usage_log`, `usage_daily`)       | `AuthnzUsageRepo`              | DDL/migrations/tests only                                        | Scheduler pruning, aggregation, and per-request usage inserts (via middleware) use the repo. |
+| LLM Usage (`llm_usage_log`, `llm_usage_daily`)     | `AuthnzUsageRepo`              | DDL/migrations; some legacy reporting helpers                    | LLM budget guard and pruning flows use repo helpers for cross-backend correctness.   |
+| Rate limits (`rate_limits`)                        | `AuthnzRateLimitsRepo`         | DDL/migrations; some legacy rate-limiter metrics wiring          | AuthNZ `RateLimiter` now reads/writes DB-backed rate limits via the repo.            |
+| Lockouts (`failed_attempts`, `account_lockouts`)   | `AuthnzRateLimitsRepo`         | DDL/migrations only                                              | Login lockout and failed-attempt counters are repo-backed for SQLite/Postgres.       |
+| Sessions (`sessions`)                              | `AuthnzSessionsRepo`           | Minimal bootstrap helpers in `initialize.py` / legacy harmonize  | Session creation, refresh, validation, listing, and cleanup are repo-backed.         |
+| Token blacklist (`token_blacklist`)                | `AuthnzTokenBlacklistRepo`     | DDL and a small SQLite harmonization helper in `token_blacklist.py` | Blacklist inserts, checks, cleanup, and stats all go through the repo.            |
+| MFA (`users` MFA columns / MFA tables)             | `AuthnzMfaRepo`                | DDL/migrations only                                              | MFA secrets, backup codes, and status rows are persisted via the repo.               |
+| Monitoring / AuthNZ metrics (monitoring tables)    | `AuthnzMonitoringRepo`         | DDL/migrations only                                              | Metrics/audit pruning and dashboards use the repo for both SQLite and Postgres.      |
+| Registration codes (`registration_codes`)          | `AuthnzRegistrationCodesRepo`  | DDL/migrations only                                              | Scheduler cleanup and registration-code lookups are repo-backed.                     |
 
 ### Stage 3: Repository Introduction
 **Goal**: Introduce AuthNZ repositories and migrate API-key and core user/RBAC operations to them.
@@ -464,7 +502,7 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
 - Failure-path tests for repository methods (uniqueness violations, missing rows) to ensure consistent exception mapping.
 - Existing API-key and RBAC tests pass unchanged.
 
-**Status**: In Progress
+**Status**: In Progress — core repos are in use; remaining repo migrations are deferred to the next iteration (see `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`).
 
 **Notes**:
 - A minimal `AuthnzApiKeysRepo` has been introduced at `tldw_Server_API/app/core/AuthNZ/repos/api_keys_repo.py` with three initial methods:
@@ -486,4 +524,4 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
 **Tests**:
 - Regression tests for affected modules under both backends (where supported by current test fixtures).
 
-**Status**: Not Started
+**Status**: Partially complete / Next iteration — initial repo-backed refactors for `virtual_keys`, `orgs_teams`, and AuthNZ rate-limiter storage have landed; remaining backend drift and mode cleanup is deferred and tracked in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`.

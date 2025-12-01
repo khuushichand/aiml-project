@@ -84,6 +84,7 @@ Provider support snapshot (indicative): OpenAI (cloud), ElevenLabs (cloud, cloni
   - **Kokoro**
     - Purely local; no HTTP egress.
     - Errors are dominated by model/file issues (`TTSModelNotFoundError`, `TTSModelLoadError`) and resource problems (`TTSResourceError`, `TTSInsufficientMemoryError`).
+    - Optional phoneme overrides: load YAML/JSON from `Config_Files/tts_phonemes.yaml` (env: `TTS_PHONEME_OVERRIDES_PATH`) with entries `{term, phonemes, lang?, boundary?, provider?}`; request-level overrides via `extra_params.phoneme_overrides` take precedence. Sample: `Config_Files/tts_phonemes.sample.yaml`.
 
 - Service-level behavior (`TTSServiceV2.generate_speech`):
   - Wraps adapter errors into the unified TTS exception taxonomy and records metrics:

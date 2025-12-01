@@ -51,3 +51,28 @@ Purpose: speech in → transcript → LLM → speech out (optional action execut
 - Unit: validation, action execution, error mapping.
 - Integration: `tldw_Server_API/tests/Audio/test_audio_chat_endpoint.py`, `test_speech_chat_service.py`.
 - Harness: `python Helper_Scripts/voice_latency_harness/run.py --out out.json --short` (metrics scrape) or run a real turn (omit `--short`; pass `--api-key`/`--base-url` if needed). Outputs p50/p90 for STT/TTS/voice-to-voice/audio_chat latencies.
+
+# /api/v1/audio/chat/stream (Streaming Voice Chat v2)
+
+Purpose: low-latency voice commands with partial STT, streaming LLM deltas, and streaming TTS audio over a single WebSocket.
+
+## Protocol
+- First frame must be `{"type":"config", ...}`:
+  - `stt`: `model|variant|sample_rate|enable_vad|vad_threshold|min_silence_ms|turn_stop_secs|min_utterance_secs`.
+  - `llm`: `provider|model|temperature|max_tokens|system|extra_params`.
+  - `tts`: `voice|model|provider|format|speed|extra_params` (`pcm` default; `mp3|opus|aac|flac|wav` supported).
+  - Optional: `session_id`, `metadata`.
+- Stream audio as `{"type":"audio","data":"<base64 float32/PCM>"}`; send `{"type":"commit"}` to finalize (Silero VAD auto-commit also supported). `reset` clears buffers; `stop` closes the socket.
+
+## Server Frames
+- STT partial/final frames mirror `/audio/stream/transcribe` plus `full_transcript` with `voice_to_voice_start` + `auto_commit`.
+- LLM streaming: `llm_delta` for each text chunk; `llm_message` + `assistant_summary` at end.
+- TTS streaming: binary audio frames; bracketed by `tts_start` / `tts_done`. Errors use `{type:"error", error_type:"...", message, quota?}`.
+
+## Limits & Metrics
+- Auth/quotas: API key/JWT/single-user key; per-user concurrency guard; minute accounting per chunk with bounded fail-open; quota/rate errors close with 4003 (1008 when `AUDIO_WS_QUOTA_CLOSE_1008=1`).
+- Metrics: `stt_final_latency_seconds{endpoint="audio.chat.stream"}`, `voice_to_voice_seconds{route="audio.chat.stream"}`, `audio_stream_underruns_total`, `audio_stream_errors_total`, plus LLM/TTS provider metrics. Underruns logged when backpressure drops audio.
+
+## Testing
+- Happy path/unit: `tldw_Server_API/tests/Audio/test_ws_audio_chat_stream.py` (LLM deltas + TTS frames).
+- Run alongside `Helper_Scripts/voice_latency_harness/run.py` for latency snapshots (`voice_to_voice_seconds`).

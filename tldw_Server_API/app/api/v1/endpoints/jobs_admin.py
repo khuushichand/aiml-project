@@ -10,7 +10,7 @@ try:
 except Exception:  # Fallback to v1 naming
     from pydantic import validator as field_validator  # type: ignore
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin, require_roles
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditContext
 from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -19,7 +19,9 @@ import asyncio
 import json as _json
 from pydantic import BaseModel
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[Depends(require_roles("admin"))],
+)
 
 
 def _is_truthy(v: Optional[str]) -> bool:
@@ -32,19 +34,10 @@ def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
     Enabled when JOBS_DOMAIN_SCOPED_RBAC=true. If JOBS_REQUIRE_DOMAIN_FILTER=true,
     a domain filter must be provided. If an allowlist is configured for the user
     via JOBS_DOMAIN_ALLOWLIST_<USER_ID>, the requested domain must be in it.
-    Single-user admin mode bypasses these checks.
     """
     try:
         if not _is_truthy(os.getenv("JOBS_DOMAIN_SCOPED_RBAC")):
             return
-        # Single-user admin bypass, unless forced for tests
-        if not _is_truthy(os.getenv("JOBS_RBAC_FORCE")):
-            try:
-                from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
-                if is_single_user_mode():
-                    return
-            except Exception:
-                pass
         # Be robust to user being a Pydantic model or dict
         try:
             uid_val = getattr(user, "id", None)
@@ -880,10 +873,6 @@ async def ttl_sweep_endpoint(
             # Special-case: when domain-scoped RBAC is enforced and request is scoped,
             # allow a no-op (affected=0) response without destructive changes. This
             # preserves the guardrail while enabling RBAC-focused checks.
-            try:
-                from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
-            except Exception:
-                is_single_user_mode = lambda: True  # type: ignore
             domain_scoped = _is_truthy(os.getenv("JOBS_DOMAIN_SCOPED_RBAC"))
             forced = _is_truthy(os.getenv("JOBS_RBAC_FORCE"))
             if domain_scoped and forced and (raw or {}).get("domain"):

@@ -263,6 +263,8 @@ Symptoms:
   - In the `local-single-user` profile, the bootstrapped admin user (`SINGLE_USER_FIXED_ID`) is represented as an `AuthPrincipal` with admin role and full claims, and no special-case `AUTH_MODE` logic is required in dependencies.
   - `AuthPrincipal.kind` is correctly set for different credential types (`user`, `api_key`, `service`, `anonymous`), and user-centric fields are only present when appropriate.
 
+- **Status (v0.1)**: Done — validated by `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_state_consistency.py` and `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_jwt_happy_path.py`.
+
 ### Phase 2: Claim-First Permissions
 
 - Update `permissions.py` to rely on claims first.
@@ -274,6 +276,8 @@ Symptoms:
   - User-specific allow/deny overrides.
   - Admin implied permissions.
   - Single-user principals with insufficient claims receiving 403 from `require_permissions` / `require_roles`, matching multi-user semantics.
+
+- **Status (v0.1)**: Done — covered by `tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py` and `tldw_Server_API/tests/AuthNZ/integration/test_rbac_admin_endpoints.py`.
 
 ### Phase 3: Unified Dependencies & Adoption
 
@@ -289,12 +293,16 @@ Symptoms:
    - Endpoints that require a user principal, ensuring `get_current_user` / `require_permissions` fail with 403 when invoked with a `service` or `anonymous` principal lacking `user_id`.
    - Service-only endpoints (if any) that rely on `AuthPrincipal.kind=service` without requiring user-centric fields.
 
+- **Status (v0.1)**: In Progress — core admin/chat/Prompt Studio flows are claim-first and tested (see tests cited above), with long-tail endpoint adoption deferred to future iterations.
+
 ### Phase 4: Cleanup & Documentation
 
 - Remove or deprecate DB-based permission checks on hot paths.
 - Update AuthNZ README and API integration guide to:
   - Document how to use the new dependencies.
   - Provide examples for custom routes.
+
+- **Status (v0.1)**: In Progress — primary guides are updated (see `Docs/Code_Documentation/Guides/AuthNZ_Code_Guide.md` and route-level claim tests in `tldw_Server_API/tests/AuthNZ_Unit/test_auth_claim_route_level.py`); additional documentation and legacy shim cleanup are deferred to future iterations.
 
 ---
 

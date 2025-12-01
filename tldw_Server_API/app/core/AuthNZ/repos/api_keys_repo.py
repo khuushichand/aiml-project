@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -238,4 +239,551 @@ class AuthnzApiKeysRepo:
             return [dict(row) for row in rows]
         except Exception as exc:  # pragma: no cover - surfaced via higher layers
             logger.error(f"AuthnzApiKeysRepo.list_user_keys failed: {exc}")
+            raise
+
+    async def create_api_key_row(
+        self,
+        *,
+        user_id: int,
+        key_hash: str,
+        key_prefix: str,
+        name: Optional[str],
+        description: Optional[str],
+        scope: str,
+        expires_at: Optional[datetime],
+        rate_limit: Optional[int],
+        allowed_ips: Optional[List[str]],
+        metadata: Optional[Dict[str, Any]],
+    ) -> int:
+        """
+        Insert a new API key row and return its id.
+
+        This mirrors the INSERT logic used by APIKeyManager.create_api_key
+        while centralizing dialect-specific SQL in the repository layer.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchval"):
+                    import json
+
+                    key_id = await conn.fetchval(
+                        """
+                        INSERT INTO api_keys (
+                            user_id, key_hash, key_prefix, name, description,
+                            scope, expires_at, rate_limit, allowed_ips, metadata
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        RETURNING id
+                        """,
+                        user_id,
+                        key_hash,
+                        key_prefix,
+                        name,
+                        description,
+                        scope,
+                        expires_at,
+                        rate_limit,
+                        json.dumps(allowed_ips) if allowed_ips else None,
+                        json.dumps(metadata) if metadata else None,
+                    )
+                else:
+                    import json
+
+                    cursor = await conn.execute(
+                        """
+                        INSERT INTO api_keys (
+                            user_id, key_hash, key_prefix, name, description,
+                            scope, expires_at, rate_limit, allowed_ips, metadata
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            user_id,
+                            key_hash,
+                            key_prefix,
+                            name,
+                            description,
+                            scope,
+                            expires_at.isoformat() if expires_at else None,
+                            rate_limit,
+                            json.dumps(allowed_ips) if allowed_ips else None,
+                            json.dumps(metadata) if metadata else None,
+                        ),
+                    )
+                    key_id = getattr(cursor, "lastrowid", None)
+                    try:
+                        await conn.commit()
+                    except Exception:
+                        pass
+
+            return int(key_id)
+        except Exception as exc:  # pragma: no cover - surfaced via higher layers
+            logger.error(f"AuthnzApiKeysRepo.create_api_key_row failed: {exc}")
+            raise
+
+    async def create_virtual_key_row(
+        self,
+        *,
+        user_id: int,
+        key_hash: str,
+        key_prefix: str,
+        name: Optional[str],
+        description: Optional[str],
+        expires_at: Optional[datetime],
+        org_id: Optional[int],
+        team_id: Optional[int],
+        allowed_endpoints: Optional[List[str]],
+        allowed_providers: Optional[List[str]],
+        allowed_models: Optional[List[str]],
+        budget_day_tokens: Optional[int],
+        budget_month_tokens: Optional[int],
+        budget_day_usd: Optional[float],
+        budget_month_usd: Optional[float],
+        parent_key_id: Optional[int],
+        allowed_methods: Optional[List[str]],
+        allowed_paths: Optional[List[str]],
+        max_calls: Optional[int],
+        max_runs: Optional[int],
+    ) -> int:
+        """
+        Insert a new virtual API key row and return its id.
+
+        This mirrors the INSERT logic used by APIKeyManager.create_virtual_key
+        while centralizing dialect-specific SQL in the repository layer.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchval"):
+                    import json as _json
+
+                    _endpoints = (
+                        _json.dumps(allowed_endpoints)
+                        if allowed_endpoints is not None
+                        else None
+                    )
+                    _providers = (
+                        _json.dumps(allowed_providers)
+                        if allowed_providers is not None
+                        else None
+                    )
+                    _models = (
+                        _json.dumps(allowed_models)
+                        if allowed_models is not None
+                        else None
+                    )
+                    _meta_dict: Dict[str, Any] = {}
+                    if allowed_methods:
+                        _meta_dict["allowed_methods"] = [
+                            str(x).upper() for x in allowed_methods
+                        ]
+                    if allowed_paths:
+                        _meta_dict["allowed_paths"] = [str(x) for x in allowed_paths]
+                    if max_calls is not None:
+                        _meta_dict["max_calls"] = int(max_calls)
+                    if max_runs is not None:
+                        _meta_dict["max_runs"] = int(max_runs)
+                    _metadata = _json.dumps(_meta_dict) if _meta_dict else None
+
+                    # Detect column types to choose JSONB cast or plain text insert
+                    try:
+                        col_type = await conn.fetchval(
+                            """
+                            SELECT data_type FROM information_schema.columns
+                            WHERE table_name = 'api_keys' AND column_name = 'llm_allowed_endpoints'
+                            """
+                        )
+                    except Exception:
+                        col_type = None
+                    is_jsonb = isinstance(col_type, str) and ("json" in col_type.lower())
+
+                    if is_jsonb:
+                        key_id = await conn.fetchval(
+                            """
+                            INSERT INTO api_keys (
+                                user_id, key_hash, key_prefix, name, description, scope, status, expires_at,
+                                is_virtual, parent_key_id, org_id, team_id,
+                                llm_budget_day_tokens, llm_budget_month_tokens,
+                                llm_budget_day_usd, llm_budget_month_usd,
+                                llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
+                                metadata
+                            ) VALUES (
+                                $1,$2,$3,$4,$5,$6,'active',$7,
+                                TRUE,$8,$9,$10,
+                                $11,$12,$13,$14,$15::jsonb,$16::jsonb,$17::jsonb,
+                                ($18)::jsonb
+                            ) RETURNING id
+                            """,
+                            user_id,
+                            key_hash,
+                            key_prefix,
+                            name,
+                            description,
+                            "read",
+                            expires_at,
+                            parent_key_id,
+                            org_id,
+                            team_id,
+                            budget_day_tokens,
+                            budget_month_tokens,
+                            budget_day_usd,
+                            budget_month_usd,
+                            _endpoints,
+                            _providers,
+                            _models,
+                            _metadata,
+                        )
+                    else:
+                        key_id = await conn.fetchval(
+                            """
+                            INSERT INTO api_keys (
+                                user_id, key_hash, key_prefix, name, description, scope, status, expires_at,
+                                is_virtual, parent_key_id, org_id, team_id,
+                                llm_budget_day_tokens, llm_budget_month_tokens,
+                                llm_budget_day_usd, llm_budget_month_usd,
+                                llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
+                                metadata
+                            ) VALUES (
+                                $1,$2,$3,$4,$5,$6,'active',$7,
+                                TRUE,$8,$9,$10,
+                                $11,$12,$13,$14,$15,$16,$17,
+                                $18
+                            ) RETURNING id
+                            """,
+                            user_id,
+                            key_hash,
+                            key_prefix,
+                            name,
+                            description,
+                            "read",
+                            expires_at,
+                            parent_key_id,
+                            org_id,
+                            team_id,
+                            budget_day_tokens,
+                            budget_month_tokens,
+                            budget_day_usd,
+                            budget_month_usd,
+                            _endpoints,
+                            _providers,
+                            _models,
+                            _metadata,
+                        )
+                else:
+                    import json
+
+                    _meta_dict: Dict[str, Any] = {}
+                    if allowed_methods:
+                        _meta_dict["allowed_methods"] = [
+                            str(x).upper() for x in allowed_methods
+                        ]
+                    if allowed_paths:
+                        _meta_dict["allowed_paths"] = [str(x) for x in allowed_paths]
+                    if max_calls is not None:
+                        _meta_dict["max_calls"] = int(max_calls)
+                    if max_runs is not None:
+                        _meta_dict["max_runs"] = int(max_runs)
+                    _metadata = json.dumps(_meta_dict) if _meta_dict else None
+
+                    cursor = await conn.execute(
+                        """
+                        INSERT INTO api_keys (
+                            user_id, key_hash, key_prefix, name, description, scope, status, expires_at,
+                            is_virtual, parent_key_id, org_id, team_id,
+                            llm_budget_day_tokens, llm_budget_month_tokens,
+                            llm_budget_day_usd, llm_budget_month_usd,
+                            llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
+                            metadata
+                        ) VALUES (?,?,?,?,?,?,'active',?,
+                            1,?,?,?,?,?,?,?,?,?,?,?
+                        )
+                        """,
+                        (
+                            user_id,
+                            key_hash,
+                            key_prefix,
+                            name,
+                            description,
+                            "read",
+                            expires_at.isoformat() if expires_at else None,
+                            parent_key_id,
+                            org_id,
+                            team_id,
+                            budget_day_tokens,
+                            budget_month_tokens,
+                            budget_day_usd,
+                            budget_month_usd,
+                            (json.dumps(allowed_endpoints) if allowed_endpoints else None),
+                            (json.dumps(allowed_providers) if allowed_providers else None),
+                            (json.dumps(allowed_models) if allowed_models else None),
+                            _metadata,
+                        ),
+                    )
+                    key_id = getattr(cursor, "lastrowid", None)
+                    try:
+                        await conn.commit()
+                    except Exception:
+                        pass
+
+            return int(key_id)
+        except Exception as exc:  # pragma: no cover - surfaced via higher layers
+            logger.error(f"AuthnzApiKeysRepo.create_virtual_key_row failed: {exc}")
+            raise
+
+    async def mark_rotated(
+        self,
+        *,
+        old_key_id: int,
+        new_key_id: int,
+        rotated_status: str,
+        reason: str,
+        revoked_at: datetime,
+    ) -> None:
+        """
+        Mark an existing key as rotated and link it to a new key.
+
+        This updates:
+        - old key: ``status``, ``rotated_to``, ``revoked_at``, ``revoke_reason``
+        - new key: ``rotated_from``
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchrow"):
+                    await conn.execute(
+                        """
+                        UPDATE api_keys
+                        SET status = $1, rotated_to = $2, revoked_at = $3,
+                            revoke_reason = $4
+                        WHERE id = $5
+                        """,
+                        rotated_status,
+                        new_key_id,
+                        revoked_at,
+                        reason,
+                        old_key_id,
+                    )
+                    await conn.execute(
+                        "UPDATE api_keys SET rotated_from = $1 WHERE id = $2",
+                        old_key_id,
+                        new_key_id,
+                    )
+                else:
+                    await conn.execute(
+                        """
+                        UPDATE api_keys
+                        SET status = ?, rotated_to = ?, revoked_at = ?,
+                            revoke_reason = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            rotated_status,
+                            new_key_id,
+                            revoked_at.isoformat(),
+                            reason,
+                            old_key_id,
+                        ),
+                    )
+                    await conn.execute(
+                        "UPDATE api_keys SET rotated_from = ? WHERE id = ?",
+                        (old_key_id, new_key_id),
+                    )
+                    try:
+                        await conn.commit()
+                    except Exception:
+                        pass
+        except Exception as exc:  # pragma: no cover - surfaced via higher layers
+            logger.error(f"AuthnzApiKeysRepo.mark_rotated failed: {exc}")
+            raise
+
+    async def revoke_api_key_for_user(
+        self,
+        *,
+        key_id: int,
+        user_id: int,
+        revoked_status: str,
+        active_status: str,
+        reason: str,
+        revoked_at: datetime,
+    ) -> bool:
+        """
+        Revoke an API key owned by the given user.
+
+        Returns True when a row was updated (key existed and was active), False otherwise.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchrow"):
+                    result = await conn.execute(
+                        """
+                        UPDATE api_keys
+                        SET status = $1, revoked_at = $2, revoked_by = $3,
+                            revoke_reason = $4
+                        WHERE id = $5 AND user_id = $6 AND status = $7
+                        """,
+                        revoked_status,
+                        revoked_at,
+                        user_id,
+                        reason,
+                        key_id,
+                        user_id,
+                        active_status,
+                    )
+                    try:
+                        return result != "UPDATE 0"
+                    except Exception:
+                        return True
+                cursor = await conn.execute(
+                    """
+                    UPDATE api_keys
+                    SET status = ?, revoked_at = ?, revoked_by = ?,
+                        revoke_reason = ?
+                    WHERE id = ? AND user_id = ? AND status = ?
+                    """,
+                    (
+                        revoked_status,
+                        revoked_at.isoformat(),
+                        user_id,
+                        reason,
+                        key_id,
+                        user_id,
+                        active_status,
+                    ),
+                )
+                success = getattr(cursor, "rowcount", 0) > 0
+                try:
+                    await conn.commit()
+                except Exception:
+                    pass
+                return success
+        except Exception as exc:  # pragma: no cover - surfaced via higher layers
+            logger.error(f"AuthnzApiKeysRepo.revoke_api_key_for_user failed: {exc}")
+            raise
+
+    async def increment_usage(
+        self,
+        *,
+        key_id: int,
+        ip_address: Optional[str],
+    ) -> None:
+        """
+        Increment usage_count and update last_used_at/last_used_ip for a key.
+
+        Mirrors the behavior of APIKeyManager._update_usage while centralizing
+        SQL and backend differences.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchrow"):
+                    await conn.execute(
+                        """
+                        UPDATE api_keys
+                        SET usage_count = COALESCE(usage_count, 0) + 1,
+                            last_used_at = $1,
+                            last_used_ip = $2
+                        WHERE id = $3
+                        """,
+                        datetime.utcnow(),
+                        ip_address,
+                        key_id,
+                    )
+                else:
+                    await conn.execute(
+                        """
+                        UPDATE api_keys
+                        SET usage_count = COALESCE(usage_count, 0) + 1,
+                            last_used_at = ?,
+                            last_used_ip = ?
+                        WHERE id = ?
+                        """,
+                        (datetime.utcnow().isoformat(), ip_address, key_id),
+                    )
+                    try:
+                        await conn.commit()
+                    except Exception:
+                        pass
+        except Exception as exc:  # pragma: no cover - surfaced via higher layers
+            logger.error(f"AuthnzApiKeysRepo.increment_usage failed: {exc}")
+            raise
+
+    async def mark_key_expired(
+        self,
+        *,
+        key_id: int,
+        expired_status: str,
+    ) -> None:
+        """
+        Mark a key as expired by updating its status.
+
+        Mirrors the behavior of APIKeyManager._mark_expired.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchrow"):
+                    await conn.execute(
+                        "UPDATE api_keys SET status = $1 WHERE id = $2",
+                        expired_status,
+                        key_id,
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE api_keys SET status = ? WHERE id = ?",
+                        (expired_status, key_id),
+                    )
+                    try:
+                        await conn.commit()
+                    except Exception:
+                        pass
+        except Exception as exc:  # pragma: no cover - surfaced via higher layers
+            logger.error(f"AuthnzApiKeysRepo.mark_key_expired failed: {exc}")
+            raise
+
+    async def insert_audit_log(
+        self,
+        *,
+        key_id: int,
+        action: str,
+        user_id: Optional[int],
+        details: Optional[Dict[str, Any]],
+    ) -> None:
+        """
+        Insert a row into api_key_audit_log for the given key/action.
+
+        Centralizes audit-log SQL previously embedded in APIKeyManager._log_action.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchrow"):
+                    import json as _json
+
+                    _details = _json.dumps(details) if details is not None else None
+                    await conn.execute(
+                        """
+                        INSERT INTO api_key_audit_log (api_key_id, action, user_id, details)
+                        VALUES ($1, $2, $3, $4::jsonb)
+                        """,
+                        key_id,
+                        action,
+                        user_id,
+                        _details,
+                    )
+                else:
+                    import json
+
+                    await conn.execute(
+                        """
+                        INSERT INTO api_key_audit_log (api_key_id, action, user_id, details)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            key_id,
+                            action,
+                            user_id,
+                            json.dumps(details) if details else None,
+                        ),
+                    )
+                    try:
+                        await conn.commit()
+                    except Exception:
+                        pass
+        except Exception as exc:  # pragma: no cover - surfaced via higher layers
+            logger.error(f"AuthnzApiKeysRepo.insert_audit_log failed: {exc}")
             raise

@@ -258,6 +258,68 @@ class AuthnzUsageRepo:
             logger.error(f"AuthnzUsageRepo.prune_usage_daily_before failed: {exc}")
             raise
 
+    async def insert_usage_log(
+        self,
+        *,
+        user_id: Optional[int],
+        key_id: Optional[int],
+        endpoint: str,
+        status: int,
+        latency_ms: int,
+        bytes_out: Optional[int],
+        bytes_in: Optional[int],
+        meta: str,
+        request_id: Optional[str],
+    ) -> None:
+        """
+        Insert a single row into ``usage_log``.
+
+        This mirrors the insert logic previously embedded in
+        ``UsageLoggingMiddleware`` while centralizing dialect differences
+        and fallback behavior (with/without ``bytes_in``) in one place.
+        """
+        try:
+            # Prefer the extended schema including bytes_in when available;
+            # fall back to the legacy schema when the column is missing.
+            try:
+                await self.db_pool.execute(
+                    """
+                    INSERT INTO usage_log (
+                        user_id, key_id, endpoint, status, latency_ms,
+                        bytes, bytes_in, meta, request_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    user_id,
+                    key_id,
+                    endpoint,
+                    int(status),
+                    int(latency_ms),
+                    int(bytes_out) if bytes_out is not None else None,
+                    int(bytes_in) if bytes_in is not None else None,
+                    meta,
+                    request_id,
+                )
+            except Exception:
+                await self.db_pool.execute(
+                    """
+                    INSERT INTO usage_log (
+                        user_id, key_id, endpoint, status, latency_ms,
+                        bytes, meta, request_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    user_id,
+                    key_id,
+                    endpoint,
+                    int(status),
+                    int(latency_ms),
+                    int(bytes_out) if bytes_out is not None else None,
+                    meta,
+                    request_id,
+                )
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzUsageRepo.insert_usage_log failed: {exc}")
+            raise
+
     async def prune_llm_usage_daily_before(self, cutoff_day: date) -> int:
         """
         Delete ``llm_usage_daily`` rows older than the given cutoff day.

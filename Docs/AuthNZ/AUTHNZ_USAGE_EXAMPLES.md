@@ -131,7 +131,59 @@ user_db.assign_role(user_id, "moderator")
 
 ## API Endpoint Protection
 
-### Using Permission Decorators
+### Claim-First Dependencies (Recommended)
+
+New endpoints should use the unified `AuthPrincipal` / dependency stack. This keeps authorization claim-first and consistent with the AuthNZ refactor PRDs.
+
+```python
+from fastapi import APIRouter, Depends
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
+    require_permissions,
+    require_roles,
+)
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+
+router = APIRouter()
+
+# Get the current principal (user, api_key, service, etc.)
+@router.get("/api/v1/me")
+async def get_me(principal: AuthPrincipal = Depends(get_auth_principal)):
+    return {
+        "subject_type": principal.subject_type,
+        "user_id": principal.user_id,
+        "roles": principal.roles,
+        "permissions": principal.permissions,
+    }
+
+# Require a specific permission
+@router.post(
+    "/api/v1/media/{media_id}",
+    dependencies=[Depends(require_permissions("media.update"))],
+)
+async def update_media(
+    media_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+):
+    return {"message": f"Principal {principal.principal_id} can update media {media_id}"}
+
+# Require admin role
+@router.delete(
+    "/api/v1/admin/user/{user_id}",
+    dependencies=[Depends(require_roles("admin"))],
+)
+async def delete_user(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+):
+    return {
+        "message": f"Admin principal {principal.principal_id} deleting user {user_id}"
+    }
+```
+
+### Legacy Permission Decorators (Still Supported)
+
+The decorator-style helpers remain available for existing routes, but new code should prefer the claim-first dependency pattern shown above.
 
 ```python
 from fastapi import APIRouter, Depends
@@ -139,7 +191,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
     PermissionChecker,
     RoleChecker,
     AnyPermissionChecker,
-    AllPermissionsChecker
+    AllPermissionsChecker,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
@@ -149,7 +201,7 @@ router = APIRouter()
 @router.get("/api/v1/media/{media_id}")
 async def get_media(
     media_id: int,
-    user: User = Depends(PermissionChecker("media.read"))
+    user: User = Depends(PermissionChecker("media.read")),
 ):
     return {"message": f"User {user.username} can read media {media_id}"}
 
@@ -157,7 +209,7 @@ async def get_media(
 @router.delete("/api/v1/admin/user/{user_id}")
 async def delete_user(
     user_id: int,
-    user: User = Depends(RoleChecker("admin"))
+    user: User = Depends(RoleChecker("admin")),
 ):
     return {"message": f"Admin {user.username} deleting user {user_id}"}
 
@@ -165,16 +217,18 @@ async def delete_user(
 @router.put("/api/v1/content/{content_id}")
 async def update_content(
     content_id: int,
-    user: User = Depends(AnyPermissionChecker(["media.update", "media.create"]))
+    user: User = Depends(AnyPermissionChecker(["media.update", "media.create"])),
 ):
     return {"message": f"User {user.username} can modify content"}
 
 # Require all permissions
 @router.post("/api/v1/system/backup")
 async def create_backup(
-    user: User = Depends(AllPermissionsChecker(["system.backup", "system.maintenance"]))
+    user: User = Depends(
+        AllPermissionsChecker(["system.backup", "system.maintenance"])
+    ),
 ):
-    return {"message": "Creating system backup"}
+    return {"message": 'Creating system backup'}
 ```
 
 ### Using in Non-FastAPI Code

@@ -211,6 +211,41 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
   - **Registration codes**: the AuthNZ scheduler’s expired-registration cleanup now uses `AuthnzRegistrationCodesRepo` (`repos/registration_codes_repo.py`) for the `registration_codes` table, removing the last scheduler-owned inline SQL for that table while preserving the existing retention semantics.
   - **API key manager / initialize**: `api_key_manager.py` and parts of `initialize.py` use limited inline SQL for bootstrap and schema backstops. These are currently low-risk and are explicitly marked as out-of-scope for Stage 3/4; they will be revisited once the core repos (users, sessions, token_blacklist, MFA, registration_codes, monitoring) are fully in place and additional tests cover those bootstrap paths.
 
+### Repo Coverage Table (AuthNZ core tables)
+
+The table below summarizes how core AuthNZ tables are covered by repositories as of this refactor stage. “Full” means all runtime read/write paths are repo-backed and remaining inline SQL is confined to migrations/bootstrap; “Partial” means there is still runtime inline SQL in addition to repo usage.
+
+| Table / Concern                                      | Primary repo                | Coverage                                                                 | Notes |
+|------------------------------------------------------|-----------------------------|--------------------------------------------------------------------------|-------|
+| Users (`users`)                                      | `AuthnzUsersRepo`           | Full – runtime via repo; inline SQL only in migrations/bootstrap         | User lookups and listing go through `AuthnzUsersRepo`/`UsersDB`; remaining inline SQL lives in `initialize.py` and migration helpers. |
+| API keys (`api_keys`, `api_key_audit_log`)           | `AuthnzApiKeysRepo`         | Full – runtime via repo; inline SQL only in migrations/bootstrap         | `APIKeyManager` uses `AuthnzApiKeysRepo` for validation, listing, primary-key upsert, creation (regular and virtual keys), rotation/revocation, usage counters, and audit-log inserts. Inline SQL remains only for table creation/backstops and migration helpers. |
+| RBAC (`roles`, `permissions`, `role_permissions`, `user_roles`, `user_permissions`, `rbac_*_rate_limits`) | `AuthnzRbacRepo`           | Full – runtime via repo; inline SQL only in migrations/bootstrap         | RBAC checks and effective-permissions queries use `AuthnzRbacRepo`; schema creation and seed data remain in `initialize.py`/migrations. |
+| Orgs/teams (`organizations`, `org_members`, `teams`, `team_members`) | `AuthnzOrgsTeamsRepo`      | Full – runtime via repo; inline SQL only in migrations/bootstrap         | `orgs_teams.py` is orchestration over `AuthnzOrgsTeamsRepo`; DDL and initial seeds are handled in `initialize.py`/migrations. |
+| Usage / LLM usage (`usage_log`, `usage_daily`, `llm_usage_log`, `llm_usage_daily`) | `AuthnzUsageRepo`         | Full – runtime via repo; inline SQL only in migrations/tests/bootstrap   | Aggregation, pruning, and per-request usage inserts use `AuthnzUsageRepo`; inline SQL remains only in migrations, initialization helpers, and test fixtures. |
+| Rate limits (`rate_limits`)                          | `AuthnzRateLimitsRepo`      | Full – runtime via repo; inline SQL only in migrations/bootstrap         | `rate_limiter.RateLimiter` uses the repo for counters and cleanup; DDL is centralized in migrations. |
+| Lockouts (`failed_attempts`, `account_lockouts`)     | `AuthnzRateLimitsRepo`      | Full – runtime via repo; inline SQL only in migrations/bootstrap         | Login lockout and failed-attempt accounting go through `AuthnzRateLimitsRepo`; only migrations define schema. |
+| Sessions (`sessions`)                                | `AuthnzSessionsRepo`        | Full – runtime via repo; inline SQL only in migrations/bootstrap         | Session create/refresh/validate/list/cleanup are repo-backed; `initialize.py` contains bootstrap DDL and token-blacklist harmonization helpers. |
+| Token blacklist (`token_blacklist`)                  | `AuthnzTokenBlacklistRepo`  | Full – runtime via repo; inline SQL only in migrations/bootstrap         | All blacklist CRUD/cleanup/statistics use the repo; DDL and a SQLite harmonization helper live in `token_blacklist.py`/migrations. |
+| MFA (`users` MFA columns / MFA tables)               | `AuthnzMfaRepo`             | Full – runtime via repo; inline SQL only in migrations/bootstrap         | `mfa_service.py` delegates MFA persistence to `AuthnzMfaRepo`; schema changes are handled by migrations. |
+| Monitoring / AuthNZ metrics (monitoring tables)      | `AuthnzMonitoringRepo`      | Full – runtime via repo; inline SQL only in migrations/bootstrap         | Monitoring/audit metrics and pruning use `AuthnzMonitoringRepo`; table creation is migration-driven. |
+| Registration codes (`registration_codes`)            | `AuthnzRegistrationCodesRepo` | Full – runtime via repo; inline SQL only in migrations/bootstrap       | Scheduler cleanup and registration-code lookups are repo-backed; DDL lives in `initialize.py`/migrations. |
+
+### Inline SQL audit (hasattr(conn, 'fetch*') clusters)
+
+An explicit audit of `hasattr(conn, 'fetch*')` usage in `tldw_Server_API/app/core/AuthNZ` shows:
+
+- `api_key_manager.py` – **runtime inline SQL (narrowed / deferred)**  
+  - Uses backend-branching (`if hasattr(conn, 'fetchval')` / `fetchrow`) for:
+    - `_create_tables` DDL for `api_keys` / `api_key_audit_log`.
+    - Runtime operations limited to `_update_usage`, `_mark_expired`, and `_log_action`.  
+  - Creation of regular and virtual keys, as well as rotation and revocation, now delegate to `AuthnzApiKeysRepo` helpers (`create_api_key_row`, `create_virtual_key_row`, `mark_rotated`, and `revoke_api_key_for_user`). Remaining inline SQL operates on `api_keys`/`api_key_audit_log` only for schema backstops, usage counters, and audit logging and is explicitly marked as **Deferred** for a future iteration that will migrate or centralize those concerns.
+
+- `initialize.py` – **bootstrap/DDL inline SQL (deferred / bootstrap only)**  
+  - Uses backend-branching DDL to ensure presence of `audit_logs`, `sessions`, `registration_codes`, RBAC tables, organizations/teams, `usage_log` / `usage_daily`, `llm_usage_log` / `llm_usage_daily`, and virtual-key counters in non-SQLite deployments.  
+  - This code path runs only as part of AuthNZ initialization/bootstrap and is explicitly treated as **bootstrap-only** inline SQL for v0.1. It is also marked as **Deferred** for later consolidation into migrations or repo-backed schema helpers once coverage and operational requirements are fully captured.
+
+MFA-related SQL has already been migrated behind `AuthnzMfaRepo`; no `hasattr(conn, 'fetch*')` MFA cluster remains in runtime paths.
+
 ---
 
 ## Stage 4: Claim-First Dependencies & AuthContext Adoption

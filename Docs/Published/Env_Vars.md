@@ -79,6 +79,11 @@ Audio Chat (non-streaming)
 - `AUDIO_CHAT_MAX_DURATION_SEC`: Max input duration (seconds) for `/api/v1/audio/chat` (default `120`). Requests exceeding this return HTTP 400 before STT runs.
 - `AUDIO_CHAT_ENABLE_ACTIONS`: Enable action/tool execution for `/api/v1/audio/chat` (default disabled). When true, `metadata.action` or `llm_config.extra_params.action` hints are routed to MCP modules via `execute_tool`; results are returned in `action_result` and persisted as a `tool` message.
 
+Streaming Audio / TTS
+- `AUDIO_WS_QUOTA_CLOSE_1008`: When set, close WebSocket quota/rate-limit violations with code `1008` (default `4003`) for streaming audio routes.
+- `TTS_PHONEME_OVERRIDES_PATH`: Optional YAML/JSON file with phoneme overrides (defaults to `Config_Files/tts_phonemes.yaml|yml|json`).
+- `KOKORO_ENABLE_PHONEME_OVERRIDES`: Toggle Kokoro phoneme override application (`true|false`, default `true`).
+
 Queues
 - CPU stages use `queue=default`.
 - GPU transcription uses dedicated `queue=transcribe` (see GPU worker container stub).

@@ -275,6 +275,8 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
   - Multi-user JWT flow.
   - API key auth (user and virtual).
 
+- **Status (v0.1)**: Done — see `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_state_consistency.py` and `tests/AuthNZ/integration/test_auth_principal_jwt_happy_path.py`.
+
 ### Phase 2: LLM Budgets via AuthGovernor
 
 - Implement minimal `AuthGovernor` with metrics for LLM budgets using existing `llm_usage_log` and virtual key columns.
@@ -283,17 +285,23 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
   - Over-budget virtual key returns 402 with structured detail.
   - Budget counts align with `llm_usage_log`.
 
+- **Status (v0.1)**: Done — covered by `tldw_Server_API/tests/AuthNZ_Unit/test_auth_governor_budget.py`, `tests/AuthNZ/integration/test_llm_budget_guard_http.py`, and SQLite middleware tests under `tests/AuthNZ_SQLite/test_llm_budget_402_sqlite.py`.
+
 ### Phase 3: Login Lockouts via AuthGovernor
 
 - Migrate login attempt tracking and lockouts to `AuthGovernor`.
 - Keep legacy tables but access them only through the governance layer.
 - Add tests for lockout threshold behavior in both SQLite and Postgres.
 
+- **Status (v0.1)**: Done — see `tldw_Server_API/tests/AuthNZ_Unit/test_auth_governor_budget.py` (lockout wrappers) and `tests/AuthNZ/integration/test_auth_login_lockout_via_auth_governor.py`.
+
 ### Phase 4: Consolidation & Clean-up
 
 - Audit guardrail code paths inside AuthNZ and:
   - Remove duplicated logic replaced by `AuthPrincipal` + `AuthGovernor`.
   - Update docs (AuthNZ README, API integration guide) to describe principals and governance.
+
+- **Status (v0.1)**: Done for AuthNZ guardrail tables; any further consolidation for non-AuthNZ modules (e.g., Evaluations, Character Chat, Web Scraping, Embeddings Server) is treated as future work and tracked under `Docs/Product/Resource_Governor_PRD.md` and `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`.
 
 ---
 
@@ -316,6 +324,17 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
   - Number of code sites manually reading/writing `request.state.user_id/api_key_id/org_ids/team_ids`.
 
 ### Admin Surfaces Governed by Principals
+
+**Coverage snapshot (v0.1)** – principal-governed admin and operator surfaces:
+
+- Metrics admin: `POST /api/v1/metrics/reset`.
+- Resource-Governor admin and diagnostics: `/api/v1/resource-governor/*`.
+- Tools admin surfaces (tools registry and control plane).
+- Embeddings model management endpoints.
+- Workflows DLQ / failure-queue admin (inspect/replay).
+- Connectors admin (registration, enable/disable, diagnostics).
+- Chat slash-command discovery and execution.
+- Prompt Studio routes (projects, prompts, tests, and optimization flows).
 
 - Resource-Governor admin and diagnostics endpoints under `/api/v1/resource-governor/*` are treated as principal-governed admin APIs:
   - They are gated via the claim-first stack (`get_auth_principal` + `require_roles("admin")`), reusing the same 401/403 semantics as other admin surfaces (e.g., connectors admin policy, tools admin, embeddings model-management, workflows DLQ).

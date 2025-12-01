@@ -344,63 +344,38 @@ class APIKeyManager:
             expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
 
         try:
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchval'):
-                    # PostgreSQL
-                    import json
-                    key_id = await conn.fetchval(
-                        """
-                        INSERT INTO api_keys (
-                            user_id, key_hash, key_prefix, name, description,
-                            scope, expires_at, rate_limit, allowed_ips, metadata
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                        RETURNING id
-                        """,
-                        user_id, key_hash, key_prefix, name, description,
-                        scope, expires_at, rate_limit,
-                        json.dumps(allowed_ips) if allowed_ips else None,
-                        json.dumps(metadata) if metadata else None
-                    )
-                else:
-                    # SQLite
-                    import json
-                    cursor = await conn.execute(
-                        """
-                        INSERT INTO api_keys (
-                            user_id, key_hash, key_prefix, name, description,
-                            scope, expires_at, rate_limit, allowed_ips, metadata
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (user_id, key_hash, key_prefix, name, description,
-                         scope, expires_at.isoformat() if expires_at else None,
-                         rate_limit,
-                         json.dumps(allowed_ips) if allowed_ips else None,
-                         json.dumps(metadata) if metadata else None)
-                    )
-                    key_id = cursor.lastrowid
-                    await conn.commit()
+            repo = self._get_repo()
+            key_id = await repo.create_api_key_row(
+                user_id=user_id,
+                key_hash=key_hash,
+                key_prefix=key_prefix,
+                name=name,
+                description=description,
+                scope=scope,
+                expires_at=expires_at,
+                rate_limit=rate_limit,
+                allowed_ips=allowed_ips,
+                metadata=metadata,
+            )
 
-                # Log the creation
-                await self._log_action(key_id, "created", user_id)
+            # Log the creation (audit rows are still written here)
+            await self._log_action(key_id, "created", user_id)
 
-                if get_settings().PII_REDACT_LOGS:
-                    logger.info("Created API key for authenticated user (details redacted)")
-                else:
-                    logger.info(f"Created API key {key_id} for user {user_id}")
+            if get_settings().PII_REDACT_LOGS:
+                logger.info("Created API key for authenticated user (details redacted)")
+            else:
+                logger.info(f"Created API key {key_id} for user {user_id}")
 
-                return {
-                    "id": key_id,
-                    "key": full_key,  # Only returned on creation!
-                    "key_prefix": key_prefix,
-                    "name": name,
-                    "scope": scope,
-                    "expires_at": expires_at.isoformat() if expires_at else None,
-                    "created_at": datetime.utcnow().isoformat(),
-                    "message": "Store this key securely - it will not be shown again"
-                }
-
+            return {
+                "id": key_id,
+                "key": full_key,  # Only returned on creation!
+                "key_prefix": key_prefix,
+                "name": name,
+                "scope": scope,
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "created_at": datetime.utcnow().isoformat(),
+                "message": "Store this key securely - it will not be shown again"
+            }
         except Exception as e:
             logger.error(f"Failed to create API key: {e}")
             raise DatabaseError(f"Failed to create API key: {e}")
@@ -439,124 +414,29 @@ class APIKeyManager:
             expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
 
         try:
-            async with self.db_pool.transaction() as conn:
-                import json
-                if hasattr(conn, 'fetchval'):
-                    # In asyncpg 0.30, Json wrapper is removed; pass JSON strings and cast to jsonb
-                    import json as _json
-                    _endpoints = _json.dumps(allowed_endpoints) if allowed_endpoints is not None else None
-                    _providers = _json.dumps(allowed_providers) if allowed_providers is not None else None
-                    _models    = _json.dumps(allowed_models)    if allowed_models    is not None else None
-                    _meta_dict = {}
-                    if allowed_methods:
-                        _meta_dict['allowed_methods'] = [str(x).upper() for x in allowed_methods]
-                    if allowed_paths:
-                        _meta_dict['allowed_paths'] = [str(x) for x in allowed_paths]
-                    if max_calls is not None:
-                        _meta_dict['max_calls'] = int(max_calls)
-                    if max_runs is not None:
-                        _meta_dict['max_runs'] = int(max_runs)
-                    _metadata = _json.dumps(_meta_dict) if _meta_dict else None
-
-                    # Detect column types to choose JSONB cast or plain text insert (compat across migrations)
-                    try:
-                        col_type = await conn.fetchval(
-                            """
-                            SELECT data_type FROM information_schema.columns
-                            WHERE table_name = 'api_keys' AND column_name = 'llm_allowed_endpoints'
-                            """
-                        )
-                    except Exception:
-                        col_type = None
-                    is_jsonb = isinstance(col_type, str) and ('json' in col_type.lower())
-
-                    if is_jsonb:
-                        key_id = await conn.fetchval(
-                            """
-                            INSERT INTO api_keys (
-                                user_id, key_hash, key_prefix, name, description, scope, status, expires_at,
-                                is_virtual, parent_key_id, org_id, team_id,
-                                llm_budget_day_tokens, llm_budget_month_tokens,
-                                llm_budget_day_usd, llm_budget_month_usd,
-                                llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
-                                metadata
-                            ) VALUES (
-                                $1,$2,$3,$4,$5,$6,'active',$7,
-                                TRUE,$8,$9,$10,
-                                $11,$12,$13,$14,$15::jsonb,$16::jsonb,$17::jsonb,
-                                ($18)::jsonb
-                            ) RETURNING id
-                            """,
-                            user_id, key_hash, key_prefix, name, description, 'read', expires_at,
-                            parent_key_id, org_id, team_id,
-                            budget_day_tokens, budget_month_tokens,
-                            budget_day_usd, budget_month_usd,
-                            _endpoints, _providers, _models,
-                            _metadata,
-                        )
-                    else:
-                        key_id = await conn.fetchval(
-                            """
-                            INSERT INTO api_keys (
-                                user_id, key_hash, key_prefix, name, description, scope, status, expires_at,
-                                is_virtual, parent_key_id, org_id, team_id,
-                                llm_budget_day_tokens, llm_budget_month_tokens,
-                                llm_budget_day_usd, llm_budget_month_usd,
-                                llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
-                                metadata
-                            ) VALUES (
-                                $1,$2,$3,$4,$5,$6,'active',$7,
-                                TRUE,$8,$9,$10,
-                                $11,$12,$13,$14,$15,$16,$17,
-                                $18
-                            ) RETURNING id
-                            """,
-                            user_id, key_hash, key_prefix, name, description, 'read', expires_at,
-                            parent_key_id, org_id, team_id,
-                            budget_day_tokens, budget_month_tokens,
-                            budget_day_usd, budget_month_usd,
-                            _endpoints, _providers, _models,
-                            _metadata,
-                        )
-                else:
-                    import json
-                    _meta_dict = {}
-                    if allowed_methods:
-                        _meta_dict['allowed_methods'] = [str(x).upper() for x in allowed_methods]
-                    if allowed_paths:
-                        _meta_dict['allowed_paths'] = [str(x) for x in allowed_paths]
-                    if max_calls is not None:
-                        _meta_dict['max_calls'] = int(max_calls)
-                    if max_runs is not None:
-                        _meta_dict['max_runs'] = int(max_runs)
-                    _metadata = json.dumps(_meta_dict) if _meta_dict else None
-                    cursor = await conn.execute(
-                        """
-                        INSERT INTO api_keys (
-                            user_id, key_hash, key_prefix, name, description, scope, status, expires_at,
-                            is_virtual, parent_key_id, org_id, team_id,
-                            llm_budget_day_tokens, llm_budget_month_tokens,
-                            llm_budget_day_usd, llm_budget_month_usd,
-                            llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
-                            metadata
-                        ) VALUES (?,?,?,?,?,?,'active',?,
-                            1,?,?,?,?,?,?,?,?,?,?,?
-                        )
-                        """,
-                        (
-                            user_id, key_hash, key_prefix, name, description, 'read',
-                            expires_at.isoformat() if expires_at else None,
-                            parent_key_id, org_id, team_id,
-                            budget_day_tokens, budget_month_tokens,
-                            budget_day_usd, budget_month_usd,
-                            (json.dumps(allowed_endpoints) if allowed_endpoints else None),
-                            (json.dumps(allowed_providers) if allowed_providers else None),
-                            (json.dumps(allowed_models) if allowed_models else None),
-                            _metadata,
-                        )
-                    )
-                    key_id = cursor.lastrowid
-                    await conn.commit()
+            repo = self._get_repo()
+            key_id = await repo.create_virtual_key_row(
+                user_id=user_id,
+                key_hash=key_hash,
+                key_prefix=key_prefix,
+                name=name,
+                description=description,
+                expires_at=expires_at,
+                org_id=org_id,
+                team_id=team_id,
+                allowed_endpoints=allowed_endpoints,
+                allowed_providers=allowed_providers,
+                allowed_models=allowed_models,
+                budget_day_tokens=budget_day_tokens,
+                budget_month_tokens=budget_month_tokens,
+                budget_day_usd=budget_day_usd,
+                budget_month_usd=budget_month_usd,
+                parent_key_id=parent_key_id,
+                allowed_methods=allowed_methods,
+                allowed_paths=allowed_paths,
+                max_calls=max_calls,
+                max_runs=max_runs,
+            )
 
             await self._log_action(key_id, "created_virtual", user_id, {
                 "org_id": org_id, "team_id": team_id, "budgets": {
@@ -709,10 +589,11 @@ class APIKeyManager:
             await self.initialize()
 
         try:
-            # Get existing key info
+            # Get existing key info (authorization check remains here)
             old_key = await self.db_pool.fetchone(
                 "SELECT * FROM api_keys WHERE id = ? AND user_id = ?",
-                key_id, user_id
+                key_id,
+                user_id,
             )
 
             if not old_key:
@@ -742,44 +623,15 @@ class APIKeyManager:
                 metadata=_coerce_json_field(old_key.get('metadata'))
             )
 
-            # Update rotation references
-            async with self.db_pool.transaction() as conn:
-                # Mark old key as rotated
-                if hasattr(conn, 'fetchrow'):
-                    await conn.execute(
-                        """
-                        UPDATE api_keys
-                        SET status = $1, rotated_to = $2, revoked_at = $3,
-                            revoke_reason = $4
-                        WHERE id = $5
-                        """,
-                        APIKeyStatus.ROTATED.value, new_key_result['id'],
-                        datetime.utcnow(), "Key rotation", key_id
-                    )
-
-                    # Update new key with rotation reference
-                    await conn.execute(
-                        "UPDATE api_keys SET rotated_from = $1 WHERE id = $2",
-                        key_id, new_key_result['id']
-                    )
-                else:
-                    await conn.execute(
-                        """
-                        UPDATE api_keys
-                        SET status = ?, rotated_to = ?, revoked_at = ?,
-                            revoke_reason = ?
-                        WHERE id = ?
-                        """,
-                        (APIKeyStatus.ROTATED.value, new_key_result['id'],
-                         datetime.utcnow().isoformat(), "Key rotation", key_id)
-                    )
-
-                    await conn.execute(
-                        "UPDATE api_keys SET rotated_from = ? WHERE id = ?",
-                        (key_id, new_key_result['id'])
-                    )
-
-                    await conn.commit()
+            # Update rotation references via repository
+            repo = self._get_repo()
+            await repo.mark_rotated(
+                old_key_id=key_id,
+                new_key_id=new_key_result["id"],
+                rotated_status=APIKeyStatus.ROTATED.value,
+                reason="Key rotation",
+                revoked_at=datetime.utcnow(),
+            )
 
             # Log the rotation
             await self._log_action(key_id, "rotated", user_id)
@@ -814,34 +666,15 @@ class APIKeyManager:
             await self.initialize()
 
         try:
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    result = await conn.execute(
-                        """
-                        UPDATE api_keys
-                        SET status = $1, revoked_at = $2, revoked_by = $3,
-                            revoke_reason = $4
-                        WHERE id = $5 AND user_id = $6 AND status = $7
-                        """,
-                        APIKeyStatus.REVOKED.value, datetime.utcnow(), user_id,
-                        reason or "Manual revocation", key_id, user_id,
-                        APIKeyStatus.ACTIVE.value
-                    )
-                    success = result != "UPDATE 0"
-                else:
-                    cursor = await conn.execute(
-                        """
-                        UPDATE api_keys
-                        SET status = ?, revoked_at = ?, revoked_by = ?,
-                            revoke_reason = ?
-                        WHERE id = ? AND user_id = ? AND status = ?
-                        """,
-                        (APIKeyStatus.REVOKED.value, datetime.utcnow().isoformat(),
-                         user_id, reason or "Manual revocation", key_id, user_id,
-                         APIKeyStatus.ACTIVE.value)
-                    )
-                    success = cursor.rowcount > 0
-                    await conn.commit()
+            repo = self._get_repo()
+            success = await repo.revoke_api_key_for_user(
+                key_id=key_id,
+                user_id=user_id,
+                revoked_status=APIKeyStatus.REVOKED.value,
+                active_status=APIKeyStatus.ACTIVE.value,
+                reason=reason or "Manual revocation",
+                revoked_at=datetime.utcnow(),
+            )
 
             if success:
                 await self._log_action(key_id, "revoked", user_id, {"reason": reason})
@@ -941,48 +774,16 @@ class APIKeyManager:
     async def _update_usage(self, key_id: int, ip_address: Optional[str] = None):
         """Update usage statistics for a key"""
         try:
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    await conn.execute(
-                        """
-                        UPDATE api_keys
-                        SET usage_count = COALESCE(usage_count, 0) + 1,
-                            last_used_at = $1,
-                            last_used_ip = $2
-                        WHERE id = $3
-                        """,
-                        datetime.utcnow(), ip_address, key_id
-                    )
-                else:
-                    await conn.execute(
-                        """
-                        UPDATE api_keys
-                        SET usage_count = COALESCE(usage_count, 0) + 1,
-                            last_used_at = ?,
-                            last_used_ip = ?
-                        WHERE id = ?
-                        """,
-                        (datetime.utcnow().isoformat(), ip_address, key_id)
-                    )
-                    await conn.commit()
+            repo = self._get_repo()
+            await repo.increment_usage(key_id=key_id, ip_address=ip_address)
         except Exception as e:
             logger.error(f"Failed to update usage: {e}")
 
     async def _mark_expired(self, key_id: int):
         """Mark a key as expired"""
         try:
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    await conn.execute(
-                        "UPDATE api_keys SET status = $1 WHERE id = $2",
-                        APIKeyStatus.EXPIRED.value, key_id
-                    )
-                else:
-                    await conn.execute(
-                        "UPDATE api_keys SET status = ? WHERE id = ?",
-                        (APIKeyStatus.EXPIRED.value, key_id)
-                    )
-                    await conn.commit()
+            repo = self._get_repo()
+            await repo.mark_key_expired(key_id=key_id, expired_status=APIKeyStatus.EXPIRED.value)
         except Exception as e:
             logger.error(f"Failed to mark key as expired: {e}")
 
@@ -995,28 +796,13 @@ class APIKeyManager:
     ):
         """Log an action in the audit log"""
         try:
-            import json
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    import json as _json
-                    _details = _json.dumps(details) if details is not None else None
-                    await conn.execute(
-                        """
-                        INSERT INTO api_key_audit_log (api_key_id, action, user_id, details)
-                        VALUES ($1, $2, $3, $4::jsonb)
-                        """,
-                        key_id, action, user_id, _details
-                    )
-                else:
-                    await conn.execute(
-                        """
-                        INSERT INTO api_key_audit_log (api_key_id, action, user_id, details)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (key_id, action, user_id,
-                         json.dumps(details) if details else None)
-                    )
-                    await conn.commit()
+            repo = self._get_repo()
+            await repo.insert_audit_log(
+                key_id=key_id,
+                action=action,
+                user_id=user_id,
+                details=details,
+            )
         except Exception as e:
             logger.error(f"Failed to log action: {e}")
 

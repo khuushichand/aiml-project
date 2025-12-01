@@ -12,8 +12,9 @@ import hmac
 import hashlib
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext
+from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
 
 
 class UsageLoggingMiddleware(BaseHTTPMiddleware):
@@ -110,82 +111,23 @@ class UsageLoggingMiddleware(BaseHTTPMiddleware):
                 except Exception:
                     meta = "{}"
 
-                # Insert row into usage_log (SQLite or Postgres)
-                db_pool: DatabasePool = await get_db_pool()
+                # Insert row into usage_log via repository (SQLite or Postgres)
+                db_pool = await get_db_pool()
+                repo = AuthnzUsageRepo(db_pool=db_pool)
                 # Request ID propagation
                 request_id = getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID")
 
-                if db_pool.pool:
-                    # PostgreSQL
-                    try:
-                        query = (
-                            "INSERT INTO usage_log (user_id, key_id, endpoint, status, latency_ms, bytes, bytes_in, meta, request_id) "
-                            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
-                        )
-                        await db_pool.execute(
-                            query,
-                            user_id,
-                            api_key_id,
-                            endpoint,
-                            int(status_code),
-                            int(duration_ms),
-                            int(bytes_out) if bytes_out is not None else None,
-                            int(bytes_in) if bytes_in is not None else None,
-                            meta,
-                            request_id,
-                        )
-                    except Exception:
-                        # Fallback to legacy schema without bytes_in
-                        query = (
-                            "INSERT INTO usage_log (user_id, key_id, endpoint, status, latency_ms, bytes, meta, request_id) "
-                            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
-                        )
-                        await db_pool.execute(
-                            query,
-                            user_id,
-                            api_key_id,
-                            endpoint,
-                            int(status_code),
-                            int(duration_ms),
-                            int(bytes_out) if bytes_out is not None else None,
-                            meta,
-                            request_id,
-                        )
-                else:
-                    # SQLite ('?' parameters)
-                    try:
-                        query = (
-                            "INSERT INTO usage_log (user_id, key_id, endpoint, status, latency_ms, bytes, bytes_in, meta, request_id) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                        )
-                        await db_pool.execute(
-                            query,
-                            user_id,
-                            api_key_id,
-                            endpoint,
-                            int(status_code),
-                            int(duration_ms),
-                            int(bytes_out) if bytes_out is not None else None,
-                            int(bytes_in) if bytes_in is not None else None,
-                            meta,
-                            request_id,
-                        )
-                    except Exception:
-                        query = (
-                            "INSERT INTO usage_log (user_id, key_id, endpoint, status, latency_ms, bytes, meta, request_id) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-                        )
-                        await db_pool.execute(
-                            query,
-                            user_id,
-                            api_key_id,
-                            endpoint,
-                            int(status_code),
-                            int(duration_ms),
-                            int(bytes_out) if bytes_out is not None else None,
-                            meta,
-                            request_id,
-                        )
+                await repo.insert_usage_log(
+                    user_id=user_id,
+                    key_id=api_key_id,
+                    endpoint=endpoint,
+                    status=int(status_code),
+                    latency_ms=int(duration_ms),
+                    bytes_out=int(bytes_out) if bytes_out is not None else None,
+                    bytes_in=int(bytes_in) if bytes_in is not None else None,
+                    meta=meta,
+                    request_id=request_id,
+                )
             except Exception as e:
                 # Never fail request due to logging
                 logger.debug(f"Usage logging skipped/failed: {e}")
