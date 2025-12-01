@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_his
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import RateLimitError
+from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import AuthnzRateLimitsRepo
 
 #######################################################################################################################
 #
@@ -288,8 +289,6 @@ class RateLimiter:
                 logger.warning(f"Redis error in record_failed_attempt: {e}")
 
         # Database fallback
-        from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import AuthnzRateLimitsRepo
-
         repo = AuthnzRateLimitsRepo(self.db_pool)
         result = await repo.record_failed_attempt_and_lockout(
             identifier=identifier,
@@ -358,8 +357,6 @@ class RateLimiter:
                 logger.warning(f"Redis error in check_lockout: {e}")
 
         # Database fallback
-        from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import AuthnzRateLimitsRepo
-
         repo = AuthnzRateLimitsRepo(self.db_pool)
         locked_until = await repo.get_active_lockout(identifier=identifier, now=now)
         if locked_until is not None:
@@ -388,8 +385,6 @@ class RateLimiter:
                 logger.warning(f"Redis error in reset_failed_attempts: {e}")
 
         # Clear from database
-        from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import AuthnzRateLimitsRepo
-
         repo = AuthnzRateLimitsRepo(self.db_pool)
         await repo.reset_failed_attempts_and_lockout(
             identifier=identifier,
@@ -525,10 +520,6 @@ class RateLimiter:
         window_start = _compute_window_start(now, window_minutes)
 
         try:
-            from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import (
-                AuthnzRateLimitsRepo,
-            )
-
             repo = AuthnzRateLimitsRepo(self.db_pool)
             current_count = await repo.increment_rate_limit_window(
                 identifier=identifier,
@@ -686,10 +677,6 @@ class RateLimiter:
             await self.initialize()
 
         try:
-            from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import (
-                AuthnzRateLimitsRepo,
-            )
-
             repo = AuthnzRateLimitsRepo(self.db_pool)
 
             # Collect distinct endpoints for Redis cleanup before DB deletion when endpoint is None
@@ -742,10 +729,6 @@ class RateLimiter:
 
         try:
             cutoff = datetime.utcnow() - timedelta(hours=hours)
-            from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import (
-                AuthnzRateLimitsRepo,
-            )
-
             repo = AuthnzRateLimitsRepo(self.db_pool)
             deleted = await repo.cleanup_rate_limits_older_than(cutoff)
             if deleted:

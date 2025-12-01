@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
@@ -36,6 +35,7 @@ def _build_app_with_overrides(principal: AuthPrincipal):
     app.include_router(crud_router, prefix="/api/v1/evaluations")
 
     async def _fake_get_auth_principal(request: Request) -> AuthPrincipal:
+        _ = request  # required by dependency signature
         ip = request.client.host if request.client else None
         ua = request.headers.get("User-Agent") if request.headers else None
         request_id = request.headers.get("X-Request-ID") if request.headers else None
@@ -183,3 +183,133 @@ async def test_evaluations_admin_cleanup_respects_require_admin(monkeypatch):
     with pytest.raises(HTTPException) as excinfo:
         require_admin(user)
     assert excinfo.value.status_code == 403
+
+
+def _build_app_with_admin_cleanup(principal: AuthPrincipal):
+    from fastapi import FastAPI, Depends
+    from tldw_Server_API.app.api.v1.endpoints import evaluations_unified as eval_unified
+
+    app = FastAPI()
+    app.include_router(eval_unified.router, prefix="/api/v1")
+
+    async def _fake_get_auth_principal(request: Request) -> AuthPrincipal:
+        _ = request  # required by dependency signature
+        ip = request.client.host if request.client else None
+        ua = request.headers.get("User-Agent") if request.headers else None
+        request_id = request.headers.get("X-Request-ID") if request.headers else None
+        ctx = AuthContext(
+            principal=principal,
+            ip=ip,
+            user_agent=ua,
+            request_id=request_id,
+        )
+        request.state.auth = ctx
+        return principal
+
+    app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
+
+    async def _fake_verify_api_key() -> str:
+        return "vk-test"
+
+    from tldw_Server_API.app.api.v1.endpoints import evaluations_auth as eval_auth
+
+    app.dependency_overrides[eval_auth.verify_api_key] = _fake_verify_api_key
+
+    async def _fake_get_request_user() -> SimpleNamespace:
+        return SimpleNamespace(
+            id=1,
+            username="eval-admin",
+            is_active=True,
+            roles=list(principal.roles),
+            permissions=list(principal.permissions),
+            is_admin=principal.is_admin,
+        )
+
+    from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as udh
+
+    app.dependency_overrides[udh.get_request_user] = _fake_get_request_user
+
+    return app
+
+
+@pytest.mark.asyncio
+async def test_evaluations_admin_cleanup_forbidden_without_admin_role(monkeypatch):
+    principal = AuthPrincipal(
+        kind="user",
+        user_id=1,
+        api_key_id=None,
+        subject=None,
+        token_type="access",
+        jti=None,
+        roles=["user"],
+        permissions=[],
+        is_admin=False,
+        org_ids=[],
+        team_ids=[],
+    )
+    app = _build_app_with_admin_cleanup(principal)
+    monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
+
+    with TestClient(app) as client:
+        resp = client.post("/api/v1/evaluations/admin/idempotency/cleanup")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_evaluations_admin_cleanup_allowed_with_admin_role(monkeypatch, tmp_path):
+    principal = AuthPrincipal(
+        kind="user",
+        user_id=1,
+        api_key_id=None,
+        subject=None,
+        token_type="access",
+        jti=None,
+        roles=["admin"],
+        permissions=[],
+        is_admin=True,
+        org_ids=[],
+        team_ids=[],
+    )
+    app = _build_app_with_admin_cleanup(principal)
+    monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
+
+    from pathlib import Path
+    from tldw_Server_API.app.core.DB_Management import db_path_utils as dp_mod
+    from tldw_Server_API.app.core.DB_Management import Evaluations_DB as eval_db_mod
+
+    db_file = tmp_path / "evals.db"
+    db_file.parent.mkdir(parents=True, exist_ok=True)
+    db_file.touch()
+
+    def _fake_get_single_user_id() -> int:
+        return 1
+
+    def _fake_get_user_base_directory(_user_id: int) -> Path:
+        return tmp_path
+
+    def _fake_get_evaluations_db_path(_user_id: int) -> Path:
+        return db_file
+
+    monkeypatch.setattr(dp_mod.DatabasePaths, "get_single_user_id", staticmethod(_fake_get_single_user_id))
+    monkeypatch.setattr(dp_mod.DatabasePaths, "get_user_base_directory", staticmethod(_fake_get_user_base_directory))
+    monkeypatch.setattr(dp_mod.DatabasePaths, "get_evaluations_db_path", staticmethod(_fake_get_evaluations_db_path))
+
+    class _FakeEvalDB:
+        def __init__(self, path: str):
+            self.path = path
+            self.called_with_ttl: int | None = None
+
+        def cleanup_idempotency_keys(self, ttl_hours: int) -> int:
+            self.called_with_ttl = ttl_hours
+            return 5
+
+    monkeypatch.setattr(eval_db_mod, "EvaluationsDatabase", _FakeEvalDB)
+
+    with TestClient(app) as client:
+        resp = client.post("/api/v1/evaluations/admin/idempotency/cleanup")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body.get("deleted_total") == 5
+    details = body.get("details") or []
+    assert details and details[0].get("deleted") == 5

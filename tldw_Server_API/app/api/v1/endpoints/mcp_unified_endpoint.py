@@ -709,7 +709,7 @@ async def list_modules(
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 async def get_modules_health(
-    user: TokenData = Depends(require_admin),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     _guard: None = Depends(enforce_http_security),
 ):
     """
@@ -724,12 +724,12 @@ async def get_modules_health(
         await server.initialize()
 
     meta: Dict[str, Any] = {"admin_override": True}
-    if user.roles:
-        meta["roles"] = user.roles
-    if user.permissions:
-        meta["permissions"] = user.permissions
+    if principal.roles:
+        meta["roles"] = principal.roles
+    if principal.permissions:
+        meta["permissions"] = principal.permissions
 
-    response = await server.handle_http_request(request, user_id=user.sub, metadata=meta)
+    response = await server.handle_http_request(request, user_id=principal.principal_id, metadata=meta)
 
     if response.error:
         if response.error.code == -32001:

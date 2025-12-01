@@ -205,8 +205,8 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             ctx = _build_context(principal, request)
             try:
                 request.state.auth = ctx
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"Unable to cache auth context in single-user mode: {exc}")
             return principal
     except HTTPException:
         # Propagate auth failures as-is

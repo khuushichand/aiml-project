@@ -425,8 +425,8 @@ class AuthnzOrgsTeamsRepo:
                 )
                 try:
                     await conn.commit()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"AuthnzOrgsTeamsRepo SQLite commit failed during add_team_member: {exc}")
                 cur = await conn.execute(
                     """
                     SELECT tm.team_id, tm.user_id, tm.role, t.org_id
@@ -571,14 +571,14 @@ class AuthnzOrgsTeamsRepo:
                         """,
                         (team_id, user_id),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
-                    try:
-                        removed = (cur.rowcount or 0) > 0
-                    except Exception:
-                        removed = True
+                try:
+                    await conn.commit()
+                except Exception as exc:
+                    logger.debug(f"AuthnzOrgsTeamsRepo SQLite commit failed during org_member delete: {exc}")
+                try:
+                    removed = (cur.rowcount or 0) > 0
+                except AttributeError:
+                    removed = True  # aiosqlite cursor may not have rowcount
 
             return {
                 "team_id": int(team_id),
@@ -770,10 +770,10 @@ class AuthnzOrgsTeamsRepo:
                         """,
                         (org_id, user_id, role),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
+                try:
+                    await conn.commit()
+                except Exception as exc:
+                    logger.debug(f"AuthnzOrgsTeamsRepo SQLite commit failed during org_member role update: {exc}")
                     cur = await conn.execute(
                         """
                         SELECT org_id, user_id, role
@@ -1100,8 +1100,8 @@ class AuthnzOrgsTeamsRepo:
                 )
                 try:
                     await conn.commit()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"AuthnzOrgsTeamsRepo SQLite commit failed during org member insert: {exc}")
                 cur2 = await conn.execute(
                     """
                     SELECT org_id, user_id, role

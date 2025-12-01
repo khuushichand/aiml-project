@@ -5,6 +5,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
+from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
@@ -34,8 +35,8 @@ def _build_app_with_overrides(
                 user_agent="pytest-agent",
                 request_id="admin-single-user-test",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"Unable to set request.state.auth: {exc}")
         return principal
 
     app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
@@ -135,4 +136,3 @@ async def test_admin_security_status_200_for_single_user_admin_principal():
     body = resp.json()
     assert isinstance(body.get("enabled"), bool)
     assert isinstance(body.get("dispatch_count"), int)
-

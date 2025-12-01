@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_authnz_orgs_teams_repo_membership_sqlite(tmp_path, monkeypatch):
     """AuthnzOrgsTeamsRepo membership helpers should work on SQLite."""
@@ -139,4 +140,3 @@ async def test_authnz_orgs_teams_repo_membership_sqlite(tmp_path, monkeypatch):
     remove_owner = await repo.remove_org_member(org_id=org_id, user_id=owner_id)
     assert remove_owner["removed"] is False
     assert remove_owner.get("error") == "owner_required"
-

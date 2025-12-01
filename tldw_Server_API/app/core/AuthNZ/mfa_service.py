@@ -39,6 +39,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     InvalidTokenError,
     DatabaseError
 )
+from tldw_Server_API.app.core.AuthNZ.repos.mfa_repo import AuthnzMfaRepo
 
 #######################################################################################################################
 #
@@ -309,28 +310,16 @@ class MFAService:
             hashed_codes = [self._hash_backup_code(user_id, code) for code in backup_codes]
             backup_codes_json = json.dumps(hashed_codes)
 
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    await conn.execute("""
-                        UPDATE users
-                        SET totp_secret = $1,
-                            two_factor_enabled = true,
-                            backup_codes = $2,
-                            updated_at = $3
-                        WHERE id = $4
-                    """, encrypted_secret, backup_codes_json, datetime.utcnow(), user_id)
-                else:
-                    # SQLite
-                    await conn.execute("""
-                        UPDATE users
-                        SET totp_secret = ?,
-                            two_factor_enabled = 1,
-                            backup_codes = ?,
-                            updated_at = ?
-                        WHERE id = ?
-                    """, (encrypted_secret, backup_codes_json, datetime.utcnow().isoformat(), user_id))
-                    await conn.commit()
+            if not self.db_pool:
+                raise DatabaseError("MFAService database pool not initialized")
+
+            repo = AuthnzMfaRepo(self.db_pool)
+            await repo.set_mfa_config(
+                user_id=user_id,
+                encrypted_secret=encrypted_secret,
+                backup_codes_json=backup_codes_json,
+                updated_at=datetime.utcnow(),
+            )
 
             logger.info(f"MFA enabled for user {user_id}")
             return True
@@ -353,28 +342,14 @@ class MFAService:
             await self.initialize()
 
         try:
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    await conn.execute("""
-                        UPDATE users
-                        SET totp_secret = NULL,
-                            two_factor_enabled = false,
-                            backup_codes = NULL,
-                            updated_at = $1
-                        WHERE id = $2
-                    """, datetime.utcnow(), user_id)
-                else:
-                    # SQLite
-                    await conn.execute("""
-                        UPDATE users
-                        SET totp_secret = NULL,
-                            two_factor_enabled = 0,
-                            backup_codes = NULL,
-                            updated_at = ?
-                        WHERE id = ?
-                    """, (datetime.utcnow().isoformat(), user_id))
-                    await conn.commit()
+            if not self.db_pool:
+                raise DatabaseError("MFAService database pool not initialized")
+
+            repo = AuthnzMfaRepo(self.db_pool)
+            await repo.clear_mfa_config(
+                user_id=user_id,
+                updated_at=datetime.utcnow(),
+            )
 
             logger.info(f"MFA disabled for user {user_id}")
             return True
@@ -389,19 +364,11 @@ class MFAService:
             await self.initialize()
 
         try:
-            async with self.db_pool.acquire() as conn:
-                if hasattr(conn, "fetchval"):
-                    encrypted = await conn.fetchval(
-                        "SELECT totp_secret FROM users WHERE id = $1",
-                        user_id,
-                    )
-                else:
-                    cursor = await conn.execute(
-                        "SELECT totp_secret FROM users WHERE id = ?",
-                        (user_id,),
-                    )
-                    result = await cursor.fetchone()
-                    encrypted = result[0] if result else None
+            if not self.db_pool:
+                raise DatabaseError("MFAService database pool not initialized")
+
+            repo = AuthnzMfaRepo(self.db_pool)
+            encrypted = await repo.get_encrypted_totp_secret(user_id)
             return self._decrypt_secret(encrypted)
         except DatabaseError:
             raise
@@ -423,31 +390,23 @@ class MFAService:
             await self.initialize()
 
         try:
-            async with self.db_pool.acquire() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    result = await conn.fetchrow("""
-                        SELECT two_factor_enabled, totp_secret IS NOT NULL as has_secret,
-                               backup_codes IS NOT NULL as has_backup_codes
-                        FROM users WHERE id = $1
-                    """, user_id)
-                else:
-                    # SQLite
-                    cursor = await conn.execute("""
-                        SELECT two_factor_enabled,
-                               totp_secret IS NOT NULL as has_secret,
-                               backup_codes IS NOT NULL as has_backup_codes
-                        FROM users WHERE id = ?
-                    """, (user_id,))
-                    result = await cursor.fetchone()
+            if not self.db_pool:
+                raise DatabaseError("MFAService database pool not initialized")
 
-                if result:
-                    return {
-                        "enabled": bool(result[0] if isinstance(result, tuple) else result['two_factor_enabled']),
-                        "has_secret": bool(result[1] if isinstance(result, tuple) else result['has_secret']),
-                        "has_backup_codes": bool(result[2] if isinstance(result, tuple) else result['has_backup_codes']),
-                        "method": "totp" if result[0] else None
-                    }
+            repo = AuthnzMfaRepo(self.db_pool)
+            row = await repo.get_mfa_status_row(user_id)
+
+            if row:
+                enabled_raw = row.get("two_factor_enabled")
+                has_secret_raw = row.get("has_secret")
+                has_backup_raw = row.get("has_backup_codes")
+                enabled = bool(enabled_raw)
+                return {
+                    "enabled": enabled,
+                    "has_secret": bool(has_secret_raw),
+                    "has_backup_codes": bool(has_backup_raw),
+                    "method": "totp" if enabled else None,
+                }
 
         except Exception as e:
             logger.error(f"Failed to get MFA status: {e}")
@@ -478,76 +437,58 @@ class MFAService:
             await self.initialize()
 
         try:
-            async with self.db_pool.transaction() as conn:
-                # Get backup codes
-                if hasattr(conn, 'fetchval'):
-                    # PostgreSQL
-                    backup_codes_json = await conn.fetchval(
-                        "SELECT backup_codes FROM users WHERE id = $1",
-                        user_id
-                    )
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        "SELECT backup_codes FROM users WHERE id = ?",
-                        (user_id,)
-                    )
-                    result = await cursor.fetchone()
-                    backup_codes_json = result[0] if result else None
+            if not self.db_pool:
+                raise DatabaseError("MFAService database pool not initialized")
 
-                if not backup_codes_json:
-                    return False
+            repo = AuthnzMfaRepo(self.db_pool)
 
-                backup_codes = json.loads(backup_codes_json)
-                hash_candidates = self._hash_backup_code_candidates(user_id, code)
-                normalized_input = self._normalize_backup_code(code)
+            # Get backup codes JSON
+            backup_codes_json = await repo.get_backup_codes_json(user_id)
 
-                matched = False
-                for digest in hash_candidates:
-                    if digest in backup_codes:
-                        backup_codes.remove(digest)
-                        matched = True
-                        break
-                if not matched:
-                    for candidate in list(backup_codes):
-                        if not isinstance(candidate, str):
-                            continue
-                        if self._normalize_backup_code(candidate) == normalized_input:
-                            backup_codes.remove(candidate)
-                            matched = True
-                            break
-                if not matched:
-                    return False
+            if not backup_codes_json:
+                return False
 
-                # Ensure remaining codes are stored as hashed values
-                normalized_codes: List[str] = []
-                for candidate in backup_codes:
+            backup_codes = json.loads(backup_codes_json)
+            hash_candidates = self._hash_backup_code_candidates(user_id, code)
+            normalized_input = self._normalize_backup_code(code)
+
+            matched = False
+            for digest in hash_candidates:
+                if digest in backup_codes:
+                    backup_codes.remove(digest)
+                    matched = True
+                    break
+            if not matched:
+                for candidate in list(backup_codes):
                     if not isinstance(candidate, str):
                         continue
-                    if len(candidate) == 64 and all(ch in string.hexdigits for ch in candidate):
-                        normalized_codes.append(candidate.lower())
-                    else:
-                        normalized_codes.append(self._hash_backup_code(user_id, candidate))
+                    if self._normalize_backup_code(candidate) == normalized_input:
+                        backup_codes.remove(candidate)
+                        matched = True
+                        break
+            if not matched:
+                return False
 
-                updated_codes_json = json.dumps(normalized_codes)
-
-                # Update database
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    await conn.execute(
-                        "UPDATE users SET backup_codes = $1 WHERE id = $2",
-                        updated_codes_json, user_id
-                    )
+            # Ensure remaining codes are stored as hashed values
+            normalized_codes: List[str] = []
+            for candidate in backup_codes:
+                if not isinstance(candidate, str):
+                    continue
+                if len(candidate) == 64 and all(ch in string.hexdigits for ch in candidate):
+                    normalized_codes.append(candidate.lower())
                 else:
-                    # SQLite
-                    await conn.execute(
-                        "UPDATE users SET backup_codes = ? WHERE id = ?",
-                        (updated_codes_json, user_id)
-                    )
-                    await conn.commit()
+                    normalized_codes.append(self._hash_backup_code(user_id, candidate))
 
-                logger.info(f"Backup code used for user {user_id}")
-                return True
+            updated_codes_json = json.dumps(normalized_codes)
+
+            # Persist updated backup codes
+            await repo.update_backup_codes_json(
+                user_id=user_id,
+                backup_codes_json=updated_codes_json,
+            )
+
+            logger.info(f"Backup code used for user {user_id}")
+            return True
 
         except Exception as e:
             logger.error(f"Failed to verify backup code: {e}")
@@ -575,20 +516,15 @@ class MFAService:
             hashed_codes = [self._hash_backup_code(user_id, code) for code in new_codes]
             backup_codes_json = json.dumps(hashed_codes)
 
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    await conn.execute(
-                        "UPDATE users SET backup_codes = $1, updated_at = $2 WHERE id = $3",
-                        backup_codes_json, datetime.utcnow(), user_id
-                    )
-                else:
-                    # SQLite
-                    await conn.execute(
-                        "UPDATE users SET backup_codes = ?, updated_at = ? WHERE id = ?",
-                        (backup_codes_json, datetime.utcnow().isoformat(), user_id)
-                    )
-                    await conn.commit()
+            if not self.db_pool:
+                raise DatabaseError("MFAService database pool not initialized")
+
+            repo = AuthnzMfaRepo(self.db_pool)
+            await repo.set_backup_codes_with_timestamp(
+                user_id=user_id,
+                backup_codes_json=backup_codes_json,
+                updated_at=datetime.utcnow(),
+            )
 
             logger.info(f"Regenerated backup codes for user {user_id}")
             return new_codes

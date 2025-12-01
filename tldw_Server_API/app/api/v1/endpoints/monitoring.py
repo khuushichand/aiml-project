@@ -6,14 +6,14 @@ Topic Monitoring API (Phase 1)
 Admin endpoints to manage watchlists and view alerts.
 """
 
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
 import os
 import json
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin, require_permissions
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_permissions
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.api.v1.schemas.monitoring_schemas import (
     Watchlist,
@@ -42,7 +42,7 @@ router = APIRouter()
     summary="List all watchlists",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def list_watchlists(_: Any = Depends(require_admin)):
+async def list_watchlists():
     svc = get_topic_monitoring_service()
     return WatchlistListResponse(watchlists=svc.list_watchlists())
 
@@ -54,7 +54,7 @@ async def list_watchlists(_: Any = Depends(require_admin)):
     summary="Create or update a watchlist",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def upsert_watchlist(payload: Watchlist, _: Any = Depends(require_admin)):
+async def upsert_watchlist(payload: Watchlist):
     try:
         svc = get_topic_monitoring_service()
         wl = svc.upsert_watchlist(payload)
@@ -71,7 +71,7 @@ async def upsert_watchlist(payload: Watchlist, _: Any = Depends(require_admin)):
     summary="Delete a watchlist",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def delete_watchlist(watchlist_id: str, _: Any = Depends(require_admin)):
+async def delete_watchlist(watchlist_id: str):
     svc = get_topic_monitoring_service()
     ok = svc.delete_watchlist(watchlist_id)
     if not ok:
@@ -85,7 +85,7 @@ async def delete_watchlist(watchlist_id: str, _: Any = Depends(require_admin)):
     summary="Reload watchlists from file",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def reload_watchlists(_: Any = Depends(require_admin)):
+async def reload_watchlists():
     svc = get_topic_monitoring_service()
     svc.reload()
     return {"status": "ok"}
@@ -104,7 +104,6 @@ async def list_alerts(
     unread_only: Optional[bool] = Query(False, description="Only unread alerts"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    _: Any = Depends(require_admin),
 ):
     db = TopicMonitoringDB()  # default path from env handled in service; keep simple here
     rows = db.list_alerts(user_id=user_id, since_iso=since, unread_only=bool(unread_only), limit=limit, offset=offset)
@@ -114,7 +113,6 @@ async def list_alerts(
         meta = r.get("metadata")
         if isinstance(meta, str) and meta:
             try:
-                import json
                 r["metadata"] = json.loads(meta)
             except Exception as e:
                 logger.debug(f"monitoring: failed to parse alert metadata JSON: {e}")
@@ -129,7 +127,7 @@ async def list_alerts(
     summary="Mark an alert as read",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def mark_alert_read(alert_id: int, _: Any = Depends(require_admin)):
+async def mark_alert_read(alert_id: int):
     db = TopicMonitoringDB()
     ok = db.mark_read(alert_id)
     if not ok:
@@ -144,7 +142,7 @@ async def mark_alert_read(alert_id: int, _: Any = Depends(require_admin)):
     summary="Get notification settings",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_notifications_settings(_: Any = Depends(require_admin)):
+async def get_notifications_settings():
     svc = get_notification_service()
     return NotificationSettings(**svc.get_settings())
 
@@ -156,7 +154,7 @@ async def get_notifications_settings(_: Any = Depends(require_admin)):
     summary="Update notification settings (runtime only)",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def update_notifications_settings(payload: NotificationSettingsUpdate, _: Any = Depends(require_admin)):
+async def update_notifications_settings(payload: NotificationSettingsUpdate):
     svc = get_notification_service()
     data = payload.model_dump(exclude_unset=True)
     updated = svc.update_settings(**data)
@@ -169,7 +167,7 @@ async def update_notifications_settings(payload: NotificationSettingsUpdate, _: 
     summary="Send a test notification (critical by default)",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def send_test_notification(payload: NotificationTestRequest, _: Any = Depends(require_admin)):
+async def send_test_notification(payload: NotificationTestRequest):
     notifier = get_notification_service()
     alert = TopicAlert(
         user_id=payload.user_id or "admin",
@@ -197,7 +195,7 @@ async def send_test_notification(payload: NotificationTestRequest, _: Any = Depe
     summary="Tail recent notifications from file (JSONL)",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_recent_notifications(limit: int = Query(50, ge=1, le=500), _: Any = Depends(require_admin)):
+async def get_recent_notifications(limit: int = Query(50, ge=1, le=500)):
     svc = get_notification_service()
     path = getattr(svc, 'file_path', None)
     items: list[dict] = []

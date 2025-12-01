@@ -20,6 +20,7 @@ def _build_app_with_overrides(
     app.include_router(connectors_mod.router, prefix="/api/v1")
 
     async def _fake_get_auth_principal(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        _ = request  # required by dependency signature
         if fail_with_401:
             raise HTTPException(
                 status_code=401,
@@ -130,4 +131,3 @@ async def test_connectors_admin_policy_200_for_admin_principal(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["org_id"] == 1
-

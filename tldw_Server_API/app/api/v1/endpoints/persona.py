@@ -80,8 +80,8 @@ async def persona_stream(
         await stream.send_json({"event": "notice", "level": "error", "message": "Persona disabled"})
         try:
             await stream.ws.close(code=1000)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"Persona stream close failed after disable notice: {exc}")
         return
     try:
         await stream.send_json({"event": "notice", "message": "persona stream connected (scaffold)"})

@@ -283,8 +283,8 @@ async def list_users(
                 _logger.info(f"Admin list_users TEST_MODE: Authorization present={bool(auth_hdr)}")
             except Exception as _e:
                 response.headers["X-TLDW-Admin-Diag-Error"] = str(_e)
-    except Exception:
-        pass
+    except Exception as diag_exc:
+        logger.debug(f"Admin list_users TEST_MODE diagnostics failed: {diag_exc}")
 
     try:
         offset = (page - 1) * limit

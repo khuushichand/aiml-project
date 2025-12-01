@@ -20,6 +20,7 @@ except ImportError:
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import AuthnzMonitoringRepo
 
 #######################################################################################################################
 #
@@ -222,8 +223,6 @@ class AuthNZMonitor:
     ):
         """Store metric in database for historical analysis"""
         try:
-            db_pool = await get_db_pool()
-
             # Prepare data
             metric_data = {
                 'type': metric_type.value,
@@ -233,31 +232,13 @@ class AuthNZMonitor:
                 'timestamp': datetime.utcnow().isoformat()
             }
 
-            # Store in audit log for now (could have dedicated metrics table)
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    await conn.execute(
-                        """
-                        INSERT INTO audit_logs (action, details, created_at)
-                        VALUES ($1, $2, $3)
-                        """,
-                        f"metric_{metric_type.value}",
-                        json.dumps(metric_data),
-                        datetime.utcnow()
-                    )
-                else:
-                    # SQLite
-                    await conn.execute(
-                        """
-                        INSERT INTO audit_logs (action, details, created_at)
-                        VALUES (?, ?, ?)
-                        """,
-                        (f"metric_{metric_type.value}",
-                         json.dumps(metric_data),
-                         datetime.utcnow().isoformat())
-                    )
-                    await conn.commit()
+            db_pool = await get_db_pool()
+            repo = AuthnzMonitoringRepo(db_pool)
+            await repo.insert_metric_audit_log(
+                action=f"metric_{metric_type.value}",
+                details_json=json.dumps(metric_data),
+                created_at=datetime.utcnow(),
+            )
 
         except Exception as e:
             logger.error(f"Failed to store metric in database: {e}")
@@ -407,48 +388,17 @@ class AuthNZMonitor:
             Dictionary with metrics summary
         """
         try:
-            db_pool = await get_db_pool()
             cutoff = datetime.utcnow() - timedelta(minutes=time_range_minutes)
-            is_postgres = getattr(db_pool, "pool", None) is not None
-            cutoff_param = cutoff if is_postgres else cutoff.isoformat()
+            db_pool = await get_db_pool()
+            repo = AuthnzMonitoringRepo(db_pool)
 
             # Get authentication metrics
-            auth_metrics = await db_pool.fetchone(
-                """
-                SELECT
-                    COUNT(CASE WHEN action = 'metric_auth_success' THEN 1 END) as successful_auths,
-                    COUNT(CASE WHEN action = 'metric_auth_failure' THEN 1 END) as failed_auths,
-                    COUNT(CASE WHEN action = 'metric_rate_limit_hit' THEN 1 END) as rate_limit_hits
-                FROM audit_logs
-                WHERE created_at > ?
-                AND action LIKE 'metric_%'
-                """,
-                cutoff_param,
-            )
+            auth_metrics = await repo.get_metrics_window_summary(cutoff)
 
-            # Get active sessions count
-            revoked_inactive_value = False
+            # Get active sessions/API keys counts
             now_dt = datetime.utcnow()
-            expires_param = now_dt if is_postgres else now_dt.isoformat()
-
-            sessions_count = await db_pool.fetchone(
-                """
-                SELECT COUNT(*) as active_sessions
-                FROM sessions
-                WHERE expires_at > ?
-                  AND (is_revoked = ? OR is_revoked IS NULL)
-                """,
-                (expires_param, revoked_inactive_value),
-            )
-
-            # Get active API keys count
-            api_keys_count = await db_pool.fetchone(
-                """
-                SELECT COUNT(*) as active_keys
-                FROM api_keys
-                WHERE status = 'active'
-                """
-            )
+            active_sessions = await repo.get_active_sessions_count(now_dt)
+            active_keys = await repo.get_active_api_keys_count()
 
             # Calculate success rate
             total_auths = (auth_metrics['successful_auths'] or 0) + (auth_metrics['failed_auths'] or 0)
@@ -465,10 +415,10 @@ class AuthNZMonitor:
                     'violations': auth_metrics['rate_limit_hits'] or 0
                 },
                 'sessions': {
-                    'active': sessions_count['active_sessions'] or 0
+                    'active': active_sessions
                 },
                 'api_keys': {
-                    'active': api_keys_count['active_keys'] or 0
+                    'active': active_keys
                 },
                 'timestamp': now_dt.isoformat()
             }
@@ -492,17 +442,9 @@ class AuthNZMonitor:
             last_hour = await self.get_metrics_summary(60)
             last_24h = await self.get_metrics_summary(24 * 60)
 
-            # Get recent alerts
             db_pool = await get_db_pool()
-            recent_alerts = await db_pool.fetchall(
-                """
-                SELECT action, details, created_at
-                FROM audit_logs
-                WHERE action = 'metric_security_alert'
-                ORDER BY created_at DESC
-                LIMIT 10
-                """
-            )
+            repo = AuthnzMonitoringRepo(db_pool)
+            recent_alerts = await repo.get_recent_security_alerts(limit=10)
 
             alerts_list = []
             for alert in recent_alerts:

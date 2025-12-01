@@ -1,21 +1,18 @@
+import uuid
+
 import pytest
+
+pytest_plugins = ("tldw_Server_API.tests.AuthNZ.conftest",)
 
 
 @pytest.mark.asyncio
-async def test_authnz_api_keys_repo_fetch_key_limits_sqlite(tmp_path, monkeypatch):
-    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
-    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
+async def test_authnz_api_keys_repo_fetch_key_limits_sqlite(isolated_test_environment):
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
     from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
     from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
 
-    db_path = tmp_path / "api_keys_repo.db"
-    monkeypatch.setenv("AUTH_MODE", "multi_user")
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
-
-    reset_settings()
-    await reset_db_pool()
-
+    _client, _db_name = isolated_test_environment
     pool = await get_db_pool()
 
     # Ensure core AuthNZ tables exist via UsersDB and APIKeyManager so we
@@ -30,6 +27,7 @@ async def test_authnz_api_keys_repo_fetch_key_limits_sqlite(tmp_path, monkeypatc
         is_active=True,
         is_superuser=False,
         storage_quota_mb=5120,
+        uuid_value=uuid.uuid4(),
     )
     user_id = int(created_user["id"])
 
@@ -48,7 +46,6 @@ async def test_authnz_api_keys_repo_fetch_key_limits_sqlite(tmp_path, monkeypatc
 
     assert row is not None
     assert int(row["id"]) == key_id
-    # SQLite stores booleans as integers; treat both as truthy for virtual keys.
     assert bool(row.get("is_virtual")) is True
     assert int(row.get("llm_budget_day_tokens") or 0) == 123
     assert pytest.approx(float(row.get("llm_budget_month_usd") or 0.0), rel=1e-6) == 4.56

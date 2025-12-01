@@ -82,7 +82,7 @@ from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_roles
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 
@@ -137,7 +137,10 @@ def get_db_for_user(user_id: int):
 # verify_api_key et al. imported from evaluations_auth
 
 
-@router.post("/admin/idempotency/cleanup")
+@router.post(
+    "/admin/idempotency/cleanup",
+    dependencies=[Depends(require_roles("admin"))],
+)
 async def admin_cleanup_idempotency(
     ttl_hours: int = Query(72, ge=1, le=720, description="Delete idempotency keys older than this TTL (hours)"),
     target_user_id: Optional[int] = Query(None, description="If provided, only clean this user's evaluations DB"),

@@ -157,12 +157,8 @@ class AuthnzUsageRepo:
             tokens = 0
             usd = 0.0
             if row:
-                try:
-                    tokens = int(row.get("tokens", 0))  # type: ignore[arg-type]
-                    usd = float(row.get("usd", 0.0))  # type: ignore[arg-type]
-                except Exception:
-                    tokens = int(row.get("tokens") or 0)  # type: ignore[arg-type]
-                    usd = float(row.get("usd") or 0.0)  # type: ignore[arg-type]
+                tokens = int(row.get("tokens") or 0)
+                usd = float(row.get("usd") or 0.0)
 
             return {"tokens": tokens, "usd": usd}
         except Exception as exc:  # pragma: no cover - surfaced via callers
@@ -179,14 +175,11 @@ class AuthnzUsageRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
-                    result = await conn.execute(
-                        "DELETE FROM llm_usage_log WHERE ts < $1",
+                    rows = await conn.fetch(
+                        "DELETE FROM llm_usage_log WHERE ts < $1 RETURNING 1",
                         cutoff,
                     )
-                    try:
-                        return int(result.split()[-1]) if isinstance(result, str) else 0
-                    except Exception:
-                        return 0
+                    return len(rows)
                 # SQLite path
                 cursor = await conn.execute(
                     "DELETE FROM llm_usage_log WHERE ts < ?",

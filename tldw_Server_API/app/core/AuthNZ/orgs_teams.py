@@ -161,10 +161,11 @@ async def remove_team_member(*, team_id: int, user_id: int) -> Dict[str, Any]:
         repo = AuthnzOrgsTeamsRepo(pool)
         return await repo.remove_team_member(team_id=team_id, user_id=user_id)
     except Exception as e:  # pragma: no cover - defensive logging wrapper
+        redact_logs = False
         try:
             redact_logs = get_settings().PII_REDACT_LOGS
-        except Exception:
-            redact_logs = False
+        except Exception as settings_err:
+            logger.debug(f"Failed to get settings for PII redaction: {settings_err}")
         if redact_logs:
             logger.error(
                 f"Failed to remove team member (details redacted) from team_id={team_id}: {e}"

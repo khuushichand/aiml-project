@@ -203,12 +203,13 @@ Notes:
   - New code MUST NOT introduce fresh `is_single_user_mode()` branches in endpoint/business logic. Mode checks are confined to a small number of coordination points (bootstrap, DB selection, and legacy compatibility helpers); authorization should flow through `AuthPrincipal` + claim-first dependencies instead.
 
 References:
-- `tldw_Server_API/app/core/AuthNZ/permissions.py:159` (PermissionChecker – legacy shim)
-- `tldw_Server_API/app/core/AuthNZ/permissions.py:222` (RoleChecker – legacy shim)
-- `tldw_Server_API/app/core/AuthNZ/permissions.py:270` (AnyPermissionChecker – legacy shim)
-- `tldw_Server_API/app/core/AuthNZ/permissions.py:318` (AllPermissionsChecker – legacy shim)
-- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:760` (get_auth_principal)
-- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:781` (require_permissions / require_roles)
+- `tldw_Server_API/app/core/AuthNZ/permissions.py#PermissionChecker` (legacy shim)
+- `tldw_Server_API/app/core/AuthNZ/permissions.py#RoleChecker` (legacy shim)
+- `tldw_Server_API/app/core/AuthNZ/permissions.py#AnyPermissionChecker` (legacy shim)
+- `tldw_Server_API/app/core/AuthNZ/permissions.py#AllPermissionsChecker` (legacy shim)
+- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#get_auth_principal`
+- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#require_permissions`
+- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#require_roles`
 
 ## Rate Limiting & Quotas
 
@@ -217,11 +218,11 @@ References:
 - LLM budgets: `llm_budget_middleware.py` and `llm_budget_guard.py` enforce endpoint/provider/model quotas when configured. Settings are `LLM_BUDGET_ENFORCE` (on/off) and `LLM_BUDGET_ENDPOINTS` (paths). Virtual key features are gated by `VIRTUAL_KEYS_ENABLED` (defaults true).
 
 References:
-- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:284` (get_rate_limiter_dep)
-- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:817` (check_rate_limit)
-- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:862` (check_auth_rate_limit)
-- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:994` (rbac_rate_limit)
-- `tldw_Server_API/app/core/AuthNZ/rate_limiter.py:45` (RateLimiter)
+- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#get_rate_limiter_dep`
+- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#check_rate_limit`
+- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#check_auth_rate_limit`
+- `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#rbac_rate_limit`
+- `tldw_Server_API/app/core/AuthNZ/rate_limiter.py#RateLimiter`
 
 RBAC-aware selector (logging-only for now):
 - `auth_deps.rbac_rate_limit(resource)` logs the strictest configured limit selected for a user/role-resource pair; it does not enforce yet (use `check_rate_limit` for enforcement).

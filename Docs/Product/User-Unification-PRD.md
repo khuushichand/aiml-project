@@ -253,8 +253,8 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
   - `virtual_keys` budget and usage paths delegate to `AuthnzApiKeysRepo` / `AuthnzUsageRepo` instead of embedding dialect-specific SQL.
   - `orgs_teams` is now a thin orchestration layer over `AuthnzOrgsTeamsRepo` for organization, team, and membership operations (including default-team handling).
   - `rate_limiter` uses `AuthnzRateLimitsRepo` for all DB-backed rate-limiter tables (`rate_limits`, `failed_attempts`, `account_lockouts`), and the AuthNZ scheduler prunes usage tables via `AuthnzUsageRepo`.
-  - `session_manager` delegates session creation, validation, refresh, listing, and cleanup to `AuthnzSessionsRepo`, and token blacklist operations (`revoke_token`, blacklist checks, cleanup, stats) use `AuthnzTokenBlacklistRepo` for all `token_blacklist` table access.
-- Remaining inline SQL touching MFA and selected bootstrap/monitoring paths is intentionally left for later phases; it is documented in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` as out-of-scope for this iteration (e.g., MFA factor storage/verification and a small amount of session revocation logic embedded in `token_blacklist.revoke_all_user_tokens`).
+  - `session_manager` delegates session creation, validation, refresh, listing, and cleanup to `AuthnzSessionsRepo`, and token blacklist operations (`revoke_token`, blacklist checks, cleanup, stats, and revoke-all-tokens flows) use `AuthnzTokenBlacklistRepo` together with `AuthnzSessionsRepo` for all `token_blacklist` and `sessions` table access in logout-all-devices paths.
+- Remaining inline SQL touching MFA and selected bootstrap/monitoring paths is intentionally left for later phases; it is documented in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` as out-of-scope for this iteration (e.g., MFA factor storage/verification and small bootstrap/monitoring helpers).
 
 ### Out of Scope (v1)
 

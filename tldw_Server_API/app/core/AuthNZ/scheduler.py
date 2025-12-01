@@ -19,6 +19,7 @@ from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
+from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
 from tldw_Server_API.app.core.Metrics import set_gauge
 
 #######################################################################################################################
@@ -366,23 +367,12 @@ class AuthNZScheduler:
             retention_days = self.settings.AUDIT_LOG_RETENTION_DAYS
             cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
 
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    result = await conn.execute(
-                        "DELETE FROM audit_logs WHERE created_at < $1",
-                        cutoff_date
-                    )
-                    # Extract count from result
-                    count = int(result.split()[-1]) if isinstance(result, str) else 0
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        "DELETE FROM audit_logs WHERE created_at < ?",
-                        (cutoff_date.isoformat(),)
-                    )
-                    count = cursor.rowcount
-                    await conn.commit()
+            from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import (
+                AuthnzMonitoringRepo,
+            )
+
+            repo = AuthnzMonitoringRepo(db_pool)
+            count = await repo.delete_audit_logs_before(cutoff_date)
 
             if count > 0:
                 logger.info(f"Pruned {count} audit log entries older than {retention_days} days")
@@ -394,7 +384,6 @@ class AuthNZScheduler:
         try:
             db_pool = await get_db_pool()
             cutoff = datetime.utcnow() - timedelta(days=self.settings.USAGE_LOG_RETENTION_DAYS)
-            from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
 
             repo = AuthnzUsageRepo(db_pool)
             count = await repo.prune_usage_log_before(cutoff)
@@ -408,7 +397,6 @@ class AuthNZScheduler:
         try:
             db_pool = await get_db_pool()
             cutoff = datetime.utcnow() - timedelta(days=self.settings.LLM_USAGE_LOG_RETENTION_DAYS)
-            from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
 
             repo = AuthnzUsageRepo(db_pool)
             count = await repo.prune_llm_usage_log_before(cutoff)
@@ -424,7 +412,6 @@ class AuthNZScheduler:
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _gs
             retention_days = _gs().USAGE_DAILY_RETENTION_DAYS
             cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
-            from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
 
             repo = AuthnzUsageRepo(db_pool)
             count = await repo.prune_usage_daily_before(cutoff_date.date())
@@ -440,7 +427,6 @@ class AuthNZScheduler:
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _gs
             retention_days = _gs().LLM_USAGE_DAILY_RETENTION_DAYS
             cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
-            from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
 
             repo = AuthnzUsageRepo(db_pool)
             count = await repo.prune_llm_usage_daily_before(cutoff_date.date())
