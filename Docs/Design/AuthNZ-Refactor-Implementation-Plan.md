@@ -203,7 +203,11 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
   - `orgs_teams.py` is thin orchestration over `AuthnzOrgsTeamsRepo` for org creation, teams, and membership, with no direct SQL.
   - `rate_limiter.py` delegates `rate_limits` upserts, reads, failed-attempt accounting, lockout checks, and DB cleanup to `AuthnzRateLimitsRepo`.
   - `scheduler.py` uses `AuthnzUsageRepo` for usage/LLM-usage pruning instead of inline `usage_log`/`llm_usage_*` SQL.
-- Remaining inline SQL in AuthNZ touching users, sessions, and token blacklist (e.g., selected paths in `session_manager`, `mfa_service`, `token_blacklist`, and parts of `initialize`/`monitoring`) is explicitly out-of-scope for this phase and will be migrated in later iterations as tests and PRDs for those areas are extended.
+- Remaining inline SQL in AuthNZ touching users, sessions, and token blacklist (e.g., selected paths in `session_manager`, `mfa_service`, `token_blacklist`, and parts of `initialize`/`monitoring`) is explicitly out-of-scope for this phase and will be migrated in later iterations as tests and PRDs for those areas are extended. A focused audit of `hasattr(conn, 'fetch*')` branches confirms the remaining clusters:
+  - **Sessions**: `session_manager.py` still contains backend-specific branches around session lookup, revocation, and cleanup (e.g., `fetchval`, `fetch`, and `fetchrow` variants). These will be pulled behind a dedicated `AuthnzSessionsRepo` in a follow-on stage.
+  - **Token blacklist**: `token_blacklist.py` retains inline SQL for blacklist insert/count/cleanup across backends. A future `AuthnzTokenBlacklistRepo` will encapsulate these operations.
+  - **MFA**: `mfa_service.py` keeps dialect-conditional queries for MFA factors and verification attempts; a small `AuthnzMfaRepo` is planned to unify these paths.
+  - **API key manager / monitoring / initialize**: `api_key_manager.py`, `monitoring.py`, and parts of `initialize.py` use limited inline SQL for bootstrap and monitoring reads. These are currently low-risk and are explicitly marked as out-of-scope for Stage 3/4; they will be revisited once the core repos (users, sessions, token_blacklist, MFA) are in place.
 
 ---
 

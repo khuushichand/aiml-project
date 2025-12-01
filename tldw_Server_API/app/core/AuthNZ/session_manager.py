@@ -41,6 +41,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DatabaseError
 )
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
+from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRepo
 
 try:
     from tldw_Server_API.app.core.config import settings as core_settings
@@ -800,84 +801,60 @@ class SessionManager:
         if refresh_exp_override:
             refresh_expires_at = refresh_exp_override
 
-        session_id = None
-
         try:
             db_pool = await self._ensure_db_pool()
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchval'):
-                    # PostgreSQL
-                    session_id = await conn.fetchval(
-                        """
-                        INSERT INTO sessions (
-                            user_id, token_hash, refresh_token_hash,
-                            encrypted_token, encrypted_refresh,
-                            expires_at, refresh_expires_at,
-                            ip_address, user_agent, device_id,
-                            access_jti, refresh_jti
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                        RETURNING id
-                        """,
-                        user_id, access_hash, refresh_hash,
-                        encrypted_access, encrypted_refresh,
-                        expires_at, refresh_expires_at,
-                        ip_address, user_agent, device_id,
-                        access_jti, refresh_jti
-                    )
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        """
-                        INSERT INTO sessions (
-                            user_id, token_hash, refresh_token_hash,
-                            encrypted_token, encrypted_refresh,
-                            expires_at, refresh_expires_at,
-                            ip_address, user_agent, device_id,
-                            access_jti, refresh_jti
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (user_id, access_hash, refresh_hash,
-                         encrypted_access, encrypted_refresh,
-                         expires_at.isoformat(),
-                         refresh_expires_at.isoformat() if refresh_expires_at else None,
-                         ip_address, user_agent, device_id,
-                         access_jti, refresh_jti)
-                    )
-                    session_id = cursor.lastrowid
-                    await conn.commit()
+            repo = AuthnzSessionsRepo(db_pool)
+            session_id = await repo.create_session_record(
+                user_id=user_id,
+                token_hash=access_hash,
+                refresh_token_hash=refresh_hash,
+                encrypted_token=encrypted_access,
+                encrypted_refresh=encrypted_refresh,
+                expires_at=expires_at,
+                refresh_expires_at=refresh_expires_at,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                device_id=device_id,
+                access_jti=access_jti,
+                refresh_jti=refresh_jti,
+            )
 
-                # Cache in Redis if available
-                if self.redis_client:
-                    await self._cache_session(
-                        access_hash,
-                        user_id,
-                        session_id,
-                        expires_at,
-                        user_active=True,
-                        revoked=False,
-                    )
+            # Cache in Redis if available
+            if self.redis_client:
+                await self._cache_session(
+                    access_hash,
+                    user_id,
+                    session_id,
+                    expires_at,
+                    user_active=True,
+                    revoked=False,
+                )
 
-                if self.settings.PII_REDACT_LOGS:
-                    logger.info("Created session [redacted]")
-                else:
-                    logger.info(f"Created session {session_id} for user {user_id}")
-                log_counter("auth_session_create_success")
-                log_histogram("auth_session_create_duration", time.perf_counter() - start_time)
+            if self.settings.PII_REDACT_LOGS:
+                logger.info("Created session [redacted]")
+            else:
+                logger.info(f"Created session {session_id} for user {user_id}")
+            log_counter("auth_session_create_success")
+            log_histogram(
+                "auth_session_create_duration",
+                time.perf_counter() - start_time,
+            )
 
-                return {
-                    "session_id": session_id,
-                    "user_id": user_id,
-                    "expires_at": expires_at.isoformat(),
-                    "access_token": access_token,
-                    "refresh_token": refresh_token
-                }
+            return {
+                "session_id": session_id,
+                "user_id": user_id,
+                "expires_at": expires_at.isoformat(),
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+            }
 
         except Exception as e:
             logger.error(f"Failed to create session: {e}")
             log_counter("auth_session_create_error")
-            log_histogram("auth_session_create_duration", time.perf_counter() - start_time)
+            log_histogram(
+                "auth_session_create_duration",
+                time.perf_counter() - start_time,
+            )
             raise SessionError(f"Failed to create session: {e}")
 
     async def validate_session(self, access_token: str) -> Optional[Dict[str, Any]]:
@@ -1022,74 +999,21 @@ class SessionManager:
         session_details: Optional[Dict[str, Any]] = None
         try:
             db_pool = await self._ensure_db_pool()
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    session_row = await conn.fetchrow(
-                        """
-                        SELECT id, user_id, access_jti, refresh_jti, expires_at, refresh_expires_at
-                        FROM sessions
-                        WHERE id = $1
-                        """,
-                        session_id
-                    )
-                    if session_row:
-                        session_details = dict(session_row)
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    await conn.execute(
-                        """
-                        UPDATE sessions
-                        SET is_active = FALSE,
-                            is_revoked = TRUE,
-                            revoked_at = CURRENT_TIMESTAMP,
-                            revoked_by = $2,
-                            revoke_reason = $3
-                        WHERE id = $1
-                        """,
-                        session_id, revoked_by, reason
-                    )
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        """
-                        SELECT id, user_id, access_jti, refresh_jti, expires_at, refresh_expires_at
-                        FROM sessions
-                        WHERE id = ?
-                        """,
-                        (session_id,)
-                    )
-                    row = await cursor.fetchone()
-                    if row:
-                        session_details = {
-                            "id": row[0],
-                            "user_id": row[1],
-                            "access_jti": row[2],
-                            "refresh_jti": row[3],
-                            "expires_at": row[4],
-                            "refresh_expires_at": row[5],
-                        }
-                    await conn.execute(
-                        """
-                        UPDATE sessions
-                        SET is_active = 0,
-                            is_revoked = 1,
-                            revoked_at = datetime('now'),
-                            revoked_by = ?,
-                            revoke_reason = ?
-                        WHERE id = ?
-                        """,
-                        (revoked_by, reason, session_id)
-                    )
-                    await conn.commit()
+            repo = AuthnzSessionsRepo(db_pool)
+            session_details = await repo.revoke_session_record(
+                session_id=session_id,
+                revoked_by=revoked_by,
+                reason=reason,
+            )
 
-                # Clear from cache
-                if self.redis_client:
-                    await self._clear_session_cache(session_id)
+            # Clear from cache
+            if self.redis_client:
+                await self._clear_session_cache(session_id)
 
-                if self.settings.PII_REDACT_LOGS:
-                    logger.info("Revoked session [redacted]")
-                else:
-                    logger.info(f"Revoked session {session_id}")
+            if self.settings.PII_REDACT_LOGS:
+                logger.info("Revoked session [redacted]")
+            else:
+                logger.info(f"Revoked session {session_id}")
 
         except Exception as e:
             logger.error(f"Failed to revoke session: {e}")
@@ -1113,65 +1037,20 @@ class SessionManager:
 
         try:
             db_pool = await self._ensure_db_pool()
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    if except_session_id:
-                        await conn.execute(
-                            """
-                            UPDATE sessions
-                            SET is_active = FALSE,
-                                is_revoked = TRUE,
-                                revoked_at = CURRENT_TIMESTAMP
-                            WHERE user_id = $1 AND id != $2
-                            """,
-                            user_id, except_session_id
-                        )
-                    else:
-                        await conn.execute(
-                            """
-                            UPDATE sessions
-                            SET is_active = FALSE,
-                                is_revoked = TRUE,
-                                revoked_at = CURRENT_TIMESTAMP
-                            WHERE user_id = $1
-                            """,
-                            user_id
-                        )
-                else:
-                    # SQLite
-                    if except_session_id:
-                        await conn.execute(
-                            """
-                            UPDATE sessions
-                            SET is_active = 0,
-                                is_revoked = 1,
-                                revoked_at = datetime('now')
-                            WHERE user_id = ? AND id != ?
-                            """,
-                            (user_id, except_session_id)
-                        )
-                    else:
-                        await conn.execute(
-                            """
-                            UPDATE sessions
-                            SET is_active = 0,
-                                is_revoked = 1,
-                                revoked_at = datetime('now')
-                            WHERE user_id = ?
-                            """,
-                            (user_id,)
-                        )
-                    await conn.commit()
+            repo = AuthnzSessionsRepo(db_pool)
+            await repo.revoke_all_sessions_for_user(
+                user_id=user_id,
+                except_session_id=except_session_id,
+            )
 
-                # Clear from cache
-                if self.redis_client:
-                    await self._clear_user_sessions_cache(user_id)
+            # Clear from cache
+            if self.redis_client:
+                await self._clear_user_sessions_cache(user_id)
 
-                if self.settings.PII_REDACT_LOGS:
-                    logger.info("Revoked all sessions [redacted]")
-                else:
-                    logger.info(f"Revoked all sessions for user {user_id}")
+            if self.settings.PII_REDACT_LOGS:
+                logger.info("Revoked all sessions [redacted]")
+            else:
+                logger.info(f"Revoked all sessions for user {user_id}")
 
         except Exception as e:
             logger.error(f"Failed to revoke user sessions: {e}")
@@ -1627,47 +1506,8 @@ class SessionManager:
 
         try:
             db_pool = await self._ensure_db_pool()
-            async with db_pool.acquire() as conn:
-                if hasattr(conn, 'fetch'):
-                    # PostgreSQL
-                    rows = await conn.fetch(
-                        """
-                        SELECT id, ip_address, user_agent, device_id,
-                               created_at, last_activity, expires_at
-                        FROM sessions
-                        WHERE user_id = $1 AND is_active = TRUE
-                        ORDER BY last_activity DESC
-                        """,
-                        user_id
-                    )
-                    sessions = [dict(row) for row in rows]
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        """
-                        SELECT id, ip_address, user_agent, device_id,
-                               created_at, last_activity, expires_at
-                        FROM sessions
-                        WHERE user_id = ? AND is_active = 1
-                        ORDER BY last_activity DESC
-                        """,
-                        (user_id,)
-                    )
-                    rows = await cursor.fetchall()
-                    sessions = []
-                    for row in rows:
-                        sessions.append({
-                            "id": row[0],
-                            "ip_address": row[1],
-                            "user_agent": row[2],
-                            "device_id": row[3],
-                            "created_at": row[4],
-                            "last_activity": row[5],
-                            "expires_at": row[6]
-                        })
-
-            return sessions
-
+            repo = AuthnzSessionsRepo(db_pool)
+            return await repo.get_active_sessions_for_user(user_id)
         except Exception as e:
             logger.error(f"Failed to get active sessions: {e}")
             return []
@@ -1681,66 +1521,17 @@ class SessionManager:
             logger.info("Starting session cleanup...")
 
             db_pool = await self._ensure_db_pool()
-            async with db_pool.transaction() as conn:
-                # First check if the sessions table exists
-                if hasattr(conn, 'fetchval'):
-                    # PostgreSQL
-                    table_exists = await conn.fetchval(
-                        """
-                        SELECT EXISTS (
-                            SELECT FROM information_schema.tables
-                            WHERE table_name = 'sessions'
-                        )
-                        """
-                    )
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        """
-                        SELECT name FROM sqlite_master
-                        WHERE type='table' AND name='sessions'
-                        """
-                    )
-                    result = await cursor.fetchone()
-                    table_exists = result is not None
+            repo = AuthnzSessionsRepo(db_pool)
+            deleted = await repo.cleanup_expired_sessions()
 
-                if not table_exists:
-                    logger.debug("Sessions table does not exist, skipping cleanup")
-                    return 0
+            if deleted:
+                logger.info(f"Cleaned up {deleted} expired sessions")
 
-                # Proceed with cleanup if table exists
-                deleted = 0
-                if hasattr(conn, 'fetchval'):
-                    # PostgreSQL
-                    rows = await conn.fetch(
-                        """
-                        DELETE FROM sessions
-                        WHERE expires_at < CURRENT_TIMESTAMP - INTERVAL '1 day'
-                        OR (is_active = FALSE AND revoked_at < CURRENT_TIMESTAMP - INTERVAL '7 days')
-                        RETURNING id
-                        """
-                    )
-                    deleted = len(rows)
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        """
-                        DELETE FROM sessions
-                        WHERE datetime(expires_at) < datetime('now', '-1 day')
-                        OR (is_active = 0 AND datetime(revoked_at) < datetime('now', '-7 days'))
-                        """
-                    )
-                    deleted = cursor.rowcount
-                    await conn.commit()
+            # Clean Redis cache
+            if self.redis_client:
+                await self._cleanup_redis_cache()
 
-                if deleted:
-                    logger.info(f"Cleaned up {deleted} expired sessions")
-
-                # Clean Redis cache
-                if self.redis_client:
-                    await self._cleanup_redis_cache()
-
-                return int(deleted or 0)
+            return int(deleted or 0)
 
         except Exception as e:
             logger.error(f"Session cleanup failed: {e}")

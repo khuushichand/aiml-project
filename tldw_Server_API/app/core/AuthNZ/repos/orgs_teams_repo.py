@@ -200,7 +200,6 @@ class AuthnzOrgsTeamsRepo:
                     ),
                 )
                 team_id = cur.lastrowid
-                await conn.commit()
                 cur2 = await conn.execute(
                     """
                     SELECT id, org_id, name, slug, description, is_active, created_at, updated_at
@@ -587,12 +586,12 @@ class AuthnzOrgsTeamsRepo:
                 "removed": bool(removed),
             }
         except Exception as exc:  # pragma: no cover - surfaced via callers
-            logger.error(f"AuthnzOrgsTeamsRepo.remove_team_member failed: {exc}")
-            return {
-                "team_id": int(team_id),
-                "user_id": int(user_id),
-                "removed": False,
-            }
+            logger.exception(
+                "AuthnzOrgsTeamsRepo.remove_team_member failed for team_id=%s user_id=%s",
+                team_id,
+                user_id,
+            )
+            raise
 
     # -------------------------------------------------------------------------
     # Default team helpers (internal)

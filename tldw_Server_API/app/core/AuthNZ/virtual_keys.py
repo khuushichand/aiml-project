@@ -62,7 +62,7 @@ async def summarize_usage_for_key_day(key_id: int, day_iso: Optional[str] = None
     else:
         try:
             parsed = date.fromisoformat(str(day_val))
-        except Exception:
+        except ValueError:
             parsed = _utc_today()
         summary = await repo.summarize_key_day(key_id=key_id, day=parsed)
 
