@@ -49,6 +49,7 @@ from tldw_Server_API.app.core.Embeddings.vector_store_meta_db import (
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 
 # Embeddings batch generator hook. Tests may monkeypatch this attribute directly or
 # replace the provider resolver via _get_embeddings_fn(). We intentionally avoid
@@ -892,10 +893,13 @@ class HNSWEfSearchRequest(BaseModel):
     ef_search: int = Field(..., gt=0, description="hnsw.ef_search value to set for this session")
 
 
-@router.get("/vector_stores/{store_id}/admin/index_info")
+@router.get(
+    "/vector_stores/{store_id}/admin/index_info",
+    dependencies=[Depends(auth_deps.require_roles("admin"))],
+)
 async def get_index_info(
     store_id: str = Path(...),
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
@@ -913,10 +917,13 @@ async def get_index_info(
     }
 
 
-@router.post("/vector_stores/admin/hnsw_ef_search")
+@router.post(
+    "/vector_stores/admin/hnsw_ef_search",
+    dependencies=[Depends(auth_deps.require_roles("admin"))],
+)
 async def set_hnsw_ef_search(
     payload: HNSWEfSearchRequest = Body(...),
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
@@ -936,11 +943,14 @@ class RebuildIndexRequest(BaseModel):
     lists: Optional[int] = Field(100, ge=1, description="IVFFLAT lists")
 
 
-@router.post("/vector_stores/{store_id}/admin/rebuild_index")
+@router.post(
+    "/vector_stores/{store_id}/admin/rebuild_index",
+    dependencies=[Depends(auth_deps.require_roles("admin"))],
+)
 async def rebuild_index(
     store_id: str = Path(...),
     payload: RebuildIndexRequest = Body(...),
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
@@ -966,11 +976,14 @@ class DeleteByFilterRequest(BaseModel):
     filter: Dict[str, Any] = Field(..., description="Metadata filter expression")
 
 
-@router.post("/vector_stores/{store_id}/admin/delete_by_filter")
+@router.post(
+    "/vector_stores/{store_id}/admin/delete_by_filter",
+    dependencies=[Depends(auth_deps.require_roles("admin"))],
+)
 async def delete_by_filter(
     store_id: str = Path(...),
     payload: DeleteByFilterRequest = Body(...),
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     require_admin(current_user)
     # Guardrails: reject empty/overly broad deletes
@@ -1018,7 +1031,10 @@ async def delete_by_filter(
     return {"deleted": int(deleted or 0)}
 
 
-@router.get("/vector_stores/admin/health")
+@router.get(
+    "/vector_stores/admin/health",
+    dependencies=[Depends(auth_deps.require_roles("admin"))],
+)
 async def vector_stores_health(current_user: User = Depends(get_request_user)):
     require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
@@ -1388,8 +1404,10 @@ async def list_vector_batches(
     status: Optional[str] = Query(None),
     limit: int = Query(50, gt=0, le=500),
     offset: int = Query(0, ge=0),
-    user_id: Optional[str] = Query(None, description="Admin-only: override user id to view their batches"),
-    current_user: User = Depends(get_request_user)
+    user_id: Optional[str] = Query(
+        None, description="Admin-only: override user id to view their batches"
+    ),
+    current_user: User = Depends(get_request_user),
 ):
     # Default to current user; admin callers may override user_id regardless of
     # auth mode, while non-admins are restricted to their own batches.

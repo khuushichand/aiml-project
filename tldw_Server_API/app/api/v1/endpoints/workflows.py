@@ -42,7 +42,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
     WORKFLOWS_RUNS_READ,
     WORKFLOWS_RUNS_CONTROL,
 )
-from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import require_admin
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
@@ -1513,7 +1513,10 @@ async def get_run_webhook_deliveries(
 
 @router.get(
     "/webhooks/dlq",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL))],
+    dependencies=[
+        Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL)),
+        Depends(auth_deps.require_roles("admin")),
+    ],
 )
 async def list_webhook_dlq(
     limit: int = Query(100, ge=1, le=500),
@@ -1523,7 +1526,7 @@ async def list_webhook_dlq(
 ):
     """Admin: list webhook DLQ entries (all tenants)."""
     if not bool(getattr(current_user, "is_admin", False)):
-        # Hide presence
+        # Hide presence (preserve legacy behavior)
         raise HTTPException(status_code=404, detail="Not found")
     rows = db.list_webhook_dlq_all(limit=limit, offset=offset)
     out = []
@@ -1548,7 +1551,10 @@ async def list_webhook_dlq(
 
 @router.post(
     "/webhooks/dlq/{dlq_id}/replay",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL))],
+    dependencies=[
+        Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL)),
+        Depends(auth_deps.require_roles("admin")),
+    ],
 )
 async def replay_webhook_dlq(
     dlq_id: int,

@@ -580,32 +580,12 @@ class AuthNZScheduler:
         try:
             db_pool = await get_db_pool()
 
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    result = await conn.execute(
-                        """
-                        UPDATE registration_codes
-                        SET is_active = FALSE
-                        WHERE is_active = TRUE
-                        AND expires_at < $1
-                        """,
-                        datetime.utcnow()
-                    )
-                    count = int(result.split()[-1]) if isinstance(result, str) else 0
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        """
-                        UPDATE registration_codes
-                        SET is_active = 0
-                        WHERE is_active = 1
-                        AND expires_at < ?
-                        """,
-                        (datetime.utcnow().isoformat(),)
-                    )
-                    count = cursor.rowcount
-                    await conn.commit()
+            from tldw_Server_API.app.core.AuthNZ.repos.registration_codes_repo import (
+                AuthnzRegistrationCodesRepo,
+            )
+
+            repo = AuthnzRegistrationCodesRepo(db_pool)
+            count = await repo.deactivate_expired_codes(datetime.utcnow())
 
             if count > 0:
                 logger.info(f"Deactivated {count} expired registration codes")

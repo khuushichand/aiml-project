@@ -248,13 +248,14 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
 **Implementation Status (AuthNZ v0.1, internal)**:
 - Repository introduction (Stage 3) is in progress:
   - `AuthnzUsersRepo`, `AuthnzApiKeysRepo`, and `AuthnzRbacRepo` are implemented and used by `User_DB_Handling`, `APIKeyManager`, and RBAC helpers.
-  - New repositories `AuthnzOrgsTeamsRepo`, `AuthnzUsageRepo`, `AuthnzRateLimitsRepo`, `AuthnzSessionsRepo`, and `AuthnzTokenBlacklistRepo` encapsulate orgs/teams membership, usage/LLM-usage tables, AuthNZ rate-limiter storage, session persistence, and token blacklist storage respectively, with cross-backend tests where applicable.
+  - New repositories `AuthnzOrgsTeamsRepo`, `AuthnzUsageRepo`, `AuthnzRateLimitsRepo`, `AuthnzSessionsRepo`, `AuthnzTokenBlacklistRepo`, `AuthnzMfaRepo`, `AuthnzMonitoringRepo`, and `AuthnzRegistrationCodesRepo` encapsulate orgs/teams membership, usage/LLM-usage tables, AuthNZ rate-limiter storage, session persistence, token blacklist storage, MFA persistence, monitoring/audit metrics, and registration-code cleanup respectively, with cross-backend tests where applicable.
 - Backend drift reduction (Stage 4) is partially complete:
   - `virtual_keys` budget and usage paths delegate to `AuthnzApiKeysRepo` / `AuthnzUsageRepo` instead of embedding dialect-specific SQL.
   - `orgs_teams` is now a thin orchestration layer over `AuthnzOrgsTeamsRepo` for organization, team, and membership operations (including default-team handling).
   - `rate_limiter` uses `AuthnzRateLimitsRepo` for all DB-backed rate-limiter tables (`rate_limits`, `failed_attempts`, `account_lockouts`), and the AuthNZ scheduler prunes usage tables via `AuthnzUsageRepo`.
   - `session_manager` delegates session creation, validation, refresh, listing, and cleanup to `AuthnzSessionsRepo`, and token blacklist operations (`revoke_token`, blacklist checks, cleanup, stats, and revoke-all-tokens flows) use `AuthnzTokenBlacklistRepo` together with `AuthnzSessionsRepo` for all `token_blacklist` and `sessions` table access in logout-all-devices paths.
-- Remaining inline SQL touching MFA and selected bootstrap/monitoring paths is intentionally left for later phases; it is documented in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` as out-of-scope for this iteration (e.g., MFA factor storage/verification and small bootstrap/monitoring helpers).
+  - Monitoring metrics, audit pruning, and AuthNZ security dashboards are now fully backed by `AuthnzMonitoringRepo`, with SQLite and Postgres repo tests exercising metric insertion, aggregation, and alert retrieval.
+- Remaining inline SQL touching selected bootstrap paths is intentionally left for later phases; it is documented in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` as out-of-scope for this iteration (e.g., minimal schema backstops in `initialize.py` and API-key bootstrap helpers).
 
 ### Out of Scope (v1)
 
