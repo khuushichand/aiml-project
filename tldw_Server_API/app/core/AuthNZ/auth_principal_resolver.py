@@ -217,7 +217,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from exc
 
     # Multi-user mode: prefer Bearer JWT, fall back to X-API-KEY
     token = _extract_bearer_token(request)

@@ -103,7 +103,7 @@ async def test_evaluations_list_requires_auth_principal_and_api_key():
 
 
 @pytest.mark.asyncio
-async def test_evaluations_list_forbidden_without_claims(monkeypatch):
+async def test_evaluations_list_forbidden_without_claims():
     principal = AuthPrincipal(
         kind="user",
         user_id=1,

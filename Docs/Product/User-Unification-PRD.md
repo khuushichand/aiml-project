@@ -245,6 +245,16 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
     - `orgs_teams` (for core operations).
     - Parts of `virtual_keys` related to key limits.
 
+**Implementation Status (AuthNZ v0.1, internal)**:
+- Repository introduction (Stage 3) is in progress:
+  - `AuthnzUsersRepo`, `AuthnzApiKeysRepo`, and `AuthnzRbacRepo` are implemented and used by `User_DB_Handling`, `APIKeyManager`, and RBAC helpers.
+  - New repositories `AuthnzOrgsTeamsRepo`, `AuthnzUsageRepo`, and `AuthnzRateLimitsRepo` encapsulate orgs/teams membership, usage/LLM-usage tables, and AuthNZ rate-limiter storage respectively, with cross-backend tests.
+- Backend drift reduction (Stage 4) is partially complete:
+  - `virtual_keys` budget and usage paths delegate to `AuthnzApiKeysRepo` / `AuthnzUsageRepo` instead of embedding dialect-specific SQL.
+  - `orgs_teams` is now a thin orchestration layer over `AuthnzOrgsTeamsRepo` for organization, team, and membership operations (including default-team handling).
+  - `rate_limiter` uses `AuthnzRateLimitsRepo` for all DB-backed rate-limiter tables (`rate_limits`, `failed_attempts`, `account_lockouts`), and the AuthNZ scheduler prunes usage tables via `AuthnzUsageRepo`.
+- Remaining inline SQL touching users, sessions, MFA, and token blacklist is intentionally left for later phases; it is documented in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` as out-of-scope for this iteration.
+
 ### Out of Scope (v1)
 
 - Fully migrating all AuthNZ-related SQL to repositories (will be incremental).
@@ -411,6 +421,9 @@ Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular fea
   - Claims govern access when present (DB is not consulted).
   - An explicit `"admin"` role in single-user mode implies both `admin` and `user` checks while still rejecting unrelated roles.
   - New tests exercise negative paths for single-user principals without sufficient claims: `require_permissions` / `require_roles` return HTTP 403 for `kind="single_user"` principals lacking the required permission/role, matching multi-user semantics.
+- Remaining `is_single_user_mode()` shortcuts are being removed from business/endpoints in favor of claim-based behavior. MCP HTTP diagnostics and persona streaming now derive identity from validated API keys instead of checking `AUTH_MODE` directly:
+  - `tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py::mcp_request`, `::mcp_request_batch`, and `::list_tools` no longer branch on `is_single_user_mode()` when computing `user_id`; they rely on `get_current_user`’s `TokenData` (which already encodes the single-user admin) and pass that through to MCP.
+  - `tldw_Server_API/app/api/v1/endpoints/persona.py::persona_stream` uses `get_api_key_manager().validate_api_key(...)` to resolve `user_id` from API keys for both single-user and multi-user deployments, rather than comparing against `SINGLE_USER_API_KEY` in the endpoint. This keeps persona’s MCP calls aligned with the unified AuthNZ bootstrap/API-key behavior without introducing new mode-based shortcuts.
 
 ### Stage 3: Repository Introduction
 **Goal**: Introduce AuthNZ repositories and migrate API-key and core user/RBAC operations to them.

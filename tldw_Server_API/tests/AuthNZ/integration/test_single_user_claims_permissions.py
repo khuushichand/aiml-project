@@ -13,6 +13,7 @@ from typing import Any, Dict
 import pytest
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.testclient import TestClient
+from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
 from tldw_Server_API.app.core.AuthNZ.initialize import bootstrap_single_user_profile
@@ -54,8 +55,8 @@ def _create_limited_principal_override(settings, request_id: str):
                 user_agent="pytest-agent",
                 request_id=request_id,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"Could not set request.state.auth: {exc}")
         return principal
 
     return _override

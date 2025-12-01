@@ -1916,32 +1916,19 @@ async def revoke_permission_from_role(role_id: int, permission_id: int, db=Depen
 
 
 @router.get("/users/{user_id}/roles", response_model=UserRoleListResponse)
-async def get_user_roles_admin(user_id: int, db=Depends(get_db_transaction)) -> UserRoleListResponse:
+async def get_user_roles_admin(user_id: int) -> UserRoleListResponse:
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            rows = await db.fetch(
-                """
-                SELECT r.id, r.name, r.description, COALESCE(r.is_system,0) as is_system
-                FROM roles r JOIN user_roles ur ON r.id = ur.role_id
-                WHERE ur.user_id = $1 AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
-                ORDER BY r.name
-                """,
-                user_id,
+        repo = AuthnzRbacRepo()
+        rows = repo.get_user_roles(user_id=int(user_id))
+        roles = [
+            RoleResponse(
+                id=int(r.get("id")),
+                name=str(r.get("name")),
+                description=str(r.get("description") or ""),
+                is_system=bool(r.get("is_system")),
             )
-            roles = [RoleResponse(**dict(r)) for r in rows]
-        else:
-            cur = await db.execute(
-                """
-                SELECT r.id, r.name, r.description, COALESCE(r.is_system,0)
-                FROM roles r JOIN user_roles ur ON r.id = ur.role_id
-                WHERE ur.user_id = ? AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
-                ORDER BY r.name
-                """,
-                (user_id,),
-            )
-            rows = await cur.fetchall()
-            roles = [RoleResponse(id=row[0], name=row[1], description=row[2], is_system=bool(row[3])) for row in rows]
+            for r in rows
+        ]
         return UserRoleListResponse(user_id=user_id, roles=roles)
     except Exception as e:
         logger.error(f"Failed to get user roles for {user_id}: {e}")
@@ -1985,31 +1972,19 @@ async def remove_role_from_user(user_id: int, role_id: int, db=Depends(get_db_tr
 
 
 @router.get("/users/{user_id}/overrides", response_model=UserOverridesResponse)
-async def list_user_overrides(user_id: int, db=Depends(get_db_transaction)) -> UserOverridesResponse:
+async def list_user_overrides(user_id: int) -> UserOverridesResponse:
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            rows = await db.fetch(
-                """
-                SELECT p.id as permission_id, p.name as permission_name, up.granted, up.expires_at
-                FROM user_permissions up JOIN permissions p ON up.permission_id = p.id
-                WHERE up.user_id = $1
-                ORDER BY p.name
-                """,
-                user_id,
+        repo = AuthnzRbacRepo()
+        rows = repo.get_user_overrides(user_id=int(user_id))
+        entries = [
+            UserOverrideEntry(
+                permission_id=int(r.get("permission_id")),
+                permission_name=str(r.get("permission_name")),
+                granted=bool(r.get("granted")),
+                expires_at=str(r.get("expires_at")) if r.get("expires_at") else None,
             )
-            entries = [UserOverrideEntry(permission_id=r['permission_id'], permission_name=r['permission_name'], granted=bool(r['granted']), expires_at=str(r['expires_at']) if r['expires_at'] else None) for r in rows]
-        else:
-            cur = await db.execute(
-                """
-                SELECT p.id, p.name, up.granted, up.expires_at
-                FROM user_permissions up JOIN permissions p ON up.permission_id = p.id
-                WHERE up.user_id = ? ORDER BY p.name
-                """,
-                (user_id,),
-            )
-            rows = await cur.fetchall()
-            entries = [UserOverrideEntry(permission_id=row[0], permission_name=row[1], granted=bool(row[2]), expires_at=row[3]) for row in rows]
+            for r in rows
+        ]
         return UserOverridesResponse(user_id=user_id, overrides=entries)
     except Exception as e:
         logger.error(f"Failed to list overrides for user {user_id}: {e}")

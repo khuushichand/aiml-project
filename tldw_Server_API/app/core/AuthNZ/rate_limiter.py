@@ -288,116 +288,41 @@ class RateLimiter:
                 logger.warning(f"Redis error in record_failed_attempt: {e}")
 
         # Database fallback
-        async with self.db_pool.transaction() as conn:
-            if hasattr(conn, 'fetchrow'):
-                # PostgreSQL - use ON CONFLICT
-                result = await conn.fetchrow(
-                    """
-                    INSERT INTO failed_attempts (identifier, attempt_type, attempt_count, window_start)
-                    VALUES ($1, $2, 1, $3)
-                    ON CONFLICT (identifier, attempt_type)
-                    DO UPDATE SET
-                        attempt_count = CASE
-                            WHEN failed_attempts.window_start + ($4 * INTERVAL '1 minute') < $3
-                            THEN 1
-                            ELSE failed_attempts.attempt_count + 1
-                        END,
-                        window_start = CASE
-                            WHEN failed_attempts.window_start + ($4 * INTERVAL '1 minute') < $3
-                            THEN $3
-                            ELSE failed_attempts.window_start
-                        END
-                    RETURNING attempt_count, window_start
-                    """,
-                    identifier,
-                    attempt_type,
-                    now,
-                    int(lockout_duration_minutes),
-                )
+        from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import AuthnzRateLimitsRepo
 
-                attempt_count = result['attempt_count']
+        repo = AuthnzRateLimitsRepo(self.db_pool)
+        result = await repo.record_failed_attempt_and_lockout(
+            identifier=identifier,
+            attempt_type=attempt_type,
+            now=now,
+            lockout_threshold=int(lockout_threshold),
+            lockout_duration_minutes=int(lockout_duration_minutes),
+        )
 
+        attempt_count = int(result.get("attempt_count", 0))
+        is_locked = bool(result.get("is_locked", False))
+        lockout_expires_dt = result.get("lockout_expires")
+
+        if is_locked and lockout_expires_dt is not None:
+            if self.settings.PII_REDACT_LOGS:
+                logger.warning("Account locked after failed attempts [redacted]")
             else:
-                # SQLite
-                cursor = await conn.execute(
-                    """
-                    INSERT INTO failed_attempts (identifier, attempt_type, attempt_count, window_start)
-                    VALUES (?, ?, 1, ?)
-                    ON CONFLICT (identifier, attempt_type)
-                    DO UPDATE SET
-                        attempt_count = CASE
-                            WHEN datetime(window_start, '+' || ? || ' minutes') < ?
-                            THEN 1
-                            ELSE attempt_count + 1
-                        END,
-                        window_start = CASE
-                            WHEN datetime(window_start, '+' || ? || ' minutes') < ?
-                            THEN ?
-                            ELSE window_start
-                        END
-                    """,
-                    (
-                        identifier,
-                        attempt_type,
-                        now.isoformat(),
-                        lockout_duration_minutes,
-                        now.isoformat(),
-                        lockout_duration_minutes,
-                        now.isoformat(),
-                        now.isoformat(),
-                    )
+                logger.warning(
+                    f"Account locked for {identifier} after {attempt_count} failed attempts"
                 )
+            log_counter("auth_rate_limit_lockout", labels={"attempt_type": attempt_type})
 
-                # Get the updated count
-                cursor = await conn.execute(
-                    "SELECT attempt_count FROM failed_attempts WHERE identifier = ? AND attempt_type = ?",
-                    (identifier, attempt_type)
-                )
-                row = await cursor.fetchone()
-                attempt_count = row[0] if row else 1
-
-            # Check for lockout
-            if attempt_count >= lockout_threshold:
-                lockout_expires = now + timedelta(minutes=lockout_duration_minutes)
-
-                # Record lockout
-                if hasattr(conn, 'fetchrow'):
-                    await conn.execute(
-                        """
-                        INSERT INTO account_lockouts (identifier, locked_until, reason)
-                        VALUES ($1, $2, $3)
-                        ON CONFLICT (identifier) DO UPDATE SET
-                            locked_until = $2,
-                            reason = $3
-                        """,
-                        identifier, lockout_expires, f"Too many failed {attempt_type} attempts"
-                    )
-                else:
-                    await conn.execute(
-                        """
-                        INSERT OR REPLACE INTO account_lockouts (identifier, locked_until, reason)
-                        VALUES (?, ?, ?)
-                        """,
-                        (identifier, lockout_expires.isoformat(), f"Too many failed {attempt_type} attempts")
-                    )
-
-                if self.settings.PII_REDACT_LOGS:
-                    logger.warning("Account locked after failed attempts [redacted]")
-                else:
-                    logger.warning(f"Account locked for {identifier} after {attempt_count} failed attempts")
-                log_counter("auth_rate_limit_lockout", labels={"attempt_type": attempt_type})
-
-                return {
-                    "attempt_count": attempt_count,
-                    "is_locked": True,
-                    "lockout_expires": lockout_expires.isoformat(),
-                    "remaining_attempts": 0
-                }
+            return {
+                "attempt_count": attempt_count,
+                "is_locked": True,
+                "lockout_expires": lockout_expires_dt.isoformat(),
+                "remaining_attempts": 0,
+            }
 
         return {
             "attempt_count": attempt_count,
             "is_locked": False,
-            "remaining_attempts": lockout_threshold - attempt_count
+            "remaining_attempts": max(0, lockout_threshold - attempt_count),
         }
 
     async def check_lockout(self, identifier: str) -> Tuple[bool, Optional[datetime]]:
@@ -433,38 +358,12 @@ class RateLimiter:
                 logger.warning(f"Redis error in check_lockout: {e}")
 
         # Database fallback
-        async with self.db_pool.acquire() as conn:
-            if hasattr(conn, 'fetchrow'):
-                # PostgreSQL
-                row = await conn.fetchrow(
-                    "SELECT locked_until FROM account_lockouts WHERE identifier = $1 AND locked_until > $2",
-                    identifier, now
-                )
-                if row:
-                    return True, row['locked_until']
-                await conn.execute(
-                    "DELETE FROM account_lockouts WHERE identifier = $1 AND locked_until <= $2",
-                    identifier,
-                    now,
-                )
-            else:
-                # SQLite
-                cursor = await conn.execute(
-                    "SELECT locked_until FROM account_lockouts WHERE identifier = ? AND locked_until > ?",
-                    (identifier, now.isoformat())
-                )
-                row = await cursor.fetchone()
-                if row:
-                    return True, datetime.fromisoformat(row[0])
-                await conn.execute(
-                    "DELETE FROM account_lockouts WHERE identifier = ? AND locked_until <= ?",
-                    (identifier, now.isoformat()),
-                )
-                try:
-                    await conn.commit()
-                except Exception:
-                    pass
+        from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import AuthnzRateLimitsRepo
 
+        repo = AuthnzRateLimitsRepo(self.db_pool)
+        locked_until = await repo.get_active_lockout(identifier=identifier, now=now)
+        if locked_until is not None:
+            return True, locked_until
         return False, None
 
     async def reset_failed_attempts(self, identifier: str, attempt_type: str = "login"):
@@ -489,27 +388,13 @@ class RateLimiter:
                 logger.warning(f"Redis error in reset_failed_attempts: {e}")
 
         # Clear from database
-        async with self.db_pool.transaction() as conn:
-            if hasattr(conn, 'fetchrow'):
-                # PostgreSQL
-                await conn.execute(
-                    "DELETE FROM failed_attempts WHERE identifier = $1 AND attempt_type = $2",
-                    identifier, attempt_type
-                )
-                await conn.execute(
-                    "DELETE FROM account_lockouts WHERE identifier = $1",
-                    identifier
-                )
-            else:
-                # SQLite
-                await conn.execute(
-                    "DELETE FROM failed_attempts WHERE identifier = ? AND attempt_type = ?",
-                    (identifier, attempt_type)
-                )
-                await conn.execute(
-                    "DELETE FROM account_lockouts WHERE identifier = ?",
-                    (identifier,)
-                )
+        from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import AuthnzRateLimitsRepo
+
+        repo = AuthnzRateLimitsRepo(self.db_pool)
+        await repo.reset_failed_attempts_and_lockout(
+            identifier=identifier,
+            attempt_type=attempt_type,
+        )
 
     async def check_rate_limit(
         self,
@@ -640,108 +525,45 @@ class RateLimiter:
         window_start = _compute_window_start(now, window_minutes)
 
         try:
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchval'):
-                    # PostgreSQL - atomic upsert
-                    result = await conn.fetchval(
-                        """
-                        INSERT INTO rate_limits (identifier, endpoint, request_count, window_start)
-                        VALUES ($1, $2, 1, $3)
-                        ON CONFLICT (identifier, endpoint, window_start)
-                        DO UPDATE SET request_count = rate_limits.request_count + 1
-                        RETURNING request_count
-                        """,
-                        identifier, endpoint, window_start
-                    )
-                    current_count = result
+            from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import (
+                AuthnzRateLimitsRepo,
+            )
 
-                    # Check burst with previous window
-                    if current_count > limit - burst:
-                        prev_window = window_start - timedelta(minutes=window_minutes)
-                        prev_count = await conn.fetchval(
-                            """
-                            SELECT request_count FROM rate_limits
-                            WHERE identifier = $1 AND endpoint = $2 AND window_start = $3
-                            """,
-                            identifier, endpoint, prev_window
-                        )
-                        prev_count = prev_count or 0
+            repo = AuthnzRateLimitsRepo(self.db_pool)
+            current_count = await repo.increment_rate_limit_window(
+                identifier=identifier,
+                endpoint=endpoint,
+                window_start=window_start,
+            )
 
-                        if prev_count + current_count > limit + burst:
-                            # Rate limit exceeded
-                            reset_time = window_start + timedelta(minutes=window_minutes)
-                            retry_after = max(0, int((reset_time - now).total_seconds()))
-                            return False, {
-                                "limit": limit,
-                                "remaining": 0,
-                                "reset_time": reset_time.isoformat(),
-                                "retry_after": retry_after,
-                            }
+            # Check burst with previous window when close to the limit
+            if current_count > limit - burst:
+                prev_window = window_start - timedelta(minutes=window_minutes)
+                prev_count = await repo.get_rate_limit_count(
+                    identifier=identifier,
+                    endpoint=endpoint,
+                    window_start=prev_window,
+                )
+                prev_count = prev_count or 0
 
-                else:
-                    # SQLite - manual upsert
-                    cursor = await conn.execute(
-                        """
-                        SELECT request_count FROM rate_limits
-                        WHERE identifier = ? AND endpoint = ? AND window_start = ?
-                        """,
-                        (identifier, endpoint, window_start.isoformat())
-                    )
-                    row = await cursor.fetchone()
+                if prev_count + current_count > limit + burst:
+                    reset_time = window_start + timedelta(minutes=window_minutes)
+                    retry_after = max(0, int((reset_time - now).total_seconds()))
+                    return False, {
+                        "limit": limit,
+                        "remaining": 0,
+                        "reset_time": reset_time.isoformat(),
+                        "retry_after": retry_after,
+                    }
 
-                    if row:
-                        current_count = row[0] + 1
-                        await conn.execute(
-                            """
-                            UPDATE rate_limits
-                            SET request_count = ?
-                            WHERE identifier = ? AND endpoint = ? AND window_start = ?
-                            """,
-                            (current_count, identifier, endpoint, window_start.isoformat())
-                        )
-                    else:
-                        current_count = 1
-                        await conn.execute(
-                            """
-                            INSERT INTO rate_limits (identifier, endpoint, request_count, window_start)
-                            VALUES (?, ?, ?, ?)
-                            """,
-                            (identifier, endpoint, 1, window_start.isoformat())
-                        )
-
-                    # Check burst
-                    if current_count > limit - burst:
-                        prev_window = window_start - timedelta(minutes=window_minutes)
-                        cursor = await conn.execute(
-                            """
-                            SELECT request_count FROM rate_limits
-                            WHERE identifier = ? AND endpoint = ? AND window_start = ?
-                            """,
-                            (identifier, endpoint, prev_window.isoformat())
-                        )
-                        row = await cursor.fetchone()
-                        prev_count = row[0] if row else 0
-
-                        if prev_count + current_count > limit + burst:
-                            # Rate limit exceeded
-                            reset_time = window_start + timedelta(minutes=window_minutes)
-                            await conn.commit()
-                            retry_after = max(0, int((reset_time - now).total_seconds()))
-                            return False, {
-                                "limit": limit,
-                                "remaining": 0,
-                                "reset_time": reset_time.isoformat(),
-                                "retry_after": retry_after,
-                            }
-
-                    await conn.commit()
-
-                # Request allowed
-                return True, {
-                    "limit": limit,
-                    "remaining": max(0, limit - current_count),
-                    "reset_time": (window_start + timedelta(minutes=window_minutes)).isoformat(),
-                }
+            # Request allowed
+            return True, {
+                "limit": limit,
+                "remaining": max(0, limit - current_count),
+                "reset_time": (
+                    window_start + timedelta(minutes=window_minutes)
+                ).isoformat(),
+            }
 
         except Exception as e:
             logger.error(f"Database rate limit check failed: {e}")
@@ -864,72 +686,46 @@ class RateLimiter:
             await self.initialize()
 
         try:
+            from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import (
+                AuthnzRateLimitsRepo,
+            )
+
+            repo = AuthnzRateLimitsRepo(self.db_pool)
+
             # Collect distinct endpoints for Redis cleanup before DB deletion when endpoint is None
             endpoints_for_cleanup: Optional[list[str]] = None
             if self.redis_client and endpoint is None:
                 try:
-                    async with self.db_pool.acquire() as aconn:
-                        if hasattr(aconn, 'fetch'):  # Postgres
-                            rows = await aconn.fetch(
-                                "SELECT DISTINCT endpoint FROM rate_limits WHERE identifier = $1",
-                                identifier,
-                            )
-                            endpoints_for_cleanup = [str(r['endpoint']) for r in rows]
-                        else:
-                            cursor = await aconn.execute(
-                                "SELECT DISTINCT endpoint FROM rate_limits WHERE identifier = ?",
-                                (identifier,),
-                            )
-                            rows = await cursor.fetchall()
-                            endpoints_for_cleanup = [str(r[0]) for r in rows]
+                    endpoints = await repo.list_rate_limit_endpoints_for_identifier(
+                        identifier=identifier
+                    )
+                    endpoints_for_cleanup = list(endpoints)
                 except Exception as _e:
                     logger.debug(f"reset_rate_limit: failed to enumerate endpoints for {identifier}: {_e}")
 
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    if endpoint:
-                        await conn.execute(
-                            "DELETE FROM rate_limits WHERE identifier = $1 AND endpoint = $2",
-                            identifier, endpoint
-                        )
-                    else:
-                        await conn.execute(
-                            "DELETE FROM rate_limits WHERE identifier = $1",
-                            identifier
-                        )
-                else:
-                    # SQLite
-                    if endpoint:
-                        await conn.execute(
-                            "DELETE FROM rate_limits WHERE identifier = ? AND endpoint = ?",
-                            (identifier, endpoint)
-                        )
-                    else:
-                        await conn.execute(
-                            "DELETE FROM rate_limits WHERE identifier = ?",
-                            (identifier,)
-                        )
-                    await conn.commit()
+            await repo.delete_rate_limits_for_identifier(
+                identifier=identifier,
+                endpoint=endpoint,
+            )
 
-                # Clear Redis cache if available
-                if self.redis_client:
-                    # Keys are stored as rate:{md5(identifier:endpoint)}:{window}
-                    if endpoint:
-                        pattern = f"rate:{self._create_key(identifier, endpoint)}:*"
+            # Clear Redis cache if available
+            if self.redis_client:
+                # Keys are stored as rate:{md5(identifier:endpoint)}:{window}
+                if endpoint:
+                    pattern = f"rate:{self._create_key(identifier, endpoint)}:*"
+                    async for key in self.redis_client.scan_iter(pattern):
+                        await self.redis_client.delete(key)
+                else:
+                    # Use the enumerated endpoints to compute hashed keys and delete them
+                    for ep in endpoints_for_cleanup or []:
+                        pattern = f"rate:{self._create_key(identifier, ep)}:*"
                         async for key in self.redis_client.scan_iter(pattern):
                             await self.redis_client.delete(key)
-                    else:
-                        # Use the enumerated endpoints to compute hashed keys and delete them
-                        for ep in endpoints_for_cleanup or []:
-                            pattern = f"rate:{self._create_key(identifier, ep)}:*"
-                            async for key in self.redis_client.scan_iter(pattern):
-                                await self.redis_client.delete(key)
 
-                if self.settings.PII_REDACT_LOGS:
-                    logger.info("Reset rate limit [redacted]")
-                else:
-                    logger.info(f"Reset rate limit for {identifier}")
+            if self.settings.PII_REDACT_LOGS:
+                logger.info("Reset rate limit [redacted]")
+            else:
+                logger.info(f"Reset rate limit for {identifier}")
 
         except Exception as e:
             logger.error(f"Failed to reset rate limit: {e}")
@@ -946,34 +742,14 @@ class RateLimiter:
 
         try:
             cutoff = datetime.utcnow() - timedelta(hours=hours)
+            from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import (
+                AuthnzRateLimitsRepo,
+            )
 
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetch'):
-                    # PostgreSQL
-                    rows = await conn.fetch(
-                        """
-                        DELETE FROM rate_limits
-                        WHERE window_start < $1
-                        RETURNING 1
-                        """,
-                        cutoff
-                    )
-                    deleted = len(rows)
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        """
-                        DELETE FROM rate_limits
-                        WHERE datetime(window_start) < datetime(?)
-                        """,
-                        (cutoff.isoformat(),)
-                    )
-                    deleted = cursor.rowcount
-                    await conn.commit()
-
-                if deleted:
-                    logger.info(f"Cleaned up {deleted} old rate limit entries")
-
+            repo = AuthnzRateLimitsRepo(self.db_pool)
+            deleted = await repo.cleanup_rate_limits_older_than(cutoff)
+            if deleted:
+                logger.info(f"Cleaned up {deleted} old rate limit entries")
         except Exception as e:
             logger.error(f"Rate limit cleanup failed: {e}")
 

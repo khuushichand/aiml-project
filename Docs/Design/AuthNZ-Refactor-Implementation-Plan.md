@@ -188,7 +188,22 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
 - Principal-Governance:
   - Underpins principal creation via repositories.
 
-**Status**: Not Started
+**Status**: In Progress
+
+**Notes**:
+- Core repositories are implemented and exercised in tests:
+  - `AuthnzUsersRepo` and `AuthnzApiKeysRepo` (with SQLite + Postgres coverage).
+  - `AuthnzRbacRepo` for roles/permissions.
+  - New repos introduced for this stage:
+    - `AuthnzOrgsTeamsRepo` encapsulates organizations, teams, and membership (including default-team helpers).
+    - `AuthnzUsageRepo` centralizes `llm_usage_log`, `usage_log`, `usage_daily`, and `llm_usage_daily` aggregates and pruning, and is wired into `virtual_keys` and the AuthNZ scheduler.
+    - `AuthnzRateLimitsRepo` owns all DB-backed rate-limiter tables (`rate_limits`, `failed_attempts`, `account_lockouts`) and is used by `rate_limiter.RateLimiter` for cleanup, per-window counters, failed-attempt tracking, and lockouts.
+- Business logic modules that previously embedded dialect-specific SQL for these tables now delegate to repositories:
+  - `virtual_keys.py` uses `AuthnzApiKeysRepo` and `AuthnzUsageRepo` for key limits and usage summaries.
+  - `orgs_teams.py` is thin orchestration over `AuthnzOrgsTeamsRepo` for org creation, teams, and membership, with no direct SQL.
+  - `rate_limiter.py` delegates `rate_limits` upserts, reads, failed-attempt accounting, lockout checks, and DB cleanup to `AuthnzRateLimitsRepo`.
+  - `scheduler.py` uses `AuthnzUsageRepo` for usage/LLM-usage pruning instead of inline `usage_log`/`llm_usage_*` SQL.
+- Remaining inline SQL in AuthNZ touching users, sessions, and token blacklist (e.g., selected paths in `session_manager`, `mfa_service`, `token_blacklist`, and parts of `initialize`/`monitoring`) is explicitly out-of-scope for this phase and will be migrated in later iterations as tests and PRDs for those areas are extended.
 
 ---
 

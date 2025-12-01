@@ -13,7 +13,8 @@ from loguru import logger
 import os
 import json
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin, require_permissions
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.api.v1.schemas.monitoring_schemas import (
     Watchlist,
     WatchlistListResponse,
@@ -34,13 +35,25 @@ from tldw_Server_API.app.core.Monitoring.notification_service import get_notific
 router = APIRouter()
 
 
-@router.get("/monitoring/watchlists", response_model=WatchlistListResponse, tags=["monitoring"], summary="List all watchlists")
+@router.get(
+    "/monitoring/watchlists",
+    response_model=WatchlistListResponse,
+    tags=["monitoring"],
+    summary="List all watchlists",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def list_watchlists(_: Any = Depends(require_admin)):
     svc = get_topic_monitoring_service()
     return WatchlistListResponse(watchlists=svc.list_watchlists())
 
 
-@router.post("/monitoring/watchlists", response_model=WatchlistUpsertResponse, tags=["monitoring"], summary="Create or update a watchlist")
+@router.post(
+    "/monitoring/watchlists",
+    response_model=WatchlistUpsertResponse,
+    tags=["monitoring"],
+    summary="Create or update a watchlist",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def upsert_watchlist(payload: Watchlist, _: Any = Depends(require_admin)):
     try:
         svc = get_topic_monitoring_service()
@@ -51,7 +64,13 @@ async def upsert_watchlist(payload: Watchlist, _: Any = Depends(require_admin)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-@router.delete("/monitoring/watchlists/{watchlist_id}", response_model=WatchlistDeleteResponse, tags=["monitoring"], summary="Delete a watchlist")
+@router.delete(
+    "/monitoring/watchlists/{watchlist_id}",
+    response_model=WatchlistDeleteResponse,
+    tags=["monitoring"],
+    summary="Delete a watchlist",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def delete_watchlist(watchlist_id: str, _: Any = Depends(require_admin)):
     svc = get_topic_monitoring_service()
     ok = svc.delete_watchlist(watchlist_id)
@@ -60,14 +79,25 @@ async def delete_watchlist(watchlist_id: str, _: Any = Depends(require_admin)):
     return WatchlistDeleteResponse(status="deleted", id=watchlist_id)
 
 
-@router.post("/monitoring/reload", tags=["monitoring"], summary="Reload watchlists from file")
+@router.post(
+    "/monitoring/reload",
+    tags=["monitoring"],
+    summary="Reload watchlists from file",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def reload_watchlists(_: Any = Depends(require_admin)):
     svc = get_topic_monitoring_service()
     svc.reload()
     return {"status": "ok"}
 
 
-@router.get("/monitoring/alerts", response_model=AlertsListResponse, tags=["monitoring"], summary="List monitoring alerts")
+@router.get(
+    "/monitoring/alerts",
+    response_model=AlertsListResponse,
+    tags=["monitoring"],
+    summary="List monitoring alerts",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def list_alerts(
     user_id: Optional[str] = Query(None, description="Filter by user id"),
     since: Optional[str] = Query(None, description="ISO 8601 timestamp inclusive lower bound"),
@@ -92,7 +122,13 @@ async def list_alerts(
     return AlertsListResponse(items=items)
 
 
-@router.post("/monitoring/alerts/{alert_id}/read", response_model=MarkReadResponse, tags=["monitoring"], summary="Mark an alert as read")
+@router.post(
+    "/monitoring/alerts/{alert_id}/read",
+    response_model=MarkReadResponse,
+    tags=["monitoring"],
+    summary="Mark an alert as read",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def mark_alert_read(alert_id: int, _: Any = Depends(require_admin)):
     db = TopicMonitoringDB()
     ok = db.mark_read(alert_id)
@@ -101,13 +137,25 @@ async def mark_alert_read(alert_id: int, _: Any = Depends(require_admin)):
     return MarkReadResponse(status="ok", id=alert_id)
 
 
-@router.get("/monitoring/notifications/settings", response_model=NotificationSettings, tags=["monitoring"], summary="Get notification settings")
+@router.get(
+    "/monitoring/notifications/settings",
+    response_model=NotificationSettings,
+    tags=["monitoring"],
+    summary="Get notification settings",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def get_notifications_settings(_: Any = Depends(require_admin)):
     svc = get_notification_service()
     return NotificationSettings(**svc.get_settings())
 
 
-@router.put("/monitoring/notifications/settings", response_model=NotificationSettings, tags=["monitoring"], summary="Update notification settings (runtime only)")
+@router.put(
+    "/monitoring/notifications/settings",
+    response_model=NotificationSettings,
+    tags=["monitoring"],
+    summary="Update notification settings (runtime only)",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def update_notifications_settings(payload: NotificationSettingsUpdate, _: Any = Depends(require_admin)):
     svc = get_notification_service()
     data = payload.model_dump(exclude_unset=True)
@@ -115,7 +163,12 @@ async def update_notifications_settings(payload: NotificationSettingsUpdate, _: 
     return NotificationSettings(**updated)
 
 
-@router.post("/monitoring/notifications/test", tags=["monitoring"], summary="Send a test notification (critical by default)")
+@router.post(
+    "/monitoring/notifications/test",
+    tags=["monitoring"],
+    summary="Send a test notification (critical by default)",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def send_test_notification(payload: NotificationTestRequest, _: Any = Depends(require_admin)):
     notifier = get_notification_service()
     alert = TopicAlert(
@@ -138,7 +191,12 @@ async def send_test_notification(payload: NotificationTestRequest, _: Any = Depe
     return {"status": "ok"}
 
 
-@router.get("/monitoring/notifications/recent", tags=["monitoring"], summary="Tail recent notifications from file (JSONL)")
+@router.get(
+    "/monitoring/notifications/recent",
+    tags=["monitoring"],
+    summary="Tail recent notifications from file (JSONL)",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def get_recent_notifications(limit: int = Query(50, ge=1, le=500), _: Any = Depends(require_admin)):
     svc = get_notification_service()
     path = getattr(svc, 'file_path', None)

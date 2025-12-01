@@ -43,6 +43,59 @@ class AuthnzRbacRepo:
         db = self._db()
         return db.has_permission(user_id, permission)
 
+    def get_user_roles(self, user_id: int) -> list[dict]:
+        """
+        Return active roles for a user.
+
+        This wraps the common join between ``roles`` and ``user_roles`` and
+        normalizes backend differences so callers do not need to issue their
+        own SQL.
+        """
+        db = self._db()
+        result = db.backend.execute(
+            """
+            SELECT
+                r.id,
+                r.name,
+                r.description,
+                COALESCE(r.is_system, 0) AS is_system
+            FROM roles r
+            JOIN user_roles ur ON r.id = ur.role_id
+            WHERE ur.user_id = ?
+              AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
+            ORDER BY r.name
+            """,
+            (int(user_id),),
+        )
+        return [dict(row) for row in result.rows]
+
+    def get_user_overrides(self, user_id: int) -> list[dict]:
+        """
+        Return user-specific permission overrides.
+
+        Each row includes:
+        - permission_id
+        - permission_name
+        - granted (0/1 or bool)
+        - expires_at (backend-native representation)
+        """
+        db = self._db()
+        result = db.backend.execute(
+            """
+            SELECT
+                p.id AS permission_id,
+                p.name AS permission_name,
+                up.granted,
+                up.expires_at
+            FROM user_permissions up
+            JOIN permissions p ON up.permission_id = p.id
+            WHERE up.user_id = ?
+            ORDER BY p.name
+            """,
+            (int(user_id),),
+        )
+        return [dict(row) for row in result.rows]
+
     def get_role_effective_permissions(self, role_id: int) -> RolePermissionsResult:
         """
         Return effective permissions for a role, split into regular and tool permissions.

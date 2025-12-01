@@ -192,10 +192,14 @@ Notes:
 - **Legacy shims (compatibility)**:
   - `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker` in `permissions.py` remain supported for existing routes but should not be used on new ones.
   - `require_admin` in `evaluations_auth.py` is an admin-only guard for heavy evaluations flows; new admin surfaces should prefer `require_roles("admin")` / `require_permissions(...)` on top of `get_auth_principal`.
-  - A minimal repository layer exists for AuthNZ:
+  - A repository layer exists for AuthNZ and MUST be used instead of ad-hoc SQL for core tables:
+    - `AuthnzUsersRepo` (`app/core/AuthNZ/repos/users_repo.py`) wraps `UsersDB` for user lookups; exercised against both SQLite and Postgres in AuthNZ tests.
     - `AuthnzApiKeysRepo` (`app/core/AuthNZ/repos/api_keys_repo.py`) centralizes `api_keys` read/write paths and is used by `APIKeyManager` and single-user bootstrap.
-    - `AuthnzUsersRepo` (`app/core/AuthNZ/repos/users_repo.py`) wraps `UsersDB` for user lookups and is exercised against both SQLite and Postgres in AuthNZ tests.
     - `AuthnzRbacRepo` (`app/core/AuthNZ/repos/rbac_repo.py`) fronts `UserDatabase_v2` for RBAC permission checks; higher-level helpers in `app/core/AuthNZ/rbac.py` delegate to it.
+    - `AuthnzOrgsTeamsRepo` (`app/core/AuthNZ/repos/orgs_teams_repo.py`) owns organizations, teams, and membership (including default-team creation/enrollment) so `orgs_teams.py` can remain orchestration-only.
+    - `AuthnzUsageRepo` (`app/core/AuthNZ/repos/usage_repo.py`) provides aggregate and pruning helpers for `usage_log`, `usage_daily`, `llm_usage_log`, and `llm_usage_daily`, and is used by `virtual_keys` and the AuthNZ scheduler.
+    - `AuthnzRateLimitsRepo` (`app/core/AuthNZ/repos/rate_limits_repo.py`) encapsulates all DB-backed rate-limiter tables (`rate_limits`, `failed_attempts`, `account_lockouts`) and is used by `rate_limiter.RateLimiter` for counters, lockouts, and cleanup.
+  - New AuthNZ code should **not** add fresh backend-specific SQL for these tables; prefer adding small, task-focused methods to the appropriate repo and calling them from business logic.
   - New code MUST NOT introduce fresh `is_single_user_mode()` branches in endpoint/business logic. Mode checks are confined to a small number of coordination points (bootstrap, DB selection, and legacy compatibility helpers); authorization should flow through `AuthPrincipal` + claim-first dependencies instead.
 
 References:

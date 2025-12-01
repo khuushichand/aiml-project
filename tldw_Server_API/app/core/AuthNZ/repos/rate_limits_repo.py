@@ -1,0 +1,474 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any, Dict, Optional, Tuple
+
+from loguru import logger
+
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+
+
+@dataclass
+class AuthnzRateLimitsRepo:
+    """
+    Repository for AuthNZ rate-limiter storage.
+
+    This repo encapsulates common read/write paths for ``rate_limits``,
+    ``failed_attempts``, and ``account_lockouts`` where backend-specific
+    SQL is required, so higher-level logic can remain dialect-agnostic.
+    """
+
+    db_pool: DatabasePool
+
+    async def cleanup_rate_limits_older_than(
+        self,
+        cutoff: datetime,
+    ) -> int:
+        """
+        Delete ``rate_limits`` rows with ``window_start`` older than the cutoff.
+
+        Returns the number of deleted rows (best-effort when the backend does
+        not report an accurate rowcount).
+        """
+        try:
+            if self.db_pool.pool:
+                rows = await self.db_pool.fetch(
+                    """
+                    DELETE FROM rate_limits
+                    WHERE window_start < $1
+                    RETURNING 1
+                    """,
+                    cutoff,
+                )
+                return len(rows)
+
+            async with self.db_pool.acquire() as conn:
+                cursor = await conn.execute(
+                    """
+                    DELETE FROM rate_limits
+                    WHERE datetime(window_start) < datetime(?)
+                    """,
+                    (cutoff.isoformat(),),
+                )
+                deleted = getattr(cursor, "rowcount", 0) or 0
+                try:
+                    await conn.commit()
+                except Exception:
+                    pass
+                return int(deleted)
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzRateLimitsRepo.cleanup_rate_limits_older_than failed: {exc}")
+            raise
+
+    async def increment_rate_limit_window(
+        self,
+        *,
+        identifier: str,
+        endpoint: str,
+        window_start: datetime,
+    ) -> int:
+        """
+        Increment the ``request_count`` for a given (identifier, endpoint, window_start)
+        bucket in ``rate_limits`` and return the updated count.
+
+        Mirrors the upsert semantics previously implemented in
+        ``RateLimiter._check_database_rate_limit``.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchval"):
+                    result = await conn.fetchval(
+                        """
+                        INSERT INTO rate_limits (identifier, endpoint, request_count, window_start)
+                        VALUES ($1, $2, 1, $3)
+                        ON CONFLICT (identifier, endpoint, window_start)
+                        DO UPDATE SET request_count = rate_limits.request_count + 1
+                        RETURNING request_count
+                        """,
+                        identifier,
+                        endpoint,
+                        window_start,
+                    )
+                    return int(result or 0)
+
+                cursor = await conn.execute(
+                    """
+                    SELECT request_count
+                    FROM rate_limits
+                    WHERE identifier = ? AND endpoint = ? AND window_start = ?
+                    """,
+                    (identifier, endpoint, window_start.isoformat()),
+                )
+                row = await cursor.fetchone()
+
+                if row:
+                    current_count = int(row[0]) + 1
+                    await conn.execute(
+                        """
+                        UPDATE rate_limits
+                        SET request_count = ?
+                        WHERE identifier = ? AND endpoint = ? AND window_start = ?
+                        """,
+                        (current_count, identifier, endpoint, window_start.isoformat()),
+                    )
+                else:
+                    current_count = 1
+                    await conn.execute(
+                        """
+                        INSERT INTO rate_limits (identifier, endpoint, request_count, window_start)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (identifier, endpoint, 1, window_start.isoformat()),
+                    )
+
+                try:
+                    await conn.commit()
+                except Exception:
+                    pass
+
+                return int(current_count)
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(
+                f"AuthnzRateLimitsRepo.increment_rate_limit_window failed: {exc}"
+            )
+            raise
+
+    async def get_rate_limit_count(
+        self,
+        *,
+        identifier: str,
+        endpoint: str,
+        window_start: datetime,
+    ) -> int:
+        """
+        Fetch the ``request_count`` for a specific rate-limit bucket.
+        """
+        try:
+            if self.db_pool.pool:
+                value = await self.db_pool.fetchval(
+                    """
+                    SELECT request_count
+                    FROM rate_limits
+                    WHERE identifier = $1 AND endpoint = $2 AND window_start = $3
+                    """,
+                    identifier,
+                    endpoint,
+                    window_start,
+                )
+                return int(value or 0)
+
+            async with self.db_pool.acquire() as conn:
+                cursor = await conn.execute(
+                    """
+                    SELECT request_count
+                    FROM rate_limits
+                    WHERE identifier = ? AND endpoint = ? AND window_start = ?
+                    """,
+                    (identifier, endpoint, window_start.isoformat()),
+                )
+                row = await cursor.fetchone()
+                return int(row[0]) if row else 0
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(
+                f"AuthnzRateLimitsRepo.get_rate_limit_count failed: {exc}"
+            )
+            raise
+
+    async def list_rate_limit_endpoints_for_identifier(
+        self,
+        *,
+        identifier: str,
+    ) -> Tuple[str, ...]:
+        """
+        Return a tuple of distinct endpoints seen for an identifier in ``rate_limits``.
+        """
+        try:
+            if self.db_pool.pool:
+                rows = await self.db_pool.fetch(
+                    "SELECT DISTINCT endpoint FROM rate_limits WHERE identifier = $1",
+                    identifier,
+                )
+                return tuple(str(r["endpoint"]) for r in rows or [])
+
+            async with self.db_pool.acquire() as conn:
+                cursor = await conn.execute(
+                    "SELECT DISTINCT endpoint FROM rate_limits WHERE identifier = ?",
+                    (identifier,),
+                )
+                rows = await cursor.fetchall()
+                return tuple(str(r[0]) for r in rows or [])
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(
+                f"AuthnzRateLimitsRepo.list_rate_limit_endpoints_for_identifier failed: {exc}"
+            )
+            raise
+
+    async def delete_rate_limits_for_identifier(
+        self,
+        *,
+        identifier: str,
+        endpoint: Optional[str] = None,
+    ) -> None:
+        """
+        Delete ``rate_limits`` rows for an identifier (optionally scoped to an endpoint).
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchrow"):
+                    if endpoint:
+                        await conn.execute(
+                            """
+                            DELETE FROM rate_limits
+                            WHERE identifier = $1 AND endpoint = $2
+                            """,
+                            identifier,
+                            endpoint,
+                        )
+                    else:
+                        await conn.execute(
+                            """
+                            DELETE FROM rate_limits
+                            WHERE identifier = $1
+                            """,
+                            identifier,
+                        )
+                else:
+                    if endpoint:
+                        await conn.execute(
+                            """
+                            DELETE FROM rate_limits
+                            WHERE identifier = ? AND endpoint = ?
+                            """,
+                            (identifier, endpoint),
+                        )
+                    else:
+                        await conn.execute(
+                            """
+                            DELETE FROM rate_limits
+                            WHERE identifier = ?
+                            """,
+                            (identifier,),
+                        )
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(
+                f"AuthnzRateLimitsRepo.delete_rate_limits_for_identifier failed: {exc}"
+            )
+            raise
+
+    async def record_failed_attempt_and_lockout(
+        self,
+        *,
+        identifier: str,
+        attempt_type: str,
+        now: datetime,
+        lockout_threshold: int,
+        lockout_duration_minutes: int,
+    ) -> Dict[str, Any]:
+        """
+        Increment the failed-attempt counter and, if necessary, record a lockout.
+
+        Returns a dict containing:
+        - ``attempt_count`` (int)
+        - ``is_locked`` (bool)
+        - ``lockout_expires`` (Optional[datetime])
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchrow"):
+                    # PostgreSQL - use ON CONFLICT with window-reset semantics
+                    result = await conn.fetchrow(
+                        """
+                        INSERT INTO failed_attempts (identifier, attempt_type, attempt_count, window_start)
+                        VALUES ($1, $2, 1, $3)
+                        ON CONFLICT (identifier, attempt_type)
+                        DO UPDATE SET
+                            attempt_count = CASE
+                                WHEN failed_attempts.window_start + ($4 * INTERVAL '1 minute') < $3
+                                THEN 1
+                                ELSE failed_attempts.attempt_count + 1
+                            END,
+                            window_start = CASE
+                                WHEN failed_attempts.window_start + ($4 * INTERVAL '1 minute') < $3
+                                THEN $3
+                                ELSE failed_attempts.window_start
+                            END
+                        RETURNING attempt_count, window_start
+                        """,
+                        identifier,
+                        attempt_type,
+                        now,
+                        int(lockout_duration_minutes),
+                    )
+                    attempt_count = int(result["attempt_count"])
+                else:
+                    # SQLite path with equivalent window-reset behavior
+                    cursor = await conn.execute(
+                        """
+                        INSERT INTO failed_attempts (identifier, attempt_type, attempt_count, window_start)
+                        VALUES (?, ?, 1, ?)
+                        ON CONFLICT (identifier, attempt_type)
+                        DO UPDATE SET
+                            attempt_count = CASE
+                                WHEN datetime(window_start, '+' || ? || ' minutes') < ?
+                                THEN 1
+                                ELSE attempt_count + 1
+                            END,
+                            window_start = CASE
+                                WHEN datetime(window_start, '+' || ? || ' minutes') < ?
+                                THEN ?
+                                ELSE window_start
+                            END
+                        """,
+                        (
+                            identifier,
+                            attempt_type,
+                            now.isoformat(),
+                            lockout_duration_minutes,
+                            now.isoformat(),
+                            lockout_duration_minutes,
+                            now.isoformat(),
+                            now.isoformat(),
+                        ),
+                    )
+                    _ = cursor  # unused
+                    cursor = await conn.execute(
+                        """
+                        SELECT attempt_count
+                        FROM failed_attempts
+                        WHERE identifier = ? AND attempt_type = ?
+                        """,
+                        (identifier, attempt_type),
+                    )
+                    row = await cursor.fetchone()
+                    attempt_count = int(row[0]) if row else 1
+
+                is_locked = attempt_count >= lockout_threshold
+                lockout_expires: Optional[datetime] = None
+
+                if is_locked:
+                    lockout_expires = now + timedelta(minutes=lockout_duration_minutes)
+                    reason = f"Too many failed {attempt_type} attempts"
+                    if hasattr(conn, "fetchrow"):
+                        await conn.execute(
+                            """
+                            INSERT INTO account_lockouts (identifier, locked_until, reason)
+                            VALUES ($1, $2, $3)
+                            ON CONFLICT (identifier) DO UPDATE SET
+                                locked_until = $2,
+                                reason = $3
+                            """,
+                            identifier,
+                            lockout_expires,
+                            reason,
+                        )
+                    else:
+                        await conn.execute(
+                            """
+                            INSERT INTO account_lockouts (identifier, locked_until, reason)
+                            VALUES (?, ?, ?)
+                            ON CONFLICT(identifier) DO UPDATE SET
+                                locked_until = excluded.locked_until,
+                                reason = excluded.reason
+                            """,
+                            (identifier, lockout_expires.isoformat(), reason),
+                        )
+                return {
+                    "attempt_count": int(attempt_count),
+                    "is_locked": bool(is_locked),
+                    "lockout_expires": lockout_expires,
+                }
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzRateLimitsRepo.record_failed_attempt_and_lockout failed: {exc}")
+            raise
+
+    async def get_active_lockout(
+        self,
+        *,
+        identifier: str,
+        now: datetime,
+    ) -> Optional[datetime]:
+        """
+        Return the active lockout expiry for an identifier, pruning expired rows.
+        """
+        try:
+            async with self.db_pool.acquire() as conn:
+                if hasattr(conn, "fetchrow"):
+                    row = await conn.fetchrow(
+                        """
+                        SELECT locked_until
+                        FROM account_lockouts
+                        WHERE identifier = $1 AND locked_until > $2
+                        """,
+                        identifier,
+                        now,
+                    )
+                    if row:
+                        return row["locked_until"]
+                    await conn.execute(
+                        "DELETE FROM account_lockouts WHERE identifier = $1 AND locked_until <= $2",
+                        identifier,
+                        now,
+                    )
+                    return None
+
+                cursor = await conn.execute(
+                    """
+                    SELECT locked_until
+                    FROM account_lockouts
+                    WHERE identifier = ? AND locked_until > ?
+                    """,
+                    (identifier, now.isoformat()),
+                )
+                row = await cursor.fetchone()
+                if row:
+                    return datetime.fromisoformat(row[0])
+                await conn.execute(
+                    "DELETE FROM account_lockouts WHERE identifier = ? AND locked_until <= ?",
+                    (identifier, now.isoformat()),
+                )
+                try:
+                    await conn.commit()
+                except Exception:
+                    pass
+                return None
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzRateLimitsRepo.get_active_lockout failed: {exc}")
+            raise
+
+    async def reset_failed_attempts_and_lockout(
+        self,
+        *,
+        identifier: str,
+        attempt_type: str,
+    ) -> None:
+        """
+        Clear failed-attempt counters and account lockout rows for an identifier.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchrow"):
+                    await conn.execute(
+                        """
+                        DELETE FROM failed_attempts
+                        WHERE identifier = $1 AND attempt_type = $2
+                        """,
+                        identifier,
+                        attempt_type,
+                    )
+                    await conn.execute(
+                        "DELETE FROM account_lockouts WHERE identifier = $1",
+                        identifier,
+                    )
+                else:
+                    await conn.execute(
+                        "DELETE FROM failed_attempts WHERE identifier = ? AND attempt_type = ?",
+                        (identifier, attempt_type),
+                    )
+                    await conn.execute(
+                        "DELETE FROM account_lockouts WHERE identifier = ?",
+                        (identifier,),
+                    )
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzRateLimitsRepo.reset_failed_attempts_and_lockout failed: {exc}")
+            raise

@@ -394,20 +394,10 @@ class AuthNZScheduler:
         try:
             db_pool = await get_db_pool()
             cutoff = datetime.utcnow() - timedelta(days=self.settings.USAGE_LOG_RETENTION_DAYS)
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    result = await conn.execute(
-                        "DELETE FROM usage_log WHERE ts < $1",
-                        cutoff
-                    )
-                    count = int(result.split()[-1]) if isinstance(result, str) else 0
-                else:
-                    cursor = await conn.execute(
-                        "DELETE FROM usage_log WHERE ts < ?",
-                        (cutoff.isoformat(),)
-                    )
-                    count = cursor.rowcount
-                    await conn.commit()
+            from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
+
+            repo = AuthnzUsageRepo(db_pool)
+            count = await repo.prune_usage_log_before(cutoff)
             if count:
                 logger.info(f"Pruned {count} usage_log rows older than {self.settings.USAGE_LOG_RETENTION_DAYS} days")
         except Exception as e:
@@ -418,20 +408,10 @@ class AuthNZScheduler:
         try:
             db_pool = await get_db_pool()
             cutoff = datetime.utcnow() - timedelta(days=self.settings.LLM_USAGE_LOG_RETENTION_DAYS)
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    result = await conn.execute(
-                        "DELETE FROM llm_usage_log WHERE ts < $1",
-                        cutoff
-                    )
-                    count = int(result.split()[-1]) if isinstance(result, str) else 0
-                else:
-                    cursor = await conn.execute(
-                        "DELETE FROM llm_usage_log WHERE ts < ?",
-                        (cutoff.isoformat(),)
-                    )
-                    count = cursor.rowcount
-                    await conn.commit()
+            from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
+
+            repo = AuthnzUsageRepo(db_pool)
+            count = await repo.prune_llm_usage_log_before(cutoff)
             if count:
                 logger.info(f"Pruned {count} llm_usage_log rows older than {self.settings.LLM_USAGE_LOG_RETENTION_DAYS} days")
         except Exception as e:
@@ -444,14 +424,10 @@ class AuthNZScheduler:
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _gs
             retention_days = _gs().USAGE_DAILY_RETENTION_DAYS
             cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    result = await conn.execute("DELETE FROM usage_daily WHERE day < $1::date", cutoff_date.date())
-                    count = int(result.split()[-1]) if isinstance(result, str) else 0
-                else:
-                    cursor = await conn.execute("DELETE FROM usage_daily WHERE day < ?", (cutoff_date.date().isoformat(),))
-                    count = cursor.rowcount
-                    await conn.commit()
+            from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
+
+            repo = AuthnzUsageRepo(db_pool)
+            count = await repo.prune_usage_daily_before(cutoff_date.date())
             if count:
                 logger.info(f"Pruned {count} usage_daily rows older than {retention_days} days")
         except Exception as e:
@@ -464,14 +440,10 @@ class AuthNZScheduler:
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _gs
             retention_days = _gs().LLM_USAGE_DAILY_RETENTION_DAYS
             cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    result = await conn.execute("DELETE FROM llm_usage_daily WHERE day < $1::date", cutoff_date.date())
-                    count = int(result.split()[-1]) if isinstance(result, str) else 0
-                else:
-                    cursor = await conn.execute("DELETE FROM llm_usage_daily WHERE day < ?", (cutoff_date.date().isoformat(),))
-                    count = cursor.rowcount
-                    await conn.commit()
+            from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
+
+            repo = AuthnzUsageRepo(db_pool)
+            count = await repo.prune_llm_usage_daily_before(cutoff_date.date())
             if count:
                 logger.info(f"Pruned {count} llm_usage_daily rows older than {retention_days} days")
         except Exception as e:

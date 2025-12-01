@@ -84,6 +84,53 @@ class AuthnzApiKeysRepo:
             logger.error(f"AuthnzApiKeysRepo.fetch_active_by_hash_candidates failed: {exc}")
             raise
 
+    async def fetch_key_limits(
+        self,
+        key_id: int,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Fetch LLM budget and org/team limit fields for a specific API key.
+
+        This mirrors the select used by the virtual-keys budget helpers while
+        encapsulating PostgreSQL vs SQLite differences in one place.
+        """
+        try:
+            if getattr(self.db_pool, "pool", None) is not None:
+                # PostgreSQL: use BOOL-aware COALESCE for is_virtual
+                row = await self.db_pool.fetchone(
+                    """
+                    SELECT id,
+                           COALESCE(is_virtual, FALSE) AS is_virtual,
+                           org_id, team_id,
+                           llm_budget_day_tokens, llm_budget_month_tokens,
+                           llm_budget_day_usd, llm_budget_month_usd,
+                           llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
+                    FROM api_keys
+                    WHERE id = $1
+                    """,
+                    key_id,
+                )
+            else:
+                # SQLite: fall back to INTEGER-based COALESCE
+                row = await self.db_pool.fetchone(
+                    """
+                    SELECT id,
+                           COALESCE(is_virtual,0) AS is_virtual,
+                           org_id, team_id,
+                           llm_budget_day_tokens, llm_budget_month_tokens,
+                           llm_budget_day_usd, llm_budget_month_usd,
+                           llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models
+                    FROM api_keys
+                    WHERE id = ?
+                    """,
+                    key_id,
+                )
+
+            return row
+        except Exception as exc:  # pragma: no cover - surfaced via higher layers
+            logger.error(f"AuthnzApiKeysRepo.fetch_key_limits failed: {exc}")
+            raise
+
     async def upsert_primary_key(
         self,
         *,

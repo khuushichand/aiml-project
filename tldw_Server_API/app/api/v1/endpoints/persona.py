@@ -17,7 +17,7 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
 )
 from tldw_Server_API.app.core.feature_flags import is_persona_enabled
 from tldw_Server_API.app.core.MCP_unified import get_mcp_server, MCPRequest
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 
 
@@ -85,16 +85,17 @@ async def persona_stream(
         return
     try:
         await stream.send_json({"event": "notice", "message": "persona stream connected (scaffold)"})
-        # Resolve user_id from token/api_key similar to MCP ws
-        # Resolve user_id from token/api_key similar to MCP ws
+        # Resolve user_id from api_key via AuthNZ API key manager
         user_id: Optional[str] = None
-        try:
-            if api_key and is_single_user_mode():
-                s = get_settings()
-                if api_key == s.SINGLE_USER_API_KEY:
-                    user_id = str(s.SINGLE_USER_FIXED_ID)
-        except Exception:
-            pass
+        if api_key:
+            try:
+                api_mgr = await get_api_key_manager()
+                client_ip = ws.client.host if getattr(ws, "client", None) else None
+                info = await api_mgr.validate_api_key(api_key, ip_address=client_ip)
+                if info and info.get("user_id") is not None:
+                    user_id = str(info["user_id"])
+            except Exception as e:
+                logger.debug(f"persona stream: failed to resolve user from api_key: {e}")
         # Basic RBAC policy from settings
         from tldw_Server_API.app.core.config import settings as _app_settings
         allow_export = bool(_app_settings.get("PERSONA_RBAC_ALLOW_EXPORT", False))

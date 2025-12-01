@@ -33,6 +33,8 @@ from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
 from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_permissions
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
@@ -284,16 +286,8 @@ async def mcp_request(
         except Exception:
             pass
 
-    # Derive user id; prefer the authenticated token user when present.
+    # Derive user id from the authenticated token user when present.
     derived_user_id: Optional[str] = user.sub if user else None
-    if derived_user_id is None:
-        try:
-            if x_api_key and is_single_user_mode():
-                settings = get_settings()
-                if x_api_key == settings.SINGLE_USER_API_KEY:
-                    derived_user_id = str(settings.SINGLE_USER_FIXED_ID)
-        except Exception:
-            pass
 
     # Parse optional safe config (base64-encoded JSON)
     safe_config: Dict[str, Any] = {}
@@ -388,16 +382,8 @@ async def mcp_request_batch(
         except Exception as e:
             logger.debug(f"Batch API key metadata attach failed: {e}")
 
-    # Derive user id; prefer the authenticated token user when present.
+    # Derive user id from the authenticated token user when present.
     derived_user_id: Optional[str] = user.sub if user else None
-    if derived_user_id is None:
-        try:
-            if x_api_key and is_single_user_mode():
-                settings = get_settings()
-                if x_api_key == settings.SINGLE_USER_API_KEY:
-                    derived_user_id = str(settings.SINGLE_USER_FIXED_ID)
-        except Exception:
-            pass
 
     # Optional safe config
     safe_config: Dict[str, Any] = {}
@@ -562,16 +548,8 @@ async def list_tools(
     if not server.initialized:
         await server.initialize()
 
-    # Derive user id with a robust single-user fallback
+    # Derive user id from the authenticated token user when present.
     derived_user_id: Optional[str] = user.sub if user else None
-    if derived_user_id is None:
-        try:
-            if x_api_key and is_single_user_mode():
-                settings = get_settings()
-                if x_api_key == settings.SINGLE_USER_API_KEY:
-                    derived_user_id = str(settings.SINGLE_USER_FIXED_ID)
-        except Exception:
-            pass
 
     metadata: Dict[str, Any] = {}
     if user:
@@ -579,12 +557,6 @@ async def list_tools(
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
-    elif derived_user_id is not None:
-        try:
-            if is_single_user_mode():
-                metadata["roles"] = [UserRole.ADMIN.value]
-        except Exception:
-            pass
 
     response = await server.handle_http_request(
         request,
@@ -732,7 +704,10 @@ async def list_modules(
     return response.result
 
 
-@router.get("/modules/health")
+@router.get(
+    "/modules/health",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def get_modules_health(
     user: TokenData = Depends(require_admin),
     _guard: None = Depends(enforce_http_security),
