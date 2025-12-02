@@ -108,3 +108,91 @@ async def test_authnz_api_keys_repo_rotation_and_revoke_postgres(test_db_pool):
     assert int(row_second_after["revoked_by"]) == user_id_int
     assert row_second_after["revoke_reason"] == "PG revoke"
 
+
+@pytest.mark.asyncio
+async def test_authnz_api_keys_repo_usage_and_audit_postgres(test_db_pool):
+    """AuthnzApiKeysRepo.increment_usage and insert_audit_log work on Postgres."""
+    pool = test_db_pool
+
+    # Seed a user row for FK
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO users (
+                uuid,
+                username,
+                email,
+                password_hash,
+                role,
+                is_active,
+                is_verified,
+                storage_quota_mb,
+                storage_used_mb,
+                created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, TRUE, TRUE, 5120, 0.0, $6)
+            """,
+            str(uuid.uuid4()),
+            "pg_api_keys_usage_user",
+            "pg_api_keys_usage_user@example.com",
+            "x",
+            "user",
+            datetime.now(timezone.utc),
+        )
+
+    user_id = await pool.fetchval(
+        "SELECT id FROM users WHERE username = $1",
+        "pg_api_keys_usage_user",
+    )
+    assert user_id is not None
+    user_id_int = int(user_id)
+
+    mgr = APIKeyManager(pool)
+    await mgr.initialize()
+
+    rec = await mgr.create_api_key(user_id=user_id_int, name="pg-usage-key")
+    key_id = int(rec["id"])
+
+    repo = AuthnzApiKeysRepo(db_pool=pool)
+
+    # usage increment
+    before = await pool.fetchrow(
+        "SELECT usage_count, last_used_at, last_used_ip FROM api_keys WHERE id = $1",
+        key_id,
+    )
+    before_count = int(before["usage_count"] or 0) if before is not None else 0
+
+    await repo.increment_usage(key_id=key_id, ip_address="203.0.113.5")
+
+    after = await pool.fetchrow(
+        "SELECT usage_count, last_used_at, last_used_ip FROM api_keys WHERE id = $1",
+        key_id,
+    )
+    assert after is not None
+    assert int(after["usage_count"] or 0) == before_count + 1
+    assert after["last_used_ip"] == "203.0.113.5"
+    assert after["last_used_at"] is not None
+
+    # audit log insert
+    before_audit = await pool.fetchval("SELECT COUNT(*) FROM api_key_audit_log")
+    await repo.insert_audit_log(
+        key_id=key_id,
+        action="unit_test_pg",
+        user_id=user_id_int,
+        details={"foo": "bar"},
+    )
+    after_audit = await pool.fetchval("SELECT COUNT(*) FROM api_key_audit_log")
+    assert int(after_audit or 0) == int(before_audit or 0) + 1
+
+    last_row = await pool.fetchrow(
+        """
+        SELECT api_key_id, action, user_id, details
+        FROM api_key_audit_log
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    )
+    assert last_row is not None
+    assert int(last_row["api_key_id"]) == key_id
+    assert last_row["action"] == "unit_test_pg"
+    assert int(last_row["user_id"]) == user_id_int

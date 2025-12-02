@@ -92,9 +92,11 @@ async def test_multi_user_jwt_and_api_key_status_codes(monkeypatch):
     when get_current_user and get_auth_principal coexist.
     """
     from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as udh
+    from tldw_Server_API.app.core.AuthNZ import auth_principal_resolver as apr
 
     # Force multi-user mode
     monkeypatch.setattr(udh, "is_single_user_mode", lambda: False)
+    monkeypatch.setattr(apr, "is_single_user_mode", lambda: False)
     fake_settings = SimpleNamespace(
         AUTH_MODE="multi_user",
         PII_REDACT_LOGS=False,
@@ -115,4 +117,3 @@ async def test_multi_user_jwt_and_api_key_status_codes(monkeypatch):
     assert resp2.status_code == 401
     assert "Not authenticated (provide Bearer token or X-API-KEY)" in resp2.json()["detail"]
     assert resp2.headers.get("WWW-Authenticate") == "Bearer"
-

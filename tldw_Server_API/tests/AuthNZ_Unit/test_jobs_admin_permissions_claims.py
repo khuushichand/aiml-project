@@ -88,6 +88,20 @@ def _build_app_with_overrides(
     return app
 
 
+def _make_admin_user_from_principal(principal: AuthPrincipal) -> dict[str, Any]:
+    """
+    Derive the minimal jobs-admin user dict from an AuthPrincipal.
+
+    This mirrors the current behavior of require_admin in jobs_admin tests,
+    but provides a single helper to use when designing claim-first variants
+    of _enforce_domain_scope that operate on AuthPrincipal instead of mode.
+    """
+    return {
+        "id": principal.user_id,
+        "username": "admin",
+    }
+
+
 @pytest.mark.asyncio
 async def test_jobs_queue_status_401_when_principal_unavailable():
     app = _build_app_with_overrides(principal=None, fail_with_401=True)

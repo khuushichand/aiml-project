@@ -31,6 +31,22 @@ def _attach_whoami_router(app: FastAPI) -> None:
         principal: AuthPrincipal = Depends(get_auth_principal),
         user: Dict[str, Any] = Depends(get_current_user),
     ) -> Dict[str, Any]:
+        auth_ctx = getattr(request.state, "auth", None)
+        if auth_ctx is not None:
+            cp = auth_ctx.principal
+            state_auth_principal: Dict[str, Any] | None = {
+                "principal_id": getattr(cp, "principal_id", None),
+                "kind": getattr(cp, "kind", None),
+                "user_id": getattr(cp, "user_id", None),
+                "api_key_id": getattr(cp, "api_key_id", None),
+                "roles": getattr(cp, "roles", None),
+                "permissions": getattr(cp, "permissions", None),
+                "org_ids": getattr(cp, "org_ids", None),
+                "team_ids": getattr(cp, "team_ids", None),
+            }
+        else:
+            state_auth_principal = None
+
         return {
             "principal": {
                 "principal_id": principal.principal_id,
@@ -56,6 +72,7 @@ def _attach_whoami_router(app: FastAPI) -> None:
                 "org_ids": getattr(request.state, "org_ids", None),
                 "team_ids": getattr(request.state, "team_ids", None),
             },
+            "state_auth_principal": state_auth_principal,
         }
 
     # Avoid attaching the router multiple times if the test reuses the app.
@@ -139,6 +156,7 @@ async def test_multi_user_jwt_happy_path_principal_matches_state(
     principal = payload["principal"]
     user = payload["user"]
     state = payload["state"]
+    state_auth_principal = payload["state_auth_principal"]
 
     # Basic identity consistency checks
     assert principal["kind"] == "user"
@@ -149,6 +167,14 @@ async def test_multi_user_jwt_happy_path_principal_matches_state(
     assert str(state["user_id"]) == str(principal["user_id"])
     assert state["api_key_id"] is None
 
+    # request.state.auth.principal mirrors both principal and request.state
+    assert state_auth_principal is not None
+    assert state_auth_principal["kind"] == principal["kind"]
+    assert str(state_auth_principal["user_id"]) == str(principal["user_id"])
+    assert state_auth_principal["api_key_id"] == principal["api_key_id"]
+    assert state_auth_principal["org_ids"] == principal["org_ids"]
+    assert state_auth_principal["team_ids"] == principal["team_ids"]
+
     # Org/team membership is mirrored between principal and request.state
     assert state["org_ids"] == principal["org_ids"]
     assert state["team_ids"] == principal["team_ids"]
@@ -156,4 +182,3 @@ async def test_multi_user_jwt_happy_path_principal_matches_state(
     # Claims on AuthPrincipal and User should be aligned (may be empty but consistent)
     assert principal["roles"] == user["roles"]
     assert principal["permissions"] == user["permissions"]
-

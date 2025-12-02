@@ -323,6 +323,15 @@ Introduce an AuthNZ-scoped governance interface that uses the principal model to
   - Lines of code in `llm_budget_guard`, `quotas`, and AuthNZ rate limiter.
   - Number of code sites manually reading/writing `request.state.user_id/api_key_id/org_ids/team_ids`.
 
+## Verification
+
+- **AuthGovernor and guardrail acceptance tests (v0.1)**:
+  - Budget metrics and lockout wrappers: `tldw_Server_API/tests/AuthNZ_Unit/test_auth_governor_budget.py`.
+  - LLM budget enforcement over HTTP: `tldw_Server_API/tests/AuthNZ/integration/test_llm_budget_guard_http.py` and SQLite 402 middleware tests under `tldw_Server_API/tests/AuthNZ_SQLite/test_llm_budget_402_sqlite.py`.
+  - Login lockouts via AuthGovernor: `tldw_Server_API/tests/AuthNZ/integration/test_auth_login_lockout_via_auth_governor.py`.
+  - Guardrail SQL audit and stack behavior: `tldw_Server_API/tests/AuthNZ/unit/test_guardrail_sql_audit.py` and `tldw_Server_API/tests/AuthNZ/integration/test_guardrail_stack_combined.py::test_guardrail_stack_login_lockout_and_chat_budget`.
+- These suites serve as the acceptance gate for the principal-governance behavior described here; changes to AuthGovernor or AuthNZ guardrails should keep them green across both SQLite and Postgres-backed runs.
+
 ### Admin Surfaces Governed by Principals
 
 **Coverage snapshot (v0.1)** – principal-governed admin and operator surfaces:

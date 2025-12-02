@@ -323,6 +323,18 @@ Symptoms:
 - There is a single, documented way to get the current authenticated principal/user in FastAPI endpoints.
 - Middlewares and services that need auth context rely on `AuthPrincipal` rather than ad-hoc `request.state` fields.
 
+## Verification & Regression Slice
+
+- **Primary test modules relied on (v0.1)**:
+  - Permissions and claim-first behavior: `tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py`.
+  - Metrics admin and AuthNZ claim gates: `tldw_Server_API/tests/AuthNZ_Unit/test_metrics_permissions_claims.py`.
+  - Resource-Governor admin/diag claim gates: `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` and `tldw_Server_API/tests/Resource_Governance/integration`.
+  - Chat slash commands (claim-first routing): `tldw_Server_API/tests/Chat_NEW/unit/test_command_router.py` and `tldw_Server_API/tests/Chat_NEW/integration/test_chat_commands_endpoint.py`.
+  - Prompt Studio dependencies and claims: `tldw_Server_API/tests/AuthNZ_Unit/test_prompt_studio_user_claims.py` and `tldw_Server_API/tests/prompt_studio/unit/test_prompt_studio_deps_headers.py`.
+- **Recommended regression slice (SQLite/Postgres)**:
+  - SQLite-focused slice: `python -m pytest tldw_Server_API/tests/AuthNZ_SQLite -m "not slow"` to exercise AuthNZ SQLite behavior (sessions, rate limits, usage, API keys).
+  - Postgres-focused slice: `python -m pytest tldw_Server_API/tests/AuthNZ_Postgres -m "not slow" tldw_Server_API/tests/AuthNZ/integration -m "not slow"` to cover AuthNZ Postgres repos and HTTP-level auth/guardrail flows.
+
 ## Implementation Plan
 
 ### Stage 1: AuthPrincipal + Claim Invariants

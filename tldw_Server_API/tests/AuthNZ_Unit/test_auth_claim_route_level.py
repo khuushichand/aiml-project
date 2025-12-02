@@ -70,6 +70,26 @@ async def test_require_permissions_http_401_when_principal_unavailable(monkeypat
     resp = client.get("/perm-protected")
     assert resp.status_code == 401
     assert "Authentication required" in resp.json().get("detail", "")
+    assert resp.headers.get("WWW-Authenticate") == "Bearer"
+
+
+@pytest.mark.asyncio
+async def test_require_roles_http_401_when_principal_unavailable(monkeypatch):
+    async def _fail_get_auth_principal(request):  # type: ignore[override]
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    monkeypatch.setattr(
+        auth_deps, "_resolve_auth_principal", _fail_get_auth_principal, raising=True
+    )
+
+    resp = client.get("/role-protected")
+    assert resp.status_code == 401
+    assert "Authentication required" in resp.json().get("detail", "")
+    assert resp.headers.get("WWW-Authenticate") == "Bearer"
 
 
 @pytest.mark.asyncio

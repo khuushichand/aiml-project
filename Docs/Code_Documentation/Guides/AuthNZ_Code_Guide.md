@@ -79,8 +79,8 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_current_user,           # Resolves single-user, API-key, or JWT
     get_current_active_user,    # Adds active status check
     check_rate_limit,           # General rate limit helper
+    require_permissions,        # Claim-first permission gate (preferred)
 )
-from tldw_Server_API.app.core.AuthNZ.permissions import PermissionChecker
 
 router = APIRouter(prefix="/example", tags=["examples"])
 
@@ -88,7 +88,10 @@ router = APIRouter(prefix="/example", tags=["examples"])
 async def protected_route(user=Depends(get_current_user)):
     return {"hello": user.get("username")}
 
-@router.post("/write", dependencies=[Depends(PermissionChecker("media.update"))])
+@router.post(
+    "/write",
+    dependencies=[Depends(require_permissions("media.update"))],
+)
 async def write_route(user=Depends(get_current_active_user)):
     return {"ok": True}
 
@@ -119,18 +122,20 @@ async def run_workflow(user=Depends(get_current_user)):
 
 Notes:
 - `get_current_user` handles single-user mode first, then API key, then JWT.
-- `PermissionChecker` honors soft-enforce via `RBAC_SOFT_ENFORCE` and never logs secrets.
 - `check_rate_limit` uses a token bucket; see Rate Limiting below.
 
 Also handy DI:
 - `get_optional_current_user` for optional auth
 - `require_admin` and `require_role("role")` for simple role gating
 
-Examples:
+Examples (modern, claim-first):
 ```python
 from fastapi import Depends
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    get_optional_current_user, require_admin, require_role
+    get_optional_current_user,
+    get_auth_principal,
+    require_permissions,
+    require_roles,
 )
 
 @router.get("/maybe-auth")
@@ -140,12 +145,12 @@ async def maybe_auth(user=Depends(get_optional_current_user)):
     return {"hello": "anonymous"}
 
 @router.get("/admin-only")
-async def admin_only(user=Depends(require_admin)):
-    return {"ok": True, "as": "admin"}
+async def admin_only(principal=Depends(require_roles("admin"))):
+    return {"ok": True, "as": "admin", "id": principal.user_id}
 
-@router.get("/viewer-only")
-async def viewer_only(user=Depends(require_role("viewer"))):
-    return {"ok": True, "as": "viewer"}
+@router.get("/media-read")
+async def media_read(principal=Depends(require_permissions("media.read"))):
+    return {"ok": True, "id": principal.user_id}
 ```
 
 ## Sessions, Tokens, Revocation
@@ -188,10 +193,31 @@ Notes:
 - **Modern pattern (preferred)**: use claim-first dependencies from `auth_deps`:
   - `get_auth_principal` → returns `AuthPrincipal` with `roles`/`permissions` claims.
   - `require_permissions("perm")` / `require_roles("role")` → enforce claims and return the principal.
-  - Representative usage exists on media, RAG, notes graph, and evaluations CRUD endpoints.
-- **Legacy shims (compatibility)**:
-  - `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker` in `permissions.py` remain supported for existing routes but should not be used on new ones.
-  - `require_admin` in `evaluations_auth.py` is an admin-only guard for heavy evaluations flows; new admin surfaces should prefer `require_roles("admin")` / `require_permissions(...)` on top of `get_auth_principal`.
+  - Representative usage exists on media, RAG, notes graph, evaluations CRUD endpoints, sandbox admin views, and selected workflows surfaces.
+- **HTTP status semantics (AuthNZ dependencies)**:
+  - `get_auth_principal`:
+    - Returns an `AuthPrincipal` when credentials are valid.
+    - Raises **401 Unauthorized** when credentials are missing or invalid, with `WWW-Authenticate: Bearer` and a stable detail string (e.g., `"Not authenticated (provide Bearer token or X-API-KEY)"` in multi-user mode).
+  - `get_current_user`:
+    - Returns a user-shaped dict when credentials are valid.
+    - Raises **401 Unauthorized** for missing/invalid credentials with detail containing `"Authentication required"` and `WWW-Authenticate: Bearer`.
+  - `require_permissions` / `require_roles`:
+    - Propagate **401** from `get_auth_principal` when no principal can be resolved.
+    - Raise **403 Forbidden** when a principal is present but lacks required claims:
+      - `require_permissions` → `detail="Permission denied. Required: <perm-list>"`.
+      - `require_roles` → `detail="Access denied. Required role(s): <role-list>"`.
+    - These 403 payload shapes are treated as part of the public surface for claim-first/admin routes.
+- **Legacy shims (compatibility, do not use for new endpoints)**:
+  - `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker` in `permissions.py` are maintained for **existing** routes only and are treated as legacy:
+    - Short-term keepers (compatibility shims with claim-first tests in place):
+      - Media add: `/api/v1/media/add` (`tldw_Server_API/app/api/v1/endpoints/media/add.py`) lists `PermissionChecker(MEDIA_CREATE)` **and** `require_permissions(MEDIA_CREATE)`. Tests (e.g., `test_media_add_permissions_claims.py`) assert that `require_permissions(...)` is the effective gate.
+      - Tools execute: `/api/v1/tools/execute` (`tldw_Server_API/app/api/v1/endpoints/tools.py`) lists `PermissionChecker("tools.execute:*")` **and** `require_permissions("tools.execute:*")`. Tests (e.g., `test_tools_permissions_claims.py`) assert claim-first behavior.
+      - Workflows runs/events/artifacts/control/DLQ: endpoints in `tldw_Server_API/app/api/v1/endpoints/workflows.py` (e.g., `GET /api/v1/workflows/runs`, `GET /runs/{run_id}/artifacts`, `GET /artifacts/{artifact_id}/download`, `POST /runs/{run_id}/{action}`, `GET /webhooks/dlq`) list `PermissionChecker(...)` **and** the corresponding `require_permissions(...)` (and `require_roles("admin")` where applicable). Unit tests such as `test_workflows_runs_permissions_claims.py`, `test_workflows_artifacts_permissions_claims.py`, `test_workflows_webhook_dlq_permissions_claims.py`, and `test_workflows_control_permissions_claims.py` assert that the claim-first dependencies are the true authorization gate.
+    - Already-migrated admin surfaces:
+      - Sandbox admin endpoints (`tldw_Server_API/app/api/v1/endpoints/sandbox.py`) now use `require_roles("admin")` (plus `get_request_user`) and no longer depend on `RoleChecker("admin")`. `test_sandbox_admin_permissions_claims.py` locks in 401/403/200 behavior for these routes.
+    - Medium-term migration targets:
+      - `AnyPermissionChecker` / `AllPermissionsChecker` are kept only for legacy use and examples; new endpoints should prefer explicit `require_permissions(...)` calls (potentially multiple) or custom dependencies composed around `get_auth_principal`.
+  - `require_admin` in `evaluations_auth.py` remains as an admin-only guard for heavy evaluations flows; new admin surfaces should prefer `require_roles("admin")` / `require_permissions(...)` on top of `get_auth_principal`.
   - A repository layer exists for AuthNZ and MUST be used instead of ad-hoc SQL for core tables:
     - `AuthnzUsersRepo` (`app/core/AuthNZ/repos/users_repo.py`) wraps `UsersDB` for user lookups; exercised against both SQLite and Postgres in AuthNZ tests.
     - `AuthnzApiKeysRepo` (`app/core/AuthNZ/repos/api_keys_repo.py`) centralizes `api_keys` read/write paths and is used by `APIKeyManager` and single-user bootstrap.
@@ -349,11 +375,12 @@ async def secure(user=Depends(get_current_user)):
     return {"user_id": user["id"]}
 ```
 
-2) Require a permission
+2) Require a permission (claim-first)
 ```python
-from tldw_Server_API.app.core.AuthNZ.permissions import PermissionChecker
+from fastapi import Depends
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_permissions
 
-@router.post("/media/update", dependencies=[Depends(PermissionChecker("media.update"))])
+@router.post("/media/update", dependencies=[Depends(require_permissions("media.update"))])
 async def update_media(user=Depends(get_current_user)):
     ...
 ```

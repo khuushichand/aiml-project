@@ -383,6 +383,16 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
 - At least API-key and user-related AuthNZ modules no longer contain inline dialect branches or DDL; they use repositories instead.
 - For both profiles, authentication headers, HTTP status codes (401/403), and error payloads remain compatible with current behavior, or any intentional changes are explicitly documented and tested.
 
+## Verification
+
+- **SQLite regression slice (AuthNZ focus)**:
+  - Recommended command: `python -m pytest tldw_Server_API/tests/AuthNZ_SQLite -m "not slow"`.
+  - Key suites: `tldw_Server_API/tests/AuthNZ_SQLite/test_authnz_users_repo_sqlite.py`, `test_authnz_api_keys_repo_sqlite.py`, `test_authnz_usage_repo_sqlite.py`, and `test_authnz_usage_repo_insert_sqlite.py` (users, API keys, usage/LLM-usage).
+- **Postgres regression slice (AuthNZ focus)**:
+  - Recommended command: `python -m pytest tldw_Server_API/tests/AuthNZ_Postgres -m "not slow" tldw_Server_API/tests/AuthNZ/integration -m "not slow"`.
+  - Key suites: `tldw_Server_API/tests/AuthNZ_Postgres` (AuthNZ repos over Postgres) and `tldw_Server_API/tests/AuthNZ/integration` (JWT login flows, single-user bootstrap, AuthGovernor lockouts, LLM budgets).
+- These slices, together with the unit suites referenced above (permissions, metrics admin, resource-governor permissions, chat commands, Prompt Studio), act as the practical verification layer that the unified single-user/multi-user behavior and repo-backed AuthNZ paths work consistently across SQLite and Postgres.
+
 ## Implementation Plan
 
 ### Stage 1: Single-User Bootstrap
@@ -505,12 +515,14 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
 **Status**: In Progress — core repos are in use; remaining repo migrations are deferred to the next iteration (see `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`).
 
 **Notes**:
-- A minimal `AuthnzApiKeysRepo` has been introduced at `tldw_Server_API/app/core/AuthNZ/repos/api_keys_repo.py` with three initial methods:
+- `AuthnzApiKeysRepo` at `tldw_Server_API/app/core/AuthNZ/repos/api_keys_repo.py` now backs all runtime `api_keys` operations with focused methods, including:
   - `fetch_active_by_hash_candidates(...)` used by `APIKeyManager.validate_api_key`.
   - `list_user_keys(...)` used by `APIKeyManager.list_user_keys`.
   - `upsert_primary_key(...)` used by `bootstrap_single_user_profile()` to seed the single-user primary API key for both SQLite and Postgres backends.
-- `APIKeyManager` now constructs the repository lazily via a private `_get_repo()` helper, keeping the manager API unchanged while centralizing the most important `api_keys` queries behind the repository.
-- DDL creation for `api_keys` / `api_key_audit_log` still lives in `APIKeyManager._create_tables`; moving this into migrations or dedicated repository helpers remains future work for this stage.
+  - `create_api_key_row(...)` / `create_virtual_key_row(...)` and `mark_rotated(...)` / `revoke_api_key_for_user(...)` for create/rotate/revoke flows.
+  - `increment_usage(...)`, `mark_key_expired(...)`, and `insert_audit_log(...)` for usage counters, status transitions, and audit logging.
+- `APIKeyManager` constructs the repository lazily via a private `_get_repo()` helper, keeping the manager API unchanged while centralizing all request-time `api_keys` queries behind the repository.
+- DDL creation for `api_keys` / `api_key_audit_log` and the maintenance helper `cleanup_expired_keys` still include backend-specific SQL; they are treated as bootstrap/maintenance guardrails for this iteration and may be migrated into migrations or dedicated repository helpers in a later phase.
 - A minimal `AuthnzUsersRepo` has been added at `tldw_Server_API/app/core/AuthNZ/repos/users_repo.py` wrapping the existing `UsersDB` abstraction and exposing `get_user_by_id` / `get_user_by_username` / `get_user_by_uuid` (and a paginated `list_users` helper) against the shared `DatabasePool`. Integration tests exercise this repo against both SQLite (`tests/AuthNZ_SQLite/test_authnz_users_repo_sqlite.py`) and Postgres (`tests/AuthNZ/integration/test_authnz_users_repo_postgres.py`) backends, and the admin `GET /api/v1/admin/users/{user_id}` and `GET /api/v1/admin/users` endpoints are covered by SQLite/Postgres admin endpoint tests.
 - A thin `AuthnzRbacRepo` at `tldw_Server_API/app/core/AuthNZ/repos/rbac_repo.py` now centralizes calls into `UserDatabase_v2` for RBAC permission checks. The higher-level helpers in `tldw_Server_API/app/core/AuthNZ/rbac.py` have been refactored to delegate to this repo, and `AuthnzRbacRepo.get_role_effective_permissions` backs the admin `GET /api/v1/admin/roles/{role_id}/permissions/effective` endpoint. Broader migration of RBAC/DDL logic into repository helpers remains future work for this stage.
 

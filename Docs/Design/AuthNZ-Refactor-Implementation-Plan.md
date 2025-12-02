@@ -28,14 +28,35 @@ The stages are designed to be incremental and backwards-compatible. Each stage s
   - Exercise `auth_deps.get_current_user` and `User_DB_Handling.get_request_user` in both single and multi-user configurations.
   - Assert on HTTP status codes and key headers (`WWW-Authenticate`, test-only diagnostics headers).
 
+**AuthNZ 401 vs 403 Semantics (Reference)**:
+- `get_auth_principal`:
+  - Returns `AuthPrincipal` when credentials are valid.
+  - Raises **401 Unauthorized** when credentials are missing or invalid, with a stable detail string:
+    - Multi-user: `"Not authenticated (provide Bearer token or X-API-KEY)"` for missing credentials.
+    - Single-user: `"Could not validate credentials"` when principal resolution fails.
+- `get_current_user`:
+  - Returns a user-shaped dict when credentials are valid.
+  - Raises **401 Unauthorized** when credentials are missing or invalid, with:
+    - Detail containing `"Authentication required"` for missing credentials.
+    - `WWW-Authenticate: Bearer` header.
+- `require_permissions` / `require_roles`:
+  - Depend on `get_auth_principal` and therefore propagate its **401** behavior when no principal is present.
+  - When a principal is present but lacks required claims, they raise **403 Forbidden**:
+    - `require_permissions` uses detail `"Permission denied. Required: <perm-list>"`.
+    - `require_roles` uses detail `"Access denied. Required role(s): <role-list>"`.
+  - These 403 payloads are considered part of the public API surface for admin/claim-first routes once shipped.
+
 **PRDs Touched**:
 - Used for reference only; no edits expected in this stage.
 
-**Status**: In Progress
+**Status**: Done
 
 **Notes**:
-- Initial invariant tests exist in `tldw_Server_API/tests/AuthNZ_Unit/test_authnz_invariants.py` to assert 401 behavior and headers for missing-credential cases in `auth_deps.get_current_user` and `User_DB_Handling.get_request_user`, as well as successful single-user API-key auth wiring `request.state.user_id`.
-- Broader integration coverage (multi-user JWT/API-key flows across backends) remains future work and will build on existing AuthNZ integration suites.
+- Unit-level invariant tests in `tldw_Server_API/tests/AuthNZ_Unit/test_authnz_invariants.py` capture 401 behavior, headers, and request-state wiring for `auth_deps.get_current_user` and `User_DB_Handling.get_request_user` in both single-user and multi-user configurations.
+- Integration tests exercise principal/state alignment for real FastAPI routes in multi-user mode:
+  - `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_jwt_happy_path.py` and `test_auth_principal_api_key_happy_path.py` assert that `request.state.user_id` / `request.state.api_key_id` and `request.state.auth.principal` stay in sync with `AuthPrincipal` across JWT and API-key flows.
+  - `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_media_rag_invariants.py` extends these invariants to representative business endpoints (`/api/v1/rag/search` for JWT, `/api/v1/media/process-videos` for API keys), ensuring `request.state.*` mirrors `AuthPrincipal` in real application routes.
+- The intended 401 vs 403 semantics for `get_auth_principal`, `get_current_user`, `require_permissions`, and `require_roles` are documented in `Docs/Code_Documentation/Guides/AuthNZ_Code_Guide.md` (see “HTTP status semantics (AuthNZ dependencies)”) and are treated as part of the stable compatibility surface.
 
 ---
 
@@ -209,7 +230,7 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
   - **Token blacklist**: `AuthnzTokenBlacklistRepo` (`repos/token_blacklist_repo.py`) now owns the `token_blacklist` table for inserts, active-expiry lookups, cleanup, and statistics, and `token_blacklist.TokenBlacklist` delegates those operations to the repo. Table-creation DDL and the SQLite session-column harmonization helper remain in `token_blacklist.py` for backwards compatibility and are explicitly out-of-scope for Stage 3/4.
   - **MFA**: `mfa_service.py` now delegates all MFA persistence on the `users` table (TOTP secret, two-factor flags, backup_codes, status rows, and regeneration/consumption updates) to `AuthnzMfaRepo` (`repos/mfa_repo.py`), while retaining the existing `MFAService` encryption, key-rotation logic, and TOTP/backup-code hashing behavior.
   - **Registration codes**: the AuthNZ scheduler’s expired-registration cleanup now uses `AuthnzRegistrationCodesRepo` (`repos/registration_codes_repo.py`) for the `registration_codes` table, removing the last scheduler-owned inline SQL for that table while preserving the existing retention semantics.
-  - **API key manager / initialize**: `api_key_manager.py` and parts of `initialize.py` use limited inline SQL for bootstrap and schema backstops. These are currently low-risk and are explicitly marked as out-of-scope for Stage 3/4; they will be revisited once the core repos (users, sessions, token_blacklist, MFA, registration_codes, monitoring) are fully in place and additional tests cover those bootstrap paths.
+  - **API key manager / initialize**: `api_key_manager.py` and parts of `initialize.py` use limited inline SQL for bootstrap and schema backstops. Runtime SQL in `api_key_manager` for usage counters, expiry, and audit logging has now been migrated into `AuthnzApiKeysRepo` (`increment_usage`, `mark_key_expired`, `insert_audit_log`), and the manager calls those helpers instead of executing its own queries. Remaining inline SQL in `initialize.py` for PostgreSQL bootstrap of usage tables (`usage_log`, `usage_daily`, `llm_usage_log`, `llm_usage_daily`, and the `vk_*_counters` tables) is treated as **bootstrap guardrails only** for this stage: it runs during explicit initialization to ensure schemas are present but is not used on hot paths. A future iteration may move this DDL into migrations or repo-backed helpers once operational requirements and tests fully cover those bootstrap flows.
 
 ### Repo Coverage Table (AuthNZ core tables)
 
@@ -234,11 +255,14 @@ The table below summarizes how core AuthNZ tables are covered by repositories as
 
 An explicit audit of `hasattr(conn, 'fetch*')` usage in `tldw_Server_API/app/core/AuthNZ` shows:
 
-- `api_key_manager.py` – **runtime inline SQL (narrowed / deferred)**  
+- `api_key_manager.py` – **bootstrap/maintenance inline SQL only**  
   - Uses backend-branching (`if hasattr(conn, 'fetchval')` / `fetchrow`) for:
-    - `_create_tables` DDL for `api_keys` / `api_key_audit_log`.
-    - Runtime operations limited to `_update_usage`, `_mark_expired`, and `_log_action`.  
-  - Creation of regular and virtual keys, as well as rotation and revocation, now delegate to `AuthnzApiKeysRepo` helpers (`create_api_key_row`, `create_virtual_key_row`, `mark_rotated`, and `revoke_api_key_for_user`). Remaining inline SQL operates on `api_keys`/`api_key_audit_log` only for schema backstops, usage counters, and audit logging and is explicitly marked as **Deferred** for a future iteration that will migrate or centralize those concerns.
+    - `_create_tables` DDL for `api_keys` / `api_key_audit_log` (bootstrap/backstop only).
+    - `cleanup_expired_keys`, which performs a periodic maintenance update for expired keys.  
+  - All request-time operations now delegate to `AuthnzApiKeysRepo` helpers:
+    - `create_api_key_row`, `create_virtual_key_row`, `mark_rotated`, and `revoke_api_key_for_user` for create/rotate/revoke flows.
+    - `increment_usage`, `mark_key_expired`, and `insert_audit_log` for usage counters, status transitions, and audit logging.  
+  - Remaining inline SQL is explicitly treated as **bootstrap/maintenance guardrails** for v0.1 and may be migrated into migrations or repo helpers in a later iteration once operational requirements are fully captured.
 
 - `initialize.py` – **bootstrap/DDL inline SQL (deferred / bootstrap only)**  
   - Uses backend-branching DDL to ensure presence of `audit_logs`, `sessions`, `registration_codes`, RBAC tables, organizations/teams, `usage_log` / `usage_daily`, `llm_usage_log` / `llm_usage_daily`, and virtual-key counters in non-SQLite deployments.  
@@ -306,7 +330,7 @@ MFA-related SQL has already been migrated behind `AuthnzMfaRepo`; no `hasattr(co
 - A focused audit of `is_single_user_mode()` usages confirms that remaining mode checks are either:
   - Coordination/governance decisions (startup banners, WebUI configuration, ChaChaNotes warm-up, backpressure/tenant RPS toggles, embedding quotas), or
   - Profile selection for auth flows (single-user API key vs multi-user JWT/API-key) and diagnostics.
-  The only auth-adjacent exception is the Jobs admin domain-scoped RBAC helper (`_enforce_domain_scope` in `tldw_Server_API/app/api/v1/endpoints/jobs_admin.py`), which bypasses domain filters in single-user mode unless `JOBS_RBAC_FORCE=true`. For this stage it is treated as a deliberate governance exception (single-tenant, local admin), not a general authorization shortcut; future work can migrate this to claim-first (`get_auth_principal` + `require_roles/require_permissions`) if domain-scoped jobs RBAC becomes a first-class product surface.
+  The only auth-adjacent exception is the Jobs admin domain-scoped RBAC helper (`_enforce_domain_scope` in `tldw_Server_API/app/api/v1/endpoints/jobs_admin.py`), which enforces domain filters via env-driven settings (`JOBS_DOMAIN_SCOPED_RBAC`, `JOBS_REQUIRE_DOMAIN_FILTER`, `JOBS_DOMAIN_ALLOWLIST_*`) and a user dict produced by `require_admin`. For this stage it is treated as a deliberate governance exception (single-tenant, local admin), not a general authorization shortcut. Tests in `tldw_Server_API/tests/AuthNZ_Unit/test_jobs_admin_permissions_claims.py` now lock in its 401/403/200 and allowlist behavior so a future refactor can migrate it to a claim-first helper that derives the jobs “admin user” from `AuthPrincipal` (see `_make_admin_user_from_principal` in the tests) while preserving domain allowlist semantics.
 
 ---
 

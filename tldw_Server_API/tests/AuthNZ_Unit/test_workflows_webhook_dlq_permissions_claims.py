@@ -10,6 +10,7 @@ from starlette.requests import Request
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.api.v1.endpoints import workflows as wf_mod
+from tldw_Server_API.app.core.AuthNZ.permissions import WORKFLOWS_RUNS_CONTROL
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 
 
@@ -35,7 +36,12 @@ def _make_principal(
     )
 
 
-def _build_app_with_overrides(principal: AuthPrincipal, dlq_rows: List[Dict[str, Any]]) -> FastAPI:
+def _build_app_with_overrides(
+    principal: AuthPrincipal,
+    dlq_rows: List[Dict[str, Any]],
+    *,
+    user_permissions: List[str] | None = None,
+) -> FastAPI:
     app = FastAPI()
     app.include_router(wf_mod.router)
 
@@ -54,12 +60,13 @@ def _build_app_with_overrides(principal: AuthPrincipal, dlq_rows: List[Dict[str,
     app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
 
     async def _fake_get_request_user():
+        perms = list(user_permissions) if user_permissions is not None else list(principal.permissions)
         return SimpleNamespace(
             id=1,
             username="wf-user",
             is_active=True,
             roles=list(principal.roles),
-            permissions=list(principal.permissions),
+            permissions=perms,
             is_admin=principal.is_admin,
             tenant_id="default",
         )
@@ -125,3 +132,29 @@ async def test_workflows_webhook_dlq_allowed_for_admin_role(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body.get("items"), list)
+
+
+@pytest.mark.asyncio
+async def test_workflows_webhook_dlq_forbidden_when_principal_lacks_control_permission_but_user_has():
+    """
+    PermissionChecker sees workflows.runs.control on the User object, but the
+    AuthPrincipal lacks WORKFLOWS_RUNS_CONTROL in its permissions. The request
+    must still be forbidden, demonstrating that require_permissions(WORKFLOWS_RUNS_CONTROL)
+    is the effective gate.
+    """
+    principal = _make_principal(
+        roles=["user"],
+        permissions=[],
+        is_admin=False,
+    )
+    dlq_rows: List[Dict[str, Any]] = []
+    app = _build_app_with_overrides(
+        principal,
+        dlq_rows,
+        user_permissions=[WORKFLOWS_RUNS_CONTROL],
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/workflows/webhooks/dlq")
+    assert resp.status_code == 403
+    assert WORKFLOWS_RUNS_CONTROL in resp.json().get("detail", "")
