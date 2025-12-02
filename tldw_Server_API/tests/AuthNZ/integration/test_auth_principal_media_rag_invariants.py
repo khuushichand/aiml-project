@@ -1,4 +1,3 @@
-import os
 from typing import Any, Dict, Tuple
 
 import pytest
@@ -82,11 +81,16 @@ def _run_async(coro):
     result: Dict[str, Any] = {}
 
     def _runner():
-        result["value"] = asyncio.run(coro)
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:  # pragma: no cover - propagated below
+            result["error"] = exc
 
     t = threading.Thread(target=_runner, daemon=True)
     t.start()
     t.join()
+    if "error" in result:
+        raise result["error"]
     return result.get("value")
 
 

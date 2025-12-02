@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi.testclient import TestClient
 
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import AuthnzMonitoringRepo
 
 
@@ -11,9 +13,15 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio
-async def test_authnz_monitoring_repo_postgres_basic(test_db_pool):
+async def test_authnz_monitoring_repo_postgres_basic(
+    isolated_test_environment: tuple[TestClient, str],
+) -> None:
     """AuthnzMonitoringRepo should aggregate metrics on Postgres."""
-    pool = test_db_pool
+    client, db_name = isolated_test_environment
+    assert client is not None
+    assert db_name
+
+    pool = await get_db_pool()
     repo = AuthnzMonitoringRepo(pool)
 
     now = datetime.now(timezone.utc)
@@ -53,7 +61,7 @@ async def test_authnz_monitoring_repo_postgres_basic(test_db_pool):
             "hashed",
             "admin",
         )
-        user_id = await pool.fetchval(
+        user_id = await conn.fetchval(
             "SELECT id FROM users WHERE username = $1",
             "monitor-user",
         )
@@ -92,4 +100,3 @@ async def test_authnz_monitoring_repo_postgres_basic(test_db_pool):
     alerts = await repo.get_recent_security_alerts(limit=5)
     assert alerts
     assert alerts[0]["action"] == "metric_security_alert"
-

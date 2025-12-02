@@ -428,9 +428,9 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
 - A higher-level claims test, `tldw_Server_API/tests/AuthNZ/integration/test_single_user_claims_permissions.py`, exercises:
   - RBAC seeding via `bootstrap_single_user_profile()` on SQLite.
   - Single-user `get_request_user` + `get_auth_principal` + `require_permissions/roles` using the bootstrapped admin's API key to reach protected endpoints.
- - Additional bootstrap invariants around existing deployments are covered by:
-   - `tldw_Server_API/tests/AuthNZ_SQLite/test_single_user_bootstrap_sqlite.py::test_single_user_bootstrap_reuses_preseeded_primary_key`, which starts from a SQLite AuthNZ database with a pre-seeded `api_keys` row for `SINGLE_USER_API_KEY` and confirms `bootstrap_single_user_profile()` reuses and upgrades that row (instead of creating a duplicate).
-   - `tldw_Server_API/tests/AuthNZ/integration/test_single_user_bootstrap_postgres.py::test_single_user_bootstrap_reuses_preseeded_primary_key_postgres`, which mirrors the same invariant on a Postgres-backed AuthNZ database via the `isolated_test_environment` fixture.
+- Additional bootstrap invariants around existing deployments are covered by:
+  - `tldw_Server_API/tests/AuthNZ_SQLite/test_single_user_bootstrap_sqlite.py::test_single_user_bootstrap_reuses_preseeded_primary_key`, which starts from a SQLite AuthNZ database with a pre-seeded `api_keys` row for `SINGLE_USER_API_KEY` and confirms `bootstrap_single_user_profile()` reuses and upgrades that row (instead of creating a duplicate).
+  - `tldw_Server_API/tests/AuthNZ/integration/test_single_user_bootstrap_postgres.py::test_single_user_bootstrap_reuses_preseeded_primary_key_postgres`, which mirrors the same invariant on a Postgres-backed AuthNZ database via the `isolated_test_environment` fixture.
 
 ### Stage 2: Claims-Based Single-User Permissions
 **Goal**: Replace mode-based permission allowances with claim-based admin role for the bootstrapped user.

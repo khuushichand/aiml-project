@@ -717,7 +717,7 @@ async def get_modules_health(
     _guard: None = Depends(enforce_http_security),
 ):
     """
-    Get detailed health status of all modules (requires admin).
+    Get detailed health status of all modules; requires `system.logs` permission (or admin).
 
     Returns health checks and metrics for each module.
     """

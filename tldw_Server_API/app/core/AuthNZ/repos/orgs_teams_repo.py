@@ -571,14 +571,7 @@ class AuthnzOrgsTeamsRepo:
                         """,
                         (team_id, user_id),
                     )
-                try:
-                    await conn.commit()
-                except Exception as exc:
-                    logger.debug(f"AuthnzOrgsTeamsRepo SQLite commit failed during org_member delete: {exc}")
-                try:
-                    removed = (cur.rowcount or 0) > 0
-                except AttributeError:
-                    removed = True  # aiosqlite cursor may not have rowcount
+                    removed = bool((getattr(cur, "rowcount", 0) or 0) > 0)
 
             return {
                 "team_id": int(team_id),

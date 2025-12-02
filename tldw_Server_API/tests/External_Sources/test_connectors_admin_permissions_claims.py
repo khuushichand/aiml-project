@@ -85,6 +85,8 @@ async def _fake_policy(_: Any, __: int) -> Dict[str, Any]:
     }
 
 
+@pytest.mark.external_api
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_connectors_admin_policy_401_when_principal_unavailable(monkeypatch):
     app = _build_app_with_overrides(principal=None, fail_with_401=True)
@@ -98,6 +100,7 @@ async def test_connectors_admin_policy_401_when_principal_unavailable(monkeypatc
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
 async def test_connectors_admin_policy_403_when_missing_permission(monkeypatch):
     principal = _make_principal(
         is_admin=False,
@@ -116,6 +119,7 @@ async def test_connectors_admin_policy_403_when_missing_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
 async def test_connectors_admin_policy_200_for_admin_principal(monkeypatch):
     principal = _make_principal(
         is_admin=True,

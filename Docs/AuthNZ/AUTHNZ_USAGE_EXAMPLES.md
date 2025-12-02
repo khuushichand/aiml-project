@@ -150,7 +150,7 @@ router = APIRouter()
 @router.get("/api/v1/me")
 async def get_me(principal: AuthPrincipal = Depends(get_auth_principal)):
     return {
-        "subject_type": principal.subject_type,
+        "kind": principal.kind,
         "user_id": principal.user_id,
         "roles": principal.roles,
         "permissions": principal.permissions,

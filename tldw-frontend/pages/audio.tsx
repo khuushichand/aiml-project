@@ -411,12 +411,37 @@ function VoiceChatStreamSection() {
   const ttsChunksRef = useRef<BlobPart[]>([]);
   const audioUrlRef = useRef<string|null>(null);
   const audioRef = useRef<HTMLAudioElement|null>(null);
+  const recordingRef = useRef(false);
+  const streamRef = useRef<MediaStream|null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode|null>(null);
+  const procRef = useRef<ScriptProcessorNode|null>(null);
   const sampleRate = 16000;
+
+  const cleanupAudio = () => {
+    recordingRef.current = false;
+    bufferRef.current = [];
+    if (procRef.current) {
+      try { procRef.current.disconnect(); } catch {}
+      procRef.current = null;
+    }
+    if (sourceRef.current) {
+      try { sourceRef.current.disconnect(); } catch {}
+      sourceRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (ctxRef.current) {
+      try { ctxRef.current.close(); } catch {}
+      ctxRef.current = null;
+    }
+  };
 
   useEffect(() => {
     return () => {
+      cleanupAudio();
       try { wsRef.current?.close(); } catch {}
-      try { ctxRef.current?.close(); } catch {}
       if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
     };
   }, []);
@@ -518,6 +543,7 @@ function VoiceChatStreamSection() {
       };
       ws.onerror = () => setStatus('WebSocket error');
       ws.onclose = () => {
+        cleanupAudio();
         setConnected(false);
         setRecording(false);
         setStatus('Disconnected');
@@ -534,14 +560,17 @@ function VoiceChatStreamSection() {
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+      streamRef.current = stream;
       const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
       ctxRef.current = ctx;
       const source = ctx.createMediaStreamSource(stream);
+      sourceRef.current = source;
       const proc = ctx.createScriptProcessor(8192, 1, 1);
+      procRef.current = proc;
       source.connect(proc); proc.connect(ctx.destination);
       bufferRef.current = [];
       proc.onaudioprocess = (ev: AudioProcessingEvent) => {
-        if (!recording) return;
+        if (!recordingRef.current) return;
         let data = ev.inputBuffer.getChannelData(0);
         if (ctx.sampleRate !== sampleRate) {
           const ratio = sampleRate / ctx.sampleRate;
@@ -565,16 +594,20 @@ function VoiceChatStreamSection() {
           wsRef.current?.send(JSON.stringify({ type: 'audio', data: b64 }));
         }
       };
+      recordingRef.current = true;
       setRecording(true);
       setStatus('Recording…');
     } catch (e: any) {
+      cleanupAudio();
+      setRecording(false);
       show({ title: 'Mic failed', description: e?.message || 'Permission error', variant: 'danger' });
     }
   };
 
   const stop = () => {
+    recordingRef.current = false;
     setRecording(false);
-    if (ctxRef.current) { try { ctxRef.current.close(); } catch {} ctxRef.current = null; }
+    cleanupAudio();
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'commit' }));
     }

@@ -10,10 +10,15 @@ try:
 except Exception:  # Fallback to v1 naming
     from pydantic import validator as field_validator  # type: ignore
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin, require_roles
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    require_admin,
+    require_roles,
+    get_auth_principal,
+)
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditContext
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from fastapi.responses import StreamingResponse
 import asyncio
 import json as _json
@@ -26,6 +31,14 @@ router = APIRouter(
 
 def _is_truthy(v: Optional[str]) -> bool:
     return str(v or "").lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _make_admin_user_from_principal(principal: AuthPrincipal) -> dict:
+    """Derive the minimal jobs-admin user dict from an AuthPrincipal."""
+    return {
+        "id": principal.user_id,
+        "username": "admin",
+    }
 
 
 def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
@@ -64,6 +77,21 @@ def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
         if _is_truthy(os.getenv("JOBS_RBAC_FORCE")):
             raise HTTPException(status_code=403, detail="RBAC enforcement error")
         return
+
+
+def _enforce_domain_scope_from_principal(principal: AuthPrincipal, domain: Optional[str]) -> None:
+    """
+    Domain-scoped RBAC enforcement using AuthPrincipal.
+
+    When JOBS_DOMAIN_RBAC_PRINCIPAL=1, jobs admin endpoints may call this
+    helper instead of passing a user dict directly to _enforce_domain_scope.
+    The underlying semantics (JOBS_DOMAIN_SCOPED_RBAC, JOBS_REQUIRE_DOMAIN_FILTER,
+    JOBS_DOMAIN_ALLOWLIST_*, JOBS_RBAC_FORCE) remain unchanged.
+    """
+    if not _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+        return
+    user = _make_admin_user_from_principal(principal)
+    _enforce_domain_scope(user, domain)
 
 
 def _set_pg_rls_for_user(user: dict, domain: Optional[str]) -> None:
@@ -286,8 +314,16 @@ async def queue_control_endpoint(req: QueueControlRequest, user=Depends(require_
 
 
 @router.get("/jobs/queue/status", response_model=QueueFlagsResponse)
-async def queue_status_endpoint(domain: str, queue: str, user=Depends(require_admin)) -> QueueFlagsResponse:
-    _enforce_domain_scope(user, domain)
+async def queue_status_endpoint(
+    domain: str,
+    queue: str,
+    user=Depends(require_admin),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> QueueFlagsResponse:
+    if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+        _enforce_domain_scope_from_principal(principal, domain)
+    else:
+        _enforce_domain_scope(user, domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     if backend == "postgres":

@@ -3,19 +3,39 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import os
 
 from tldw_Server_API.app.core.AuthNZ.repos.token_blacklist_repo import (
     AuthnzTokenBlacklistRepo,
 )
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+from tldw_Server_API.app.core.AuthNZ.settings import Settings
 
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio
-async def test_authnz_token_blacklist_repo_postgres(test_db_pool):
+async def test_authnz_token_blacklist_repo_postgres(isolated_test_environment):
     """AuthnzTokenBlacklistRepo helpers should work on Postgres."""
-    pool = test_db_pool
+    # Use the per-test Postgres database created by isolated_test_environment
+    _client, _db_name = isolated_test_environment  # client/db name not needed directly here
+
+    database_url = os.getenv("DATABASE_URL")
+    assert database_url, "DATABASE_URL must be set by isolated_test_environment fixture"
+
+    test_settings = Settings(
+        AUTH_MODE="multi_user",
+        DATABASE_URL=database_url,
+        JWT_SECRET_KEY=os.getenv("JWT_SECRET_KEY", "test-secret-key-for-testing-only"),
+        ENABLE_REGISTRATION=True,
+        REQUIRE_REGISTRATION_CODE=False,
+        RATE_LIMIT_ENABLED=False,
+    )
+
+    pool = DatabasePool(test_settings)
+    await pool.initialize()
+
     repo = AuthnzTokenBlacklistRepo(pool)
 
     now = datetime.now(timezone.utc).replace(microsecond=0)
@@ -48,4 +68,3 @@ async def test_authnz_token_blacklist_repo_postgres(test_db_pool):
     # Cleanup with future cutoff should be able to delete it
     deleted_some = await repo.cleanup_expired(now=now + timedelta(days=1))
     assert deleted_some >= 1
-

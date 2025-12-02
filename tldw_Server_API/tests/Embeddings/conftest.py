@@ -2,6 +2,7 @@ import os
 import pytest
 import asyncio
 import inspect
+from typing import Final
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -26,12 +27,13 @@ def admin_user():
     async def _principal_override(request):
         from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 
+        token_type: Final[str] = "access"
         principal = AuthPrincipal(
             kind="user",
             user_id=42,
             api_key_id=None,
             subject=None,
-            token_type="access",
+            token_type=token_type,
             jti=None,
             roles=["admin"],
             permissions=["*"],

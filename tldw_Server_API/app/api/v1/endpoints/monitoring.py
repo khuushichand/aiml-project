@@ -176,7 +176,7 @@ async def send_test_notification(payload: NotificationTestRequest):
         source="monitoring.test",
         watchlist_id="test",
         rule_category="test",
-        rule_severity=payload.severity or "critical",
+        rule_severity=payload.severity,
         pattern="test",
         text_snippet=payload.message or "Test notification",
         metadata={"source": "admin_panel"},

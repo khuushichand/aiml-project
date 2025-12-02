@@ -110,7 +110,7 @@ def parse_override_entries(raw: Any, provider_hint: Optional[str] = None) -> Lis
             ent = _coerce_entry({"term": term, "phonemes": phonemes}, provider_hint)
             if ent:
                 entries.append(ent)
-        return entries
+        return entries[:_MAX_OVERRIDE_ENTRIES]
 
     # List/tuple payloads or single dict
     if isinstance(raw, (list, tuple)):

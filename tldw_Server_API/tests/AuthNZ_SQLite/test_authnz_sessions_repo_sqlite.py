@@ -95,20 +95,18 @@ async def test_authnz_sessions_repo_basic_crud_sqlite(isolated_test_environment)
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, FALSE, FALSE, NULL)
             """,
-            (
-                int(user_id),
-                "hash-old",
-                "hash-refresh-old",
-                "enc-old",
-                "enc-refresh-old",
-                (now - timedelta(days=2)),
-                (now - timedelta(days=1)),
-                "127.0.0.1",
-                "pytest-old",
-                "device-old",
-                "access-old",
-                "refresh-old",
-            ),
+            int(user_id),
+            "hash-old",
+            "hash-refresh-old",
+            "enc-old",
+            "enc-refresh-old",
+            (now - timedelta(days=2)),
+            (now - timedelta(days=1)),
+            "127.0.0.1",
+            "pytest-old",
+            "device-old",
+            "access-old",
+            "refresh-old",
         )
 
     before_count = await pool.fetchval("SELECT COUNT(*) FROM sessions")

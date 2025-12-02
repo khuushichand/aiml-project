@@ -152,7 +152,6 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
 )
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.Streaming import speech_chat_service
-from tldw_Server_API.app.core.Usage.audio_quota import can_start_stream, finish_stream
 
 # Initialize rate limiter
 from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import (
@@ -2380,12 +2379,15 @@ async def websocket_transcribe(
             _s = _get_settings()
             user_id_for_usage = getattr(_s, "SINGLE_USER_FIXED_ID", 1)
 
+        acquired_stream = False
+
         ok_stream, msg_stream = await can_start_stream(user_id_for_usage)
         if not ok_stream:
             if _outer_stream:
                 await _outer_stream.send_json({"type": "error", "message": msg_stream})
             await websocket.close()
             return
+        acquired_stream = True
 
         # Resource Governor: acquire a 'streams' concurrency lease (policy resolved via route_map)
         _rg_handle_id = None
@@ -2617,7 +2619,8 @@ async def websocket_transcribe(
                     await gov.release(_rg_handle_id)
             except Exception as _rg_rel_err:
                 logger.debug(f"RG release on WS close failed: {_rg_rel_err}")
-            await finish_stream(user_id_for_usage)
+            if acquired_stream:
+                await finish_stream(user_id_for_usage)
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
@@ -2751,665 +2754,721 @@ async def websocket_audio_chat_stream(
         _s = _get_settings()
         user_id_for_usage = getattr(_s, "SINGLE_USER_FIXED_ID", 1)
 
-    # Concurrency guard
+    acquired_stream = False
+
     try:
-        ok_stream, msg_stream = await can_start_stream(user_id_for_usage)
-        if not ok_stream:
+        # Concurrency guard
+        try:
+            ok_stream, msg_stream = await can_start_stream(user_id_for_usage)
+            if not ok_stream:
+                if _outer_stream:
+                    await _outer_stream.send_json(
+                        {
+                            "type": "error",
+                            "message": msg_stream or "Concurrent audio streams limit reached",
+                            "error_type": "rate_limited",
+                        }
+                    )
+                await websocket.close(code=_policy_close_code())
+                return
+            acquired_stream = True
+        except Exception:
             if _outer_stream:
                 await _outer_stream.send_json(
-                    {"type": "error", "message": msg_stream or "Concurrent audio streams limit reached", "error_type": "rate_limited"}
+                    {
+                        "type": "error",
+                        "message": "Unable to evaluate audio stream quota or concurrency",
+                        "error_type": "quota",
+                    }
                 )
             await websocket.close(code=_policy_close_code())
             return
-    except Exception:
-        if _outer_stream:
-            await _outer_stream.send_json(
-                {"type": "error", "message": "Unable to evaluate audio stream quota or concurrency", "error_type": "quota"}
-            )
-        await websocket.close(code=_policy_close_code())
-        return
 
-    # Daily minute tracking (bounded fail-open like STT WS)
-    used_minutes = 0.0
-    FAIL_OPEN_CAP_MINUTES = _get_failopen_cap_minutes()
-    failopen_remaining = FAIL_OPEN_CAP_MINUTES
-    remaining_minutes_snapshot: Optional[float] = None
+        # Daily minute tracking (bounded fail-open like STT WS)
+        used_minutes = 0.0
+        FAIL_OPEN_CAP_MINUTES = _get_failopen_cap_minutes()
+        failopen_remaining = FAIL_OPEN_CAP_MINUTES
+        remaining_minutes_snapshot: Optional[float] = None
 
-    async def _on_audio_quota(seconds: float, sr: int) -> None:
-        nonlocal used_minutes, failopen_remaining, remaining_minutes_snapshot
-        minutes_chunk = float(seconds) / 60.0
-        deducted = False
-        allow = False
+        async def _on_audio_quota(seconds: float, sr: int) -> None:
+            nonlocal used_minutes, failopen_remaining, remaining_minutes_snapshot
+            minutes_chunk = float(seconds) / 60.0
+            deducted = False
+            allow = False
 
-        if remaining_minutes_snapshot is not None and minutes_chunk > remaining_minutes_snapshot:
-            raise QuotaExceeded("daily_minutes")
-
-        try:
-            allow, remaining_after = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
-            if allow and remaining_after is not None:
-                remaining_minutes_snapshot = float(remaining_after)
-        except EXPECTED_DB_EXC as e:
-            logger.warning(
-                f"check_daily_minutes_allow failed during streaming; temporarily allowing (bounded fail-open). user_id={user_id_for_usage}, error={e}"
-            )
-            allow = True
-            failopen_remaining -= minutes_chunk
-            try:
-                increment_counter(
-                    "audio_failopen_minutes_total", value=float(minutes_chunk), labels={"reason": "db_check"}
-                )
-                increment_counter("audio_failopen_events_total", labels={"reason": "db_check"})
-            except Exception:
-                pass
-            deducted = True
-            if failopen_remaining <= 0:
-                try:
-                    increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_check"})
-                except Exception:
-                    pass
+            if remaining_minutes_snapshot is not None and minutes_chunk > remaining_minutes_snapshot:
                 raise QuotaExceeded("daily_minutes")
 
-        if not allow:
-            raise QuotaExceeded("daily_minutes")
-
-        used_minutes += minutes_chunk
-        if remaining_minutes_snapshot is not None:
-            remaining_minutes_snapshot = max(0.0, remaining_minutes_snapshot - minutes_chunk)
-        try:
-            await add_daily_minutes(user_id_for_usage, minutes_chunk)
-        except EXPECTED_DB_EXC as e:
-            logger.warning(
-                f"Failed to record streaming minutes (bounded fail-open). user_id={user_id_for_usage}, error={e}"
-            )
-            if not deducted:
+            try:
+                allow, remaining_after = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
+                if allow and remaining_after is not None:
+                    remaining_minutes_snapshot = float(remaining_after)
+            except EXPECTED_DB_EXC as e:
+                logger.warning(
+                    f"check_daily_minutes_allow failed during streaming; temporarily allowing (bounded fail-open). user_id={user_id_for_usage}, error={e}"
+                )
+                allow = True
                 failopen_remaining -= minutes_chunk
                 try:
                     increment_counter(
-                        "audio_failopen_minutes_total",
-                        value=float(minutes_chunk),
-                        labels={"reason": "db_record"},
+                        "audio_failopen_minutes_total", value=float(minutes_chunk), labels={"reason": "db_check"}
                     )
-                    increment_counter("audio_failopen_events_total", labels={"reason": "db_record"})
+                    increment_counter("audio_failopen_events_total", labels={"reason": "db_check"})
                 except Exception:
                     pass
+                deducted = True
                 if failopen_remaining <= 0:
                     try:
-                        increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_record"})
+                        increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_check"})
                     except Exception:
                         pass
                     raise QuotaExceeded("daily_minutes")
 
-    async def _on_heartbeat() -> None:
-        try:
-            await heartbeat_stream(user_id_for_usage)  # type: ignore[arg-type]
-        except Exception as _hb_e:
-            logger.debug(f"Heartbeat failed for user_id={user_id_for_usage}: {_hb_e}")
+            if not allow:
+                raise QuotaExceeded("daily_minutes")
 
-    # Parse initial config
-    try:
-        raw_cfg = await asyncio.wait_for(websocket.receive_text(), timeout=15.0)
-        cfg_data = json.loads(raw_cfg)
-    except Exception as exc:
-        if _outer_stream:
-            await _outer_stream.send_json({"type": "error", "message": "config frame required", "details": str(exc)})
-        await websocket.close(code=4400)
-        await finish_stream(user_id_for_usage)
-        return
-
-    if cfg_data.get("type") != "config":
-        if _outer_stream:
-            await _outer_stream.send_json({"type": "error", "message": "First frame must be type=config"})
-        await websocket.close(code=4400)
-        await finish_stream(user_id_for_usage)
-        return
-
-    stt_cfg = cfg_data.get("stt") or cfg_data
-    llm_cfg = cfg_data.get("llm") or {}
-    tts_cfg = cfg_data.get("tts") or {}
-    session_id = cfg_data.get("session_id")
-    metadata = cfg_data.get("metadata") if isinstance(cfg_data.get("metadata"), dict) else None
-
-    config = UnifiedStreamingConfig()
-    try:
-        config.model = stt_cfg.get("model", config.model)
-        variant_override = stt_cfg.get("variant") or stt_cfg.get("model_variant")
-        if variant_override:
-            config.model_variant = variant_override
-        config.sample_rate = stt_cfg.get("sample_rate", config.sample_rate)
-        config.enable_partial = stt_cfg.get("enable_partial", config.enable_partial)
-        config.enable_vad = bool(stt_cfg.get("enable_vad", config.enable_vad))
-        config.vad_threshold = float(stt_cfg.get("vad_threshold", config.vad_threshold))
-        config.vad_min_silence_ms = int(stt_cfg.get("min_silence_ms", config.vad_min_silence_ms))
-        config.vad_turn_stop_secs = float(stt_cfg.get("turn_stop_secs", config.vad_turn_stop_secs))
-        if "min_utterance_secs" in stt_cfg:
-            config.vad_min_utterance_secs = float(stt_cfg.get("min_utterance_secs"))
-        if "min_partial_duration" in stt_cfg:
+            used_minutes += minutes_chunk
+            if remaining_minutes_snapshot is not None:
+                remaining_minutes_snapshot = max(0.0, remaining_minutes_snapshot - minutes_chunk)
             try:
-                config.min_partial_duration = max(0.0, float(stt_cfg.get("min_partial_duration")))
-            except Exception:
-                pass
-        if "language" in stt_cfg:
-            config.language = stt_cfg.get("language")
-    except Exception as cfg_exc:
-        logger.debug(f"Failed to parse streaming STT config: {cfg_exc}")
-
-    llm_provider = (llm_cfg.get("provider") or llm_cfg.get("api_provider") or DEFAULT_LLM_PROVIDER).lower()
-    llm_model = llm_cfg.get("model") or os.getenv("AUDIO_CHAT_DEFAULT_LLM_MODEL") or "gpt-3.5-turbo"
-    llm_temperature = llm_cfg.get("temperature")
-    llm_max_tokens = llm_cfg.get("max_tokens")
-    llm_system_prompt = llm_cfg.get("system_prompt") or llm_cfg.get("system")
-    llm_extra_params = llm_cfg.get("extra_params") if isinstance(llm_cfg.get("extra_params"), dict) else None
-
-    try:
-        tts_speed_raw = tts_cfg.get("speed", 1.0)
-        tts_speed = float(tts_speed_raw)
-    except Exception:
-        tts_speed = 1.0
-    response_format = tts_cfg.get("format") or tts_cfg.get("response_format") or "pcm"
-    tts_model = tts_cfg.get("model", "kokoro")
-    tts_voice = tts_cfg.get("voice", "af_heart")
-    tts_provider = tts_cfg.get("provider")
-    tts_extra_params = tts_cfg.get("extra_params") if isinstance(tts_cfg.get("extra_params"), dict) else None
-
-    # Initialize STT transcriber + VAD gate
-    try:
-        transcriber = UnifiedStreamingTranscriber(config)
-        transcriber.initialize()
-    except Exception as exc:
-        if _outer_stream:
-            await _outer_stream.error(
-                "model_unavailable",
-                "Failed to initialize streaming transcriber",
-                data={"message": str(exc), "model": config.model, "variant": getattr(config, "model_variant", None)},
-            )
-        await finish_stream(user_id_for_usage)
-        return
-
-    turn_detector: Optional[SileroTurnDetector] = None
-    vad_warning_sent = False
-    if config.enable_vad:
-        try:
-            turn_detector = SileroTurnDetector(
-                sample_rate=config.sample_rate,
-                enabled=True,
-                vad_threshold=config.vad_threshold,
-                min_silence_ms=config.vad_min_silence_ms,
-                turn_stop_secs=config.vad_turn_stop_secs,
-                min_utterance_secs=config.vad_min_utterance_secs,
-            )
-            if not turn_detector.available:
-                vad_warning_sent = True
-                await _outer_stream.send_json(
-                    {
-                        "type": "warning",
-                        "warning_type": "vad_unavailable",
-                        "message": "Silero VAD unavailable; auto-commit disabled",
-                        "details": turn_detector.unavailable_reason,
-                    }
+                await add_daily_minutes(user_id_for_usage, minutes_chunk)
+            except EXPECTED_DB_EXC as e:
+                logger.warning(
+                    f"Failed to record streaming minutes (bounded fail-open). user_id={user_id_for_usage}, error={e}"
                 )
-                turn_detector = None
-        except Exception as vad_exc:
-            logger.debug(f"VAD init failed: {vad_exc}")
-            turn_detector = None
-
-    chat_history: List[Dict[str, Any]] = []
-    if session_id:
-        try:
-            chat_history.append({"role": "system", "content": f"session:{session_id}"})
-        except Exception:
-            chat_history = []
-
-    def _action_hint() -> Optional[str]:
-        try:
-            if metadata and isinstance(metadata, dict) and metadata.get("action"):
-                return str(metadata.get("action"))
-        except Exception:
-            pass
-        try:
-            if llm_extra_params and isinstance(llm_extra_params, dict) and llm_extra_params.get("action"):
-                return str(llm_extra_params.get("action"))
-        except Exception:
-            pass
-        return None
-
-    async def _maybe_run_action(transcript_text: str) -> Optional[Dict[str, Any]]:
-        action_name = _action_hint()
-        if not action_name:
-            return None
-        try:
-            enabled = getattr(speech_chat_service, "_actions_enabled", lambda: False)()
-        except Exception:
-            enabled = False
-        if not enabled:
-            return None
-
-        user_obj = SimpleNamespace(id=user_id_for_usage)
-        try:
-            return await speech_chat_service._execute_action(action_name, transcript_text, user_obj)
-        except Exception as exc:
-            logger.warning(f"Streaming action execution failed: action={action_name}, error={exc}")
-            return {
-                "action": action_name,
-                "status": "error",
-                "message": str(exc),
-                "user_id": getattr(user_obj, "id", None),
-            }
-
-    processing_turn = False
-
-    async def _iter_stream_lines(stream_obj):
-        if hasattr(stream_obj, "__aiter__"):
-            async for line in stream_obj:
-                yield line
-        else:
-            for line in stream_obj:
-                yield line
-
-    async def _stream_llm(transcript_text: str) -> tuple[str, Optional[str], Optional[Dict[str, Any]]]:
-        nonlocal chat_history
-        api_keys = get_api_keys()
-        provider_api_key = api_keys.get(llm_provider)
-        messages_payload = list(chat_history)
-        messages_payload.append({"role": "user", "content": transcript_text})
-        try:
-            llm_stream = await chat_api_call_async(
-                api_endpoint=llm_provider,
-                messages_payload=messages_payload,
-                api_key=provider_api_key,
-                temp=llm_temperature,
-                model=llm_model,
-                max_tokens=llm_max_tokens,
-                streaming=True,
-                system_message=llm_system_prompt,
-                user_identifier=str(user_id_for_usage),
-                extra_body=llm_extra_params,
-            )
-        except Exception as exc:
-            if _outer_stream:
-                await _outer_stream.send_json(
-                    {"type": "error", "error_type": "llm_error", "message": "LLM call failed", "details": str(exc)}
-                )
-            return "", None, None
-
-        deltas: List[str] = []
-        finish_reason: Optional[str] = None
-        usage_payload: Optional[Dict[str, Any]] = None
-
-        async for raw_line in _iter_stream_lines(llm_stream):
-            try:
-                line_str = (
-                    raw_line.decode("utf-8", errors="ignore")
-                    if isinstance(raw_line, (bytes, bytearray))
-                    else str(raw_line)
-                )
-            except Exception:
-                continue
-            if not line_str:
-                continue
-            stripped = line_str.strip()
-            if stripped.lower() == "data: [done]" or stripped.lower() == "[done]":
-                break
-            if stripped.lower().endswith("[done]"):
-                break
-            payload_str = stripped
-            if payload_str.startswith("data:"):
-                payload_str = payload_str[len("data:") :].strip()
-            try:
-                payload = json.loads(payload_str)
-            except Exception:
-                continue
-            if "error" in payload:
-                if _outer_stream:
-                    await _outer_stream.send_json(
-                        {"type": "error", "error_type": "llm_error", "message": payload.get("error")}
-                    )
-                continue
-            choices = payload.get("choices") or []
-            for choice in choices:
-                delta = choice.get("delta") or choice.get("message") or {}
-                if isinstance(delta, dict):
-                    content = delta.get("content") or delta.get("text")
-                else:
-                    content = None
-                if content:
-                    deltas.append(content)
-                    if _outer_stream:
-                        await _outer_stream.send_json({"type": "llm_delta", "delta": content})
-                if choice.get("finish_reason"):
-                    finish_reason = choice.get("finish_reason")
-            if payload.get("usage"):
-                usage_payload = payload.get("usage")
-
-        assistant_text = "".join(deltas).strip()
-        if _outer_stream:
-            await _outer_stream.send_json(
-                {
-                    "type": "llm_message",
-                    "text": assistant_text,
-                    "finish_reason": finish_reason,
-                    "usage": usage_payload,
-                }
-            )
-        chat_history.append({"role": "user", "content": transcript_text})
-        if assistant_text:
-            chat_history.append({"role": "assistant", "content": assistant_text})
-        if len(chat_history) > 40:
-            chat_history = chat_history[-40:]
-        return assistant_text, finish_reason, usage_payload
-
-    async def _stream_tts(text: str, voice_to_voice_start: float) -> None:
-        if not text:
-            if _outer_stream:
-                await _outer_stream.send_json(
-                    {"type": "error", "error_type": "empty_assistant", "message": "Assistant reply empty"}
-                )
-            return
-        allowed_formats = {"mp3", "opus", "aac", "flac", "wav", "pcm"}
-        if response_format not in allowed_formats:
-            if _outer_stream:
-                await _outer_stream.send_json(
-                    {"type": "error", "error_type": "bad_request", "message": f"Unsupported format '{response_format}'"}
-                )
-            return
-
-        speech_req = OpenAISpeechRequest(
-            model=tts_model,
-            input=text,
-            voice=tts_voice,
-            response_format=response_format,
-            speed=tts_speed,
-            stream=True,
-            extra_params=tts_extra_params,
-        )
-
-        queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=8)
-        provider_label = (tts_provider or getattr(speech_req, "model", None) or "default").lower()
-        underrun_labels = {"provider": provider_label}
-        error_labels = {"component": "audio_chat_ws", "provider": provider_label}
-
-        tts_service = await get_tts_service()
-
-        if _outer_stream:
-            try:
-                await _outer_stream.send_json(
-                    {
-                        "type": "tts_start",
-                        "format": response_format,
-                        "provider": tts_provider or "auto",
-                        "voice": tts_voice,
-                    }
-                )
-            except Exception:
-                pass
-
-        async def _producer() -> None:
-            try:
-                async for chunk in tts_service.generate_speech(
-                    speech_req,
-                    provider=tts_provider,
-                    fallback=True,
-                    voice_to_voice_route="audio.chat.stream",
-                    voice_to_voice_start=voice_to_voice_start,
-                ):
-                    if not chunk:
-                        continue
+                if not deducted:
+                    failopen_remaining -= minutes_chunk
                     try:
-                        queue.put_nowait(chunk)
-                    except asyncio.QueueFull:
-                        try:
-                            _ = queue.get_nowait()
-                        except Exception:
-                            pass
-                        try:
-                            queue.put_nowait(chunk)
-                            reg.increment("audio_stream_underruns_total", 1, labels=underrun_labels)
-                        except Exception:
-                            reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-            except Exception as exc:
-                try:
-                    reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                except Exception:
-                    pass
-                if _outer_stream:
-                    try:
-                        await _outer_stream.send_json(
-                            {"type": "error", "error_type": "tts_error", "message": "TTS generation failed", "details": str(exc)}
+                        increment_counter(
+                            "audio_failopen_minutes_total",
+                            value=float(minutes_chunk),
+                            labels={"reason": "db_record"},
                         )
+                        increment_counter("audio_failopen_events_total", labels={"reason": "db_record"})
                     except Exception:
                         pass
-            finally:
-                try:
-                    await queue.put(None)
-                except Exception:
-                    pass
-
-        async def _consumer() -> None:
-            try:
-                while True:
-                    item = await queue.get()
-                    if item is None:
-                        break
-                    try:
-                        await websocket.send_bytes(item)
-                        if _outer_stream:
-                            _outer_stream.mark_activity()
-                    except Exception as exc:
+                    if failopen_remaining <= 0:
                         try:
-                            reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+                            increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_record"})
                         except Exception:
                             pass
-                        try:
-                            await websocket.close(code=1011)
-                        except Exception:
-                            pass
-                        if _outer_stream:
-                            try:
-                                await _outer_stream.send_json(
-                                    {"type": "error", "error_type": "transport_error", "message": str(exc)}
-                                )
-                            except Exception:
-                                pass
-                        break
-            except Exception:
-                try:
-                    reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                except Exception:
-                    pass
+                        raise QuotaExceeded("daily_minutes")
 
-        producer_task = asyncio.create_task(_producer())
-        consumer_task = asyncio.create_task(_consumer())
-
-        try:
-            done, pending = await asyncio.wait(
-                {producer_task, consumer_task},
-                return_when=asyncio.FIRST_EXCEPTION,
-            )
-            for task in pending:
-                task.cancel()
-                try:
-                    await task
-                except Exception:
-                    pass
-        finally:
-            producer_task.cancel()
-            consumer_task.cancel()
-            if _outer_stream:
-                try:
-                    await _outer_stream.send_json({"type": "tts_done"})
-                except Exception:
-                    pass
-
-    async def _finalize_turn(commit_at: float, *, auto: bool = False) -> None:
-        nonlocal processing_turn
-        if processing_turn:
-            return
-        processing_turn = True
-        try:
-            transcript_text = transcriber.get_full_transcript()
-            final_emit_at = time.time()
-            payload = {
-                "type": "full_transcript",
-                "text": transcript_text,
-                "timestamp": final_emit_at,
-                "voice_to_voice_start": final_emit_at,
-            }
-            if auto:
-                payload["auto_commit"] = True
-            if _outer_stream:
-                await _outer_stream.send_json(payload)
-
-            # Metric for commit->final emit latency
+        async def _on_heartbeat() -> None:
             try:
-                reg.observe(
-                    "stt_final_latency_seconds",
-                    max(0.0, final_emit_at - float(commit_at or final_emit_at)),
-                    labels={
-                        "model": getattr(config, "model", "parakeet"),
-                        "variant": getattr(config, "model_variant", "standard"),
-                        "endpoint": "audio.chat.stream",
-                    },
-                )
-            except Exception:
-                pass
+                await heartbeat_stream(user_id_for_usage)  # type: ignore[arg-type]
+            except Exception as _hb_e:
+                logger.debug(f"Heartbeat failed for user_id={user_id_for_usage}: {_hb_e}")
 
-            assistant_text, finish_reason, usage_payload = await _stream_llm(transcript_text)
-            action_result = await _maybe_run_action(transcript_text)
+        # Parse initial config
+        try:
+            raw_cfg = await asyncio.wait_for(websocket.receive_text(), timeout=15.0)
+            cfg_data = json.loads(raw_cfg)
+        except Exception as exc:
             if _outer_stream:
                 await _outer_stream.send_json(
-                    {
-                        "type": "assistant_summary",
-                        "finish_reason": finish_reason,
-                        "usage": usage_payload,
-                        "action": action_result,
-                    }
+                    {"type": "error", "message": "config frame required", "details": str(exc)}
                 )
-            if action_result:
+            await websocket.close(code=4400)
+            return
+
+        if cfg_data.get("type") != "config":
+            if _outer_stream:
+                await _outer_stream.send_json(
+                    {"type": "error", "message": "First frame must be type=config"}
+                )
+            await websocket.close(code=4400)
+            return
+
+        stt_cfg = cfg_data.get("stt") or cfg_data
+        llm_cfg = cfg_data.get("llm") or {}
+        tts_cfg = cfg_data.get("tts") or {}
+        session_id = cfg_data.get("session_id")
+        metadata = cfg_data.get("metadata") if isinstance(cfg_data.get("metadata"), dict) else None
+
+        config = UnifiedStreamingConfig()
+        try:
+            config.model = stt_cfg.get("model", config.model)
+            variant_override = stt_cfg.get("variant") or stt_cfg.get("model_variant")
+            if variant_override:
+                config.model_variant = variant_override
+            config.sample_rate = stt_cfg.get("sample_rate", config.sample_rate)
+            config.enable_partial = stt_cfg.get("enable_partial", config.enable_partial)
+            config.enable_vad = bool(stt_cfg.get("enable_vad", config.enable_vad))
+            config.vad_threshold = float(stt_cfg.get("vad_threshold", config.vad_threshold))
+            config.vad_min_silence_ms = int(stt_cfg.get("min_silence_ms", config.vad_min_silence_ms))
+            config.vad_turn_stop_secs = float(stt_cfg.get("turn_stop_secs", config.vad_turn_stop_secs))
+            if "min_utterance_secs" in stt_cfg:
+                config.vad_min_utterance_secs = float(stt_cfg.get("min_utterance_secs"))
+            if "min_partial_duration" in stt_cfg:
                 try:
-                    chat_history.append({"role": "tool", "content": json.dumps(action_result)})
+                    config.min_partial_duration = max(0.0, float(stt_cfg.get("min_partial_duration")))
                 except Exception:
                     pass
-                if _outer_stream:
-                    await _outer_stream.send_json({"type": "action_result", **action_result})
-            await _stream_tts(assistant_text, final_emit_at)
-        finally:
+            if "language" in stt_cfg:
+                config.language = stt_cfg.get("language")
+        except Exception as cfg_exc:
+            logger.debug(f"Failed to parse streaming STT config: {cfg_exc}")
+
+        llm_provider = (llm_cfg.get("provider") or llm_cfg.get("api_provider") or DEFAULT_LLM_PROVIDER).lower()
+        llm_model = llm_cfg.get("model") or os.getenv("AUDIO_CHAT_DEFAULT_LLM_MODEL") or "gpt-3.5-turbo"
+        llm_temperature = llm_cfg.get("temperature")
+        llm_max_tokens = llm_cfg.get("max_tokens")
+        llm_system_prompt = llm_cfg.get("system_prompt") or llm_cfg.get("system")
+        llm_extra_params = llm_cfg.get("extra_params") if isinstance(llm_cfg.get("extra_params"), dict) else None
+
+        try:
+            tts_speed_raw = tts_cfg.get("speed", 1.0)
+            tts_speed = float(tts_speed_raw)
+        except Exception:
+            tts_speed = 1.0
+        response_format = tts_cfg.get("format") or tts_cfg.get("response_format") or "pcm"
+        tts_model = tts_cfg.get("model", "kokoro")
+        tts_voice = tts_cfg.get("voice", "af_heart")
+        tts_provider = tts_cfg.get("provider")
+        tts_extra_params = tts_cfg.get("extra_params") if isinstance(tts_cfg.get("extra_params"), dict) else None
+
+        # Initialize STT transcriber + VAD gate
+        try:
+            transcriber = UnifiedStreamingTranscriber(config)
+            transcriber.initialize()
+        except Exception as exc:
+            if _outer_stream:
+                await _outer_stream.error(
+                    "model_unavailable",
+                    "Failed to initialize streaming transcriber",
+                    data={
+                        "message": str(exc),
+                        "model": config.model,
+                        "variant": getattr(config, "model_variant", None),
+                    },
+                )
+            return
+
+        turn_detector: Optional[SileroTurnDetector] = None
+        vad_warning_sent = False
+        if config.enable_vad:
             try:
-                transcriber.reset()
+                turn_detector = SileroTurnDetector(
+                    sample_rate=config.sample_rate,
+                    enabled=True,
+                    vad_threshold=config.vad_threshold,
+                    min_silence_ms=config.vad_min_silence_ms,
+                    turn_stop_secs=config.vad_turn_stop_secs,
+                    min_utterance_secs=config.vad_min_utterance_secs,
+                )
+                if not turn_detector.available:
+                    vad_warning_sent = True
+                    await _outer_stream.send_json(
+                        {
+                            "type": "warning",
+                            "warning_type": "vad_unavailable",
+                            "message": "Silero VAD unavailable; auto-commit disabled",
+                            "details": turn_detector.unavailable_reason,
+                        }
+                    )
+                    turn_detector = None
+            except Exception as vad_exc:
+                logger.debug(f"VAD init failed: {vad_exc}")
+                turn_detector = None
+
+        chat_history: List[Dict[str, Any]] = []
+        if session_id:
+            try:
+                chat_history.append({"role": "system", "content": f"session:{session_id}"})
+            except Exception:
+                chat_history = []
+
+        def _action_hint() -> Optional[str]:
+            try:
+                if metadata and isinstance(metadata, dict) and metadata.get("action"):
+                    return str(metadata.get("action"))
             except Exception:
                 pass
-            processing_turn = False
-
-    try:
-        while True:
-            raw_msg = await websocket.receive_text()
             try:
-                if _outer_stream:
-                    _outer_stream.mark_activity()
+                if llm_extra_params and isinstance(llm_extra_params, dict) and llm_extra_params.get("action"):
+                    return str(llm_extra_params.get("action"))
             except Exception:
                 pass
-            try:
-                data = json.loads(raw_msg)
-            except Exception:
-                if _outer_stream:
-                    await _outer_stream.send_json({"type": "error", "error_type": "bad_request", "message": "Invalid JSON"})
-                continue
+            return None
 
-            msg_type = data.get("type")
-            if msg_type == "audio":
-                audio_base64 = data.get("data", "")
+        async def _maybe_run_action(transcript_text: str) -> Optional[Dict[str, Any]]:
+            action_name = _action_hint()
+            if not action_name:
+                return None
+            try:
+                enabled = getattr(speech_chat_service, "_actions_enabled", lambda: False)()
+            except Exception:
+                enabled = False
+            if not enabled:
+                return None
+
+            user_obj = SimpleNamespace(id=user_id_for_usage)
+            try:
+                return await speech_chat_service._execute_action(action_name, transcript_text, user_obj)
+            except Exception as exc:
+                logger.warning(f"Streaming action execution failed: action={action_name}, error={exc}")
+                return {
+                    "action": action_name,
+                    "status": "error",
+                    "message": str(exc),
+                    "user_id": getattr(user_obj, "id", None),
+                }
+
+        processing_turn = False
+
+        async def _iter_stream_lines(stream_obj):
+            if hasattr(stream_obj, "__aiter__"):
+                async for line in stream_obj:
+                    yield line
+            else:
+                for line in stream_obj:
+                    yield line
+
+        async def _stream_llm(transcript_text: str) -> tuple[str, Optional[str], Optional[Dict[str, Any]]]:
+            nonlocal chat_history
+            api_keys = get_api_keys()
+            provider_api_key = api_keys.get(llm_provider)
+            messages_payload = list(chat_history)
+            messages_payload.append({"role": "user", "content": transcript_text})
+            try:
+                llm_stream = await chat_api_call_async(
+                    api_endpoint=llm_provider,
+                    messages_payload=messages_payload,
+                    api_key=provider_api_key,
+                    temp=llm_temperature,
+                    model=llm_model,
+                    max_tokens=llm_max_tokens,
+                    streaming=True,
+                    system_message=llm_system_prompt,
+                    user_identifier=str(user_id_for_usage),
+                    extra_body=llm_extra_params,
+                )
+            except Exception as exc:
+                if _outer_stream:
+                    await _outer_stream.send_json(
+                        {
+                            "type": "error",
+                            "error_type": "llm_error",
+                            "message": "LLM call failed",
+                            "details": str(exc),
+                        }
+                    )
+                return "", None, None
+
+            deltas: List[str] = []
+            finish_reason: Optional[str] = None
+            usage_payload: Optional[Dict[str, Any]] = None
+
+            async for raw_line in _iter_stream_lines(llm_stream):
                 try:
-                    audio_bytes = base64.b64decode(audio_base64)
+                    line_str = (
+                        raw_line.decode("utf-8", errors="ignore")
+                        if isinstance(raw_line, (bytes, bytearray))
+                        else str(raw_line)
+                    )
                 except Exception:
-                    if _outer_stream:
-                        await _outer_stream.send_json(
-                            {"type": "error", "error_type": "bad_request", "message": "Invalid base64 audio frame"}
-                        )
                     continue
-
-                auto_commit_triggered = False
-                if turn_detector:
-                    auto_commit_triggered = turn_detector.observe(audio_bytes)
-                    if not turn_detector.available and not vad_warning_sent:
-                        vad_warning_sent = True
-                        await _outer_stream.send_json(
-                            {
-                                "type": "warning",
-                                "warning_type": "vad_unavailable",
-                                "message": "Silero VAD disabled; continuing without auto-commit",
-                                "details": turn_detector.unavailable_reason,
-                            }
-                        )
-                        turn_detector = None
-
+                if not line_str:
+                    continue
+                stripped = line_str.strip()
+                if stripped.lower() == "data: [done]" or stripped.lower() == "[done]":
+                    break
+                if stripped.lower().endswith("[done]"):
+                    break
+                payload_str = stripped
+                if payload_str.startswith("data:"):
+                    payload_str = payload_str[len("data:") :].strip()
                 try:
-                    seconds = bytes_to_seconds(len(audio_bytes), int(config.sample_rate or 16000))
+                    payload = json.loads(payload_str)
                 except Exception:
-                    seconds = float(len(audio_bytes)) / float(4 * max(1, int(config.sample_rate or 16000)))
-                try:
-                    await _on_audio_quota(seconds, int(config.sample_rate or 16000))
-                except QuotaExceeded as qe:
+                    continue
+                if "error" in payload:
                     if _outer_stream:
                         await _outer_stream.send_json(
                             {
                                 "type": "error",
-                                "error_type": "quota_exceeded",
-                                "quota": getattr(qe, "quota", "daily_minutes"),
-                                "message": "Streaming quota exceeded",
+                                "error_type": "llm_error",
+                                "message": payload.get("error"),
                             }
                         )
-                    try:
-                        await websocket.close(code=_policy_close_code(), reason="quota_exceeded")
-                    finally:
-                        break
+                    continue
+                choices = payload.get("choices") or []
+                for choice in choices:
+                    delta = choice.get("delta") or choice.get("message") or {}
+                    if isinstance(delta, dict):
+                        content = delta.get("content") or delta.get("text")
+                    else:
+                        content = None
+                    if content:
+                        deltas.append(content)
+                        if _outer_stream:
+                            await _outer_stream.send_json({"type": "llm_delta", "delta": content})
+                    if choice.get("finish_reason"):
+                        finish_reason = choice.get("finish_reason")
+                if payload.get("usage"):
+                    usage_payload = payload.get("usage")
 
+            assistant_text = "".join(deltas).strip()
+            if _outer_stream:
+                await _outer_stream.send_json(
+                    {
+                        "type": "llm_message",
+                        "text": assistant_text,
+                        "finish_reason": finish_reason,
+                        "usage": usage_payload,
+                    }
+                )
+            chat_history.append({"role": "user", "content": transcript_text})
+            if assistant_text:
+                chat_history.append({"role": "assistant", "content": assistant_text})
+            if len(chat_history) > 40:
+                chat_history = chat_history[-40:]
+            return assistant_text, finish_reason, usage_payload
+
+        async def _stream_tts(text: str, voice_to_voice_start: float) -> None:
+            if not text:
+                if _outer_stream:
+                    await _outer_stream.send_json(
+                        {
+                            "type": "error",
+                            "error_type": "empty_assistant",
+                            "message": "Assistant reply empty",
+                        }
+                    )
+                return
+            allowed_formats = {"mp3", "opus", "aac", "flac", "wav", "pcm"}
+            if response_format not in allowed_formats:
+                if _outer_stream:
+                    await _outer_stream.send_json(
+                        {
+                            "type": "error",
+                            "error_type": "bad_request",
+                            "message": f"Unsupported format '{response_format}'",
+                        }
+                    )
+                return
+
+            speech_req = OpenAISpeechRequest(
+                model=tts_model,
+                input=text,
+                voice=tts_voice,
+                response_format=response_format,
+                speed=tts_speed,
+                stream=True,
+                extra_params=tts_extra_params,
+            )
+
+            queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=8)
+            provider_label = (tts_provider or getattr(speech_req, "model", None) or "default").lower()
+            underrun_labels = {"provider": provider_label}
+            error_labels = {"component": "audio_chat_ws", "provider": provider_label}
+
+            tts_service = await get_tts_service()
+
+            if _outer_stream:
                 try:
-                    await _on_heartbeat()
+                    await _outer_stream.send_json(
+                        {
+                            "type": "tts_start",
+                            "format": response_format,
+                            "provider": tts_provider or "auto",
+                            "voice": tts_voice,
+                        }
+                    )
                 except Exception:
                     pass
 
-                result = await transcriber.process_audio_chunk(audio_bytes)
-                if result:
-                    # Drop audio blob if present
-                    result.pop("_audio_chunk", None)
-                    await _outer_stream.send_json(result)
-                if auto_commit_triggered:
-                    await _finalize_turn(
-                        commit_at=getattr(turn_detector, "last_trigger_at", None) if turn_detector else time.time(),
-                        auto=True,
-                    )
+            async def _producer() -> None:
+                try:
+                    async for chunk in tts_service.generate_speech(
+                        speech_req,
+                        provider=tts_provider,
+                        fallback=True,
+                        voice_to_voice_route="audio.chat.stream",
+                        voice_to_voice_start=voice_to_voice_start,
+                    ):
+                        if not chunk:
+                            continue
+                        try:
+                            queue.put_nowait(chunk)
+                        except asyncio.QueueFull:
+                            try:
+                                _ = queue.get_nowait()
+                            except Exception:
+                                pass
+                            try:
+                                queue.put_nowait(chunk)
+                                reg.increment("audio_stream_underruns_total", 1, labels=underrun_labels)
+                            except Exception:
+                                reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+                except Exception as exc:
+                    try:
+                        reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+                    except Exception:
+                        pass
+                    if _outer_stream:
+                        try:
+                            await _outer_stream.send_json(
+                                {
+                                    "type": "error",
+                                    "error_type": "tts_error",
+                                    "message": "TTS generation failed",
+                                    "details": str(exc),
+                                }
+                            )
+                        except Exception:
+                            pass
+                finally:
+                    try:
+                        await queue.put(None)
+                    except Exception:
+                        pass
 
-            elif msg_type == "commit":
-                await _finalize_turn(time.time(), auto=False)
-            elif msg_type == "reset":
+            async def _consumer() -> None:
+                try:
+                    while True:
+                        item = await queue.get()
+                        if item is None:
+                            break
+                        try:
+                            await websocket.send_bytes(item)
+                            if _outer_stream:
+                                _outer_stream.mark_activity()
+                        except Exception as exc:
+                            try:
+                                reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+                            except Exception:
+                                pass
+                            try:
+                                await websocket.close(code=1011)
+                            except Exception:
+                                pass
+                            if _outer_stream:
+                                try:
+                                    await _outer_stream.send_json(
+                                        {
+                                            "type": "error",
+                                            "error_type": "transport_error",
+                                            "message": str(exc),
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                            break
+                except Exception:
+                    try:
+                        reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+                    except Exception:
+                        pass
+
+            producer_task = asyncio.create_task(_producer())
+            consumer_task = asyncio.create_task(_consumer())
+
+            try:
+                done, pending = await asyncio.wait(
+                    {producer_task, consumer_task},
+                    return_when=asyncio.FIRST_EXCEPTION,
+                )
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except Exception:
+                        pass
+            finally:
+                producer_task.cancel()
+                consumer_task.cancel()
+                if _outer_stream:
+                    try:
+                        await _outer_stream.send_json({"type": "tts_done"})
+                    except Exception:
+                        pass
+
+        async def _finalize_turn(commit_at: float, *, auto: bool = False) -> None:
+            nonlocal processing_turn
+            if processing_turn:
+                return
+            processing_turn = True
+            try:
+                transcript_text = transcriber.get_full_transcript()
+                final_emit_at = time.time()
+                payload = {
+                    "type": "full_transcript",
+                    "text": transcript_text,
+                    "timestamp": final_emit_at,
+                    "voice_to_voice_start": final_emit_at,
+                }
+                if auto:
+                    payload["auto_commit"] = True
+                if _outer_stream:
+                    await _outer_stream.send_json(payload)
+
+                # Metric for commit->final emit latency
+                try:
+                    reg.observe(
+                        "stt_final_latency_seconds",
+                        max(0.0, final_emit_at - float(commit_at or final_emit_at)),
+                        labels={
+                            "model": getattr(config, "model", "parakeet"),
+                            "variant": getattr(config, "model_variant", "standard"),
+                            "endpoint": "audio.chat.stream",
+                        },
+                    )
+                except Exception:
+                    pass
+
+                assistant_text, finish_reason, usage_payload = await _stream_llm(transcript_text)
+                action_result = await _maybe_run_action(transcript_text)
+                if _outer_stream:
+                    await _outer_stream.send_json(
+                        {
+                            "type": "assistant_summary",
+                            "finish_reason": finish_reason,
+                            "usage": usage_payload,
+                            "action": action_result,
+                        }
+                    )
+                if action_result:
+                    try:
+                        chat_history.append({"role": "tool", "content": json.dumps(action_result)})
+                    except Exception:
+                        pass
+                    if _outer_stream:
+                        await _outer_stream.send_json({"type": "action_result", **action_result})
+                await _stream_tts(assistant_text, final_emit_at)
+            finally:
                 try:
                     transcriber.reset()
                 except Exception:
                     pass
-                if _outer_stream:
-                    await _outer_stream.send_json({"type": "status", "state": "reset"})
-            elif msg_type == "stop":
-                if _outer_stream:
-                    await _outer_stream.done()
-                break
-            else:
-                if _outer_stream:
-                    await _outer_stream.send_json({"type": "warning", "message": f"Unknown message type {msg_type}"})
+                processing_turn = False
 
-    except WebSocketDisconnect:
-        logger.info("Audio chat WS disconnected")
-    except Exception as exc:
-        logger.error(f"Audio chat WS error: {exc}")
         try:
-            if _outer_stream:
-                await _outer_stream.send_json(
-                    {"type": "error", "error_type": "internal_error", "message": str(exc)}
-                )
-        except Exception:
-            pass
+            while True:
+                raw_msg = await websocket.receive_text()
+                try:
+                    if _outer_stream:
+                        _outer_stream.mark_activity()
+                except Exception:
+                    pass
+                try:
+                    data = json.loads(raw_msg)
+                except Exception:
+                    if _outer_stream:
+                        await _outer_stream.send_json(
+                            {"type": "error", "error_type": "bad_request", "message": "Invalid JSON"}
+                        )
+                    continue
+
+                msg_type = data.get("type")
+                if msg_type == "audio":
+                    audio_base64 = data.get("data", "")
+                    try:
+                        audio_bytes = base64.b64decode(audio_base64)
+                    except Exception:
+                        if _outer_stream:
+                            await _outer_stream.send_json(
+                                {
+                                    "type": "error",
+                                    "error_type": "bad_request",
+                                    "message": "Invalid base64 audio frame",
+                                }
+                            )
+                        continue
+
+                    auto_commit_triggered = False
+                    if turn_detector:
+                        auto_commit_triggered = turn_detector.observe(audio_bytes)
+                        if not turn_detector.available and not vad_warning_sent:
+                            vad_warning_sent = True
+                            await _outer_stream.send_json(
+                                {
+                                    "type": "warning",
+                                    "warning_type": "vad_unavailable",
+                                    "message": "Silero VAD disabled; continuing without auto-commit",
+                                    "details": turn_detector.unavailable_reason,
+                                }
+                            )
+                            turn_detector = None
+
+                    try:
+                        seconds = bytes_to_seconds(len(audio_bytes), int(config.sample_rate or 16000))
+                    except Exception:
+                        seconds = float(len(audio_bytes)) / float(
+                            4 * max(1, int(config.sample_rate or 16000))
+                        )
+                    try:
+                        await _on_audio_quota(seconds, int(config.sample_rate or 16000))
+                    except QuotaExceeded as qe:
+                        if _outer_stream:
+                            await _outer_stream.send_json(
+                                {
+                                    "type": "error",
+                                    "error_type": "quota_exceeded",
+                                    "quota": getattr(qe, "quota", "daily_minutes"),
+                                    "message": "Streaming quota exceeded",
+                                }
+                            )
+                        try:
+                            await websocket.close(code=_policy_close_code(), reason="quota_exceeded")
+                        finally:
+                            break
+
+                    try:
+                        await _on_heartbeat()
+                    except Exception:
+                        pass
+
+                    result = await transcriber.process_audio_chunk(audio_bytes)
+                    if result:
+                        # Drop audio blob if present
+                        result.pop("_audio_chunk", None)
+                        await _outer_stream.send_json(result)
+                    if auto_commit_triggered:
+                        await _finalize_turn(
+                            commit_at=getattr(turn_detector, "last_trigger_at", None)
+                            if turn_detector
+                            else time.time(),
+                            auto=True,
+                        )
+
+                elif msg_type == "commit":
+                    await _finalize_turn(time.time(), auto=False)
+                elif msg_type == "reset":
+                    try:
+                        transcriber.reset()
+                    except Exception:
+                        pass
+                    if _outer_stream:
+                        await _outer_stream.send_json({"type": "status", "state": "reset"})
+                elif msg_type == "stop":
+                    if _outer_stream:
+                        await _outer_stream.done()
+                    break
+                else:
+                    if _outer_stream:
+                        await _outer_stream.send_json(
+                            {"type": "warning", "message": f"Unknown message type {msg_type}"}
+                        )
+
+        except WebSocketDisconnect:
+            logger.info("Audio chat WS disconnected")
+        except Exception as exc:
+            logger.error(f"Audio chat WS error: {exc}")
+            try:
+                if _outer_stream:
+                    await _outer_stream.send_json(
+                        {"type": "error", "error_type": "internal_error", "message": str(exc)}
+                    )
+            except Exception:
+                pass
     finally:
-        try:
-            await finish_stream(user_id_for_usage)
-        except Exception:
-            pass
+        if acquired_stream:
+            try:
+                await finish_stream(user_id_for_usage)
+            except Exception:
+                pass
         try:
             if _outer_stream:
                 await _outer_stream.stop()
@@ -3491,165 +3550,172 @@ async def websocket_tts(
         _s = _get_settings()
         user_id_for_usage = getattr(_s, "SINGLE_USER_FIXED_ID", 1)
 
-    # Concurrency guard
+    acquired_stream = False
+    producer_task: Optional[asyncio.Task] = None
+    consumer_task: Optional[asyncio.Task] = None
+
     try:
-        ok_stream, msg_stream = await can_start_stream(user_id_for_usage)
-        if not ok_stream:
+        # Concurrency guard
+        try:
+            ok_stream, msg_stream = await can_start_stream(user_id_for_usage)
+            if not ok_stream:
+                if _outer_stream:
+                    await _outer_stream.send_json(
+                        {"type": "error", "message": msg_stream or "Concurrent audio streams limit reached"}
+                    )
+                await websocket.close(code=_policy_close_code())
+                return
+            acquired_stream = True
+        except Exception:
             if _outer_stream:
                 await _outer_stream.send_json(
-                    {"type": "error", "message": msg_stream or "Concurrent audio streams limit reached"}
+                    {"type": "error", "message": "Unable to evaluate audio stream quota or concurrency"}
                 )
             await websocket.close(code=_policy_close_code())
             return
-    except Exception:
-        if _outer_stream:
-            await _outer_stream.send_json(
-                {"type": "error", "message": "Unable to evaluate audio stream quota or concurrency"}
-            )
-        await websocket.close(code=_policy_close_code())
-        return
 
-    # Parse prompt frame
-    try:
-        prompt_message = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
-        prompt_data = json.loads(prompt_message)
-    except Exception as exc:
-        if _outer_stream:
-            try:
-                await _outer_stream.error("bad_request", "Prompt frame required", data={"message": str(exc)})
-            except Exception:
-                pass
-        await websocket.close(code=4400)
-        await finish_stream(user_id_for_usage)
-        return
-
-    if (prompt_data.get("type") or "prompt") not in {"prompt", "config"}:
-        if _outer_stream:
-            await _outer_stream.error("bad_request", "First frame must be type=prompt")
-        await websocket.close(code=4400)
-        await finish_stream(user_id_for_usage)
-        return
-
-    text = prompt_data.get("text") or prompt_data.get("input")
-    if not text:
-        if _outer_stream:
-            await _outer_stream.error("bad_request", "Prompt text is required")
-        await websocket.close(code=4400)
-        await finish_stream(user_id_for_usage)
-        return
-
-    # Build TTS request
-    response_format = prompt_data.get("format") or prompt_data.get("response_format") or "pcm"
-    allowed_formats = {"mp3", "opus", "aac", "flac", "wav", "pcm"}
-    if response_format not in allowed_formats:
-        if _outer_stream:
-            await _outer_stream.error("bad_request", f"Unsupported format '{response_format}'")
-        await websocket.close(code=4400)
-        await finish_stream(user_id_for_usage)
-        return
-
-    try:
-        speed_val = float(prompt_data.get("speed", 1.0))
-    except Exception:
-        speed_val = 1.0
-
-    extra_params = prompt_data.get("extra_params")
-    if extra_params is not None and not isinstance(extra_params, dict):
-        extra_params = None
-
-    speech_req = OpenAISpeechRequest(
-        model=prompt_data.get("model", "kokoro"),
-        input=text,
-        voice=prompt_data.get("voice", "af_heart"),
-        response_format=response_format,
-        speed=speed_val,
-        stream=True,
-        lang_code=prompt_data.get("lang") or prompt_data.get("lang_code"),
-        extra_params=extra_params,
-    )
-
-    provider_hint = prompt_data.get("provider")
-    reg = get_metrics_registry()
-    tts_service = await get_tts_service()
-
-    queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=8)
-    provider_label = (provider_hint or getattr(speech_req, "model", None) or "default").lower()
-    underrun_labels = {"provider": provider_label}
-    error_labels = {"component": "audio_tts_ws", "provider": provider_label}
-
-    async def _producer() -> None:
+        # Parse prompt frame
         try:
-            async for chunk in tts_service.generate_speech(
-                speech_req,
-                provider=provider_hint,
-                fallback=True,
-                voice_to_voice_route="audio.stream.tts",
-            ):
-                if not chunk:
-                    continue
-                try:
-                    queue.put_nowait(chunk)
-                except asyncio.QueueFull:
-                    try:
-                        _ = queue.get_nowait()
-                    except Exception:
-                        pass
-                    try:
-                        queue.put_nowait(chunk)
-                        reg.increment("audio_stream_underruns_total", 1, labels=underrun_labels)
-                    except Exception:
-                        reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+            prompt_message = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+            prompt_data = json.loads(prompt_message)
         except Exception as exc:
-            try:
-                reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-            except Exception:
-                pass
             if _outer_stream:
                 try:
-                    await _outer_stream.error("internal_error", "TTS generation failed", data={"message": str(exc)})
+                    await _outer_stream.error("bad_request", "Prompt frame required", data={"message": str(exc)})
                 except Exception:
                     pass
-        finally:
-            try:
-                await queue.put(None)
-            except Exception:
-                pass
+            await websocket.close(code=4400)
+            return
 
-    async def _consumer() -> None:
+        if (prompt_data.get("type") or "prompt") not in {"prompt", "config"}:
+            if _outer_stream:
+                await _outer_stream.error("bad_request", "First frame must be type=prompt")
+            await websocket.close(code=4400)
+            return
+
+        text = prompt_data.get("text") or prompt_data.get("input")
+        if not text:
+            if _outer_stream:
+                await _outer_stream.error("bad_request", "Prompt text is required")
+            await websocket.close(code=4400)
+            return
+
+        # Build TTS request
+        response_format = prompt_data.get("format") or prompt_data.get("response_format") or "pcm"
+        allowed_formats = {"mp3", "opus", "aac", "flac", "wav", "pcm"}
+        if response_format not in allowed_formats:
+            if _outer_stream:
+                await _outer_stream.error("bad_request", f"Unsupported format '{response_format}'")
+            await websocket.close(code=4400)
+            return
+
         try:
-            while True:
-                item = await queue.get()
-                if item is None:
-                    break
-                try:
-                    await websocket.send_bytes(item)
-                    if _outer_stream:
-                        _outer_stream.mark_activity()
-                except Exception as exc:
+            speed_val = float(prompt_data.get("speed", 1.0))
+        except Exception:
+            speed_val = 1.0
+
+        extra_params = prompt_data.get("extra_params")
+        if extra_params is not None and not isinstance(extra_params, dict):
+            extra_params = None
+
+        speech_req = OpenAISpeechRequest(
+            model=prompt_data.get("model", "kokoro"),
+            input=text,
+            voice=prompt_data.get("voice", "af_heart"),
+            response_format=response_format,
+            speed=speed_val,
+            stream=True,
+            lang_code=prompt_data.get("lang") or prompt_data.get("lang_code"),
+            extra_params=extra_params,
+        )
+
+        provider_hint = prompt_data.get("provider")
+        reg = get_metrics_registry()
+        tts_service = await get_tts_service()
+
+        queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=8)
+        provider_label = (provider_hint or getattr(speech_req, "model", None) or "default").lower()
+        underrun_labels = {"provider": provider_label}
+        error_labels = {"component": "audio_tts_ws", "provider": provider_label}
+
+        async def _producer() -> None:
+            try:
+                async for chunk in tts_service.generate_speech(
+                    speech_req,
+                    provider=provider_hint,
+                    fallback=True,
+                    voice_to_voice_route="audio.stream.tts",
+                ):
+                    if not chunk:
+                        continue
                     try:
-                        reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                    except Exception:
-                        pass
-                    try:
-                        await websocket.close(code=1011)
-                    except Exception:
-                        pass
-                    if _outer_stream:
+                        queue.put_nowait(chunk)
+                    except asyncio.QueueFull:
                         try:
-                            await _outer_stream.error("transport_error", "WebSocket send failed", data={"message": str(exc)})
+                            _ = queue.get_nowait()
                         except Exception:
                             pass
-                    break
-        except Exception:
+                        try:
+                            queue.put_nowait(chunk)
+                            reg.increment("audio_stream_underruns_total", 1, labels=underrun_labels)
+                        except Exception:
+                            reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+            except Exception as exc:
+                try:
+                    reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+                except Exception:
+                    pass
+                if _outer_stream:
+                    try:
+                        await _outer_stream.error(
+                            "internal_error", "TTS generation failed", data={"message": str(exc)}
+                        )
+                    except Exception:
+                        pass
+            finally:
+                try:
+                    await queue.put(None)
+                except Exception:
+                    pass
+
+        async def _consumer() -> None:
             try:
-                reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+                while True:
+                    item = await queue.get()
+                    if item is None:
+                        break
+                    try:
+                        await websocket.send_bytes(item)
+                        if _outer_stream:
+                            _outer_stream.mark_activity()
+                    except Exception as exc:
+                        try:
+                            reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+                        except Exception:
+                            pass
+                        try:
+                            await websocket.close(code=1011)
+                        except Exception:
+                            pass
+                        if _outer_stream:
+                            try:
+                                await _outer_stream.error(
+                                    "transport_error",
+                                    "WebSocket send failed",
+                                    data={"message": str(exc)},
+                                )
+                            except Exception:
+                                pass
+                        break
             except Exception:
-                pass
+                try:
+                    reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+                except Exception:
+                    pass
 
-    producer_task = asyncio.create_task(_producer())
-    consumer_task = asyncio.create_task(_consumer())
+        producer_task = asyncio.create_task(_producer())
+        consumer_task = asyncio.create_task(_consumer())
 
-    try:
         done, pending = await asyncio.wait(
             {producer_task, consumer_task},
             return_when=asyncio.FIRST_EXCEPTION,
@@ -3661,10 +3727,11 @@ async def websocket_tts(
             except Exception:
                 pass
     finally:
-        try:
-            await finish_stream(user_id_for_usage)
-        except Exception:
-            pass
+        if acquired_stream:
+            try:
+                await finish_stream(user_id_for_usage)
+            except Exception:
+                pass
         try:
             if _outer_stream:
                 await _outer_stream.done()
@@ -3674,8 +3741,10 @@ async def websocket_tts(
             except Exception:
                 pass
         try:
-            producer_task.cancel()
-            consumer_task.cancel()
+            if producer_task is not None:
+                producer_task.cancel()
+            if consumer_task is not None:
+                consumer_task.cancel()
         except Exception:
             pass
 

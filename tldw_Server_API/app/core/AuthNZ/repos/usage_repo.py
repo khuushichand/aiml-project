@@ -157,8 +157,12 @@ class AuthnzUsageRepo:
             tokens = 0
             usd = 0.0
             if row:
-                tokens = int(row.get("tokens") or 0)
-                usd = float(row.get("usd") or 0.0)
+                if hasattr(row, "get"):
+                    tokens = int(row.get("tokens") or 0)
+                    usd = float(row.get("usd") or 0.0)
+                else:
+                    tokens = int((row["tokens"] if "tokens" in row else row[0]) or 0)
+                    usd = float((row["usd"] if "usd" in row else row[1]) or 0.0)
 
             return {"tokens": tokens, "usd": usd}
         except Exception as exc:  # pragma: no cover - surfaced via callers

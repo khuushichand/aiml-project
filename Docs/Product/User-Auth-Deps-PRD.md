@@ -289,9 +289,9 @@ Symptoms:
     - Resource-Governor admin and diagnostics endpoints (`/api/v1/resource-governor/policy*`, `/api/v1/resource-governor/diag/*`) are gated via `get_auth_principal` + `require_roles("admin")`, with behavior validated by `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` and the `Resource_Governance` integration suite.
     - Chat slash-command discovery (`GET /api/v1/chat/commands`) now performs RBAC filtering purely via `AuthNZ.rbac.user_has_permission` when `CHAT_COMMANDS_REQUIRE_PERMISSIONS` is enabled, and the async command router enforces per-command permissions without any `is_single_user_mode()` bypass; this is locked in by `tldw_Server_API/tests/Chat_NEW/unit/test_command_router.py` and `tldw_Server_API/tests/Chat_NEW/integration/test_chat_commands_endpoint.py`.
     - Prompt Studio dependencies (`get_prompt_studio_user`) build `user_context.is_admin` and `user_context.permissions` strictly from `User` claims (`roles`, `permissions`, `is_admin`) instead of `AUTH_MODE`; HTTP-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_prompt_studio_user_claims.py` and `tldw_Server_API/tests/prompt_studio/unit/test_prompt_studio_deps_headers.py` cover claim propagation and 401 behavior.
- - Add route-level tests covering:
-   - Endpoints that require a user principal, ensuring `get_current_user` / `require_permissions` fail with 403 when invoked with a `service` or `anonymous` principal lacking `user_id`.
-   - Service-only endpoints (if any) that rely on `AuthPrincipal.kind=service` without requiring user-centric fields.
+- Add route-level tests covering:
+  - Endpoints that require a user principal, ensuring `get_current_user` / `require_permissions` fail with 403 when invoked with a `service` or `anonymous` principal lacking `user_id`.
+  - Service-only endpoints (if any) that rely on `AuthPrincipal.kind=service` without requiring user-centric fields.
 
 - **Status (v0.1)**: In Progress — core admin/chat/Prompt Studio flows are claim-first and tested (see tests cited above), with long-tail endpoint adoption deferred to future iterations.
 

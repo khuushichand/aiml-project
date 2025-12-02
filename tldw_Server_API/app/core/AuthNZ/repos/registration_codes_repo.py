@@ -8,14 +8,14 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 
 
-@dataclass
+    @dataclass
 class AuthnzRegistrationCodesRepo:
     """
     Repository for AuthNZ registration code maintenance.
 
-    This helper currently owns the small cross‑backend cleanup used by the
+    This helper currently owns the small cross-backend cleanup used by the
     AuthNZ scheduler to deactivate expired registration codes, so the
-    scheduler no longer embeds dialect‑specific SQL.
+    scheduler no longer embeds dialect-specific SQL.
     """
 
     db_pool: DatabasePool
@@ -25,7 +25,7 @@ class AuthnzRegistrationCodesRepo:
         Deactivate registration codes whose ``expires_at`` is in the past.
 
         Returns:
-            Best‑effort count of rows updated.
+            Best-effort count of rows updated.
         """
         try:
             async with self.db_pool.transaction() as conn:
@@ -56,10 +56,6 @@ class AuthnzRegistrationCodesRepo:
                         (cutoff.isoformat(),),
                     )
                     updated = getattr(cursor, "rowcount", 0) or 0
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
                 return int(updated or 0)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
@@ -67,4 +63,3 @@ class AuthnzRegistrationCodesRepo:
                 exc,
             )
             raise
-

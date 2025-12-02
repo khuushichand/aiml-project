@@ -84,18 +84,13 @@ def _build_app_with_overrides(
     # Ensure domain-scoped RBAC does not inject additional 403s in these tests
     os.environ.pop("JOBS_DOMAIN_SCOPED_RBAC", None)
     os.environ.pop("JOBS_RBAC_FORCE", None)
+    os.environ.pop("JOBS_DOMAIN_RBAC_PRINCIPAL", None)
 
     return app
 
 
 def _make_admin_user_from_principal(principal: AuthPrincipal) -> dict[str, Any]:
-    """
-    Derive the minimal jobs-admin user dict from an AuthPrincipal.
-
-    This mirrors the current behavior of require_admin in jobs_admin tests,
-    but provides a single helper to use when designing claim-first variants
-    of _enforce_domain_scope that operate on AuthPrincipal instead of mode.
-    """
+    """Thin wrapper to mirror jobs_admin helper for tests."""
     return {
         "id": principal.user_id,
         "username": "admin",
@@ -209,3 +204,28 @@ async def test_jobs_queue_status_200_when_domain_in_allowlist(monkeypatch: pytes
     body = resp.json()
     assert body.get("paused") is False
     assert body.get("drain") is False
+
+
+@pytest.mark.asyncio
+async def test_jobs_queue_status_principal_domain_allowlist_matches_user(monkeypatch: pytest.MonkeyPatch):
+    principal = _make_principal(
+        is_admin=True,
+        roles=["admin"],
+        permissions=[],
+    )
+    app = _build_app_with_overrides(principal=principal)
+
+    # Enable principal-driven domain RBAC and configure allowlist
+    monkeypatch.setenv("JOBS_DOMAIN_SCOPED_RBAC", "1")
+    monkeypatch.setenv("JOBS_DOMAIN_RBAC_PRINCIPAL", "1")
+    monkeypatch.setenv("JOBS_DOMAIN_ALLOWLIST_1", "tenant-a,tenant-b")
+
+    with TestClient(app) as client:
+        ok = client.get("/api/v1/jobs/queue/status", params={"domain": "tenant-a", "queue": "default"})
+        assert ok.status_code == 200
+
+        forbidden = client.get("/api/v1/jobs/queue/status", params={"domain": "tenant-x", "queue": "default"})
+
+    assert forbidden.status_code == 403
+    detail = forbidden.json().get("detail", "")
+    assert "Not allowed for domain tenant-x" in detail
