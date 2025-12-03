@@ -3,6 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Request, Header
 from typing import Optional, Dict, Any
 
+from loguru import logger
+
 from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import (
@@ -43,9 +45,9 @@ async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dic
                 user_id = getattr(principal, "user_id", None)
                 if key_id is not None:
                     return {"api_key_id": int(key_id), "user_id": user_id}
-    except AttributeError:
+    except AttributeError as exc:
         # Fall back to legacy request.state attributes and header-based resolution.
-        pass
+        logger.debug(f"_resolve_api_key_id: principal-first resolution failed, falling back: {exc}")
 
     key_id = getattr(request.state, "api_key_id", None)
     user_id = getattr(request.state, "user_id", None)

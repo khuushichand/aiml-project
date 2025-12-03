@@ -633,10 +633,8 @@ class AuthnzApiKeysRepo:
                         user_id,
                         active_status,
                     )
-                    try:
-                        return result != "UPDATE 0"
-                    except Exception:
-                        return True
+                    # asyncpg returns a status string like "UPDATE <n>"
+                    return str(result).strip().upper() != "UPDATE 0"
                 cursor = await conn.execute(
                     """
                     UPDATE api_keys
@@ -654,8 +652,7 @@ class AuthnzApiKeysRepo:
                         active_status,
                     ),
                 )
-                success = getattr(cursor, "rowcount", 0) > 0
-                return success
+                return getattr(cursor, "rowcount", 0) > 0
         except Exception as exc:  # pragma: no cover - surfaced via higher layers
             logger.error(f"AuthnzApiKeysRepo.revoke_api_key_for_user failed: {exc}")
             raise
@@ -728,11 +725,12 @@ class AuthnzApiKeysRepo:
                         active_status,
                         now,
                     )
-                    try:
-                        # asyncpg returns a status string like "UPDATE 3"
-                        return int(str(result).split()[-1])
-                    except Exception:
+                    # asyncpg returns a status string like "UPDATE <n>"; surface
+                    # unexpected formats via the outer exception handler.
+                    parts = str(result).split()
+                    if not parts:
                         return 0
+                    return int(parts[-1])
                 cursor = await conn.execute(
                     """
                     UPDATE api_keys

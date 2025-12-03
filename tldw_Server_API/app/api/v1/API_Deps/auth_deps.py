@@ -809,7 +809,8 @@ def require_roles(*roles: str):
     Dependency factory that enforces required role claims on the principal.
 
     Admin principals (principal.is_admin) are allowed regardless of specific
-    roles. On failure, raises HTTP 403 with a descriptive message.
+    roles. On failure, raises HTTP 403 with a descriptive message. Existing
+    401/403 semantics are treated as part of the public error contract.
     """
 
     role_list = [str(r) for r in roles if str(r).strip()]
@@ -827,6 +828,26 @@ def require_roles(*roles: str):
         return principal
 
     return _checker
+
+
+async def require_service_principal(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> AuthPrincipal:
+    """
+    Dependency that enforces a service principal.
+
+    Behavior:
+    - Relies on get_auth_principal for authentication (401 on failure).
+    - When a principal is present but principal.kind is not "service", raises
+      HTTP 403 with a stable, descriptive message.
+    - When principal.kind == "service", returns the principal unchanged.
+    """
+    if principal.kind != "service":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Service principal required",
+        )
+    return principal
 
 
 async def get_current_active_user(

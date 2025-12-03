@@ -2734,11 +2734,11 @@ async def websocket_audio_chat_stream(
                 allow, remaining_after = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
                 if allow and remaining_after is not None:
                     remaining_minutes_snapshot = float(remaining_after)
-                except EXPECTED_DB_EXC as e:
-                    logger.warning(
-                        f"check_daily_minutes_allow failed during streaming; temporarily allowing "
-                        f"(bounded fail-open). user_id={user_id_for_usage}, error={e}"
-                    )
+            except EXPECTED_DB_EXC as e:
+                logger.warning(
+                    f"check_daily_minutes_allow failed during streaming; temporarily allowing "
+                    f"(bounded fail-open). user_id={user_id_for_usage}, error={e}"
+                )
                 allow = True
                 failopen_remaining -= minutes_chunk
                 try:

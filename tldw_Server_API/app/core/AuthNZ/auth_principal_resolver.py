@@ -192,7 +192,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                 request.state._auth_user = user
             except Exception as exc:  # noqa: BLE001 - defensive: request.state failures must not break auth
                 logger.exception(
-                    "Unable to set request.state for single-user principal: {}", exc_info=True
+                    "Unable to set request.state for single-user principal: {}", exc
                 )
 
             principal = _build_principal_from_user(
@@ -208,7 +208,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                 request.state.auth = ctx
             except Exception as exc:  # noqa: BLE001 - defensive: caching failures must not break auth
                 logger.exception(
-                    "Unable to cache auth context in single-user mode: {}", exc_info=True
+                    "Unable to cache auth context in single-user mode: {}", exc
                 )
             return principal
     except HTTPException:
@@ -262,7 +262,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             # Cache the resolved user for downstream dependencies
             request.state._auth_user = user
         except Exception as exc:  # noqa: BLE001 - defensive: caching failures must not break auth
-            logger.exception("Unable to cache auth context/user: {}", exc_info=True)
+            logger.exception("Unable to cache auth context/user: {}", exc)
         return principal
 
     # API key path
@@ -300,7 +300,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             # Cache the resolved user for downstream dependencies
             request.state._auth_user = user
         except Exception as exc:  # noqa: BLE001 - defensive: caching failures must not break auth
-            logger.exception("Unable to cache auth context/user: {}", exc_info=True)
+            logger.exception("Unable to cache auth context/user: {}", exc)
         return principal
 
     # Fallback (should not be reached)

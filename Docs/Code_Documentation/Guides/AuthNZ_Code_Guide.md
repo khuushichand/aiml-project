@@ -194,6 +194,7 @@ Notes:
 - **Modern pattern (preferred)**: use claim-first dependencies from `auth_deps`:
   - `get_auth_principal` → returns `AuthPrincipal` with `roles`/`permissions` claims.
   - `require_permissions("perm")` / `require_roles("role")` → enforce claims and return the principal.
+  - `require_service_principal()` → enforces `principal.kind == "service"` for internal-only/service endpoints.
   - Representative usage exists on media, RAG, notes graph, evaluations CRUD endpoints, sandbox admin views, and selected workflows surfaces.
 - **HTTP status semantics (AuthNZ dependencies)**:
   - `get_auth_principal`:
@@ -208,6 +209,10 @@ Notes:
       - `require_permissions` → `detail="Permission denied. Required: <perm-list>"`.
       - `require_roles` → `detail="Access denied. Required role(s): <role-list>"`.
     - These 403 payload shapes are treated as part of the public surface for claim-first/admin routes.
+  - `require_service_principal`:
+    - Depends on `get_auth_principal` for authentication (401 on missing/invalid credentials).
+    - Raises **403 Forbidden** with `detail="Service principal required"` when a non-service principal calls a service-only route.
+    - Returns the underlying `AuthPrincipal` unchanged when `principal.kind == "service"`.
 - **Legacy shims (compatibility, do not use for new endpoints)**:
   - `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker` in `permissions.py` are maintained for **existing** routes only and are treated as legacy:
     - Short-term keepers and migration examples (compatibility shims with claim-first tests in place):

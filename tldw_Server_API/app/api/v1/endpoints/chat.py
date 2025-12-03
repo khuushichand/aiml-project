@@ -309,37 +309,43 @@ async def _maybe_rg_shadow_chat_decision(
     try:
         if str(os.getenv("RG_SHADOW_CHAT", "") or "").strip().lower() not in {"1", "true", "yes", "on"}:
             return
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - defensive: RG shadow must not affect control flow
+        logger.debug("RG shadow: env flag check failed, skipping shadow comparison: {}", exc)
         return
 
     try:
         from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.debug("RG shadow: rg_enabled import failed, skipping shadow comparison: {}", exc)
         return
 
     try:
         if not bool(_rg_enabled_flag(False)):  # type: ignore[arg-type]
             return
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.debug("RG shadow: rg_enabled check failed, skipping shadow comparison: {}", exc)
         return
 
     try:
         gov = getattr(request.app.state, "rg_governor", None)
         if gov is None:
             return
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.debug("RG shadow: governor lookup failed, skipping shadow comparison: {}", exc)
         return
 
     try:
         entity = derive_entity_key(request)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.debug("RG shadow: entity derivation failed, falling back to limiter_user_id: {}", exc)
         entity = f"user:{limiter_user_id}"
 
     # Build RG request mirroring chat policy (requests + optional tokens)
     cats: Dict[str, Dict[str, int]] = {"requests": {"units": 1}}
     try:
         est_tokens = int(estimated_tokens or 0)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.debug("RG shadow: estimated_tokens cast failed, treating as 0: {}", exc)
         est_tokens = 0
     if est_tokens > 0:
         cats["tokens"] = {"units": est_tokens}
@@ -361,7 +367,8 @@ async def _maybe_rg_shadow_chat_decision(
                 elif path == s:
                     policy_id = str(pol)
                     break
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.debug("RG shadow: policy lookup failed, defaulting to chat.default: {}", exc)
         policy_id = "chat.default"
 
     try:
@@ -370,7 +377,8 @@ async def _maybe_rg_shadow_chat_decision(
             RGRequest(entity=entity, categories=cats, tags={"policy_id": policy_id, "endpoint": "/api/v1/chat/completions"}),
             op_id=op_id,
         )
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.debug("RG shadow: reserve failed, skipping shadow comparison: {}", exc)
         return
 
     legacy_dec = "allow" if legacy_allowed else "deny"
@@ -387,9 +395,9 @@ async def _maybe_rg_shadow_chat_decision(
                 legacy=legacy_dec,
                 rg=rg_dec,
             )
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - defensive
             # Metrics must never affect control flow
-            pass
+            logger.debug("RG shadow: mismatch metric recording failed: {}", exc)
 
     if handle_id:
         try:
@@ -397,9 +405,9 @@ async def _maybe_rg_shadow_chat_decision(
             if "tokens" in cats and est_tokens > 0:
                 actuals["tokens"] = est_tokens
             await gov.commit(handle_id, actuals=actuals)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - defensive
             # Shadow commits are best-effort only
-            pass
+            logger.debug("RG shadow: commit failed for handle_id={}, ignoring: {}", handle_id, exc)
 
 # ------------------------------------------------------------------------------------
 # New Endpoints: Chat Commands discovery and Dictionary Validation

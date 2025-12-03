@@ -146,7 +146,8 @@ class AuthnzMonitoringRepo:
                 WHERE expires_at > ?
                   AND (is_revoked = ? OR is_revoked IS NULL)
                 """,
-                (expires_param, revoked_inactive_value),
+                expires_param,
+                revoked_inactive_value,
             )
             if not row:
                 return 0

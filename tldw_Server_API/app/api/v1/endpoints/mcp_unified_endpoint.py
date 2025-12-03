@@ -447,8 +447,8 @@ async def get_server_status(
     if not server.initialized:
         await server.initialize()
 
-    status = await server.get_status()
-    return ServerStatusResponse(**status)
+    server_status = await server.get_status()
+    return ServerStatusResponse(**server_status)
 
 
 @router.get("/metrics", response_model=ServerMetricsResponse)
@@ -689,6 +689,9 @@ async def list_modules(
     if not server.initialized:
         await server.initialize()
 
+    # Derive user id from the authenticated token user when present.
+    derived_user_id = _get_derived_user_id(user)
+
     metadata: Dict[str, Any] = {}
     if user:
         if user.roles:
@@ -698,7 +701,7 @@ async def list_modules(
 
     response = await server.handle_http_request(
         request,
-        user_id=user.sub if user else None,
+        user_id=derived_user_id,
         metadata=metadata or None
     )
 
@@ -767,6 +770,9 @@ async def list_resources(
     if not server.initialized:
         await server.initialize()
 
+    # Derive user id from the authenticated token user when present.
+    derived_user_id = _get_derived_user_id(user)
+
     metadata: Dict[str, Any] = {}
     if user:
         if user.roles:
@@ -776,7 +782,7 @@ async def list_resources(
 
     response = await server.handle_http_request(
         request,
-        user_id=user.sub if user else None,
+        user_id=derived_user_id,
         metadata=metadata or None
     )
 
@@ -807,6 +813,9 @@ async def list_prompts(
     if not server.initialized:
         await server.initialize()
 
+    # Derive user id from the authenticated token user when present.
+    derived_user_id = _get_derived_user_id(user)
+
     metadata: Dict[str, Any] = {}
     if user:
         if user.roles:
@@ -816,7 +825,7 @@ async def list_prompts(
 
     response = await server.handle_http_request(
         request,
-        user_id=user.sub if user else None,
+        user_id=derived_user_id,
         metadata=metadata or None
     )
 

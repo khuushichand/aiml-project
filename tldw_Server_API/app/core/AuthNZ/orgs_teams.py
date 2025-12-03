@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, Dict, Any, List
 
-from loguru import logger
-
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
 
 
@@ -168,21 +165,5 @@ async def list_org_memberships_for_user(user_id: int) -> List[Dict[str, Any]]:
 
 async def remove_team_member(*, team_id: int, user_id: int) -> Dict[str, Any]:
     """Remove a user from a team. Returns a simple dict with removal status."""
-    try:
-        repo = await _get_orgs_teams_repo()
-        return await repo.remove_team_member(team_id=team_id, user_id=user_id)
-    except Exception as e:  # pragma: no cover - defensive logging wrapper
-        redact_logs = False
-        try:
-            redact_logs = get_settings().PII_REDACT_LOGS
-        except Exception as settings_err:  # noqa: BLE001  # best-effort PII redaction
-            logger.debug(f"Failed to get settings for PII redaction: {settings_err}")
-        if redact_logs:
-            logger.error(
-                f"Failed to remove team member (details redacted) from team_id={team_id}: {e}"
-            )
-        else:
-            logger.error(
-                f"Failed to remove team member user_id={user_id} from team_id={team_id}: {e}"
-            )
-        raise
+    repo = await _get_orgs_teams_repo()
+    return await repo.remove_team_member(team_id=team_id, user_id=user_id)

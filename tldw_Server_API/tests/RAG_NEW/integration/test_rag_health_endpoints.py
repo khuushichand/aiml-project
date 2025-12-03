@@ -5,8 +5,11 @@ No mocks; assert JSON shape and expected status codes.
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from tldw_Server_API.app.main import app
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 
 pytestmark = pytest.mark.integration
@@ -14,8 +17,28 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client():
-    with TestClient(app) as c:
-        yield c
+    async def _fake_get_auth_principal(_request: Request) -> AuthPrincipal:  # type: ignore[override]
+        # Diagnostics-style principal with system.logs permission and admin flag for RAG health
+        return AuthPrincipal(
+            kind="service",
+            user_id=None,
+            api_key_id=None,
+            subject="service:rag-health-test",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.logs"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+
+    app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        app.dependency_overrides.pop(auth_deps.get_auth_principal, None)
 
 
 def test_rag_liveness_and_readiness(client: TestClient):

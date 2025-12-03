@@ -42,10 +42,12 @@ are explicitly tested. For each, tests assert alignment between:
 | AuthNZ “whoami” (JWT happy path)               | Bearer JWT            | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_jwt_happy_path.py`                         |
 | AuthNZ “whoami” (API key happy path)           | AuthNZ API key        | `api_key`         | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_api_key_happy_path.py`                     |
 | Media – process-videos                         | AuthNZ API key        | `api_key`         | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_media_rag_invariants.py`                   |
-| RAG – unified search                            | Bearer JWT            | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_media_rag_invariants.py`                   |
+| RAG – unified search                           | Bearer JWT            | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_media_rag_invariants.py`                   |
 | Tools – execute (`/api/v1/tools/execute`)      | AuthNZ API key        | `api_key`         | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_tools_invariants.py`                       |
 | Evaluations – list (`/api/v1/evaluations/`)    | Bearer JWT            | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_evaluations_invariants.py::test_evaluations_list_jwt_principal_and_state_alignment` |
 | Evaluations – admin cleanup (idempotency)      | Bearer JWT            | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_evaluations_invariants.py::test_evaluations_admin_cleanup_jwt_principal_and_state_alignment` |
+| MCP – modules health (`/api/v1/mcp/modules/health`) | Bearer JWT       | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_mcp_monitoring_invariants.py::test_mcp_modules_health_jwt_principal_and_state_alignment` |
+| Monitoring – watchlists (`/api/v1/monitoring/watchlists`) | Bearer JWT   | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_mcp_monitoring_invariants.py::test_monitoring_watchlists_jwt_principal_and_state_alignment` |
 | Single-user profile (bootstrapped admin)       | X-API-KEY (single_user) | `single_user`   | `tldw_Server_API/tests/AuthNZ/integration/test_single_user_claims_permissions.py`                        |
 
 Additional claim-first / permissions surfaces (without dedicated principal-state
@@ -82,4 +84,3 @@ These documents together specify that:
 - New high-value domains should, where practical, add an invariant-style test
   that exercises at least one representative route (JWT and/or API-key path)
   and asserts principal/state alignment as shown above.
-

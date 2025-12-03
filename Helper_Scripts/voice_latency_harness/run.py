@@ -271,7 +271,7 @@ def main():
     except Exception as exc:
         logger.error(f"Harness failed: {exc}")
         logger.exception("Full traceback:")
-        raise SystemExit(1)
+        raise SystemExit(1) from exc
 
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(result.to_json())

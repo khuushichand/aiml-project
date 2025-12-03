@@ -8,6 +8,7 @@ from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_permissions,
     require_roles,
+    require_service_principal,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
@@ -20,6 +21,13 @@ async def perm_protected(
     _principal: AuthPrincipal = Depends(require_permissions("media.read")),
 ) -> dict[str, Any]:
     return {"status": "ok"}
+
+
+@app.get("/service-protected")
+async def service_protected(
+    _principal: AuthPrincipal = Depends(require_service_principal),
+) -> dict[str, Any]:
+    return {"status": "ok-service"}
 
 
 @app.get("/role-protected")
@@ -195,3 +203,53 @@ async def test_require_permissions_denies_anonymous_principal_without_claims(mon
     resp = local_client.get("/perm-protected")
     assert resp.status_code == 403
     assert "media.read" in resp.json().get("detail", "")
+
+
+@pytest.mark.asyncio
+async def test_require_service_principal_http_401_when_principal_unavailable(monkeypatch):
+    async def _fail_get_auth_principal(request):  # type: ignore[override]
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    monkeypatch.setattr(
+        auth_deps, "_resolve_auth_principal", _fail_get_auth_principal, raising=True
+    )
+
+    resp = client.get("/service-protected")
+    assert resp.status_code == 401
+    body = resp.json()
+    assert "Authentication required" in body.get("detail", "")
+    assert resp.headers.get("WWW-Authenticate") == "Bearer"
+
+
+@pytest.mark.asyncio
+async def test_require_service_principal_http_403_for_non_service_principal(monkeypatch):
+    async def _stub_get_auth_principal(request):  # type: ignore[override]
+        return _make_principal(kind="user", permissions=["media.read"], roles=["worker"])
+
+    monkeypatch.setattr(
+        auth_deps, "_resolve_auth_principal", _stub_get_auth_principal, raising=True
+    )
+
+    local_client = TestClient(app)
+    resp = local_client.get("/service-protected")
+    assert resp.status_code == 403
+    assert "Service principal required" in resp.json().get("detail", "")
+
+
+@pytest.mark.asyncio
+async def test_require_service_principal_http_200_for_service_principal(monkeypatch):
+    async def _stub_get_auth_principal(request):  # type: ignore[override]
+        return _make_principal(kind="service", permissions=["media.read"], roles=["worker"])
+
+    monkeypatch.setattr(
+        auth_deps, "_resolve_auth_principal", _stub_get_auth_principal, raising=True
+    )
+
+    local_client = TestClient(app)
+    resp = local_client.get("/service-protected")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok-service"}

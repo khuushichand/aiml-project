@@ -477,13 +477,12 @@ class MFAService:
                 user_id=user_id,
                 backup_codes_json=updated_codes_json,
             )
-
-            logger.info(f"Backup code used for user {user_id}")
-            return True
-
         except Exception as e:
             logger.error(f"Failed to verify backup code: {e}")
             return False
+        else:
+            logger.info(f"Backup code used for user {user_id}")
+            return True
 
     async def regenerate_backup_codes(
         self,

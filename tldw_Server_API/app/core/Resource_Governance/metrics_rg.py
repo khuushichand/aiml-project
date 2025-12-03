@@ -164,6 +164,10 @@ def record_shadow_mismatch(
     This helper is best-effort and must never raise.
     """
     try:
+        # Ensure metrics are registered so early callers do not depend on
+        # external registration order. Safe to call multiple times.
+        ensure_rg_metrics_registered()
+
         reg = get_metrics_registry()
         if not reg:
             return

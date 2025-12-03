@@ -94,7 +94,7 @@ router = APIRouter()
 async def secure(principal: AuthPrincipal = Depends(get_auth_principal)):
     return {"principal_id": principal.principal_id, "roles": principal.roles}
 
-@router.post("/media/{id}", dependencies=[Depends(require_permissions("media.update"))])
+@router.post("/media/{media_id}", dependencies=[Depends(require_permissions("media.update"))])
 async def update_media(
     media_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
