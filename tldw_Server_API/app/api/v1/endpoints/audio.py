@@ -1624,7 +1624,6 @@ async def _audio_ws_authenticate(
 
     Returns (authenticated, user_id) where user_id is best-effort (JWT or API key owner).
     """
-    authenticated = False
     jwt_user_id: Optional[int] = None
 
     def _policy_close_code() -> int:
@@ -1635,19 +1634,100 @@ async def _audio_ws_authenticate(
         if outer_stream:
             try:
                 await outer_stream.send_json({"type": "error", "message": message})
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"Failed to send websocket error payload: {exc}")
         try:
             await websocket.close(code=code)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"Failed to close websocket after auth error: {exc}")
+
+    async def _enforce_jwt_limits(payload: dict[str, Any]) -> bool:
+        """Enforce endpoint/path/quota limits for JWT-authenticated websocket sessions."""
+        try:
+            from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+            from tldw_Server_API.app.core.AuthNZ.quotas import increment_and_check_jwt_quota
+        except Exception as exc:  # pragma: no cover - defensive import
+            logger.debug(f"Failed to import JWT quota helpers: {exc}")
+            return False
+
+        if str(payload.get("role", "")).lower() != "admin":
+            allowed_eps = payload.get("allowed_endpoints")
+            if isinstance(allowed_eps, list) and allowed_eps:
+                if endpoint_id not in [str(x) for x in allowed_eps]:
+                    await _stream_error("Endpoint not permitted for token", code=4403)
+                    return False
+            ap = payload.get("allowed_paths")
+            if isinstance(ap, list) and ap:
+                if not any(str(ws_path).startswith(str(pfx)) for pfx in ap):
+                    await _stream_error("Path not permitted for token", code=4403)
+                    return False
+            max_calls = payload.get("max_runs")
+            if max_calls is None:
+                max_calls = payload.get("max_calls")
+            if isinstance(max_calls, int) and max_calls >= 0:
+                bucket = None
+                per = payload.get("period")
+                if isinstance(per, str) and per.lower() == "day":
+                    from datetime import datetime, timezone
+
+                    bucket = datetime.now(timezone.utc).date().isoformat()
+                db_pool = await get_db_pool()
+                ok, _cnt = await increment_and_check_jwt_quota(
+                    db_pool=db_pool,
+                    jti=str(payload.get("jti")),
+                    counter_type="call",
+                    limit=int(max_calls),
+                    bucket=bucket,
+                )
+                if not ok:
+                    await _stream_error("Token quota exceeded", code=_policy_close_code())
+                    return False
+        return True
+
+    async def _decode_and_validate_jwt_token(token: str) -> Optional[int]:
+        """
+        Decode a JWT, enforce blacklist + user existence + scope/quotas, and return the user id.
+
+        Returns:
+            int user id when valid; None when rejected (after emitting an error/close).
+        """
+        try:
+            from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+            from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+            from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+            from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user_by_id
+
+            jwt_service = get_jwt_service()
+            payload = jwt_service.decode_access_token(token)
+            uid = payload.get("user_id") or payload.get("sub")
+            if isinstance(uid, str):
+                uid = int(uid)
+            if not uid:
+                raise InvalidTokenError("missing user_id/sub claim")
+            session_manager = await get_session_manager()
+            if await session_manager.is_token_blacklisted(token, payload.get("jti")):
+                raise InvalidTokenError("token revoked")
+            user_row = await _get_user_by_id(int(uid))
+            if not user_row:
+                raise InvalidTokenError("user not found")
+            if not await _enforce_jwt_limits(payload):
+                return None
+            return int(uid)
+        except (InvalidTokenError, TokenExpiredError):
+            await _stream_error("Invalid or expired token", code=4401)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"JWT authentication failed: {exc}")
+            await _stream_error("Authentication failed", code=4401)
+            return None
 
     if is_multi_user_mode():
         # Optional X-API-KEY path (virtual API keys)
         x_api_key = None
         try:
             x_api_key = websocket.headers.get("x-api-key") or websocket.headers.get("X-API-KEY")
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"Failed to read X-API-KEY header: {exc}")
             x_api_key = None
         if x_api_key:
             try:
@@ -1705,14 +1785,14 @@ async def _audio_ws_authenticate(
                             if not ok:
                                 await _stream_error("API key quota exceeded", code=_policy_close_code())
                                 return False, None
-                authenticated = True
                 uid = info.get("user_id")
                 try:
                     jwt_user_id = int(uid) if uid is not None else None
                 except Exception:
                     jwt_user_id = None
                 return True, jwt_user_id
-            except Exception:
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"API key authentication failed: {exc}")
                 await _stream_error("API key authentication failed", code=4401)
                 return False, None
 
@@ -1725,66 +1805,13 @@ async def _audio_ws_authenticate(
                 bearer = parts[1]
         if bearer:
             try:
-                from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
-                from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
-                from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
-                from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user_by_id
-                from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-                from tldw_Server_API.app.core.AuthNZ.quotas import increment_and_check_jwt_quota
-
-                jwt_service = get_jwt_service()
-                payload = jwt_service.decode_access_token(bearer)
-                uid = payload.get("user_id") or payload.get("sub")
-                if isinstance(uid, str):
-                    uid = int(uid)
-                if not uid:
-                    raise InvalidTokenError("missing user_id/sub claim")
-                session_manager = await get_session_manager()
-                if await session_manager.is_token_blacklisted(bearer, payload.get("jti")):
-                    raise InvalidTokenError("token revoked")
-                user_row = await _get_user_by_id(int(uid))
-                if not user_row:
-                    raise InvalidTokenError("user not found")
-                if str(payload.get("role", "")) != "admin":
-                    allowed_eps = payload.get("allowed_endpoints")
-                    if isinstance(allowed_eps, list) and allowed_eps:
-                        if endpoint_id not in [str(x) for x in allowed_eps]:
-                            await _stream_error("Endpoint not permitted for token", code=4403)
-                            return False, None
-                    ap = payload.get("allowed_paths")
-                    if isinstance(ap, list) and ap:
-                        if not any(str(ws_path).startswith(str(pfx)) for pfx in ap):
-                            await _stream_error("Path not permitted for token", code=4403)
-                            return False, None
-                    max_calls = payload.get("max_runs")
-                    if max_calls is None:
-                        max_calls = payload.get("max_calls")
-                    if isinstance(max_calls, int) and max_calls >= 0:
-                        bucket = None
-                        per = payload.get("period")
-                        if isinstance(per, str) and per.lower() == "day":
-                            from datetime import datetime, timezone
-
-                            bucket = datetime.now(timezone.utc).date().isoformat()
-                        db_pool = await get_db_pool()
-                        ok, _cnt = await increment_and_check_jwt_quota(
-                            db_pool=db_pool,
-                            jti=str(payload.get("jti")),
-                            counter_type="call",
-                            limit=int(max_calls),
-                            bucket=bucket,
-                        )
-                        if not ok:
-                            await _stream_error("Token quota exceeded", code=_policy_close_code())
-                            return False, None
-                jwt_user_id = int(uid)
-                authenticated = True
+                user_id = await _decode_and_validate_jwt_token(bearer)
+                if user_id is None:
+                    return False, None
+                jwt_user_id = user_id
                 return True, jwt_user_id
-            except (InvalidTokenError, TokenExpiredError):
-                await _stream_error("Invalid or expired token", code=4401)
-                return False, None
-            except Exception:
-                await _stream_error("Authentication failed", code=4401)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"JWT auth unexpected error: {exc}")
                 return False, None
 
         # Message-based auth as a fallback
@@ -1795,27 +1822,13 @@ async def _audio_ws_authenticate(
                 await _stream_error("Authentication required: Authorization: Bearer <JWT> or auth message", code=4401)
                 return False, None
             bearer = auth_data.get("token")
-            from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
-            from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
-            from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user_by_id
-
-            jwt_service = get_jwt_service()
-            payload = jwt_service.decode_access_token(bearer)
-            uid = payload.get("user_id") or payload.get("sub")
-            if isinstance(uid, str):
-                uid = int(uid)
-            if not uid:
-                raise ValueError("missing user id in token")
-            session_manager = await get_session_manager()
-            if await session_manager.is_token_blacklisted(bearer, payload.get("jti")):
-                raise ValueError("token revoked")
-            user_row = await _get_user_by_id(int(uid))
-            if not user_row:
-                raise ValueError("user not found")
-            jwt_user_id = int(uid)
-            authenticated = True
+            user_id = await _decode_and_validate_jwt_token(bearer)
+            if user_id is None:
+                return False, None
+            jwt_user_id = user_id
             return True, jwt_user_id
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"Message-based auth failed: {exc}")
             await _stream_error("Authentication required", code=4401)
             return False, None
 
@@ -1861,7 +1874,8 @@ async def _audio_ws_authenticate(
         header_bearer = auth_header.split(" ", 1)[1].strip()
     try:
         query_token = websocket.query_params.get("token") if hasattr(websocket, "query_params") else None
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"Failed to read query token: {exc}")
         query_token = None
 
     if (
@@ -1872,7 +1886,6 @@ async def _audio_ws_authenticate(
         if not _ip_allowed_single_user(client_ip):
             await _stream_error("IP not allowed", code=1008)
             return False, None
-        authenticated = True
         return True, settings.SINGLE_USER_FIXED_ID if hasattr(settings, "SINGLE_USER_FIXED_ID") else None
     try:
         first_message = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
@@ -1883,7 +1896,6 @@ async def _audio_ws_authenticate(
         if not _ip_allowed_single_user(client_ip):
             await _stream_error("IP not allowed", code=1008)
             return False, None
-        authenticated = True
         return True, settings.SINGLE_USER_FIXED_ID if hasattr(settings, "SINGLE_USER_FIXED_ID") else None
     except asyncio.TimeoutError:
         await _stream_error("Authentication timeout. Send auth message within 5 seconds.")
@@ -2408,7 +2420,7 @@ async def websocket_transcribe(
             QuotaExceeded as _QuotaExceeded,
         )
 
-        async def _on_audio_quota(seconds: float, sr: int) -> None:
+        async def _on_audio_quota(seconds: float, _sr: int) -> None:
             """
             Handle a chunk of audio for daily-minute quota accounting and enforcement.
 
@@ -2451,14 +2463,14 @@ async def websocket_transcribe(
                         "audio_failopen_minutes_total", value=float(minutes_chunk), labels={"reason": "db_check"}
                     )
                     increment_counter("audio_failopen_events_total", labels={"reason": "db_check"})
-                except Exception:
-                    pass
+                except Exception as m_err:
+                    logger.debug(f"metrics increment failed (audio_failopen_db_check): error={m_err}")
                 deducted = True
                 if failopen_remaining <= 0:
                     try:
                         increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_check"})
-                    except Exception:
-                        pass
+                    except Exception as m_err:
+                        logger.debug(f"metrics increment failed (audio_failopen_cap_db_check): error={m_err}")
                     raise _QuotaExceeded("daily_minutes")
             if not allow:
                 # Raise structured signal to outer scope
@@ -2485,13 +2497,13 @@ async def websocket_transcribe(
                             labels={"reason": "db_record"},
                         )
                         increment_counter("audio_failopen_events_total", labels={"reason": "db_record"})
-                    except Exception:
-                        pass
+                    except Exception as m_err:
+                        logger.debug(f"metrics increment failed (audio_failopen_db_record): error={m_err}")
                     if failopen_remaining <= 0:
                         try:
                             increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_record"})
-                        except Exception:
-                            pass
+                        except Exception as m_err:
+                            logger.debug(f"metrics increment failed (audio_failopen_cap_db_record): error={m_err}")
                         raise _QuotaExceeded("daily_minutes")
 
         async def _on_heartbeat() -> None:
@@ -2515,26 +2527,31 @@ async def websocket_transcribe(
                 on_heartbeat=_on_heartbeat,
             )
         except _QuotaExceeded as qe:
-                # Send structured error and close with application-defined code
-                try:
-                    if _outer_stream:
-                        await _outer_stream.send_json(
-                            {
-                                "type": "error",
-                                "error_type": "quota_exceeded",
-                                "quota": qe.quota,
-                                "message": "Streaming transcription quota exceeded (daily minutes)",
-                            }
-                        )
-                except Exception as e:
-                    logger.debug(f"WebSocket send_json quota error failed: error={e}")
-                try:
-                    await websocket.close(code=_policy_close_code(), reason="quota_exceeded")
-                except Exception as e:
-                    logger.debug(f"WebSocket close (quota case) failed: error={e}")
+            try:
+                if _outer_stream:
+                    await _outer_stream.send_json(
+                        {
+                            "type": "error",
+                            "error_type": "quota_exceeded",
+                            "quota": qe.quota,
+                            "message": "Streaming transcription quota exceeded (daily minutes)",
+                        }
+                    )
+            except Exception as send_exc:
+                logger.debug(f"WebSocket send_json quota error failed: error={send_exc}")
+            try:
+                await websocket.close(code=_policy_close_code(), reason="quota_exceeded")
+            except Exception as close_exc:
+                logger.debug(f"WebSocket close (quota case) failed: error={close_exc}")
         finally:
             if acquired_stream:
-                await finish_stream(user_id_for_usage)
+                try:
+                    await finish_stream(user_id_for_usage)
+                except EXPECTED_DB_EXC as e:
+                    logger.debug(
+                        f"Failed to release streaming quota slot (stream/transcribe): "
+                        f"user_id={user_id_for_usage}, error={e}"
+                    )
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
@@ -2704,7 +2721,7 @@ async def websocket_audio_chat_stream(
         failopen_remaining = FAIL_OPEN_CAP_MINUTES
         remaining_minutes_snapshot: Optional[float] = None
 
-        async def _on_audio_quota(seconds: float, sr: int) -> None:
+        async def _on_audio_quota(seconds: float, _sr: int) -> None:
             nonlocal used_minutes, failopen_remaining, remaining_minutes_snapshot
             minutes_chunk = float(seconds) / 60.0
             deducted = False
@@ -2717,10 +2734,11 @@ async def websocket_audio_chat_stream(
                 allow, remaining_after = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
                 if allow and remaining_after is not None:
                     remaining_minutes_snapshot = float(remaining_after)
-            except EXPECTED_DB_EXC as e:
-                logger.warning(
-                    f"check_daily_minutes_allow failed during streaming; temporarily allowing (bounded fail-open). user_id={user_id_for_usage}, error={e}"
-                )
+                except EXPECTED_DB_EXC as e:
+                    logger.warning(
+                        f"check_daily_minutes_allow failed during streaming; temporarily allowing "
+                        f"(bounded fail-open). user_id={user_id_for_usage}, error={e}"
+                    )
                 allow = True
                 failopen_remaining -= minutes_chunk
                 try:
@@ -2759,13 +2777,15 @@ async def websocket_audio_chat_stream(
                             labels={"reason": "db_record"},
                         )
                         increment_counter("audio_failopen_events_total", labels={"reason": "db_record"})
-                    except Exception:
-                        pass
+                    except Exception as m_err:
+                        logger.debug(f"metrics increment failed (audio_chat_failopen_db_record): error={m_err}")
                     if failopen_remaining <= 0:
                         try:
                             increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_record"})
-                        except Exception:
-                            pass
+                        except Exception as m_err:
+                            logger.debug(
+                                f"metrics increment failed (audio_chat_failopen_cap_db_record): error={m_err}"
+                            )
                         raise QuotaExceeded("daily_minutes")
 
         async def _on_heartbeat() -> None:
@@ -3090,8 +3110,8 @@ async def websocket_audio_chat_stream(
                             "voice": tts_voice,
                         }
                     )
-                except Exception:
-                    pass
+                except Exception as send_exc:
+                    logger.debug(f"audio.chat.stream tts_start send failed: error={send_exc}")
 
             async def _producer() -> None:
                 try:
@@ -3109,18 +3129,23 @@ async def websocket_audio_chat_stream(
                         except asyncio.QueueFull:
                             try:
                                 _ = queue.get_nowait()
-                            except Exception:
-                                pass
+                            except Exception as q_err:
+                                logger.debug(f"audio.chat.stream queue get_nowait failed: error={q_err}")
                             try:
                                 queue.put_nowait(chunk)
                                 reg.increment("audio_stream_underruns_total", 1, labels=underrun_labels)
-                            except Exception:
+                            except Exception as m_err:
+                                logger.debug(
+                                    f"audio.chat.stream underrun metrics update failed: error={m_err}"
+                                )
                                 reg.increment("audio_stream_errors_total", 1, labels=error_labels)
                 except Exception as exc:
                     try:
                         reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                    except Exception:
-                        pass
+                    except Exception as m_err:
+                        logger.debug(
+                            f"audio.chat.stream producer metrics update failed (outer): error={m_err}"
+                        )
                     if _outer_stream:
                         try:
                             await _outer_stream.send_json(
@@ -3131,13 +3156,15 @@ async def websocket_audio_chat_stream(
                                     "details": str(exc),
                                 }
                             )
-                        except Exception:
-                            pass
+                        except Exception as send_exc:
+                            logger.debug(
+                                f"audio.chat.stream producer error frame send failed: error={send_exc}"
+                            )
                 finally:
                     try:
                         await queue.put(None)
-                    except Exception:
-                        pass
+                    except Exception as q_err:
+                        logger.debug(f"audio.chat.stream queue sentinel enqueue failed: error={q_err}")
 
             async def _consumer() -> None:
                 try:
@@ -3152,12 +3179,16 @@ async def websocket_audio_chat_stream(
                         except Exception as exc:
                             try:
                                 reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                            except Exception:
-                                pass
+                            except Exception as m_err:
+                                logger.debug(
+                                    f"audio.chat.stream consumer metrics update failed: error={m_err}"
+                                )
                             try:
                                 await websocket.close(code=1011)
-                            except Exception:
-                                pass
+                            except Exception as close_exc:
+                                logger.debug(
+                                    f"audio.chat.stream websocket close in consumer failed: error={close_exc}"
+                                )
                             if _outer_stream:
                                 try:
                                     await _outer_stream.send_json(
@@ -3167,20 +3198,24 @@ async def websocket_audio_chat_stream(
                                             "message": str(exc),
                                         }
                                     )
-                                except Exception:
-                                    pass
+                                except Exception as send_exc:
+                                    logger.debug(
+                                        f"audio.chat.stream consumer error frame send failed: error={send_exc}"
+                                    )
                             break
-                except Exception:
+                except Exception as exc:
                     try:
                         reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                    except Exception:
-                        pass
+                    except Exception as m_err:
+                        logger.debug(
+                            f"audio.chat.stream consumer metrics update failed (outer): error={m_err}"
+                        )
 
             producer_task = asyncio.create_task(_producer())
             consumer_task = asyncio.create_task(_consumer())
 
             try:
-                done, pending = await asyncio.wait(
+                _done, pending = await asyncio.wait(
                     {producer_task, consumer_task},
                     return_when=asyncio.FIRST_EXCEPTION,
                 )
@@ -3188,16 +3223,20 @@ async def websocket_audio_chat_stream(
                     task.cancel()
                     try:
                         await task
-                    except Exception:
-                        pass
+                    except Exception as wait_exc:
+                        logger.debug(
+                            f"audio.chat.stream wait for pending task failed after cancel: error={wait_exc}"
+                        )
             finally:
                 producer_task.cancel()
                 consumer_task.cancel()
                 if _outer_stream:
                     try:
                         await _outer_stream.send_json({"type": "tts_done"})
-                    except Exception:
-                        pass
+                    except Exception as send_exc:
+                        logger.debug(
+                            f"audio.chat.stream tts_done frame send failed: error={send_exc}"
+                        )
 
         async def _finalize_turn(commit_at: float, *, auto: bool = False) -> None:
             nonlocal processing_turn
@@ -3316,23 +3355,31 @@ async def websocket_audio_chat_stream(
                         await _on_audio_quota(seconds, int(config.sample_rate or 16000))
                     except QuotaExceeded as qe:
                         if _outer_stream:
-                            await _outer_stream.send_json(
-                                {
-                                    "type": "error",
-                                    "error_type": "quota_exceeded",
-                                    "quota": getattr(qe, "quota", "daily_minutes"),
-                                    "message": "Streaming quota exceeded",
-                                }
-                            )
+                            try:
+                                await _outer_stream.send_json(
+                                    {
+                                        "type": "error",
+                                        "error_type": "quota_exceeded",
+                                        "quota": getattr(qe, "quota", "daily_minutes"),
+                                        "message": "Streaming quota exceeded",
+                                    }
+                                )
+                            except Exception as send_exc:
+                                logger.debug(
+                                    f"WebSocket send_json quota error failed (audio.chat.stream): error={send_exc}"
+                                )
                         try:
                             await websocket.close(code=_policy_close_code(), reason="quota_exceeded")
-                        finally:
-                            break
+                        except Exception as close_exc:
+                            logger.debug(
+                                f"WebSocket close (quota case) failed (audio.chat.stream): error={close_exc}"
+                            )
+                        break
 
                     try:
                         await _on_heartbeat()
-                    except Exception:
-                        pass
+                    except Exception as hb_exc:
+                        logger.debug(f"audio.chat.stream heartbeat failed: error={hb_exc}")
 
                     result = await transcriber.process_audio_chunk(audio_bytes)
                     if result:
@@ -3567,30 +3614,37 @@ async def websocket_tts(
                     except asyncio.QueueFull:
                         try:
                             _ = queue.get_nowait()
-                        except Exception:
-                            pass
+                        except Exception as q_err:
+                            logger.debug(f"audio.stream.tts queue get_nowait failed: error={q_err}")
                         try:
                             queue.put_nowait(chunk)
                             reg.increment("audio_stream_underruns_total", 1, labels=underrun_labels)
-                        except Exception:
+                        except Exception as m_err:
+                            logger.debug(
+                                f"audio.stream.tts underrun metrics update failed: error={m_err}"
+                            )
                             reg.increment("audio_stream_errors_total", 1, labels=error_labels)
             except Exception as exc:
                 try:
                     reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                except Exception:
-                    pass
+                except Exception as m_err:
+                    logger.debug(
+                        f"audio.stream.tts producer metrics update failed (outer): error={m_err}"
+                    )
                 if _outer_stream:
                     try:
                         await _outer_stream.error(
                             "internal_error", "TTS generation failed", data={"message": str(exc)}
                         )
-                    except Exception:
-                        pass
+                    except Exception as send_exc:
+                        logger.debug(
+                            f"audio.stream.tts producer error frame send failed: error={send_exc}"
+                        )
             finally:
                 try:
                     await queue.put(None)
-                except Exception:
-                    pass
+                except Exception as q_err:
+                    logger.debug(f"audio.stream.tts queue sentinel enqueue failed: error={q_err}")
 
         async def _consumer() -> None:
             try:
@@ -3605,12 +3659,16 @@ async def websocket_tts(
                     except Exception as exc:
                         try:
                             reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                        except Exception:
-                            pass
+                        except Exception as m_err:
+                            logger.debug(
+                                f"audio.stream.tts consumer metrics update failed: error={m_err}"
+                            )
                         try:
                             await websocket.close(code=1011)
-                        except Exception:
-                            pass
+                        except Exception as close_exc:
+                            logger.debug(
+                                f"audio.stream.tts websocket close in consumer failed: error={close_exc}"
+                            )
                         if _outer_stream:
                             try:
                                 await _outer_stream.error(
@@ -3618,19 +3676,23 @@ async def websocket_tts(
                                     "WebSocket send failed",
                                     data={"message": str(exc)},
                                 )
-                            except Exception:
-                                pass
+                            except Exception as send_exc:
+                                logger.debug(
+                                    f"audio.stream.tts consumer error frame send failed: error={send_exc}"
+                                )
                         break
-            except Exception:
+            except Exception as exc:
                 try:
                     reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                except Exception:
-                    pass
+                except Exception as m_err:
+                    logger.debug(
+                        f"audio.stream.tts consumer metrics update failed (outer): error={m_err}"
+                    )
 
         producer_task = asyncio.create_task(_producer())
         consumer_task = asyncio.create_task(_consumer())
 
-        done, pending = await asyncio.wait(
+        _done, pending = await asyncio.wait(
             {producer_task, consumer_task},
             return_when=asyncio.FIRST_EXCEPTION,
         )
@@ -3638,29 +3700,37 @@ async def websocket_tts(
             task.cancel()
             try:
                 await task
-            except Exception:
-                pass
+            except Exception as wait_exc:
+                logger.debug(
+                    f"audio.stream.tts wait for pending task failed after cancel: error={wait_exc}"
+                )
     finally:
         if acquired_stream:
             try:
                 await finish_stream(user_id_for_usage)
-            except Exception:
-                pass
+            except EXPECTED_DB_EXC as e:
+                logger.debug(
+                    f"Failed to release streaming quota slot (audio.stream.tts): "
+                    f"user_id={user_id_for_usage}, error={e}"
+                )
         try:
             if _outer_stream:
                 await _outer_stream.done()
-        except Exception:
+        except Exception as outer_exc:
             try:
                 await websocket.close()
-            except Exception:
-                pass
+            except Exception as close_exc:
+                logger.debug(
+                    f"audio.stream.tts websocket close failed after _outer_stream.done error: "
+                    f"outer_error={outer_exc}, close_error={close_exc}"
+                )
         try:
             if producer_task is not None:
                 producer_task.cancel()
             if consumer_task is not None:
                 consumer_task.cancel()
-        except Exception:
-            pass
+        except Exception as cancel_exc:
+            logger.debug(f"audio.stream.tts task cancel failed: error={cancel_exc}")
 
 
 @router.get("/stream/status", summary="Check streaming transcription availability")

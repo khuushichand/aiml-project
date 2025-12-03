@@ -263,7 +263,14 @@ Symptoms:
   - In the `local-single-user` profile, the bootstrapped admin user (`SINGLE_USER_FIXED_ID`) is represented as an `AuthPrincipal` with admin role and full claims, and no special-case `AUTH_MODE` logic is required in dependencies.
   - `AuthPrincipal.kind` is correctly set for different credential types (`user`, `api_key`, `service`, `anonymous`), and user-centric fields are only present when appropriate.
 
-- **Status (v0.1)**: Done — validated by `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_state_consistency.py` and `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_jwt_happy_path.py`.
+- **Status (v0.1)**: Done — validated by:
+  - `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_state_consistency.py`
+  - `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_jwt_happy_path.py`
+  - `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_api_key_happy_path.py`
+  - Domain-specific principal/state invariant suites:
+    - Media/RAG: `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_media_rag_invariants.py`
+    - Tools execute: `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_tools_invariants.py`
+    - Evaluations list: `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_evaluations_invariants.py`
 
 ### Phase 2: Claim-First Permissions
 

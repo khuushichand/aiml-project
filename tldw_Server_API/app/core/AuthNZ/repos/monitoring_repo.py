@@ -82,7 +82,7 @@ class AuthnzMonitoringRepo:
             logger.error(f"AuthnzMonitoringRepo.delete_audit_logs_before failed: {exc}")
             raise
 
-    async def get_metrics_window_summary(self, cutoff: datetime) -> Dict[str, Any]:
+    async def get_metrics_window_summary(self, cutoff: datetime) -> Dict[str, int]:
         """
         Return aggregate authentication and rate-limit metrics for a time window.
 
@@ -110,7 +110,22 @@ class AuthnzMonitoringRepo:
                     "failed_auths": 0,
                     "rate_limit_hits": 0,
                 }
-            return row
+
+            # Normalize to a plain mapping of int counts for callers.
+            if isinstance(row, dict):
+                data: Dict[str, Any] = row
+            else:
+                # Fallback for sequence-like rows
+                keys = ("successful_auths", "failed_auths", "rate_limit_hits")
+                data = {k: (row[idx] if idx < len(row) else 0) for idx, k in enumerate(keys)}  # type: ignore[index]
+
+            result: Dict[str, int] = {}
+            for key in ("successful_auths", "failed_auths", "rate_limit_hits"):
+                try:
+                    result[key] = int(data.get(key, 0) or 0)
+                except (TypeError, ValueError):
+                    result[key] = 0
+            return result
         except Exception as exc:  # pragma: no cover - surfaced through callers
             logger.error(f"AuthnzMonitoringRepo.get_metrics_window_summary failed: {exc}")
             raise

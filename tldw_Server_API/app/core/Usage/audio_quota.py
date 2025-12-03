@@ -141,9 +141,9 @@ def _rg_audio_enabled() -> bool:
                 try:
                     return cfg.getboolean("ResourceGovernor", "enable_audio", fallback=False)
                 except Exception:
-                    pass
-        except Exception:
-            pass
+                    logger.debug("Failed to parse ResourceGovernor.enable_audio as boolean")
+    except Exception as e:
+        logger.debug(f"Failed to load config for RG audio check: {e}")
         # Inherit from global RG_ENABLED when module flag is unset
         if rg_enabled is not None:
             try:
@@ -160,6 +160,24 @@ _rg_audio_loader = None
 _rg_audio_lock = asyncio.Lock()
 _rg_stream_handles: Dict[int, List[str]] = {}
 _rg_job_handles: Dict[int, List[str]] = {}
+_rg_job_handle_locks: Dict[int, asyncio.Lock] = {}
+_rg_job_handle_locks_lock = asyncio.Lock()
+
+
+def _reset_in_process_counters_for_tests() -> None:
+    """
+    Reset in-process concurrency tracking state for tests.
+
+    This helper clears the local counters and handle registries used for
+    stream and job concurrency so that integration tests can start from a
+    clean slate without reaching into module internals such as _active_jobs
+    directly. It is not intended for application runtime use.
+    """
+    _active_streams.clear()
+    _active_jobs.clear()
+    _rg_stream_handles.clear()
+    _rg_job_handles.clear()
+    _rg_job_handle_locks.clear()
 
 
 async def _get_audio_rg_governor():
@@ -212,6 +230,39 @@ async def _get_audio_rg_governor():
             _rg_audio_governor = None
             _rg_audio_loader = None
             return None
+
+
+async def _get_job_handle_lock(user_id: int) -> asyncio.Lock:
+    """Return (and lazily create) the per-user lock protecting RG job handles."""
+    uid = int(user_id)
+    async with _rg_job_handle_locks_lock:
+        lock = _rg_job_handle_locks.get(uid)
+        if lock is None:
+            lock = asyncio.Lock()
+            _rg_job_handle_locks[uid] = lock
+        return lock
+
+
+async def _cleanup_job_handle_lock(user_id: int) -> None:
+    """Remove a per-user job handle lock when no handles remain."""
+    uid = int(user_id)
+    async with _rg_job_handle_locks_lock:
+        # If handles were added after the pop, keep the lock.
+        if _rg_job_handles.get(uid):
+            return
+        lock = _rg_job_handle_locks.get(uid)
+        if lock and not lock.locked():
+            _rg_job_handle_locks.pop(uid, None)
+
+
+async def _cleanup_stream_handles(user_id: int) -> None:
+    """Prune empty stream handle entries to avoid unbounded growth."""
+    uid = int(user_id)
+    async with _rg_audio_lock:
+        handles = _rg_stream_handles.get(uid)
+        if handles:
+            return
+        _rg_stream_handles.pop(uid, None)
 
 
 @lru_cache(maxsize=1)
@@ -591,7 +642,8 @@ async def can_start_job(user_id: int) -> Tuple[bool, str]:
     gov = await _get_audio_rg_governor()
     if gov is not None and RGRequest is not None:
         try:
-            entity = f"user:{int(user_id)}"
+            user_key = int(user_id)
+            entity = f"user:{user_key}"
             policy_id = "audio.default"
             req = RGRequest(
                 entity=entity,
@@ -603,10 +655,12 @@ async def can_start_job(user_id: int) -> Tuple[bool, str]:
                 _metrics_increment("audio_quota_violations_total", {"type": "concurrent_jobs"})
                 return False, "Concurrent job limit reached"
             # Track handle for explicit release in finish_job
-            handles = _rg_job_handles.setdefault(int(user_id), [])
-            handles.append(handle_id)
-            # Approximate active count via local handles for metrics
-            _metrics_set_gauge("audio_jobs_active", float(len(handles)), {"user_id": str(int(user_id))})
+            job_lock = await _get_job_handle_lock(user_key)
+            async with job_lock:
+                handles = _rg_job_handles.setdefault(user_key, [])
+                handles.append(handle_id)
+                # Approximate active count via local handles for metrics
+                _metrics_set_gauge("audio_jobs_active", float(len(handles)), {"user_id": str(user_key)})
             return True, "OK"
         except Exception as e:
             logger.debug(f"RG error in can_start_job; falling back to legacy counters: {e}")
@@ -652,16 +706,25 @@ async def finish_job(user_id: int) -> None:
     gov = await _get_audio_rg_governor()
     if gov is not None:
         try:
-            handles = _rg_job_handles.get(int(user_id)) or []
-            if handles:
-                handle_id = handles.pop()
-                try:
-                    await gov.release(handle_id)
-                except Exception as e:
-                    logger.debug(f"RG finish_job release failed: {e}")
-            # Update gauge based on remaining handles (best-effort)
-            remaining = len(_rg_job_handles.get(int(user_id)) or [])
-            _metrics_set_gauge("audio_jobs_active", float(remaining), {"user_id": str(int(user_id))})
+            user_key = int(user_id)
+            job_lock = await _get_job_handle_lock(user_key)
+            should_cleanup_lock = False
+            async with job_lock:
+                handles = _rg_job_handles.get(user_key)
+                if handles:
+                    handle_id = handles.pop()
+                    try:
+                        await gov.release(handle_id)
+                    except Exception as e:
+                        logger.debug(f"RG finish_job release failed: {e}")
+                remaining_handles = _rg_job_handles.get(user_key)
+                remaining = len(remaining_handles or [])
+                if remaining == 0:
+                    _rg_job_handles.pop(user_key, None)
+                    should_cleanup_lock = True
+                _metrics_set_gauge("audio_jobs_active", float(remaining), {"user_id": str(user_key)})
+            if should_cleanup_lock:
+                await _cleanup_job_handle_lock(user_key)
             # Even when RG is in use, do not touch Redis/in-process counters here
             # to avoid double-decrement; legacy state is not used when RG_ENABLE_AUDIO=1.
             return
@@ -768,6 +831,8 @@ async def finish_stream(user_id: int) -> None:
                 except Exception as e:
                     logger.debug(f"RG finish_stream release failed: {e}")
             remaining = len(_rg_stream_handles.get(int(user_id)) or [])
+            if remaining == 0:
+                await _cleanup_stream_handles(int(user_id))
             _metrics_set_gauge("audio_streaming_active", float(remaining), {"user_id": str(int(user_id))})
             return
         except Exception as e:

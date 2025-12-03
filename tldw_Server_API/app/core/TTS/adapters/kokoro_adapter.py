@@ -1143,10 +1143,11 @@ class KokoroAdapter(TTSAdapter):
             return text
         try:
             updated = apply_overrides_to_text(text, entries, lang_hint=lang_hint)
-            return updated
         except Exception as exc:
             logger.debug(f"{self.provider_name}: failed to apply phoneme overrides: {exc}")
             return text
+        else:
+            return updated
 
     def preprocess_text(self, text: str, **kwargs) -> str:
         """Preprocess text for Kokoro"""

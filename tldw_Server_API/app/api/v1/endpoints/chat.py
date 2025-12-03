@@ -289,6 +289,118 @@ async def _decrement_active_request(user_id: str) -> None:
             else:
                 _active_request_counts[user_id] = current - 1
 
+
+async def _maybe_rg_shadow_chat_decision(
+    request: Request,
+    limiter_user_id: str,
+    limiter_conversation_id: Optional[str],
+    estimated_tokens: int,
+    legacy_allowed: bool,
+) -> None:
+    """
+    Optional shadow-mode comparison between the legacy ConversationRateLimiter and
+    the shared ResourceGovernor for chat completions.
+
+    When RG_SHADOW_CHAT=1 and RG_ENABLED is true, this helper evaluates the same
+    request against the governor (policy chat.default) and emits a
+    rg_shadow_decision_mismatch_total metric when the allow/deny decisions differ.
+    Control flow always follows the legacy limiter; RG is observability-only.
+    """
+    try:
+        if str(os.getenv("RG_SHADOW_CHAT", "") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+            return
+    except Exception:
+        return
+
+    try:
+        from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag
+    except Exception:
+        return
+
+    try:
+        if not bool(_rg_enabled_flag(False)):  # type: ignore[arg-type]
+            return
+    except Exception:
+        return
+
+    try:
+        gov = getattr(request.app.state, "rg_governor", None)
+        if gov is None:
+            return
+    except Exception:
+        return
+
+    try:
+        entity = derive_entity_key(request)
+    except Exception:
+        entity = f"user:{limiter_user_id}"
+
+    # Build RG request mirroring chat policy (requests + optional tokens)
+    cats: Dict[str, Dict[str, int]] = {"requests": {"units": 1}}
+    try:
+        est_tokens = int(estimated_tokens or 0)
+    except Exception:
+        est_tokens = 0
+    if est_tokens > 0:
+        cats["tokens"] = {"units": est_tokens}
+
+    policy_id = "chat.default"
+    try:
+        loader = getattr(request.app.state, "rg_policy_loader", None)
+        if loader is not None:
+            snap = loader.get_snapshot()
+            route_map = dict(getattr(snap, "route_map", {}) or {})
+            by_path = dict(route_map.get("by_path") or {})
+            path = "/api/v1/chat/completions"
+            for pat, pol in by_path.items():
+                s = str(pat)
+                if s.endswith("*"):
+                    if path.startswith(s[:-1]):
+                        policy_id = str(pol)
+                        break
+                elif path == s:
+                    policy_id = str(pol)
+                    break
+    except Exception:
+        policy_id = "chat.default"
+
+    try:
+        op_id = f"chat-shadow:{limiter_user_id}:{limiter_conversation_id or 'none'}"
+        dec, handle_id = await gov.reserve(
+            RGRequest(entity=entity, categories=cats, tags={"policy_id": policy_id, "endpoint": "/api/v1/chat/completions"}),
+            op_id=op_id,
+        )
+    except Exception:
+        return
+
+    legacy_dec = "allow" if legacy_allowed else "deny"
+    rg_dec = "allow" if getattr(dec, "allowed", False) else "deny"
+
+    if legacy_dec != rg_dec:
+        try:
+            from tldw_Server_API.app.core.Resource_Governance.metrics_rg import record_shadow_mismatch
+
+            record_shadow_mismatch(
+                module="chat",
+                route="/api/v1/chat/completions",
+                policy_id=policy_id,
+                legacy=legacy_dec,
+                rg=rg_dec,
+            )
+        except Exception:
+            # Metrics must never affect control flow
+            pass
+
+    if handle_id:
+        try:
+            actuals: Dict[str, int] = {"requests": 1}
+            if "tokens" in cats and est_tokens > 0:
+                actuals["tokens"] = est_tokens
+            await gov.commit(handle_id, actuals=actuals)
+        except Exception:
+            # Shadow commits are best-effort only
+            pass
+
 # ------------------------------------------------------------------------------------
 # New Endpoints: Chat Commands discovery and Dictionary Validation
 # ------------------------------------------------------------------------------------
@@ -1049,6 +1161,19 @@ async def create_chat_completion(
                         estimated_tokens=estimated_tokens
                     )
 
+                    # Shadow-mode comparison between legacy limiter and ResourceGovernor (observability-only).
+                    try:
+                        await _maybe_rg_shadow_chat_decision(
+                            request=request,
+                            limiter_user_id=str(limiter_user_id),
+                            limiter_conversation_id=limiter_conversation_id,
+                            estimated_tokens=int(estimated_tokens or 0),
+                            legacy_allowed=bool(allowed),
+                        )
+                    except Exception:
+                        # Shadow path must never affect primary rate-limiting behavior.
+                        pass
+
                     if not allowed:
                         metrics.track_rate_limit(user_id)
                         if audit_service and context:
@@ -1305,7 +1430,6 @@ async def create_chat_completion(
 
         character_card_for_context: Optional[Dict[str, Any]] = None
         final_conversation_id: Optional[str] = request_data.conversation_id
-        final_character_db_id: Optional[int] = None  # Initialize
 
         try:
             # In TEST_MODE or when explicitly enabled via config/env, allow
@@ -1352,7 +1476,7 @@ async def create_chat_completion(
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
             # --- Character/Conversation Context, History, and Current Turn ---
-            character_card_for_context, final_character_db_id, final_conversation_id, conversation_created_this_turn, llm_payload_messages, should_persist = await build_context_and_messages(
+            character_card_for_context, _character_db_id, final_conversation_id, conversation_created_this_turn, llm_payload_messages, should_persist = await build_context_and_messages(
                 chat_db=chat_db,
                 request_data=request_data,
                 loop=current_loop,
@@ -1973,7 +2097,10 @@ async def create_chat_completion(
     "/queue/status",
     summary="Chat request queue status",
     tags=["chat"],
-    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.queue.status")),
+        Depends(require_permissions(SYSTEM_LOGS)),
+    ],
 )
 async def get_chat_queue_status():
     """Expose raw chat request queue metrics for diagnostics."""
@@ -1994,15 +2121,15 @@ async def get_chat_queue_status():
     "/queue/activity",
     summary="Recent chat queue activity",
     tags=["chat"],
-    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.queue.activity")),
+        Depends(require_permissions(SYSTEM_LOGS)),
+    ],
 )
 async def get_chat_queue_activity(
     limit: int = 50,
 ):
     """Expose a rolling sample of recent queue activity (last N jobs)."""
-    # Guardrail: enforce sane bounds for limit
-    if limit is None:
-        limit = 50
     try:
         limit = int(limit)
     except Exception:

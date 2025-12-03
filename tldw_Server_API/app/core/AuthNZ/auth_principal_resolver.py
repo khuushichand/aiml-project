@@ -67,7 +67,7 @@ def _build_principal_from_user(
     # Best-effort numeric user id
     try:
         user_id_int = user.id_int
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         logger.debug("Could not extract numeric user_id from user object")
         user_id_int = None
 
@@ -78,13 +78,13 @@ def _build_principal_from_user(
         raw_org_ids = getattr(request.state, "org_ids", None)
         if isinstance(raw_org_ids, (list, tuple)):
             org_ids = [int(o) for o in raw_org_ids if o is not None]
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         org_ids = []
     try:
         raw_team_ids = getattr(request.state, "team_ids", None)
         if isinstance(raw_team_ids, (list, tuple)):
             team_ids = [int(t) for t in raw_team_ids if t is not None]
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         team_ids = []
 
     # Claims on the User model are the canonical source of truth
@@ -115,18 +115,19 @@ def _build_context(
     """Construct AuthContext from principal and request metadata."""
     try:
         ip = request.client.host if request.client else None  # type: ignore[union-attr]
-    except Exception:
+    except (AttributeError, TypeError):
         ip = None
     try:
         user_agent = request.headers.get("User-Agent")
-    except Exception:
+    except (AttributeError, TypeError):
         user_agent = None
     try:
         request_id = (
             request.headers.get("X-Request-ID")
             or getattr(request.state, "request_id", None)
         )
-    except Exception:
+        # getattr(request, "state", ...) can raise if state is not present or misconfigured
+    except (AttributeError, TypeError):
         request_id = None
 
     return AuthContext(
@@ -189,8 +190,10 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                 request.state.org_ids = []
                 # Cache the resolved user for downstream dependencies
                 request.state._auth_user = user
-            except Exception as exc:
-                logger.debug(f"Unable to set request.state for single-user principal: {exc}")
+            except Exception as exc:  # noqa: BLE001 - defensive: request.state failures must not break auth
+                logger.exception(
+                    "Unable to set request.state for single-user principal: {}", exc_info=True
+                )
 
             principal = _build_principal_from_user(
                 user=user,
@@ -203,8 +206,10 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             ctx = _build_context(principal, request)
             try:
                 request.state.auth = ctx
-            except Exception as exc:
-                logger.debug(f"Unable to cache auth context in single-user mode: {exc}")
+            except Exception as exc:  # noqa: BLE001 - defensive: caching failures must not break auth
+                logger.exception(
+                    "Unable to cache auth context in single-user mode: {}", exc_info=True
+                )
             return principal
     except HTTPException:
         # Propagate auth failures as-is
@@ -256,8 +261,8 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             request.state.auth = ctx
             # Cache the resolved user for downstream dependencies
             request.state._auth_user = user
-        except Exception as exc:
-            logger.debug(f"Unable to cache auth context/user: {exc}")
+        except Exception as exc:  # noqa: BLE001 - defensive: caching failures must not break auth
+            logger.exception("Unable to cache auth context/user: {}", exc_info=True)
         return principal
 
     # API key path
@@ -278,7 +283,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             raw_api_key_id = getattr(request.state, "api_key_id", None)
             if raw_api_key_id is not None:
                 api_key_id = int(raw_api_key_id)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             api_key_id = None
 
         principal = _build_principal_from_user(
@@ -294,8 +299,8 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             request.state.auth = ctx
             # Cache the resolved user for downstream dependencies
             request.state._auth_user = user
-        except Exception as exc:
-            logger.debug(f"Unable to cache auth context/user: {exc}")
+        except Exception as exc:  # noqa: BLE001 - defensive: caching failures must not break auth
+            logger.exception("Unable to cache auth context/user: {}", exc_info=True)
         return principal
 
     # Fallback (should not be reached)

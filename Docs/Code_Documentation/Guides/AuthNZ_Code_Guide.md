@@ -137,6 +137,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_permissions,
     require_roles,
 )
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 @router.get("/maybe-auth")
 async def maybe_auth(user=Depends(get_optional_current_user)):
@@ -145,11 +146,11 @@ async def maybe_auth(user=Depends(get_optional_current_user)):
     return {"hello": "anonymous"}
 
 @router.get("/admin-only")
-async def admin_only(principal=Depends(require_roles("admin"))):
+async def admin_only(principal: AuthPrincipal = Depends(require_roles("admin"))):
     return {"ok": True, "as": "admin", "id": principal.user_id}
 
 @router.get("/media-read")
-async def media_read(principal=Depends(require_permissions("media.read"))):
+async def media_read(principal: AuthPrincipal = Depends(require_permissions("media.read"))):
     return {"ok": True, "id": principal.user_id}
 ```
 
@@ -227,6 +228,8 @@ Notes:
     - `AuthnzRateLimitsRepo` (`app/core/AuthNZ/repos/rate_limits_repo.py`) encapsulates all DB-backed rate-limiter tables (`rate_limits`, `failed_attempts`, `account_lockouts`) and is used by `rate_limiter.RateLimiter` for counters, lockouts, and cleanup.
   - New AuthNZ code should **not** add fresh backend-specific SQL for these tables; prefer adding small, task-focused methods to the appropriate repo and calling them from business logic.
   - New code MUST NOT introduce fresh `is_single_user_mode()` branches in endpoint/business logic. Mode checks are confined to a small number of coordination points (bootstrap, DB selection, and legacy compatibility helpers); authorization should flow through `AuthPrincipal` + claim-first dependencies instead.
+  - New code **must not** introduce new usages of `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, or `AllPermissionsChecker` on endpoints. Treat these as legacy compatibility shims kept only for existing routes and tests; new surfaces should always use `get_auth_principal`, `require_permissions`, and `require_roles`.
+  - AuthNZ-facing documentation (usage examples, API integration guides) should treat this guide as canonical and mirror its claim-first patterns. When decorator-style helpers appear in historical examples, they should be clearly labeled as legacy.
 
 References:
 - `tldw_Server_API/app/core/AuthNZ/permissions.py#PermissionChecker` (legacy shim)
@@ -378,7 +381,7 @@ async def secure(user=Depends(get_current_user)):
 2) Require a permission (claim-first)
 ```python
 from fastapi import Depends
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_permissions
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user, require_permissions
 
 @router.post("/media/update", dependencies=[Depends(require_permissions("media.update"))])
 async def update_media(user=Depends(get_current_user)):
@@ -422,7 +425,9 @@ async def mint_vk(user=Depends(get_current_user)):
 ## Extending AuthNZ
 
 - Add new permissions in `permissions.py` and seed mapping in RBAC migrations/seeders.
-- New admin surfaces belong under `.../endpoints/admin.py` or feature-specific admin routes guarded by `RoleChecker("admin")` and permission checks.
+- New admin surfaces belong under `.../endpoints/admin.py` or feature-specific admin routes and should be guarded using claim-first dependencies:
+  - Prefer `principal: AuthPrincipal = Depends(get_auth_principal)` together with `dependencies=[Depends(require_roles("admin"))]` (and `require_permissions(...)` where appropriate).
+  - Only existing legacy routes should continue to use `RoleChecker("admin")` / `PermissionChecker(...)`; do not introduce new usages of these decorator helpers.
 - For new guardrails, prefer middleware with settings gating, and expose DI helpers to keep endpoints simple.
 - Keep both SQLite and Postgres code paths working; use `DatabasePool` helpers to normalize placeholders across backends when needed.
 

@@ -662,6 +662,27 @@ Notes:
 - Per-module feature flags available and honored during phased rollout.
 - Roadmap captured: v1.1 generic DailyLedger plan documented; cross-category budget model noted for future.
 
+## ResourceGovernor v1 status (implementation snapshot)
+
+- Core library & policy loader:
+  - Memory + Redis backends are implemented with `reserve/check/commit/refund/renew/release` semantics, metrics (`rg_decisions_total`, `rg_denials_total`, `rg_refunds_total`, `rg_concurrency_active`, `rg_wait_seconds`), and Redis fail modes driven by `RG_REDIS_FAIL_MODE`.
+  - File and DB policy stores are wired via `rg_policy_store`/`rg_policy_path`, with the default YAML at `tldw_Server_API/Config_Files/resource_governor_policies.yaml` and AuthNZ-backed `rg_policies` support.
+- Ingress middleware:
+  - `RGSimpleMiddleware` is available and can be enabled for representative routes via `RG_ENABLED`+`RG_ENABLE_SLOWAPI` or directly via `RG_ENABLE_SIMPLE_MIDDLEWARE` (tests use the latter).
+  - Route-map based resolution is in place for `/api/v1/chat/*`, `/api/v1/audio/*`, `/api/v1/embeddings*`, `/api/v1/mcp/*`, and `/api/v1/evaluations/*`, with standard `Retry-After` / `X-RateLimit-*` headers on deny and success.
+- Chat:
+  - Endpoint-level token reservation can be enabled with `RG_ENDPOINT_ENFORCE_TOKENS`, using `chat.default` policy and `derive_entity_key` for entities; RGSimpleMiddleware can enforce `requests` on `/api/v1/chat/*`.
+  - A shadow-mode helper (`RG_SHADOW_CHAT=1`) compares the legacy `ConversationRateLimiter` decision with a governor decision for chat completions and emits `rg_shadow_decision_mismatch_total{module=\"chat\",route=\"/api/v1/chat/completions\",policy_id,...}` when they differ.
+- Audio:
+  - Streams/jobs concurrency is enforced via the governor (`audio.default` policy, `streams`/`jobs` categories) when `RG_ENABLE_AUDIO` is enabled, with Redis/in-process counters retained as a fail-open fallback.
+  - Daily minutes remain enforced via the existing `audio_usage_daily` tables; usage is mirrored into `ResourceDailyLedger` in shadow mode for observability and future cutover.
+  - The audio WebSocket transcription endpoint consumes `audio_quota` helpers, which in turn use the governor for streams concurrency when `RG_ENABLE_AUDIO=1`; legacy Redis counters are bypassed in this mode.
+- Embeddings:
+  - The legacy per-user sliding-window limiter remains the enforcement path (`UserRateLimiter`); `embeddings.default` policy and route-map entries are defined but request paths have not yet been migrated to RG.
+- MCP & SlowAPI:
+  - MCP unified limiter still uses its in-memory/Redis implementation; `mcp.ingestion` policies exist and are exercised in RG unit tests, but production MCP ingress has not yet been fully cut over.
+  - SlowAPI-decorated routes continue to use the existing limiter by default; `RGSimpleMiddleware` can be enabled as a façade in front of selected ingress paths when `RG_ENABLED` and `RG_ENABLE_SLOWAPI` are set.
+
 ## Appendix — Mapping table (initial examples)
 
 - Chat

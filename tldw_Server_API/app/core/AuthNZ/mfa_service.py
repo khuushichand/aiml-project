@@ -91,6 +91,12 @@ class MFAService:
         self._initialized = True
         logger.info("MFAService initialized")
 
+    def _ensure_db_pool(self) -> DatabasePool:
+        """Ensure database pool is initialized, raising DatabaseError if not."""
+        if not self.db_pool:
+            raise DatabaseError("MFAService database pool not initialized")
+        return self.db_pool
+
     def _ensure_cipher_candidates(self) -> List[Fernet]:
         """Return Fernet instances for all active/legacy key materials."""
         key_candidates = tuple(derive_hmac_key_candidates(self.settings))
@@ -310,10 +316,7 @@ class MFAService:
             hashed_codes = [self._hash_backup_code(user_id, code) for code in backup_codes]
             backup_codes_json = json.dumps(hashed_codes)
 
-            if not self.db_pool:
-                raise DatabaseError("MFAService database pool not initialized")
-
-            repo = AuthnzMfaRepo(self.db_pool)
+            repo = AuthnzMfaRepo(self._ensure_db_pool())
             await repo.set_mfa_config(
                 user_id=user_id,
                 encrypted_secret=encrypted_secret,
@@ -342,10 +345,7 @@ class MFAService:
             await self.initialize()
 
         try:
-            if not self.db_pool:
-                raise DatabaseError("MFAService database pool not initialized")
-
-            repo = AuthnzMfaRepo(self.db_pool)
+            repo = AuthnzMfaRepo(self._ensure_db_pool())
             await repo.clear_mfa_config(
                 user_id=user_id,
                 updated_at=datetime.now(timezone.utc),
@@ -364,10 +364,7 @@ class MFAService:
             await self.initialize()
 
         try:
-            if not self.db_pool:
-                raise DatabaseError("MFAService database pool not initialized")
-
-            repo = AuthnzMfaRepo(self.db_pool)
+            repo = AuthnzMfaRepo(self._ensure_db_pool())
             encrypted = await repo.get_encrypted_totp_secret(user_id)
             return self._decrypt_secret(encrypted)
         except DatabaseError:
@@ -390,10 +387,7 @@ class MFAService:
             await self.initialize()
 
         try:
-            if not self.db_pool:
-                raise DatabaseError("MFAService database pool not initialized")
-
-            repo = AuthnzMfaRepo(self.db_pool)
+            repo = AuthnzMfaRepo(self._ensure_db_pool())
             row = await repo.get_mfa_status_row(user_id)
 
             if row:
@@ -437,10 +431,7 @@ class MFAService:
             await self.initialize()
 
         try:
-            if not self.db_pool:
-                raise DatabaseError("MFAService database pool not initialized")
-
-            repo = AuthnzMfaRepo(self.db_pool)
+            repo = AuthnzMfaRepo(self._ensure_db_pool())
 
             # Get backup codes JSON
             backup_codes_json = await repo.get_backup_codes_json(user_id)
@@ -516,10 +507,7 @@ class MFAService:
             hashed_codes = [self._hash_backup_code(user_id, code) for code in new_codes]
             backup_codes_json = json.dumps(hashed_codes)
 
-            if not self.db_pool:
-                raise DatabaseError("MFAService database pool not initialized")
-
-            repo = AuthnzMfaRepo(self.db_pool)
+            repo = AuthnzMfaRepo(self._ensure_db_pool())
             await repo.set_backup_codes_with_timestamp(
                 user_id=user_id,
                 backup_codes_json=backup_codes_json,

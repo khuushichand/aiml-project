@@ -2,7 +2,7 @@
 # Description: Database-backed rate limiting with token bucket algorithm
 #
 # Imports
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple
 import hashlib
 import asyncio
@@ -254,7 +254,7 @@ class RateLimiter:
         lockout_duration_minutes = lockout_duration_minutes or self.settings.LOCKOUT_DURATION_MINUTES
 
         key = f"failed_{attempt_type}:{identifier}"
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Try Redis first if available
         if self.redis_client:
@@ -350,7 +350,7 @@ class RateLimiter:
         if not self._initialized:
             await self.initialize()
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Check Redis first
         if self.redis_client:
@@ -480,7 +480,7 @@ class RateLimiter:
             # Use Redis pipeline for atomic operations
             pipe = self.redis_client.pipeline()
 
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             window_start = _compute_window_start(now, window_minutes)
             window_key = f"rate:{key}:{_window_key(window_start)}"
 
@@ -529,7 +529,7 @@ class RateLimiter:
         window_minutes: int
     ) -> Tuple[bool, Dict[str, Any]]:
         """Check rate limit using database"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         window_start = _compute_window_start(now, window_minutes)
 
         try:
@@ -741,7 +741,7 @@ class RateLimiter:
             await self.initialize()
 
         try:
-            cutoff = datetime.utcnow() - timedelta(hours=hours)
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
             repo = self._get_rate_limits_repo()
             deleted = await repo.cleanup_rate_limits_older_than(cutoff)
             if deleted:
@@ -757,7 +757,8 @@ class RateLimiter:
     async def get_current_usage(
         self,
         identifier: str,
-        endpoint: str
+        endpoint: str,
+        window_minutes: int = 1,
     ) -> Dict[str, Any]:
         """
         Get current rate limit usage for an identifier
@@ -765,6 +766,7 @@ class RateLimiter:
         Args:
             identifier: Identifier to check
             endpoint: API endpoint
+            window_minutes: Size of the rate-limit window (minutes)
 
         Returns:
             Current usage statistics
@@ -772,22 +774,17 @@ class RateLimiter:
         if not self._initialized:
             await self.initialize()
 
-        now = datetime.utcnow()
-        window_start = now.replace(second=0, microsecond=0)
+        now = datetime.now(timezone.utc)
+        window_start = _compute_window_start(now, window_minutes)
 
         try:
-            # SQLite stores window_start as TEXT; pass ISO string in that case.
-            is_postgres = bool(getattr(self.db_pool, "pool", None))
-            win_param = window_start if is_postgres else window_start.isoformat()
-            result = await self.db_pool.fetchone(
-                """
-                SELECT request_count FROM rate_limits
-                WHERE identifier = ? AND endpoint = ? AND window_start = ?
-                """,
-                identifier, endpoint, win_param
+            repo = self._get_rate_limits_repo()
+            current_count = await repo.get_rate_limit_count(
+                identifier=identifier,
+                endpoint=endpoint,
+                window_start=window_start,
             )
-
-            current_count = result['request_count'] if result else 0
+            current_count = current_count or 0
 
             return {
                 "identifier": identifier,
@@ -796,7 +793,7 @@ class RateLimiter:
                 "limit": self.default_limit,
                 "remaining": max(0, self.default_limit - current_count),
                 "window_start": window_start.isoformat(),
-                "window_end": (window_start + timedelta(minutes=1)).isoformat()
+                "window_end": (window_start + timedelta(minutes=window_minutes)).isoformat()
             }
 
         except Exception as e:

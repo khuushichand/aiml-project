@@ -174,7 +174,18 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
 - User-Auth-Deps:
   - Stage 1 (local-single-user profile mapping to `AuthPrincipal`).
 
-**Status**: Not Started
+**Status**: Done
+
+**Status details & notes**:
+- `bootstrap_single_user_profile` is implemented in `tldw_Server_API/app/core/AuthNZ/initialize.py` and exercised by SQLite/Postgres integration tests:
+  - `tldw_Server_API/tests/AuthNZ_SQLite/test_single_user_bootstrap_sqlite.py`
+  - `tldw_Server_API/tests/AuthNZ_Postgres/test_single_user_bootstrap_postgres.py`
+- Claim-first semantics for single-user principals are locked in by:
+  - `tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py` (e.g., `test_check_permission_single_user_mode_prefers_claims`, `test_check_role_single_user_mode_treats_admin_as_admin_and_user`).
+  - `tldw_Server_API/tests/AuthNZ/integration/test_single_user_claims_permissions.py`, which verifies both:
+    - The bootstrapped single-user admin has concrete roles/permissions claims and passes `require_permissions` / `require_roles`.
+    - A non-admin single-user principal (overridden via `get_auth_principal`) is correctly denied on permission- and role-protected endpoints (403).
+- The AuthNZ Code Guide documents single-user behavior and explicitly notes that claim-first dependencies respect single-user claims, with these tests referenced as invariants.
 
 ---
 
@@ -209,7 +220,7 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
 - Principal-Governance:
   - Underpins principal creation via repositories.
 
-**Status**: In Progress
+**Status**: Done
 
 **Notes**:
 - Core repositories are implemented and exercised in tests:

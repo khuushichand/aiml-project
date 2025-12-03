@@ -92,7 +92,7 @@ def test_audio_chat_endpoint_concurrency_limit(monkeypatch, client: TestClient):
     # Patch can_start_stream to force a quota failure
     from tldw_Server_API.app.api.v1.endpoints import audio as audio_module
 
-    async def _deny(user_id: int):
+    async def _deny(_user_id: int):
         return False, "Concurrent streams limit reached (1)"
 
     monkeypatch.setattr(audio_module, "can_start_stream", _deny)

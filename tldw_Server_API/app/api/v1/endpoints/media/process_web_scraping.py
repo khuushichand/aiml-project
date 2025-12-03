@@ -91,6 +91,9 @@ async def process_web_scraping_endpoint(
             score_threshold=payload.score_threshold,
         )
         return result
+    except HTTPException:
+        # Preserve downstream HTTP status codes (validation, upstream errors).
+        raise
     except Exception as exc:  # pragma: no cover - defensive path
         import traceback
 

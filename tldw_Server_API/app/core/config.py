@@ -1661,9 +1661,15 @@ def rg_enabled(default: bool = False) -> bool:
     if v is None:
         try:
             cp = load_comprehensive_config()
-            v = cp.get("ResourceGovernor", "enabled", fallback=str(default)) if cp else str(default)
-        except Exception:
+        except (FileNotFoundError, configparser.Error) as exc:
+            _log_debug(f"rg_enabled: config load failed, falling back to default={default}: {exc}")
             v = str(default)
+        else:
+            try:
+                v = cp.get("ResourceGovernor", "enabled", fallback=str(default)) if cp else str(default)
+            except (configparser.Error, KeyError, ValueError) as exc:
+                _log_debug(f"rg_enabled: config read failed, falling back to default={default}: {exc}")
+                v = str(default)
     return _as_bool(v, default)
 
 

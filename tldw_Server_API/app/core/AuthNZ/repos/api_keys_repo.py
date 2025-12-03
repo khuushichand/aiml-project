@@ -127,7 +127,9 @@ class AuthnzApiKeysRepo:
                     key_id,
                 )
 
-            return row
+            if not row:
+                return None
+            return dict(row)
         except Exception as exc:  # pragma: no cover - surfaced via higher layers
             logger.error(f"AuthnzApiKeysRepo.fetch_key_limits failed: {exc}")
             raise
@@ -202,8 +204,6 @@ class AuthnzApiKeysRepo:
                             1 if is_virtual else 0,
                         ),
                     )
-                if hasattr(conn, "commit"):
-                    await conn.commit()  # type: ignore[attr-defined]
             except Exception as exc:  # pragma: no cover - surfaced via higher layers
                 logger.error(f"AuthnzApiKeysRepo.upsert_primary_key failed: {exc}")
                 raise
@@ -221,20 +221,38 @@ class AuthnzApiKeysRepo:
         fields to expose externally.
         """
         try:
-            if include_revoked:
-                query = """
-                    SELECT * FROM api_keys
-                    WHERE user_id = ?
-                    ORDER BY created_at DESC
-                """
-                rows = await self.db_pool.fetchall(query, user_id)
+            if getattr(self.db_pool, "pool", None) is not None:
+                # PostgreSQL backend: use $-style placeholders
+                if include_revoked:
+                    query = """
+                        SELECT * FROM api_keys
+                        WHERE user_id = $1
+                        ORDER BY created_at DESC
+                    """
+                    rows = await self.db_pool.fetchall(query, user_id)
+                else:
+                    query = """
+                        SELECT * FROM api_keys
+                        WHERE user_id = $1 AND status = $2
+                        ORDER BY created_at DESC
+                    """
+                    rows = await self.db_pool.fetchall(query, user_id, "active")
             else:
-                query = """
-                    SELECT * FROM api_keys
-                    WHERE user_id = ? AND status = ?
-                    ORDER BY created_at DESC
-                """
-                rows = await self.db_pool.fetchall(query, user_id, "active")
+                # SQLite backend: retain '?' placeholders
+                if include_revoked:
+                    query = """
+                        SELECT * FROM api_keys
+                        WHERE user_id = ?
+                        ORDER BY created_at DESC
+                    """
+                    rows = await self.db_pool.fetchall(query, user_id)
+                else:
+                    query = """
+                        SELECT * FROM api_keys
+                        WHERE user_id = ? AND status = ?
+                        ORDER BY created_at DESC
+                    """
+                    rows = await self.db_pool.fetchall(query, user_id, "active")
 
             return [dict(row) for row in rows]
         except Exception as exc:  # pragma: no cover - surfaced via higher layers
@@ -311,10 +329,6 @@ class AuthnzApiKeysRepo:
                         ),
                     )
                     key_id = getattr(cursor, "lastrowid", None)
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
 
             return int(key_id)
         except Exception as exc:  # pragma: no cover - surfaced via higher layers
@@ -519,10 +533,6 @@ class AuthnzApiKeysRepo:
                         ),
                     )
                     key_id = getattr(cursor, "lastrowid", None)
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
 
             return int(key_id)
         except Exception as exc:  # pragma: no cover - surfaced via higher layers
@@ -586,10 +596,6 @@ class AuthnzApiKeysRepo:
                         "UPDATE api_keys SET rotated_from = ? WHERE id = ?",
                         (old_key_id, new_key_id),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
         except Exception as exc:  # pragma: no cover - surfaced via higher layers
             logger.error(f"AuthnzApiKeysRepo.mark_rotated failed: {exc}")
             raise
@@ -649,10 +655,6 @@ class AuthnzApiKeysRepo:
                     ),
                 )
                 success = getattr(cursor, "rowcount", 0) > 0
-                try:
-                    await conn.commit()
-                except Exception:
-                    pass
                 return success
         except Exception as exc:  # pragma: no cover - surfaced via higher layers
             logger.error(f"AuthnzApiKeysRepo.revoke_api_key_for_user failed: {exc}")
@@ -696,10 +698,6 @@ class AuthnzApiKeysRepo:
                         """,
                         (datetime.utcnow().isoformat(), ip_address, key_id),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
         except Exception as exc:  # pragma: no cover - surfaced via higher layers
             logger.error(f"AuthnzApiKeysRepo.increment_usage failed: {exc}")
             raise
@@ -743,10 +741,6 @@ class AuthnzApiKeysRepo:
                     """,
                     (expired_status, active_status, now.isoformat()),
                 )
-                try:
-                    await conn.commit()
-                except Exception:
-                    pass
                 return int(getattr(cursor, "rowcount", 0) or 0)
         except Exception as exc:  # pragma: no cover - surfaced via higher layers
             logger.error(f"AuthnzApiKeysRepo.expire_keys_before failed: {exc}")
@@ -776,10 +770,6 @@ class AuthnzApiKeysRepo:
                         "UPDATE api_keys SET status = ? WHERE id = ?",
                         (expired_status, key_id),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
         except Exception as exc:  # pragma: no cover - surfaced via higher layers
             logger.error(f"AuthnzApiKeysRepo.mark_key_expired failed: {exc}")
             raise
@@ -828,10 +818,6 @@ class AuthnzApiKeysRepo:
                             json.dumps(details) if details else None,
                         ),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
         except Exception as exc:  # pragma: no cover - surfaced via higher layers
             logger.error(f"AuthnzApiKeysRepo.insert_audit_log failed: {exc}")
             raise

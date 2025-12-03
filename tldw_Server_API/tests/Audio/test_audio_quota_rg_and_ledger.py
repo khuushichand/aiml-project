@@ -1,7 +1,9 @@
-import os
 from datetime import datetime, timezone
 
 import pytest
+
+
+pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio
@@ -21,48 +23,50 @@ async def test_add_daily_minutes_mirrors_to_resource_daily_ledger(tmp_path, monk
 
     await reset_db_pool()
     pool = await get_db_pool()
-
-    # Seed minimal audio tables
-    await pool.execute(
-        """
-        CREATE TABLE IF NOT EXISTS audio_usage_daily (
-            user_id INTEGER NOT NULL,
-            day TEXT NOT NULL,
-            minutes_used REAL NOT NULL DEFAULT 0,
-            jobs_started INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (user_id, day)
+    try:
+        # Seed minimal audio tables
+        await pool.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audio_usage_daily (
+                user_id INTEGER NOT NULL,
+                day TEXT NOT NULL,
+                minutes_used REAL NOT NULL DEFAULT 0,
+                jobs_started INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, day)
+            )
+            """
         )
-        """
-    )
-    await pool.execute(
-        """
-        CREATE TABLE IF NOT EXISTS audio_user_tiers (
-            user_id INTEGER PRIMARY KEY,
-            tier TEXT NOT NULL
+        await pool.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audio_user_tiers (
+                user_id INTEGER PRIMARY KEY,
+                tier TEXT NOT NULL
+            )
+            """
         )
-        """
-    )
 
-    user_id = 42
-    # Default tier is "free" with a nonzero daily_minutes cap; ledger is shadow-only.
-    await audio_quota.add_daily_minutes(user_id, 2.5)
+        user_id = 42
+        # Default tier is "free" with a nonzero daily_minutes cap; ledger is shadow-only.
+        await audio_quota.add_daily_minutes(user_id, 2.5)
 
-    # Verify audio_usage_daily was updated
-    rows = await pool.fetch(
-        "SELECT minutes_used FROM audio_usage_daily WHERE user_id=?",
-        user_id,
-    )
-    assert rows, "audio_usage_daily should have a row for the user"
-    minutes_used = float(rows[0][0])
-    assert minutes_used == pytest.approx(2.5)
+        # Verify audio_usage_daily was updated
+        rows = await pool.fetch(
+            "SELECT minutes_used FROM audio_usage_daily WHERE user_id=?",
+            user_id,
+        )
+        assert rows, "audio_usage_daily should have a row for the user"
+        minutes_used = float(rows[0][0])
+        assert minutes_used == pytest.approx(2.5)
 
-    # ResourceDailyLedger lives in the same AuthNZ DB; query totals via DAL
-    ledger = ResourceDailyLedger(db_pool=pool)
-    await ledger.initialize()
-    today = datetime.now(timezone.utc).date().strftime("%Y-%m-%d")
-    # Units are stored as whole seconds; 2.5 minutes ≈ 150 seconds
-    total_units = await ledger.total_for_day("user", str(user_id), "minutes", day_utc=today)
-    assert total_units >= 145  # allow small rounding differences
+        # ResourceDailyLedger lives in the same AuthNZ DB; query totals via DAL
+        ledger = ResourceDailyLedger(db_pool=pool)
+        await ledger.initialize()
+        today = datetime.now(timezone.utc).date().strftime("%Y-%m-%d")
+        # Units are stored as whole seconds; 2.5 minutes ≈ 150 seconds
+        total_units = await ledger.total_for_day("user", str(user_id), "minutes", day_utc=today)
+        assert 145 <= total_units <= 155, f"Expected ~150 seconds, got {total_units}"
+    finally:
+        await pool.close()
 
 
 @pytest.mark.asyncio
@@ -84,8 +88,9 @@ async def test_can_start_stream_and_finish_stream_via_rg_integration(monkeypatch
             if "streams" not in cats:
                 return type("Dec", (), {"allowed": True, "retry_after": 0})(), "h-ignore"
             count = self.stream_counts.get(entity, 0) + 1
-            self.stream_counts[entity] = count
             allowed = count <= 2
+            if allowed:
+                self.stream_counts[entity] = count
             dec = type("Dec", (), {"allowed": allowed, "retry_after": 0})()
             handle_id = f"h-{entity}-{count}" if allowed else None
             return dec, handle_id
@@ -162,7 +167,7 @@ async def test_can_start_job_fallback_when_redis_unavailable(monkeypatch):
     monkeypatch.setattr(audio_quota, "get_limits_for_user", _limits)
 
     # Reset in-process job counters
-    audio_quota._active_jobs.clear()  # type: ignore[attr-defined]
+    audio_quota._reset_in_process_counters_for_tests()
 
     user_id = 99
     ok1, msg1 = await audio_quota.can_start_job(user_id)
@@ -174,3 +179,7 @@ async def test_can_start_job_fallback_when_redis_unavailable(monkeypatch):
     assert ok2 is False
 
     await audio_quota.finish_job(user_id)
+
+    # Verify job was released - should be able to start a new job
+    ok3, msg3 = await audio_quota.can_start_job(user_id)
+    assert ok3 is True, "Job should be allowed after finish_job released the slot"

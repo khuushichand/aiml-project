@@ -133,7 +133,7 @@ user_db.assign_role(user_id, "moderator")
 
 ### Claim-First Dependencies (Recommended)
 
-New endpoints should use the unified `AuthPrincipal` / dependency stack. This keeps authorization claim-first and consistent with the AuthNZ refactor PRDs.
+New endpoints should use the unified `AuthPrincipal` / dependency stack. This keeps authorization claim-first and consistent with the AuthNZ refactor PRDs and the canonical AuthNZ Code Guide.
 
 ```python
 from fastapi import APIRouter, Depends
@@ -181,9 +181,9 @@ async def delete_user(
     }
 ```
 
-### Legacy Permission Decorators (Still Supported)
+### Legacy Permission Decorators (Existing Routes Only)
 
-The decorator-style helpers remain available for existing routes, but new code should prefer the claim-first dependency pattern shown above.
+The decorator-style helpers remain available for existing routes, but new code should **not** adopt them. Treat these as legacy compatibility shims; new endpoints should use the claim-first dependency pattern shown above.
 
 ```python
 from fastapi import APIRouter, Depends

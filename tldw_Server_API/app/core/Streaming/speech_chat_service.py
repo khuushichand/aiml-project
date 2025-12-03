@@ -141,13 +141,41 @@ def _validate_audio_constraints(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported input_audio_format '{input_format}'",
         )
-    max_bytes = int(os.getenv("AUDIO_CHAT_MAX_BYTES", 20 * 1024 * 1024))
+    # Size limit (bytes): allow env override but fall back safely on parse errors.
+    _raw_max_bytes = os.getenv("AUDIO_CHAT_MAX_BYTES")
+    if _raw_max_bytes is not None:
+        try:
+            max_bytes = int(_raw_max_bytes)
+        except (ValueError, TypeError) as exc:
+            logger.debug(
+                "AUDIO_CHAT_MAX_BYTES parse failed (%r); using default 20MB: %s",
+                _raw_max_bytes,
+                exc,
+            )
+            max_bytes = 20 * 1024 * 1024
+    else:
+        max_bytes = 20 * 1024 * 1024
+
     if audio_bytes and len(audio_bytes) > max_bytes:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="input_audio exceeds size limit for speech chat",
         )
-    max_duration = float(os.getenv("AUDIO_CHAT_MAX_DURATION_SEC", 120))
+    # Duration limit (seconds): allow env override but fall back safely on parse errors.
+    _raw_max_duration = os.getenv("AUDIO_CHAT_MAX_DURATION_SEC")
+    if _raw_max_duration is not None:
+        try:
+            max_duration = float(_raw_max_duration)
+        except (ValueError, TypeError) as exc:
+            logger.debug(
+                "AUDIO_CHAT_MAX_DURATION_SEC parse failed (%r); using default 120s: %s",
+                _raw_max_duration,
+                exc,
+            )
+            max_duration = 120.0
+    else:
+        max_duration = 120.0
+
     if duration_sec > max_duration:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

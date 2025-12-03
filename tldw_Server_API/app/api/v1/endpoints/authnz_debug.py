@@ -43,7 +43,7 @@ async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dic
                 user_id = getattr(principal, "user_id", None)
                 if key_id is not None:
                     return {"api_key_id": int(key_id), "user_id": user_id}
-    except Exception:
+    except AttributeError:
         # Fall back to legacy request.state attributes and header-based resolution.
         pass
 

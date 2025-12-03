@@ -139,3 +139,21 @@ Headers on success/deny:
   - `pytest -q tldw_Server_API/tests/Resource_Governance/test_middleware_simple.py`
   - `pytest -q tldw_Server_API/tests/Resource_Governance/test_middleware_tokens_headers.py`
   - `pytest -q tldw_Server_API/tests/Resource_Governance/test_middleware_enforcement_extended.py`
+
+## Operator examples
+
+- Local dev (file policies, memory backend):
+  - `RG_ENABLED=1`
+  - `RG_POLICY_STORE=file`
+  - `RG_POLICY_PATH=tldw_Server_API/Config_Files/resource_governor_policies.yaml`
+  - `RG_BACKEND=memory`
+  - `RG_ENABLE_SIMPLE_MIDDLEWARE=1` (or `RG_ENABLE_SLOWAPI=1`) to guard representative `/api/v1/chat/*` and `/api/v1/audio/*` routes using the default `route_map`.
+- Production with DB policy store + Redis:
+  - `RG_ENABLED=1`
+  - `RG_POLICY_STORE=db` (AuthNZ `rg_policies` as source of truth)
+  - `RG_BACKEND=redis`
+  - `RG_REDIS_URL=redis://user:pass@redis-host:6379/0`
+  - `RG_REDIS_FAIL_MODE=fail_closed` for strict ingress enforcement, or `fallback_memory` to prefer availability on non-critical paths.
+- Route-map driven ingress:
+  - Keep `route_map.by_path` in `resource_governor_policies.yaml` aligned with your primary ingress routes (for example `/api/v1/chat/* → chat.default`, `/api/v1/embeddings* → embeddings.default`).
+  - Enable `RG_ENABLED=1` and `RG_ENABLE_SLOWAPI=1` (or `RG_ENABLE_SIMPLE_MIDDLEWARE=1`) so `RGSimpleMiddleware` resolves `policy_id` from the route map and emits standard `Retry-After` / `X-RateLimit-*` headers on 429 responses.

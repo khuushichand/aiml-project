@@ -39,7 +39,6 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
@@ -976,15 +975,15 @@ async def health_check(
     if not server.initialized:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Server not initialized"
+            detail="Server not initialized",
         )
 
-    status = await server.get_status()
+    server_status = await server.get_status()
 
-    if status["status"] != "healthy":
+    if server_status["status"] != "healthy":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Server status: {status['status']}"
+            detail=f"Server status: {server_status['status']}",
         )
 
     return {"status": "healthy"}

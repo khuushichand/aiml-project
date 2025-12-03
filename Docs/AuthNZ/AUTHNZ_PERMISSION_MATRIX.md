@@ -75,7 +75,42 @@ The tldw_server AuthNZ module implements a comprehensive Role-Based Access Contr
 
 ## Usage in Code
 
-### Using Permission Decorators (FastAPI)
+### Claim-First Dependencies (Preferred)
+
+For new FastAPI endpoints, use the unified `AuthPrincipal` dependency stack from `auth_deps`. This keeps authorization claim-first and aligned with the AuthNZ refactor PRDs and the AuthNZ Code Guide.
+
+```python
+from fastapi import APIRouter, Depends
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
+    require_permissions,
+    require_roles,
+)
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+
+router = APIRouter()
+
+@router.get("/secure")
+async def secure(principal: AuthPrincipal = Depends(get_auth_principal)):
+    return {"principal_id": principal.principal_id, "roles": principal.roles}
+
+@router.post("/media/{id}", dependencies=[Depends(require_permissions("media.update"))])
+async def update_media(
+    media_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+):
+    return {"ok": True, "media_id": media_id, "by": principal.principal_id}
+
+@router.get("/admin/dashboard", dependencies=[Depends(require_roles("admin"))])
+async def admin_dashboard(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+):
+    return {"ok": True, "admin_id": principal.principal_id}
+```
+
+### Legacy Permission Decorators (FastAPI – Existing Routes)
+
+The decorator-style helpers remain available for legacy endpoints, but **must not** be used for new routes. They are maintained as compatibility shims only.
 
 ```python
 from fastapi import Depends

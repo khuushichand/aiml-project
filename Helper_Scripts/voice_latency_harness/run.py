@@ -23,17 +23,22 @@ import argparse
 import base64
 import io
 import json
-import traceback
-import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 import requests
+from loguru import logger
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
+HISTOGRAM_METRIC_NAMES = {
+    "stt_final_latency_seconds",
+    "tts_ttfb_seconds",
+    "voice_to_voice_seconds",
+    "audio_chat_latency_seconds",
+}
 
 
 def _make_silence(duration_sec: float = 0.2, sr: int = 16000) -> bytes:
@@ -78,26 +83,17 @@ class HarnessResult:
 
 
 def _fetch_metrics(base_url: str, api_key: Optional[str]) -> Dict[str, Any]:
-    """Fetch metrics from /metrics, preferring JSON but falling back to Prom text."""
+    """Fetch metrics from /metrics, preferring JSON and falling back to Prometheus text parsing."""
     headers = {}
     if api_key:
         headers["X-API-KEY"] = api_key
     r = requests.get(f"{base_url}/metrics", headers=headers, timeout=5)
     r.raise_for_status()
-    # Prefer JSON metrics endpoint if exposed; fall back to Prom text.
     try:
-        return r.json()
+        data = r.json()
+        return data.get("metrics", data) if isinstance(data, dict) else data
     except ValueError:
-        text = r.text
-        parsed: Dict[str, Any] = {}
-        for line in text.splitlines():
-            if line.startswith("#") or not line.strip():
-                continue
-            if " " in line:
-                name = line.split(" ", 1)[0]
-                parsed.setdefault(name, 0)
-                parsed[name] += 1
-        return parsed
+        return _parse_prometheus_histograms(r.text, target_names=HISTOGRAM_METRIC_NAMES)
 
 
 def _percentiles(values: Sequence[float], pcts: Sequence[int] = (50, 90)) -> Dict[str, float]:
@@ -108,13 +104,89 @@ def _percentiles(values: Sequence[float], pcts: Sequence[int] = (50, 90)) -> Dic
     return {f"p{p}": float(np.percentile(arr, p)) for p in pcts}
 
 
+def _histogram_percentiles_from_buckets(hist: Dict[str, Any], pcts: Sequence[int] = (50, 90)) -> Dict[str, float]:
+    """Approximate percentiles from Prometheus histogram buckets."""
+    buckets = hist.get("buckets") or {}
+    ordered = []
+    for bound, cumulative in buckets.items():
+        try:
+            upper = float("inf") if str(bound) == "+Inf" else float(bound)
+        except ValueError:
+            continue
+        ordered.append((upper, float(cumulative)))
+    if not ordered:
+        return {}
+    ordered.sort(key=lambda pair: pair[0])
+    total = float(hist.get("count") or max(val for _, val in ordered))
+    if total <= 0:
+        return {}
+    results: Dict[str, float] = {}
+    for p in pcts:
+        target = total * (p / 100.0)
+        prev_bound = 0.0
+        prev_cum = 0.0
+        for upper, cumulative in ordered:
+            if cumulative >= target:
+                if upper == float("inf"):
+                    approx = prev_bound
+                else:
+                    bucket_count = max(cumulative - prev_cum, 0.0)
+                    if bucket_count == 0:
+                        approx = upper
+                    else:
+                        fraction = (target - prev_cum) / bucket_count
+                        lower = prev_bound
+                        approx = lower + (upper - lower) * min(max(fraction, 0.0), 1.0)
+                results[f"p{p}"] = float(approx)
+                break
+            if upper != float("inf"):
+                prev_bound = upper
+            prev_cum = cumulative
+    return results
+
+
+def _parse_prometheus_histograms(prom_text: str, target_names: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+    """Parse Prometheus text exposition into histogram bucket dictionaries."""
+    try:
+        from prometheus_client.parser import text_string_to_metric_families
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise RuntimeError("Prometheus text parsing requires prometheus_client; install to enable fallback.") from exc
+
+    targets = set(target_names) if target_names else None
+    histograms: Dict[str, Dict[str, Any]] = {}
+
+    for family in text_string_to_metric_families(prom_text):
+        if family.type != "histogram":
+            continue
+        if targets and family.name not in targets:
+            continue
+        hist = histograms.setdefault(family.name, {"buckets": {}, "count": 0, "sum": 0.0})
+        for sample in family.samples:
+            name, labels, value, *_ = sample
+            if name.endswith("_bucket"):
+                le = labels.get("le")
+                if le is None:
+                    continue
+                hist["buckets"][le] = hist["buckets"].get(le, 0.0) + float(value)
+            elif name.endswith("_count"):
+                hist["count"] = hist.get("count", 0.0) + float(value)
+            elif name.endswith("_sum"):
+                hist["sum"] = hist.get("sum", 0.0) + float(value)
+
+    return histograms
+
+
 def _extract_histogram_percentiles(metrics: Dict[str, Any], name: str) -> Dict[str, float]:
     """Extract histogram-style metrics into percentile summaries."""
     series = metrics.get(name)
+    if series is None and isinstance(metrics.get("metrics"), dict):
+        series = metrics["metrics"].get(name)
     if not series:
         return {}
     if isinstance(series, dict) and "values" in series:
         values = [v for v in series.get("values", []) if isinstance(v, (int, float))]
+    elif isinstance(series, dict) and "buckets" in series:
+        return _histogram_percentiles_from_buckets(series)
     elif isinstance(series, list):
         values = series
     else:
@@ -134,7 +206,12 @@ def run_short_mode(base_url: str, api_key: Optional[str]) -> HarnessResult:
     )
 
 
-def run_full_turn(base_url: str, api_key: Optional[str]) -> HarnessResult:
+def run_full_turn(
+    base_url: str,
+    api_key: Optional[str],
+    model: str = "gpt-4o-mini",
+    provider: str = "openai",
+) -> HarnessResult:
     """Post a short silent clip, then scrape metrics to derive latency percentiles."""
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -144,7 +221,7 @@ def run_full_turn(base_url: str, api_key: Optional[str]) -> HarnessResult:
     payload = {
         "input_audio": audio_b64,
         "input_audio_format": "wav",
-        "llm_config": {"model": "gpt-4o-mini", "api_provider": "openai"},
+        "llm_config": {"model": model, "api_provider": provider},
         # Default harness target; override via server/env config as needed.
     }
     start = time.time()
@@ -172,21 +249,33 @@ def main():
     parser.add_argument("--base-url", type=str, default=DEFAULT_BASE_URL, help="Server base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key (if required)")
     parser.add_argument("--short", action="store_true", help="Short mode: no calls, just scrape metrics")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="gpt-4o-mini",
+        help="Model name for the /api/v1/audio/chat LLM config",
+    )
+    parser.add_argument(
+        "--provider",
+        type=str,
+        default="openai",
+        help="API provider name for the /api/v1/audio/chat LLM config",
+    )
     args = parser.parse_args()
 
     try:
         if args.short:
             result = run_short_mode(args.base_url, args.api_key)
         else:
-            result = run_full_turn(args.base_url, args.api_key)
+            result = run_full_turn(args.base_url, args.api_key, model=args.model, provider=args.provider)
     except Exception as exc:
-        sys.stderr.write(f"[harness] failed: {exc}\n")
-        traceback.print_exc(file=sys.stderr)
-        sys.exit(1)
+        logger.error(f"Harness failed: {exc}")
+        logger.exception("Full traceback:")
+        raise SystemExit(1)
 
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(result.to_json())
-    print(f"[harness] wrote results to {args.out}")
+    logger.info(f"Wrote results to {args.out}")
 
 
 if __name__ == "__main__":

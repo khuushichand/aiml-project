@@ -2797,7 +2797,21 @@ from starlette.responses import JSONResponse  # noqa: E402
 import os as _os  # noqa: E402
 
 try:
-    _rg_env_enabled = (_os.getenv("RG_ENABLE_SIMPLE_MIDDLEWARE") or "").strip().lower() in {"1", "true", "yes"}
+    # Determine whether to enable RGSimpleMiddleware.
+    # - Explicit RG_ENABLE_SIMPLE_MIDDLEWARE=1 always enables.
+    # - Otherwise, require global RG_ENABLED together with RG_ENABLE_SLOWAPI=1.
+    # - MINIMAL_TEST_APP keeps existing behavior and enables middleware for test apps.
+    from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag  # noqa: E402
+
+    try:
+        _rg_global_enabled = bool(_rg_enabled_flag(False))
+    except Exception:
+        _rg_global_enabled = False
+
+    _rg_simple_flag = (_os.getenv("RG_ENABLE_SIMPLE_MIDDLEWARE") or "").strip().lower() in {"1", "true", "yes"}
+    _rg_slowapi_flag = (_os.getenv("RG_ENABLE_SLOWAPI") or "").strip().lower() in {"1", "true", "yes"}
+    _rg_env_enabled = _rg_simple_flag or (_rg_global_enabled and _rg_slowapi_flag)
+
     # Only enable RGSimpleMiddleware when explicitly requested via env, or when running the
     # minimal test app mode. Do not enable solely due to pytest detection to avoid unintended
     # 429 responses in tests that don't expect global rate limiting.
