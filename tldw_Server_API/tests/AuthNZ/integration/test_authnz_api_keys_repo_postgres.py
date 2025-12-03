@@ -40,7 +40,7 @@ async def test_authnz_api_keys_repo_rotation_and_revoke_postgres(test_db_pool):
             "pg_api_keys_repo_user@example.com",
             "x",
             "user",
-            datetime.now(timezone.utc),
+            datetime.utcnow(),
         )
 
     user_id = await pool.fetchval(
@@ -137,7 +137,7 @@ async def test_authnz_api_keys_repo_usage_and_audit_postgres(test_db_pool):
             "pg_api_keys_usage_user@example.com",
             "x",
             "user",
-            datetime.now(timezone.utc),
+            datetime.utcnow(),
         )
 
     user_id = await pool.fetchval(

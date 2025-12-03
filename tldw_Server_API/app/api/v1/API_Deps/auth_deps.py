@@ -35,7 +35,6 @@ from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_databa
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
     get_auth_principal as _resolve_auth_principal,
 )

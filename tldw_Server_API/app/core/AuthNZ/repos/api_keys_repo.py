@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -558,6 +558,10 @@ class AuthnzApiKeysRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
+                    norm_revoked_at = revoked_at
+                    if isinstance(norm_revoked_at, datetime) and norm_revoked_at.tzinfo is not None:
+                        # Store as naive UTC for TIMESTAMP columns
+                        norm_revoked_at = norm_revoked_at.astimezone(timezone.utc).replace(tzinfo=None)
                     await conn.execute(
                         """
                         UPDATE api_keys
@@ -567,7 +571,7 @@ class AuthnzApiKeysRepo:
                         """,
                         rotated_status,
                         new_key_id,
-                        revoked_at,
+                        norm_revoked_at,
                         reason,
                         old_key_id,
                     )
@@ -618,6 +622,9 @@ class AuthnzApiKeysRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
+                    norm_revoked_at = revoked_at
+                    if isinstance(norm_revoked_at, datetime) and norm_revoked_at.tzinfo is not None:
+                        norm_revoked_at = norm_revoked_at.astimezone(timezone.utc).replace(tzinfo=None)
                     result = await conn.execute(
                         """
                         UPDATE api_keys
@@ -626,7 +633,7 @@ class AuthnzApiKeysRepo:
                         WHERE id = $5 AND user_id = $6 AND status = $7
                         """,
                         revoked_status,
-                        revoked_at,
+                        norm_revoked_at,
                         user_id,
                         reason,
                         key_id,
@@ -672,6 +679,7 @@ class AuthnzApiKeysRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
+                    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
                     await conn.execute(
                         """
                         UPDATE api_keys
@@ -680,11 +688,12 @@ class AuthnzApiKeysRepo:
                             last_used_ip = $2
                         WHERE id = $3
                         """,
-                        datetime.utcnow(),
+                        now_utc,
                         ip_address,
                         key_id,
                     )
                 else:
+                    now_utc = datetime.now(timezone.utc)
                     await conn.execute(
                         """
                         UPDATE api_keys
@@ -693,7 +702,7 @@ class AuthnzApiKeysRepo:
                             last_used_ip = ?
                         WHERE id = ?
                         """,
-                        (datetime.utcnow().isoformat(), ip_address, key_id),
+                        (now_utc.isoformat(), ip_address, key_id),
                     )
         except Exception as exc:  # pragma: no cover - surfaced via higher layers
             logger.error(f"AuthnzApiKeysRepo.increment_usage failed: {exc}")
@@ -715,6 +724,9 @@ class AuthnzApiKeysRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
+                    norm_now = now
+                    if isinstance(norm_now, datetime) and norm_now.tzinfo is not None:
+                        norm_now = norm_now.astimezone(timezone.utc).replace(tzinfo=None)
                     result = await conn.execute(
                         """
                         UPDATE api_keys
@@ -723,7 +735,7 @@ class AuthnzApiKeysRepo:
                         """,
                         expired_status,
                         active_status,
-                        now,
+                        norm_now,
                     )
                     # asyncpg returns a status string like "UPDATE <n>"; surface
                     # unexpected formats via the outer exception handler.
