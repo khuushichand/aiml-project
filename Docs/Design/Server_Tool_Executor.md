@@ -33,7 +33,7 @@ Schemas live in `app/api/v1/schemas/tools.py`.
 ## ACLs & Controls
 
 - RBAC (AuthNZ DB):
-  - Endpoint requires `tools.execute:*` (via `PermissionChecker`).
+  - Endpoint requires `tools.execute:*` (via `require_permissions("tools.execute:*")`).
   - MCP protocol enforces `tools.execute:{tool_name}` (or wildcard), `modules.read:{module}` when needed, and scoped permissions.
 - Write-capable tools:
   - Disabled when `MCP_DISABLE_WRITE_TOOLS=1`.

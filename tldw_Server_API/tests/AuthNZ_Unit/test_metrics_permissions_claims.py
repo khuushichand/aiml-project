@@ -49,7 +49,7 @@ def _build_app_with_overrides(
                 detail="Authentication required",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        assert principal is not None
+        assert principal is not None, "Test setup error: principal must be provided when fail_with_401 is False"
         ip = request.client.host if getattr(request, "client", None) else None
         ua = request.headers.get("User-Agent") if getattr(request, "headers", None) else None
         request_id = request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None
@@ -72,8 +72,8 @@ def _build_app_with_overrides(
     return app
 
 
-@pytest.mark.asyncio
-async def test_metrics_reset_401_when_principal_unavailable():
+@pytest.mark.unit
+def test_metrics_reset_401_when_principal_unavailable():
     app = _build_app_with_overrides(principal=None, fail_with_401=True)
 
     with TestClient(app) as client:
@@ -83,8 +83,8 @@ async def test_metrics_reset_401_when_principal_unavailable():
     assert "Authentication required" in resp.json().get("detail", "")
 
 
-@pytest.mark.asyncio
-async def test_metrics_reset_403_when_missing_admin_role():
+@pytest.mark.unit
+def test_metrics_reset_403_when_missing_admin_role():
     principal = _make_principal(
         is_admin=False,
         roles=["user"],
@@ -98,8 +98,8 @@ async def test_metrics_reset_403_when_missing_admin_role():
     assert resp.status_code == 403
 
 
-@pytest.mark.asyncio
-async def test_metrics_reset_200_for_admin_principal():
+@pytest.mark.unit
+def test_metrics_reset_200_for_admin_principal():
     principal = _make_principal(
         is_admin=True,
         roles=["admin"],
@@ -114,4 +114,3 @@ async def test_metrics_reset_200_for_admin_principal():
     body = resp.json()
     assert body.get("status") == "success"
     assert "message" in body
-

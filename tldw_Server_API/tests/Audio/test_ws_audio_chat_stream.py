@@ -3,6 +3,7 @@ import base64
 import json
 import time
 from types import SimpleNamespace
+from typing import Any, AsyncIterator, Dict, Iterable, List, Optional
 
 import pytest
 
@@ -10,33 +11,42 @@ from tldw_Server_API.app.api.v1.endpoints import audio
 
 
 class DummyWebSocket:
-    def __init__(self, messages):
-        self.headers = {}
-        self.query_params = {}
-        self.client = SimpleNamespace(host="127.0.0.1")
-        self._messages = [json.dumps(m) if isinstance(m, dict) else m for m in messages]
-        self.sent_bytes = []
-        self.sent_json = []
-        self.accepted = False
-        self.closed = False
-        self.close_code = None
-        self.close_calls = []
+    """In-memory WebSocket stub used for audio chat WebSocket tests."""
 
-    async def accept(self):
+    def __init__(self, messages: Iterable[Dict[str, Any] | str]) -> None:
+        self.headers: Dict[str, str] = {}
+        self.query_params: Dict[str, str] = {}
+        self.client = SimpleNamespace(host="127.0.0.1")
+        self._messages: List[str] = [
+            json.dumps(m) if isinstance(m, dict) else m for m in messages
+        ]
+        self.sent_bytes: List[bytes] = []
+        self.sent_json: List[Dict[str, Any]] = []
+        self.accepted: bool = False
+        self.closed: bool = False
+        self.close_code: Optional[int] = None
+        self.close_calls: List[int] = []
+
+    async def accept(self) -> None:
+        """Mark the WebSocket as accepted."""
         self.accepted = True
 
-    async def receive_text(self):
+    async def receive_text(self) -> str:
+        """Return the next queued text frame, or raise when exhausted."""
         if not self._messages:
             raise RuntimeError("No more messages")
         return self._messages.pop(0)
 
-    async def send_bytes(self, data: bytes):
+    async def send_bytes(self, data: bytes) -> None:
+        """Record bytes sent over the WebSocket."""
         self.sent_bytes.append(data)
 
-    async def send_json(self, payload):
+    async def send_json(self, payload: Dict[str, Any]) -> None:
+        """Record JSON payloads sent over the WebSocket."""
         self.sent_json.append(payload)
 
-    async def close(self, code=1000, reason=None):  # noqa: ARG002
+    async def close(self, code: int = 1000, reason: Optional[str] = None) -> None:  # noqa: ARG002
+        """Record the close code and mark the WebSocket as closed."""
         self.close_calls.append(code)
         if not self.closed:
             self.close_code = code
@@ -44,60 +54,79 @@ class DummyWebSocket:
 
 
 class _DummyTranscriber:
-    def __init__(self, config):  # noqa: ARG002
+    """Minimal streaming transcriber stub used in audio chat WebSocket tests."""
+
+    def __init__(self, config: Any) -> None:  # noqa: ARG002
         self.reset_called = False
 
-    def initialize(self):
+    def initialize(self) -> None:
+        """Simulate transcriber initialization."""
         return None
 
-    async def process_audio_chunk(self, audio_bytes):  # noqa: ARG002
+    async def process_audio_chunk(self, audio_bytes: bytes) -> Dict[str, Any]:  # noqa: ARG002
+        """Return a fixed partial transcription payload."""
         return {"type": "partial", "text": "hi"}
 
-    def get_full_transcript(self):
+    def get_full_transcript(self) -> str:
+        """Return a fixed full transcript."""
         return "hello world"
 
-    def reset(self):
+    def reset(self) -> None:
+        """Record that reset was called."""
         self.reset_called = True
 
 
 class _DummyVAD:
-    available = True
-    unavailable_reason = None
+    """Simple VAD stub that never triggers an auto-commit."""
 
-    def __init__(self, *args, **kwargs):  # noqa: D401, ARG002
+    available: bool = True
+    unavailable_reason: Optional[str] = None
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
         self.last_trigger_at = time.time()
 
-    def observe(self, audio_bytes):  # noqa: ARG002
+    def observe(self, audio_bytes: bytes) -> bool:  # noqa: ARG002
+        """Update the last trigger timestamp and return False (no commit)."""
         self.last_trigger_at = time.time()
         return False
 
 
 class _DummyRegistry:
-    def __init__(self):
-        self.records = []
-        self.registered = []
+    """Simple in-memory metrics registry stub."""
 
-    def increment(self, name, value=1, labels=None):
+    def __init__(self) -> None:
+        self.records: List[tuple[str, str, Any, Optional[Dict[str, Any]]]] = []
+        self.registered: List[Any] = []
+
+    def increment(self, name: str, value: int = 1, labels: Optional[Dict[str, Any]] = None) -> None:
+        """Record an increment call."""
         self.records.append(("inc", name, value, labels))
 
-    def observe(self, name, value, labels=None):
+    def observe(self, name: str, value: float, labels: Optional[Dict[str, Any]] = None) -> None:
+        """Record an observe call."""
         self.records.append(("obs", name, value, labels))
 
-    def register_metric(self, *args, **kwargs):  # noqa: ARG002
+    def register_metric(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+        """Record that a metric registration was requested."""
         self.registered.append(args)
 
 
 class _DummyTTSService:
-    def __init__(self, chunks):
-        self._chunks = chunks
+    """TTS service stub that yields a fixed sequence of chunks."""
 
-    async def generate_speech(self, *args, **kwargs):  # noqa: ARG002
+    def __init__(self, chunks: Iterable[bytes]) -> None:
+        self._chunks = list(chunks)
+
+    async def generate_speech(self, *args: Any, **kwargs: Any) -> AsyncIterator[bytes]:  # noqa: ARG002
+        """Yield preconfigured audio chunks."""
         for chunk in self._chunks:
             yield chunk
 
 
-async def _llm_stub(**kwargs):  # noqa: ARG002
-    async def _gen():
+async def _llm_stub(**kwargs: Any) -> AsyncIterator[str]:  # noqa: ARG002
+    """Stubbed streaming LLM generator returning a short response."""
+
+    async def _gen() -> AsyncIterator[str]:
         yield 'data: {"choices":[{"delta":{"content":"hey "}}]}\n\n'
         yield 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
         yield "data: [DONE]\n\n"
@@ -105,8 +134,48 @@ async def _llm_stub(**kwargs):  # noqa: ARG002
     return _gen()
 
 
+@pytest.fixture(autouse=True)
+def mock_audio_ws_dependencies(monkeypatch: pytest.MonkeyPatch) -> "_DummyRegistry":
+    """Fixture that sets up common mocks for audio streaming WebSocket tests."""
+
+    async def _auth(*_args: Any, **_kwargs: Any) -> tuple[bool, int]:
+        return True, 1
+
+    async def _can_start_stream(_user_id: int) -> tuple[bool, Optional[str]]:
+        return True, None
+
+    async def _finish_stream(_user_id: int) -> None:
+        return None
+
+    async def _allow_minutes(_uid: int, _minutes: float) -> tuple[bool, Optional[float]]:
+        return True, None
+
+    async def _add_minutes(_uid: int, _minutes: float) -> None:
+        return None
+
+    async def _hb(_uid: int) -> None:
+        return None
+
+    monkeypatch.setattr(audio, "_audio_ws_authenticate", _auth)
+    monkeypatch.setattr(audio, "can_start_stream", _can_start_stream)
+    monkeypatch.setattr(audio, "finish_stream", _finish_stream)
+    monkeypatch.setattr(audio, "check_daily_minutes_allow", _allow_minutes)
+    monkeypatch.setattr(audio, "add_daily_minutes", _add_minutes)
+    monkeypatch.setattr(audio, "heartbeat_stream", _hb)
+    monkeypatch.setattr(audio, "UnifiedStreamingTranscriber", _DummyTranscriber)
+    monkeypatch.setattr(audio, "SileroTurnDetector", _DummyVAD)
+    monkeypatch.setattr(audio, "chat_api_call_async", _llm_stub)
+    monkeypatch.setattr(audio, "get_api_keys", lambda: {"stub": "fake"})
+
+    registry = _DummyRegistry()
+    monkeypatch.setattr(audio, "get_metrics_registry", lambda: registry)
+
+    return registry
+
+
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_audio_chat_ws_streams_llm_and_tts(monkeypatch: pytest.MonkeyPatch):
+async def test_audio_chat_ws_streams_llm_and_tts(monkeypatch: pytest.MonkeyPatch) -> None:
     audio_payload = base64.b64encode(b"abc").decode("ascii")
     messages = [
         {
@@ -121,45 +190,10 @@ async def test_audio_chat_ws_streams_llm_and_tts(monkeypatch: pytest.MonkeyPatch
     ]
     ws = DummyWebSocket(messages)
 
-    # Stubs
-    async def _auth(*args, **kwargs):
-        return True, 1
-
-    monkeypatch.setattr(audio, "_audio_ws_authenticate", _auth)
-
-    async def _can_start_stream(user_id):
-        return True, None
-
-    async def _finish_stream(user_id):
-        return None
-
-    async def _allow_minutes(uid, minutes):
-        return True, None
-
-    async def _add_minutes(uid, minutes):
-        return None
-
-    async def _hb(uid):
-        return None
-
-    monkeypatch.setattr(audio, "can_start_stream", _can_start_stream)
-    monkeypatch.setattr(audio, "finish_stream", _finish_stream)
-    monkeypatch.setattr(audio, "check_daily_minutes_allow", _allow_minutes)
-    monkeypatch.setattr(audio, "add_daily_minutes", _add_minutes)
-    monkeypatch.setattr(audio, "heartbeat_stream", _hb)
-
-    monkeypatch.setattr(audio, "UnifiedStreamingTranscriber", _DummyTranscriber)
-    monkeypatch.setattr(audio, "SileroTurnDetector", _DummyVAD)
-    monkeypatch.setattr(audio, "chat_api_call_async", _llm_stub)
-    monkeypatch.setattr(audio, "get_api_keys", lambda: {"stub": "fake"})
-
     async def _get_tts_service():
         return _DummyTTSService([b"tts1", b"tts2"])
 
     monkeypatch.setattr(audio, "get_tts_service", _get_tts_service)
-
-    reg = _DummyRegistry()
-    monkeypatch.setattr(audio, "get_metrics_registry", lambda: reg)
 
     await audio.websocket_audio_chat_stream(ws, token=None)
 
@@ -171,8 +205,9 @@ async def test_audio_chat_ws_streams_llm_and_tts(monkeypatch: pytest.MonkeyPatch
     assert ws.closed is True
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_audio_chat_ws_quota_exceeded(monkeypatch: pytest.MonkeyPatch):
+async def test_audio_chat_ws_quota_exceeded(monkeypatch: pytest.MonkeyPatch) -> None:
     audio_payload = base64.b64encode(b"abc").decode("ascii")
     ws = DummyWebSocket(
         [
@@ -181,35 +216,12 @@ async def test_audio_chat_ws_quota_exceeded(monkeypatch: pytest.MonkeyPatch):
         ]
     )
 
-    async def _auth(*args, **kwargs):
-        return True, 1
-
-    async def _can_start_stream(user_id):
-        return True, None
-
-    async def _finish_stream(user_id):
-        return None
-
-    async def _check_minutes(uid, minutes):
+    async def _check_minutes(uid: int, minutes: float) -> tuple[bool, Optional[float]]:  # noqa: ARG002
         return False, None
 
-    async def _add_minutes(uid, minutes):
-        return None
-
-    monkeypatch.setattr(audio, "_audio_ws_authenticate", _auth)
-    monkeypatch.setattr(audio, "can_start_stream", _can_start_stream)
-    monkeypatch.setattr(audio, "finish_stream", _finish_stream)
     monkeypatch.setattr(audio, "check_daily_minutes_allow", _check_minutes)
-    monkeypatch.setattr(audio, "add_daily_minutes", _add_minutes)
-    monkeypatch.setattr(audio, "heartbeat_stream", lambda uid: None)
-    monkeypatch.setattr(audio, "UnifiedStreamingTranscriber", _DummyTranscriber)
-    monkeypatch.setattr(audio, "SileroTurnDetector", _DummyVAD)
-    monkeypatch.setattr(audio, "chat_api_call_async", _llm_stub)
-    monkeypatch.setattr(audio, "get_api_keys", lambda: {"stub": "fake"})
-    monkeypatch.setattr(audio, "get_tts_service", lambda: _DummyTTSService([b"x"]))
 
-    reg = _DummyRegistry()
-    monkeypatch.setattr(audio, "get_metrics_registry", lambda: reg)
+    monkeypatch.setattr(audio, "get_tts_service", lambda: _DummyTTSService([b"x"]))
 
     await audio.websocket_audio_chat_stream(ws, token=None)
 
@@ -220,8 +232,9 @@ async def test_audio_chat_ws_quota_exceeded(monkeypatch: pytest.MonkeyPatch):
     assert ws.closed is True
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_audio_chat_ws_records_metrics(monkeypatch: pytest.MonkeyPatch):
+async def test_audio_chat_ws_records_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
     audio_payload = base64.b64encode(b"abcd").decode("ascii")
     ws = DummyWebSocket(
         [
@@ -238,67 +251,56 @@ async def test_audio_chat_ws_records_metrics(monkeypatch: pytest.MonkeyPatch):
     )
 
     class QueueStub:
-        def __init__(self, *args, **kwargs):  # noqa: ARG002
+        """Queue stub that simulates initial overflow and then enqueues items."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
             self.items = []
             self.first_full = True
 
-        def put_nowait(self, item):
+        def put_nowait(self, item: Any) -> None:
             if self.first_full:
                 self.first_full = False
                 raise asyncio.QueueFull
             self.items.append(item)
 
-        async def put(self, item):
+        async def put(self, item: Any) -> None:
             self.items.append(item)
 
-        async def get(self):
+        async def get(self) -> Any:
             while not self.items:
                 await asyncio.sleep(0)
             return self.items.pop(0)
 
-        def get_nowait(self):
+        def get_nowait(self) -> Any:
             if not self.items:
                 raise asyncio.QueueEmpty
             return self.items.pop(0)
 
     class Registry:
-        def __init__(self):
+        """Metrics registry stub used to capture increments and observations."""
+
+        def __init__(self) -> None:
             self.increments = []
             self.observes = []
             self.registered = []
 
-        def increment(self, name, value=1, labels=None):
+        def increment(self, name: str, value: int = 1, labels: Optional[Dict[str, Any]] = None) -> None:
             self.increments.append((name, value, labels or {}))
 
-        def observe(self, name, value, labels=None):
+        def observe(self, name: str, value: float, labels: Optional[Dict[str, Any]] = None) -> None:
             self.observes.append((name, value, labels or {}))
 
-        def register_metric(self, *args, **kwargs):  # noqa: ARG002
+        def register_metric(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
             self.registered.append(args)
 
     reg = Registry()
 
-    async def _auth(*args, **kwargs):
-        return True, 1
-
-    async def _can_start_stream(user_id):
-        return True, None
-
-    async def _finish_stream(user_id):
-        return None
-
-    async def _allow_minutes(uid, minutes):
+    async def _allow_minutes(uid: int, minutes: float) -> tuple[bool, float]:  # noqa: ARG002
         return True, 10.0
-
-    async def _add_minutes(uid, minutes):
-        return None
-
-    async def _hb(uid):
-        return None
 
     async def _get_tts_service():
         class _Service:
-            async def generate_speech(self, *args, **kwargs):  # noqa: ARG002
+            async def generate_speech(self, *args: Any, **kwargs: Any) -> AsyncIterator[bytes]:  # noqa: ARG002
                 reg.observe(
                     "voice_to_voice_seconds",
                     0.5,
@@ -309,16 +311,7 @@ async def test_audio_chat_ws_records_metrics(monkeypatch: pytest.MonkeyPatch):
 
         return _Service()
 
-    monkeypatch.setattr(audio, "_audio_ws_authenticate", _auth)
-    monkeypatch.setattr(audio, "can_start_stream", _can_start_stream)
-    monkeypatch.setattr(audio, "finish_stream", _finish_stream)
     monkeypatch.setattr(audio, "check_daily_minutes_allow", _allow_minutes)
-    monkeypatch.setattr(audio, "add_daily_minutes", _add_minutes)
-    monkeypatch.setattr(audio, "heartbeat_stream", _hb)
-    monkeypatch.setattr(audio, "UnifiedStreamingTranscriber", _DummyTranscriber)
-    monkeypatch.setattr(audio, "SileroTurnDetector", _DummyVAD)
-    monkeypatch.setattr(audio, "chat_api_call_async", _llm_stub)
-    monkeypatch.setattr(audio, "get_api_keys", lambda: {"stub": "fake"})
     monkeypatch.setattr(audio, "get_tts_service", _get_tts_service)
     monkeypatch.setattr(audio, "get_metrics_registry", lambda: reg)
 

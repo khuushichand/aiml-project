@@ -431,11 +431,11 @@ Phase 7 — Cleanup & removal
 
 ### Generic Daily Ledger (v1.1)
 
-- Plan: Introduce a generic `DailyLedger` abstraction to extend beyond `minutes` (e.g., `tokens_per_day`).
-- Interface (concept): `add(entity, category, units, occurred_at_utc)`, `remaining(entity, category, day)`, `peek(entity, category)`, `reset(...)`.
-- Storage: reuse existing DB with a generalized schema (`day_utc`, `entity`, `category`, `units`), plus indexes; migrate audio minutes to this ledger.
-- Semantics: UTC-based partitioning; consistent rounding per policy; idempotent commits via `op_id`.
-- Rollout: shadow existing minutes ledger first; then cut over with migration script. Target version: v1.1.
+- Implementation status: a generic `ResourceDailyLedger` DAL now exists in `tldw_Server_API/app/core/DB_Management/Resource_Daily_Ledger.py`, backed by SQLite/Postgres tests, and is ready to track categories such as `minutes` and `tokens_per_day`.
+- Interface: `add(LedgerEntry(...))` for idempotent inserts keyed by `(day_utc, entity_scope, entity_value, category, op_id)`, plus helpers `total_for_day(...)`, `remaining_for_day(...)`, and `peek_range(entity_scope, entity_value, category, start_day_utc, end_day_utc)`.
+- Storage: reuses the AuthNZ DB via the `resource_daily_ledger` table (schema below). Existing audio minutes tables remain the source of truth for audio usage until they are migrated onto this ledger.
+- Semantics: UTC-based partitioning; app callers are responsible for splitting long-running usage across UTC day boundaries before calling `add`, and for applying any policy-specific rounding rules at commit time.
+- Rollout: v1.0 ships the DAL and tests; planned v1.1 work wires audio minutes (and any new daily quotas) through `ResourceDailyLedger` alongside the governor’s `minutes` category, starting in shadow mode before full cutover.
 
 ## Database Schemas
 
@@ -644,7 +644,7 @@ Notes:
 
 ## Open Questions
 
-- Minutes generalization: planned for v1.1 via a generic DailyLedger (see Minutes Ledger Semantics). For v1, reuse audio minutes ledger only.
+- Minutes generalization: a generic `ResourceDailyLedger` DAL now exists (see Minutes Ledger Semantics), but v1 continues to reuse the existing audio minutes ledger; v1.1 will route audio minutes and other daily quotas through the shared ledger.
 - Cross-category budgets: do we want a global “cost units” budget that maps tokens/requests into a unified spend?
 - Tier/source of truth: adopt AuthNZ DB as the policy SoT in production with cache + hot-reload; keep env+YAML as dev overrides.
 - Multi-tenant isolation: do we introduce `tenant:{id}` as a first-class scope now?

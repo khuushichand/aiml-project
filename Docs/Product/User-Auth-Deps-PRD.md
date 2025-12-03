@@ -313,7 +313,7 @@ Symptoms:
 - Do we want a formal notion of “scopes” (beyond permissions) for token issuance, or are permissions sufficient?
   - What would the difference be?
 - How aggressively should we back-migrate existing endpoints vs. allowing both patterns for a time?
-  - Complete migration
+  - Plan for a full migration with a short compatibility window (e.g., one release), then retire legacy patterns.
 
 ---
 
@@ -333,7 +333,7 @@ Symptoms:
   - Prompt Studio dependencies and claims: `tldw_Server_API/tests/AuthNZ_Unit/test_prompt_studio_user_claims.py` and `tldw_Server_API/tests/prompt_studio/unit/test_prompt_studio_deps_headers.py`.
 - **Recommended regression slice (SQLite/Postgres)**:
   - SQLite-focused slice: `python -m pytest tldw_Server_API/tests/AuthNZ_SQLite -m "not slow"` to exercise AuthNZ SQLite behavior (sessions, rate limits, usage, API keys).
-  - Postgres-focused slice: `python -m pytest tldw_Server_API/tests/AuthNZ_Postgres -m "not slow" tldw_Server_API/tests/AuthNZ/integration -m "not slow"` to cover AuthNZ Postgres repos and HTTP-level auth/guardrail flows.
+  - Postgres-focused slice: `python -m pytest -m "not slow" tldw_Server_API/tests/AuthNZ_Postgres tldw_Server_API/tests/AuthNZ/integration` to cover AuthNZ Postgres repos and HTTP-level auth/guardrail flows.
 
 ## Implementation Plan
 
@@ -377,7 +377,7 @@ Symptoms:
 **Notes**:
 - `permissions.py` now treats `user.permissions` / `user.roles` as authoritative when present, returning False without hitting the DB when claims exist but lack the required permission/role.
 - DB-based fallbacks are retained only for caller contexts that do not provide claim lists at all (e.g., legacy user objects without `permissions` / `roles` attributes), reducing database usage on typical, claim-bearing code paths. Additional tests explicitly simulate DB unavailability when claims are present to prove that hot paths remain purely claim-based (`tests/AuthNZ_Unit/test_permissions_claim_first.py::test_check_permission_uses_claims_even_if_db_unavailable` and `::test_check_role_uses_claims_even_if_db_unavailable`).
-- Route coverage expanding: admin router now enforces `require_roles("admin")` in addition to legacy `require_admin`, and media ingestion’s `/process-web-scraping` endpoint layers `require_permissions(MEDIA_CREATE)` alongside the legacy `PermissionChecker`. Claim-first `require_permissions` / `require_roles` matrices and HTTP-level admin 401/403 semantics are covered in `tests/AuthNZ_Unit/test_permissions_claim_first.py` and `tests/AuthNZ/integration/test_rbac_admin_endpoints.py::test_admin_roles_require_auth_and_admin`.
+- Route coverage expanding: admin router now enforces `require_roles("admin")` in addition to legacy `require_admin`, and media ingestion’s `/process-web-scraping` endpoint is now gated via `require_permissions(MEDIA_CREATE)` plus `rbac_rate_limit("media.create")` (no legacy `PermissionChecker`). Claim-first `require_permissions` / `require_roles` matrices and HTTP-level admin 401/403 semantics are covered in `tests/AuthNZ_Unit/test_permissions_claim_first.py` and `tests/AuthNZ/integration/test_rbac_admin_endpoints.py::test_admin_roles_require_auth_and_admin`.
 - Single-user deployments now use the same claim-first semantics as multi-user for permission and role checks: `permissions.py` no longer treats `is_single_user_mode()` as an “allow-all” fallback when claims are missing. New tests in `tests/AuthNZ_Unit/test_permissions_claim_first.py` (e.g., `test_check_permission_single_user_mode_prefers_claims`, `test_check_permission_single_user_mode_without_claims_falls_back_to_db`, `test_check_role_single_user_mode_treats_admin_as_admin_and_user`, `test_check_role_single_user_mode_without_roles_falls_back_to_db`) assert that single-user admins are governed by claims and DB fallbacks rather than global mode flags.
 - API-key authentication now enriches users with roles/permissions from RBAC tables (matching the JWT path) so claim-first checks succeed for X-API-KEY callers on protected routes.
 - Usage logging middleware now derives `user_id` / `api_key_id` from `AuthPrincipal` when `request.state.auth` is present, falling back to legacy `request.state` attributes for compatibility, aligning usage metrics with the unified principal model.
@@ -428,7 +428,7 @@ Symptoms:
   - The tests assert that:
     - Non-admin principals without scheduler claims receive 403 for `POST /api/v1/scheduler/workflows/admin/rescan`.
     - User and service principals with `is_admin=True` succeed (200) and trigger the fake scheduler’s rescan call, confirming that admin-style claims (via `is_admin`) remain the primary gate while also flowing through the `require_permissions` / `AuthPrincipal` stack for observability and future fine-grained permissions.
-- MCP admin diagnostics are beginning to adopt the same pattern: `tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py::get_modules_health` now depends on `require_permissions(SYSTEM_LOGS)` alongside its module-local admin checks, and route-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_mcp_admin_permissions_claims.py` exercise 401 vs 403 vs 200 behavior by overriding `get_auth_principal` for different principals.
+
 - Topic monitoring admin endpoints (`/api/v1/monitoring/...`) now also enforce claim-first diagnostics permissions: `tldw_Server_API/app/api/v1/endpoints/monitoring.py` adds `dependencies=[Depends(require_permissions(SYSTEM_LOGS))]` on watchlist/alert/notification routes in addition to `require_admin`. Route-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_monitoring_permissions_claims.py` cover 401 (no principal), 403 (principal without `system.logs`), and 200 (admin principal) cases while stubbing the underlying monitoring service.
 - MCP admin diagnostics are beginning to adopt the same pattern: `tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py::get_modules_health` now depends on `require_permissions(SYSTEM_LOGS)` alongside its module-local admin checks, and route-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_mcp_admin_permissions_claims.py` exercise 401 vs 403 vs 200 behavior by overriding `get_auth_principal` for different principals.
 

@@ -61,7 +61,8 @@ def _resolve_config_path(path_hint: Optional[str]) -> Optional[Path]:
                 p = (Path.cwd() / p).resolve()
             if p.exists() and p.is_file():
                 return p
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"Failed to resolve phoneme override path candidate '{cand}': {exc}")
             continue
     return None
 
@@ -214,9 +215,7 @@ def apply_overrides_to_text(
             flags=re.IGNORECASE,
         )
 
-        def _repl(match: re.Match[str]) -> str:
-            # Preserve surrounding whitespace/punctuation by replacing only the term
-            return f"[[{ent.phonemes}]]"
-
-        updated = pattern.sub(_repl, updated)
+        replacement = f"[[{ent.phonemes}]]"
+        # Preserve surrounding whitespace/punctuation by replacing only the term
+        updated = pattern.sub(lambda _match: replacement, updated)
     return updated

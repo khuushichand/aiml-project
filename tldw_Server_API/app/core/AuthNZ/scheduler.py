@@ -20,6 +20,7 @@ from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
 from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
+from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import AuthnzMonitoringRepo
 from tldw_Server_API.app.core.Metrics import set_gauge
 
 #######################################################################################################################
@@ -366,10 +367,6 @@ class AuthNZScheduler:
             db_pool = await get_db_pool()
             retention_days = self.settings.AUDIT_LOG_RETENTION_DAYS
             cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
-
-            from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import (
-                AuthnzMonitoringRepo,
-            )
 
             repo = AuthnzMonitoringRepo(db_pool)
             count = await repo.delete_audit_logs_before(cutoff_date)

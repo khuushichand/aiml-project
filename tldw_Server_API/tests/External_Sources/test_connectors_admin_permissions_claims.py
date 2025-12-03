@@ -32,6 +32,7 @@ def _build_app_with_overrides(
 
     app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
 
+    # Override require_admin as no-op to test endpoint's internal permission checks
     async def _fake_require_admin() -> None:
         return None
 

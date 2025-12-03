@@ -704,6 +704,54 @@ class AuthnzApiKeysRepo:
             logger.error(f"AuthnzApiKeysRepo.increment_usage failed: {exc}")
             raise
 
+    async def expire_keys_before(
+        self,
+        *,
+        now: datetime,
+        expired_status: str,
+        active_status: str,
+    ) -> int:
+        """
+        Mark keys as expired when their expires_at is before ``now``.
+
+        This mirrors the behavior of APIKeyManager.cleanup_expired_keys while
+        centralizing SQL and backend differences.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchrow"):
+                    result = await conn.execute(
+                        """
+                        UPDATE api_keys
+                        SET status = $1
+                        WHERE status = $2 AND expires_at < $3
+                        """,
+                        expired_status,
+                        active_status,
+                        now,
+                    )
+                    try:
+                        # asyncpg returns a status string like "UPDATE 3"
+                        return int(str(result).split()[-1])
+                    except Exception:
+                        return 0
+                cursor = await conn.execute(
+                    """
+                    UPDATE api_keys
+                    SET status = ?
+                    WHERE status = ? AND expires_at < ?
+                    """,
+                    (expired_status, active_status, now.isoformat()),
+                )
+                try:
+                    await conn.commit()
+                except Exception:
+                    pass
+                return int(getattr(cursor, "rowcount", 0) or 0)
+        except Exception as exc:  # pragma: no cover - surfaced via higher layers
+            logger.error(f"AuthnzApiKeysRepo.expire_keys_before failed: {exc}")
+            raise
+
     async def mark_key_expired(
         self,
         *,

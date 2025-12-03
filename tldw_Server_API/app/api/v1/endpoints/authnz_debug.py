@@ -4,6 +4,7 @@ from fastapi import APIRouter, Request, Header
 from typing import Optional, Dict, Any
 
 from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import (
     get_key_limits,
     summarize_usage_for_key_day,
@@ -32,6 +33,20 @@ async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dic
             - "api_key_id": int or None - the resolved API key ID as an integer when found, otherwise None.
             - "user_id": Any or None - the associated user identifier when available, otherwise None.
     """
+    # Prefer principal-first resolution when AuthContext is available.
+    try:
+        auth_ctx = getattr(request.state, "auth", None)
+        if isinstance(auth_ctx, AuthContext):
+            principal = getattr(auth_ctx, "principal", None)
+            if isinstance(principal, AuthPrincipal):
+                key_id = getattr(principal, "api_key_id", None)
+                user_id = getattr(principal, "user_id", None)
+                if key_id is not None:
+                    return {"api_key_id": int(key_id), "user_id": user_id}
+    except Exception:
+        # Fall back to legacy request.state attributes and header-based resolution.
+        pass
+
     key_id = getattr(request.state, "api_key_id", None)
     user_id = getattr(request.state, "user_id", None)
     if key_id:

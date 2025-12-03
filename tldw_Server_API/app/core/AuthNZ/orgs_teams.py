@@ -174,4 +174,4 @@ async def remove_team_member(*, team_id: int, user_id: int) -> Dict[str, Any]:
             logger.error(
                 f"Failed to remove team member user_id={user_id} from team_id={team_id}: {e}"
             )
-        return {"team_id": int(team_id), "user_id": int(user_id), "removed": False}
+        raise

@@ -20,10 +20,6 @@ def _encode_silence_base64(duration_sec: float = 0.1, sr: int = 16000) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def _encode_bytes_base64(size_bytes: int) -> str:
-    return base64.b64encode(b"0" * size_bytes).decode("ascii")
-
-
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "true")
@@ -88,7 +84,8 @@ def test_audio_chat_endpoint_success(client: TestClient):
     assert body["assistant_text"] == "stub reply"
     assert body["output_audio"]
     assert body["output_audio_mime_type"].startswith("audio/")
-    assert body.get("action_result") is None
+    assert "action_result" in body
+    assert body["action_result"] is None
 
 
 def test_audio_chat_endpoint_concurrency_limit(monkeypatch, client: TestClient):

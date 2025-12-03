@@ -20,6 +20,7 @@ from tldw_Server_API.app.api.v1.schemas.monitoring_schemas import (
     WatchlistListResponse,
     WatchlistUpsertResponse,
     WatchlistDeleteResponse,
+    WatchlistsReloadResponse,
     AlertsListResponse,
     AlertItem,
     MarkReadResponse,
@@ -42,7 +43,8 @@ router = APIRouter()
     summary="List all watchlists",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def list_watchlists():
+async def list_watchlists() -> WatchlistListResponse:
+    """List all configured topic monitoring watchlists."""
     svc = get_topic_monitoring_service()
     return WatchlistListResponse(watchlists=svc.list_watchlists())
 
@@ -54,7 +56,8 @@ async def list_watchlists():
     summary="Create or update a watchlist",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def upsert_watchlist(payload: Watchlist):
+async def upsert_watchlist(payload: Watchlist) -> WatchlistUpsertResponse:
+    """Create a new watchlist or update an existing one."""
     try:
         svc = get_topic_monitoring_service()
         wl = svc.upsert_watchlist(payload)
@@ -71,7 +74,8 @@ async def upsert_watchlist(payload: Watchlist):
     summary="Delete a watchlist",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def delete_watchlist(watchlist_id: str):
+async def delete_watchlist(watchlist_id: str) -> WatchlistDeleteResponse:
+    """Delete a watchlist by ID and return the deletion status."""
     svc = get_topic_monitoring_service()
     ok = svc.delete_watchlist(watchlist_id)
     if not ok:
@@ -81,14 +85,16 @@ async def delete_watchlist(watchlist_id: str):
 
 @router.post(
     "/monitoring/reload",
+    response_model=WatchlistsReloadResponse,
     tags=["monitoring"],
     summary="Reload watchlists from file",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def reload_watchlists():
+async def reload_watchlists() -> WatchlistsReloadResponse:
+    """Reload watchlist definitions from the backing configuration source."""
     svc = get_topic_monitoring_service()
     svc.reload()
-    return {"status": "ok"}
+    return WatchlistsReloadResponse(status="ok")
 
 
 @router.get(
@@ -101,12 +107,12 @@ async def reload_watchlists():
 async def list_alerts(
     user_id: Optional[str] = Query(None, description="Filter by user id"),
     since: Optional[str] = Query(None, description="ISO 8601 timestamp inclusive lower bound"),
-    unread_only: Optional[bool] = Query(False, description="Only unread alerts"),
+    unread_only: bool = Query(False, description="Only unread alerts"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
     db = TopicMonitoringDB()  # default path from env handled in service; keep simple here
-    rows = db.list_alerts(user_id=user_id, since_iso=since, unread_only=bool(unread_only), limit=limit, offset=offset)
+    rows = db.list_alerts(user_id=user_id, since_iso=since, unread_only=unread_only, limit=limit, offset=offset)
     items: list[AlertItem] = []
     for r in rows:
         # metadata column may be JSON string
@@ -202,9 +208,11 @@ async def get_recent_notifications(limit: int = Query(50, ge=1, le=500)):
     if not path or not os.path.exists(path):
         return {"items": []}
     try:
-        # Simple bounded tail: read last N lines
+        # Simple bounded tail: read last N lines without loading entire file into memory
+        from collections import deque
+
         with open(path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()[-limit:]
+            lines = deque(f, maxlen=limit)
         for ln in lines:
             ln = ln.strip()
             if not ln:
@@ -216,4 +224,8 @@ async def get_recent_notifications(limit: int = Query(50, ge=1, le=500)):
                 items.append({"raw": ln})
         return {"items": items}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"monitoring: failed to read recent notifications from {path}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to read recent notifications",
+        )

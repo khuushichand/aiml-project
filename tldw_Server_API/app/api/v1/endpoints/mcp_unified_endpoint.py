@@ -39,6 +39,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
@@ -98,6 +99,11 @@ class AuthTokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     refresh_token: Optional[str] = None
+
+
+def _get_derived_user_id(user: Optional[TokenData]) -> Optional[str]:
+    """Return user.sub when available, otherwise None."""
+    return user.sub if user else None
 
 
 # Dependency functions
@@ -291,7 +297,7 @@ async def mcp_request(
             pass
 
     # Derive user id from the authenticated token user when present.
-    derived_user_id: Optional[str] = user.sub if user else None
+    derived_user_id = _get_derived_user_id(user)
 
     # Parse optional safe config (base64-encoded JSON)
     safe_config: Dict[str, Any] = {}
@@ -387,7 +393,7 @@ async def mcp_request_batch(
             logger.debug(f"Batch API key metadata attach failed: {e}")
 
     # Derive user id from the authenticated token user when present.
-    derived_user_id: Optional[str] = user.sub if user else None
+    derived_user_id = _get_derived_user_id(user)
 
     # Optional safe config
     safe_config: Dict[str, Any] = {}
@@ -553,7 +559,7 @@ async def list_tools(
         await server.initialize()
 
     # Derive user id from the authenticated token user when present.
-    derived_user_id: Optional[str] = user.sub if user else None
+    derived_user_id = _get_derived_user_id(user)
 
     metadata: Dict[str, Any] = {}
     if user:

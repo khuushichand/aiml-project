@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import string
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Tuple, Dict, Any
 #
 # 3rd-party imports
@@ -318,7 +318,7 @@ class MFAService:
                 user_id=user_id,
                 encrypted_secret=encrypted_secret,
                 backup_codes_json=backup_codes_json,
-                updated_at=datetime.utcnow(),
+                updated_at=datetime.now(timezone.utc),
             )
 
             logger.info(f"MFA enabled for user {user_id}")
@@ -348,7 +348,7 @@ class MFAService:
             repo = AuthnzMfaRepo(self.db_pool)
             await repo.clear_mfa_config(
                 user_id=user_id,
-                updated_at=datetime.utcnow(),
+                updated_at=datetime.now(timezone.utc),
             )
 
             logger.info(f"MFA disabled for user {user_id}")
@@ -523,7 +523,7 @@ class MFAService:
             await repo.set_backup_codes_with_timestamp(
                 user_id=user_id,
                 backup_codes_json=backup_codes_json,
-                updated_at=datetime.utcnow(),
+                updated_at=datetime.now(timezone.utc),
             )
 
             logger.info(f"Regenerated backup codes for user {user_id}")

@@ -59,3 +59,14 @@
 - New unit tests in `tldw_Server_API/tests/AuthNZ_Unit/test_principal_model.py` cover `compute_principal_id`, `AuthPrincipal`, and `AuthContext`.
 - New unit tests in `tldw_Server_API/tests/AuthNZ_Unit/test_auth_principal_resolver.py` cover `get_auth_principal` for single-user, JWT, API-key, and missing-credentials cases.
 **Status**: Complete
+
+## Stage 6: Resource Governor & AuthNZ v1 Alignment
+**Goal**: Align the ResourceGovernor, claim-first auth dependencies, and AuthNZ user-unification repos with their PRDs for a cohesive v1 baseline.
+**Success Criteria**:
+- `ResourceGovernor` memory/Redis backends, policy loader, and admin/diagnostic endpoints are wired into `tldw_Server_API.app.main`, `tldw_Server_API/app/api/v1/endpoints/resource_governor.py`, and `tldw_Server_API/app/core/Resource_Governance`, with metrics and Redis failover semantics matching `Docs/Product/Resource_Governor_PRD.md`.
+- Simple RG middleware and route-map-based policy resolution protect representative HTTP ingress paths (chat, MCP, SlowAPI facade) behind feature flags, with tests in `tldw_Server_API/tests/Resource_Governance` remaining green.
+- AuthNZ claim-first dependencies (`get_auth_principal`, `require_permissions`, `require_roles`) are the canonical choice for new admin/diagnostic endpoints, and the main surfaces listed in `Docs/Product/User-Auth-Deps-PRD.md` use them with 401/403/200 semantics covered by tests.
+- Single-user bootstrap and the initial AuthNZ repository layer (`AuthnzUsersRepo`, `AuthnzApiKeysRepo`, `AuthnzRbacRepo`, etc.) are the default path in AuthNZ, with both SQLite and Postgres tests covering core flows as described in `Docs/Product/User-Unification-PRD.md`.
+**Tests**:
+- Keep `tests/Resource_Governance/*`, `tests/AuthNZ_Unit/test_auth_principal_*`, `tests/AuthNZ_Unit/*permissions*_claims.py`, `tests/AuthNZ/integration/test_single_user_claims_permissions.py`, and the AuthNZ repo tests passing across SQLite/Postgres backends.
+**Status**: In Progress

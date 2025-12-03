@@ -48,10 +48,6 @@ class AuthnzMonitoringRepo:
                         """,
                         (action, details_json, created_at.isoformat()),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
         except Exception as exc:  # pragma: no cover - surfaced through callers
             logger.error(f"AuthnzMonitoringRepo.insert_metric_audit_log failed: {exc}")
             raise
@@ -81,10 +77,6 @@ class AuthnzMonitoringRepo:
                         (cutoff.isoformat(),),
                     )
                     deleted = getattr(cursor, "rowcount", 0) or 0
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
                 return int(deleted or 0)
         except Exception as exc:  # pragma: no cover - surfaced through callers
             logger.error(f"AuthnzMonitoringRepo.delete_audit_logs_before failed: {exc}")
@@ -197,4 +189,3 @@ class AuthnzMonitoringRepo:
         except Exception as exc:  # pragma: no cover - surfaced through callers
             logger.error(f"AuthnzMonitoringRepo.get_recent_security_alerts failed: {exc}")
             raise
-

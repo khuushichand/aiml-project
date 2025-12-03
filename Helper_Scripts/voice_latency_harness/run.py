@@ -23,10 +23,11 @@ import argparse
 import base64
 import io
 import json
+import traceback
 import sys
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 import requests
@@ -36,22 +37,26 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 
 
 def _make_silence(duration_sec: float = 0.2, sr: int = 16000) -> bytes:
+    """Generate a silent WAV clip for quick end-to-end harness checks."""
     buf = io.BytesIO()
     data = np.zeros(int(sr * duration_sec), dtype=np.float32)
     try:
         import soundfile as sf
-    except Exception as exc:  # pragma: no cover - optional dep guard
-        raise RuntimeError("soundfile is required for the harness; pip install soundfile") from exc
+    except ImportError as exc:  # pragma: no cover - optional dep guard
+        raise RuntimeError("The 'soundfile' package is required for the harness; `pip install soundfile`.") from exc
     sf.write(buf, data, sr, format="WAV")
     return buf.getvalue()
 
 
 def _b64_audio(audio_bytes: bytes) -> str:
+    """Base64-encode audio bytes for API submission."""
     return base64.b64encode(audio_bytes).decode("ascii")
 
 
 @dataclass
 class HarnessResult:
+    """Aggregated latency percentiles plus raw metrics payload from the server."""
+
     stt_final_latency_seconds: Dict[str, float]
     tts_ttfb_seconds: Dict[str, float]
     voice_to_voice_seconds: Dict[str, float]
@@ -59,6 +64,7 @@ class HarnessResult:
     raw_metrics: Dict[str, Any]
 
     def to_json(self) -> str:
+        """Serialize the harness result to formatted JSON."""
         return json.dumps(
             {
                 "stt_final_latency_seconds": self.stt_final_latency_seconds,
@@ -72,6 +78,7 @@ class HarnessResult:
 
 
 def _fetch_metrics(base_url: str, api_key: Optional[str]) -> Dict[str, Any]:
+    """Fetch metrics from /metrics, preferring JSON but falling back to Prom text."""
     headers = {}
     if api_key:
         headers["X-API-KEY"] = api_key
@@ -80,7 +87,7 @@ def _fetch_metrics(base_url: str, api_key: Optional[str]) -> Dict[str, Any]:
     # Prefer JSON metrics endpoint if exposed; fall back to Prom text.
     try:
         return r.json()
-    except Exception:
+    except ValueError:
         text = r.text
         parsed: Dict[str, Any] = {}
         for line in text.splitlines():
@@ -93,14 +100,16 @@ def _fetch_metrics(base_url: str, api_key: Optional[str]) -> Dict[str, Any]:
         return parsed
 
 
-def _percentiles(values, pcts=(50, 90)) -> Dict[str, float]:
-    if not values:
+def _percentiles(values: Sequence[float], pcts: Sequence[int] = (50, 90)) -> Dict[str, float]:
+    """Compute percentile map for a numeric sequence."""
+    if len(values) == 0:
         return {}
     arr = np.array(values, dtype=float)
     return {f"p{p}": float(np.percentile(arr, p)) for p in pcts}
 
 
 def _extract_histogram_percentiles(metrics: Dict[str, Any], name: str) -> Dict[str, float]:
+    """Extract histogram-style metrics into percentile summaries."""
     series = metrics.get(name)
     if not series:
         return {}
@@ -114,7 +123,7 @@ def _extract_histogram_percentiles(metrics: Dict[str, Any], name: str) -> Dict[s
 
 
 def run_short_mode(base_url: str, api_key: Optional[str]) -> HarnessResult:
-    # Short mode only fetches metrics; assumes mocks/short fixtures already emit them.
+    """Scrape /metrics and derive latency percentiles without issuing new requests."""
     metrics = _fetch_metrics(base_url, api_key)
     return HarnessResult(
         stt_final_latency_seconds=_extract_histogram_percentiles(metrics, "stt_final_latency_seconds"),
@@ -126,6 +135,7 @@ def run_short_mode(base_url: str, api_key: Optional[str]) -> HarnessResult:
 
 
 def run_full_turn(base_url: str, api_key: Optional[str]) -> HarnessResult:
+    """Post a short silent clip, then scrape metrics to derive latency percentiles."""
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["X-API-KEY"] = api_key
@@ -135,7 +145,7 @@ def run_full_turn(base_url: str, api_key: Optional[str]) -> HarnessResult:
         "input_audio": audio_b64,
         "input_audio_format": "wav",
         "llm_config": {"model": "gpt-4o-mini", "api_provider": "openai"},
-        # Keep defaults for STT/TTS; adjust providers/models via env/server config.
+        # Default harness target; override via server/env config as needed.
     }
     start = time.time()
     r = requests.post(f"{base_url}/api/v1/audio/chat", headers=headers, json=payload, timeout=30)
@@ -156,6 +166,7 @@ def run_full_turn(base_url: str, api_key: Optional[str]) -> HarnessResult:
 
 
 def main():
+    """CLI entrypoint for the voice latency harness."""
     parser = argparse.ArgumentParser(description="Voice latency harness")
     parser.add_argument("--out", type=str, default="out.json", help="Path to write JSON results")
     parser.add_argument("--base-url", type=str, default=DEFAULT_BASE_URL, help="Server base URL")
@@ -170,6 +181,7 @@ def main():
             result = run_full_turn(args.base_url, args.api_key)
     except Exception as exc:
         sys.stderr.write(f"[harness] failed: {exc}\n")
+        traceback.print_exc(file=sys.stderr)
         sys.exit(1)
 
     with open(args.out, "w", encoding="utf-8") as f:

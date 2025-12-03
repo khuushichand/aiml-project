@@ -182,6 +182,17 @@ class Settings(BaseSettings):
         description="Default role for new users"
     )
 
+    SINGLE_USER_DEFAULT_PERMISSIONS: list[str] = Field(
+        default_factory=lambda: [
+            "system.configure",
+            "media.read",
+            "media.create",
+            "media.update",
+            "media.delete",
+        ],
+        description="Default permissions granted to the single-user principal in single_user mode",
+    )
+
     REGISTRATION_CODE_DEFAULT_EXPIRY_DAYS: int = Field(
         default=7,
         ge=1,

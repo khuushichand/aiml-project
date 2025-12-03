@@ -8,7 +8,7 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 
 
-    @dataclass
+@dataclass
 class AuthnzRegistrationCodesRepo:
     """
     Repository for AuthNZ registration code maintenance.

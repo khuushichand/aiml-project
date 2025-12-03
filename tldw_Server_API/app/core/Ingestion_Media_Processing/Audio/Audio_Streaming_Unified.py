@@ -1950,7 +1950,11 @@ async def handle_unified_websocket(
                 config.auto_detect_language = config_data.get("auto_detect_language", False)
                 config.chunk_duration = config_data.get("chunk_duration", 2.0)
                 config.enable_partial = config_data.get("enable_partial", True)
-                config.enable_vad = bool(config_data.get("enable_vad", config.enable_vad))
+                raw_vad = config_data.get("enable_vad", config.enable_vad)
+                if isinstance(raw_vad, str):
+                    normalized_vad = raw_vad.strip().lower()
+                    raw_vad = normalized_vad in {"1", "true", "yes", "on"}
+                config.enable_vad = bool(raw_vad)
                 config.vad_threshold = _clamp_float(
                     config_data.get("vad_threshold", config.vad_threshold),
                     default=config.vad_threshold,

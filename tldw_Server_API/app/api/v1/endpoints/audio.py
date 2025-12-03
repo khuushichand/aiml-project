@@ -97,7 +97,6 @@ except ImportError as e:
     # Optional helpers may be unavailable in some environments; log at debug level
     logger.debug(f"audio_quota job helpers not available: {e}")
 from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode, is_single_user_mode
-from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 
 # Optional DB/Redis drivers (for precise exception handling without hard dependencies)
 try:  # asyncpg is optional; used when PostgreSQL is configured
@@ -1276,6 +1275,7 @@ async def audio_chat_turn(
     except Exception as e:  # noqa: BLE001
         logger.debug(f"usage_log audio.chat failed: error={e}; request_id={rid}")
 
+    acquired_stream = False
     try:
         # Per-user concurrent chat guard (reuses audio stream limits)
         can_start, reason = await can_start_stream(int(getattr(current_user, "id", 0) or 0))
@@ -1285,6 +1285,8 @@ async def audio_chat_turn(
                 detail=reason or "Concurrent audio chat limit reached",
             )
 
+        acquired_stream = True
+
         try:
             return await speech_chat_service.run_speech_chat_turn(
                 request_data=request_data,
@@ -1293,10 +1295,11 @@ async def audio_chat_turn(
                 tts_service=tts_service,
             )
         finally:
-            try:
-                await finish_stream(int(getattr(current_user, "id", 0) or 0))
-            except Exception as e:
-                logger.debug(f"finish_stream failed (audio chat): {e}")
+            if acquired_stream:
+                try:
+                    await finish_stream(int(getattr(current_user, "id", 0) or 0))
+                except Exception as e:
+                    logger.debug(f"finish_stream failed (audio chat): {e}")
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
@@ -2390,67 +2393,6 @@ async def websocket_transcribe(
         acquired_stream = True
 
         # Resource Governor: acquire a 'streams' concurrency lease (policy resolved via route_map)
-        _rg_handle_id = None
-        try:
-            gov = getattr(websocket.app.state, "rg_governor", None)
-            loader = getattr(websocket.app.state, "rg_policy_loader", None)
-            if gov is not None and loader is not None:
-                snap = loader.get_snapshot()
-                route_map = dict(getattr(snap, "route_map", {}) or {})
-                by_path = dict(route_map.get("by_path") or {})
-                ws_path = "/api/v1/audio/stream/transcribe"
-                policy_id = None
-                # Simple wildcard resolution similar to middleware
-                for pat, pol in by_path.items():
-                    s = str(pat)
-                    if s.endswith("*"):
-                        if ws_path.startswith(s[:-1]):
-                            policy_id = str(pol)
-                            break
-                    elif ws_path == s:
-                        policy_id = str(pol)
-                        break
-                if not policy_id:
-                    # Fallback to audio.default when mapping absent
-                    policy_id = "audio.default"
-                # Prefer user scope; fallback to IP
-                if user_id_for_usage is not None:
-                    entity = f"user:{int(user_id_for_usage)}"
-                else:
-                    ip = getattr(websocket.client, "host", None) or "unknown"
-                    entity = f"ip:{ip}"
-                dec, hid = await gov.reserve(
-                    RGRequest(
-                        entity=entity,
-                        categories={"streams": {"units": 1}},
-                        tags={"policy_id": policy_id, "endpoint": ws_path},
-                    ),
-                    op_id=f"audio-ws:{entity}:{ws_path}",
-                )
-                if not dec.allowed:
-                    try:
-                        if _outer_stream:
-                            await _outer_stream.send_json(
-                                {
-                                    "type": "error",
-                                    "error_type": "rate_limited",
-                                    "quota": "streams",
-                                    "retry_after": int(dec.retry_after or 0),
-                                    "message": "Too many concurrent streams",
-                                }
-                            )
-                    except Exception:
-                        pass
-                    try:
-                        await websocket.close(code=_policy_close_code(), reason="rate_limited")
-                    except Exception:
-                        pass
-                    return
-                _rg_handle_id = hid
-        except Exception as _rg_err:
-            # Do not break streaming on RG errors; continue without RG enforcement
-            logger.debug(f"RG streams reserve skipped/failed: {_rg_err}")
-
         # Track and enforce minutes chunk-by-chunk
         used_minutes = 0.0
         # Bounded fail-open budget in minutes if DB is unavailable while streaming
@@ -2461,139 +2403,118 @@ async def websocket_transcribe(
         # the next chunk will trigger a DB refresh.
         remaining_minutes_snapshot: Optional[float] = None
 
-        try:
-            # Use shared exception class so inner handler can bubble it up
-            from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
-                QuotaExceeded as _QuotaExceeded,
-            )
+        # Use shared exception class so inner handler can bubble it up
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+            QuotaExceeded as _QuotaExceeded,
+        )
 
-            async def _on_audio_quota(seconds: float, sr: int) -> None:
-                """
-                Handle a chunk of audio for daily-minute quota accounting and enforcement.
+        async def _on_audio_quota(seconds: float, sr: int) -> None:
+            """
+            Handle a chunk of audio for daily-minute quota accounting and enforcement.
 
-                Parameters:
-                    seconds (float): Duration of the audio chunk in seconds.
-                    sr (int): Sample rate of the audio chunk in Hz (unused by this function but provided for callback compatibility).
+            Parameters:
+                seconds (float): Duration of the audio chunk in seconds.
+                sr (int): Sample rate of the audio chunk in Hz (unused by this function but provided for callback compatibility).
 
-                Raises:
-                    _QuotaExceeded: If adding this chunk would exceed the user's daily minutes quota.
+            Raises:
+                _QuotaExceeded: If adding this chunk would exceed the user's daily minutes quota.
 
-                Notes:
-                    - Checks whether the user's remaining daily minutes allow this chunk; if allowed, increments the nonlocal
-                      `used_minutes` counter and records the minutes via `add_daily_minutes`.
-                """
-                nonlocal used_minutes, failopen_remaining, remaining_minutes_snapshot
-                minutes_chunk = float(seconds) / 60.0
-                deducted = False
-                allow = False
-                # Fast-path local check: if we have a remaining snapshot and this
-                # chunk would exceed it, raise immediately without a DB round-trip.
-                if remaining_minutes_snapshot is not None and minutes_chunk > remaining_minutes_snapshot:
-                    raise _QuotaExceeded("daily_minutes")
+            Notes:
+                - Checks whether the user's remaining daily minutes allow this chunk; if allowed, increments the nonlocal
+                  `used_minutes` counter and records the minutes via `add_daily_minutes`.
+            """
+            nonlocal used_minutes, failopen_remaining, remaining_minutes_snapshot
+            minutes_chunk = float(seconds) / 60.0
+            deducted = False
+            allow = False
+            # Fast-path local check: if we have a remaining snapshot and this
+            # chunk would exceed it, raise immediately without a DB round-trip.
+            if remaining_minutes_snapshot is not None and minutes_chunk > remaining_minutes_snapshot:
+                raise _QuotaExceeded("daily_minutes")
 
-                # Refresh remaining snapshot periodically by asking the DB for this
-                # chunk; on success, we treat the returned "remaining_after" value
-                # as the new snapshot.
+            # Refresh remaining snapshot periodically by asking the DB for this
+            # chunk; on success, we treat the returned "remaining_after" value
+            # as the new snapshot.
+            try:
+                allow, remaining_after = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
+                if allow and remaining_after is not None:
+                    remaining_minutes_snapshot = float(remaining_after)
+            except EXPECTED_DB_EXC as e:
+                # Backing store failed; allow temporarily but deduct from bounded fail-open budget
+                logger.warning(
+                    f"check_daily_minutes_allow failed during streaming; temporarily allowing (bounded fail-open). user_id={user_id_for_usage}, error={e}"
+                )
+                allow = True
+                failopen_remaining -= minutes_chunk
                 try:
-                    allow, remaining_after = await check_daily_minutes_allow(user_id_for_usage, minutes_chunk)
-                    if allow and remaining_after is not None:
-                        remaining_minutes_snapshot = float(remaining_after)
-                except EXPECTED_DB_EXC as e:
-                    # Backing store failed; allow temporarily but deduct from bounded fail-open budget
-                    logger.warning(
-                        f"check_daily_minutes_allow failed during streaming; temporarily allowing (bounded fail-open). user_id={user_id_for_usage}, error={e}"
+                    increment_counter(
+                        "audio_failopen_minutes_total", value=float(minutes_chunk), labels={"reason": "db_check"}
                     )
-                    allow = True
+                    increment_counter("audio_failopen_events_total", labels={"reason": "db_check"})
+                except Exception:
+                    pass
+                deducted = True
+                if failopen_remaining <= 0:
+                    try:
+                        increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_check"})
+                    except Exception:
+                        pass
+                    raise _QuotaExceeded("daily_minutes")
+            if not allow:
+                # Raise structured signal to outer scope
+                raise _QuotaExceeded("daily_minutes")
+            used_minutes += minutes_chunk
+            # Reduce the local snapshot so subsequent chunks can be checked
+            # without hitting the DB until it is exhausted or refreshed on
+            # the next successful check.
+            if remaining_minutes_snapshot is not None:
+                remaining_minutes_snapshot = max(0.0, remaining_minutes_snapshot - minutes_chunk)
+            try:
+                await add_daily_minutes(user_id_for_usage, minutes_chunk)
+            except EXPECTED_DB_EXC as e:
+                # Could not record; continue streaming under bounded fail-open
+                logger.warning(
+                    f"Failed to record streaming minutes (bounded fail-open). user_id={user_id_for_usage}, error={e}"
+                )
+                if not deducted:
                     failopen_remaining -= minutes_chunk
                     try:
                         increment_counter(
-                            "audio_failopen_minutes_total", value=float(minutes_chunk), labels={"reason": "db_check"}
+                            "audio_failopen_minutes_total",
+                            value=float(minutes_chunk),
+                            labels={"reason": "db_record"},
                         )
-                        increment_counter("audio_failopen_events_total", labels={"reason": "db_check"})
+                        increment_counter("audio_failopen_events_total", labels={"reason": "db_record"})
                     except Exception:
                         pass
-                    deducted = True
                     if failopen_remaining <= 0:
                         try:
-                            increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_check"})
+                            increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_record"})
                         except Exception:
                             pass
                         raise _QuotaExceeded("daily_minutes")
-                if not allow:
-                    # Raise structured signal to outer scope
-                    raise _QuotaExceeded("daily_minutes")
-                used_minutes += minutes_chunk
-                # Reduce the local snapshot so subsequent chunks can be checked
-                # without hitting the DB until it is exhausted or refreshed on
-                # the next successful check.
-                if remaining_minutes_snapshot is not None:
-                    remaining_minutes_snapshot = max(0.0, remaining_minutes_snapshot - minutes_chunk)
-                try:
-                    await add_daily_minutes(user_id_for_usage, minutes_chunk)
-                except EXPECTED_DB_EXC as e:
-                    # Could not record; continue streaming under bounded fail-open
-                    logger.warning(
-                        f"Failed to record streaming minutes (bounded fail-open). user_id={user_id_for_usage}, error={e}"
-                    )
-                    if not deducted:
-                        failopen_remaining -= minutes_chunk
-                        try:
-                            increment_counter(
-                                "audio_failopen_minutes_total",
-                                value=float(minutes_chunk),
-                                labels={"reason": "db_record"},
-                            )
-                            increment_counter("audio_failopen_events_total", labels={"reason": "db_record"})
-                        except Exception:
-                            pass
-                        if failopen_remaining <= 0:
-                            try:
-                                increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_record"})
-                            except Exception:
-                                pass
-                            raise _QuotaExceeded("daily_minutes")
 
+        async def _on_heartbeat() -> None:
+            """
+            Send a heartbeat to update streaming quota/timestamp for the current user.
+
+            Invokes the module-level `heartbeat_stream` callback with
+            `user_id_for_usage` to record activity; any Redis-related
+            exceptions are logged and suppressed.
+            """
             try:
+                await heartbeat_stream(user_id_for_usage)
+            except EXPECTED_REDIS_EXC as _hb_e:
+                logger.debug(f"Heartbeat failed for user_id={user_id_for_usage}: {_hb_e}")
 
-                async def _on_heartbeat() -> None:
-                    """
-                    Send a heartbeat to update streaming quota/timestamp for the current user.
-
-                    Invokes the module-level `heartbeat_stream` callback with `user_id_for_usage` to record activity; any exceptions raised by the callback are suppressed.
-                    """
-                    try:
-                        await heartbeat_stream(user_id_for_usage)
-                    except EXPECTED_REDIS_EXC as _hb_e:
-                        logger.debug(f"Heartbeat failed for user_id={user_id_for_usage}: {_hb_e}")
-                    # Also renew RG lease if active
-                    try:
-                        gov = getattr(websocket.app.state, "rg_governor", None)
-                        loader = getattr(websocket.app.state, "rg_policy_loader", None)
-                        hid = _rg_handle_id
-                        if gov is not None and loader is not None and hid:
-                            # Determine TTL from policy if available
-                            ttl = 60
-                            try:
-                                snap = loader.get_snapshot()
-                                pol = (snap.policies or {}).get("audio.default")
-                                if isinstance(pol, dict):
-                                    st = pol.get("streams") or {}
-                                    v = int(st.get("ttl_sec") or 60)
-                                    if v > 0:
-                                        ttl = v
-                            except Exception:
-                                ttl = 60
-                            await gov.renew(hid, ttl_s=int(ttl))
-                    except Exception as _rg_renew_err:
-                        logger.debug(f"RG renew on WS heartbeat failed: {_rg_renew_err}")
-
-                await handle_unified_websocket(
-                    websocket,
-                    config,
-                    on_audio_seconds=_on_audio_quota,
-                    on_heartbeat=_on_heartbeat,
-                )
-            except _QuotaExceeded as qe:
+        try:
+            await handle_unified_websocket(
+                websocket,
+                config,
+                on_audio_seconds=_on_audio_quota,
+                on_heartbeat=_on_heartbeat,
+            )
+        except _QuotaExceeded as qe:
                 # Send structured error and close with application-defined code
                 try:
                     if _outer_stream:
@@ -2612,13 +2533,6 @@ async def websocket_transcribe(
                 except Exception as e:
                     logger.debug(f"WebSocket close (quota case) failed: error={e}")
         finally:
-            # Release any RG concurrency lease if held
-            try:
-                gov = getattr(websocket.app.state, "rg_governor", None)
-                if gov is not None and _rg_handle_id:
-                    await gov.release(_rg_handle_id)
-            except Exception as _rg_rel_err:
-                logger.debug(f"RG release on WS close failed: {_rg_rel_err}")
             if acquired_stream:
                 await finish_stream(user_id_for_usage)
 

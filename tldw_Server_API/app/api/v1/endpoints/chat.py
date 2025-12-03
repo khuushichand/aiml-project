@@ -1305,7 +1305,7 @@ async def create_chat_completion(
 
         character_card_for_context: Optional[Dict[str, Any]] = None
         final_conversation_id: Optional[str] = request_data.conversation_id
-        final_character_db_id: Optional[int] = None # Initialize
+        final_character_db_id: Optional[int] = None  # Initialize
 
         try:
             # In TEST_MODE or when explicitly enabled via config/env, allow
@@ -1972,11 +1972,10 @@ async def create_chat_completion(
 @router.get(
     "/queue/status",
     summary="Chat request queue status",
-    tags=["chat"]
+    tags=["chat"],
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_chat_queue_status(
-    _principal=Depends(require_permissions(SYSTEM_LOGS)),
-):
+async def get_chat_queue_status():
     """Expose raw chat request queue metrics for diagnostics."""
     try:
         queue = get_request_queue()
@@ -1994,11 +1993,11 @@ async def get_chat_queue_status(
 @router.get(
     "/queue/activity",
     summary="Recent chat queue activity",
-    tags=["chat"]
+    tags=["chat"],
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 async def get_chat_queue_activity(
     limit: int = 50,
-    _principal=Depends(require_permissions(SYSTEM_LOGS)),
 ):
     """Expose a rolling sample of recent queue activity (last N jobs)."""
     # Guardrail: enforce sane bounds for limit

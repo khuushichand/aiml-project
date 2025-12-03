@@ -38,7 +38,6 @@ from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
 from tldw_Server_API.app.core.MCP_unified.auth.rbac import UserRole
 from tldw_Server_API.app.core.AuthNZ.permissions import (
-    PermissionChecker,
     WORKFLOWS_RUNS_READ,
     WORKFLOWS_RUNS_CONTROL,
 )
@@ -912,7 +911,6 @@ async def run_saved(
     "/runs",
     response_model=WorkflowRunListResponse,
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_READ)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
     ],
     openapi_extra={
@@ -1303,7 +1301,6 @@ async def run_adhoc(
     "/runs/{run_id}",
     response_model=WorkflowRunResponse,
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_READ)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
     ],
 )
@@ -1487,7 +1484,6 @@ async def get_run_events(
 @router.get(
     "/runs/{run_id}/webhooks/deliveries",
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_READ)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
     ],
 )
@@ -1523,7 +1519,6 @@ async def get_run_webhook_deliveries(
 @router.get(
     "/webhooks/dlq",
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
         Depends(auth_deps.require_roles("admin")),
     ],
@@ -1562,7 +1557,6 @@ async def list_webhook_dlq(
 @router.post(
     "/webhooks/dlq/{dlq_id}/replay",
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
         Depends(auth_deps.require_roles("admin")),
     ],
@@ -1700,7 +1694,6 @@ async def replay_webhook_dlq(
 @router.get(
     "/runs/{run_id}/artifacts",
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_READ)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
     ],
 )
@@ -1739,7 +1732,6 @@ async def get_run_artifacts(
 @router.get(
     "/runs/{run_id}/artifacts/manifest",
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_READ)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
     ],
 )
@@ -1812,7 +1804,6 @@ class VerifyBatchRequest(BaseModel):
 @router.post(
     "/runs/{run_id}/artifacts/verify-batch",
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_READ)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
     ],
 )
@@ -1874,7 +1865,6 @@ async def verify_artifacts_batch(
 @router.get(
     "/artifacts/{artifact_id}/download",
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_READ)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
     ],
 )
@@ -2087,7 +2077,6 @@ async def download_artifact(
 @router.get(
     "/runs/{run_id}/artifacts/download",
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_READ)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
     ],
 )
@@ -2209,7 +2198,6 @@ async def get_chunker_options():
 @router.post(
     "/runs/{run_id}/{action}",
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
     ],
 )
@@ -2879,7 +2867,6 @@ async def get_workflows_config(current_user: User = Depends(get_request_user), d
 @router.post(
     "/runs/{run_id}/retry",
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
     ],
 )
@@ -2910,7 +2897,6 @@ async def retry_run(
 @router.get(
     "/{workflow_id}",
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_READ)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
     ],
 )
@@ -2957,7 +2943,6 @@ class HumanReviewPayload(BaseModel):
 @router.post(
     "/runs/{run_id}/steps/{step_id}/approve",
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
     ],
 )
@@ -2995,7 +2980,6 @@ async def approve_step(
 @router.post(
     "/runs/{run_id}/steps/{step_id}/reject",
     dependencies=[
-        Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL)),
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
     ],
 )

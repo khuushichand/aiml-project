@@ -160,6 +160,7 @@ async def test_run_speech_chat_turn_happy_path(monkeypatch):
     tts = _StubTTSService()
 
     reg = get_metrics_registry()
+    assert "audio_chat_latency_seconds" in reg.values
     reg.values["audio_chat_latency_seconds"].clear()
 
     resp = await run_speech_chat_turn(
@@ -259,18 +260,22 @@ async def test_run_speech_chat_turn_invokes_action_when_enabled(monkeypatch):
 
     # Stub STT/LLM/TTS paths to keep test lean
     monkeypatch.setattr(
-        speech_chat_service, "transcribe_audio", lambda *a, **k: "action transcript"
+        speech_chat_service,
+        "transcribe_audio",
+        lambda *_args, **_kwargs: "action transcript",
     )
 
-    async def _fake_get_or_create_character_context(db, character_id, loop):
+    async def _fake_get_or_create_character_context(_db, _character_id, _loop):
         return {"id": 1, "name": "Test Character", "system_prompt": "You are helpful."}, 1
 
     async def _fake_get_or_create_conversation(
-        db, conversation_id, character_id, character_name, client_id, loop
+        _db, _conversation_id, _character_id, _character_name, _client_id, _loop
     ):
-        return conversation_id or "conv-1", conversation_id is None
+        return _conversation_id or "conv-1", _conversation_id is None
 
-    async def _fake_load_history(db, conversation_id, character_card, limit=20, loop=None):
+    async def _fake_load_history(
+        _db, _conversation_id, _character_card, _limit=20, _loop=None
+    ):
         return []
 
     monkeypatch.setattr(
@@ -289,7 +294,7 @@ async def test_run_speech_chat_turn_invokes_action_when_enabled(monkeypatch):
         _fake_load_history,
     )
 
-    async def _fake_chat_api_call_async(**kwargs):
+    async def _fake_chat_api_call_async(**_kwargs):
         return {
             "choices": [
                 {"message": {"role": "assistant", "content": "assistant with action"}}
@@ -338,18 +343,22 @@ async def test_run_speech_chat_turn_blocks_disallowed_action(monkeypatch):
 
     # Stub STT/LLM/TTS
     monkeypatch.setattr(
-        speech_chat_service, "transcribe_audio", lambda *a, **k: "blocked transcript"
+        speech_chat_service,
+        "transcribe_audio",
+        lambda *_args, **_kwargs: "blocked transcript",
     )
 
-    async def _fake_get_or_create_character_context(db, character_id, loop):
+    async def _fake_get_or_create_character_context(_db, _character_id, _loop):
         return {"id": 1, "name": "Test Character", "system_prompt": "You are helpful."}, 1
 
     async def _fake_get_or_create_conversation(
-        db, conversation_id, character_id, character_name, client_id, loop
+        _db, _conversation_id, _character_id, _character_name, _client_id, _loop
     ):
-        return conversation_id or "conv-1", conversation_id is None
+        return _conversation_id or "conv-1", _conversation_id is None
 
-    async def _fake_load_history(db, conversation_id, character_card, limit=20, loop=None):
+    async def _fake_load_history(
+        _db, _conversation_id, _character_card, _limit=20, _loop=None
+    ):
         return []
 
     monkeypatch.setattr(
@@ -368,7 +377,7 @@ async def test_run_speech_chat_turn_blocks_disallowed_action(monkeypatch):
         _fake_load_history,
     )
 
-    async def _fake_chat_api_call_async(**kwargs):
+    async def _fake_chat_api_call_async(**_kwargs):
         return {
             "choices": [
                 {"message": {"role": "assistant", "content": "assistant"}}
@@ -434,7 +443,11 @@ async def test_run_speech_chat_turn_rejects_long_duration(monkeypatch):
     from tldw_Server_API.app.core.Streaming import speech_chat_service
 
     monkeypatch.setenv("AUDIO_CHAT_MAX_DURATION_SEC", "0.05")
-    monkeypatch.setattr(speech_chat_service, "transcribe_audio", lambda *a, **k: "should not run")
+    monkeypatch.setattr(
+        speech_chat_service,
+        "transcribe_audio",
+        lambda *_args, **_kwargs: "should not run",
+    )
     req = SpeechChatRequest(
         session_id=None,
         input_audio=_encode_silence_base64(duration_sec=0.2, sr=16000),

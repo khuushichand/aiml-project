@@ -1648,6 +1648,25 @@ def _as_int(val: object, default: int) -> int:
         return default
 
 
+def rg_enabled(default: bool = False) -> bool:
+    """
+    Global feature flag for Resource Governor integrations.
+
+    Resolution order:
+      1) Env var RG_ENABLED
+      2) [ResourceGovernor] enabled in config.txt
+      3) Provided default (False unless overridden by caller)
+    """
+    v = os.getenv("RG_ENABLED")
+    if v is None:
+        try:
+            cp = load_comprehensive_config()
+            v = cp.get("ResourceGovernor", "enabled", fallback=str(default)) if cp else str(default)
+        except Exception:
+            v = str(default)
+    return _as_bool(v, default)
+
+
 def get_llamacpp_handler_config() -> Optional["LlamaCppConfig"]:
     """
     Build a LlamaCppConfig from environment variables or [LlamaCpp] section in config.txt.

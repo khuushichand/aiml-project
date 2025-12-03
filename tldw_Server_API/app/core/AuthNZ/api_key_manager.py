@@ -727,33 +727,13 @@ class APIKeyManager:
             await self.initialize()
 
         try:
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    result = await conn.execute(
-                        """
-                        UPDATE api_keys
-                        SET status = $1
-                        WHERE status = $2 AND expires_at < $3
-                        """,
-                        APIKeyStatus.EXPIRED.value,
-                        APIKeyStatus.ACTIVE.value,
-                        datetime.utcnow()
-                    )
-                else:
-                    await conn.execute(
-                        """
-                        UPDATE api_keys
-                        SET status = ?
-                        WHERE status = ? AND expires_at < ?
-                        """,
-                        (APIKeyStatus.EXPIRED.value,
-                         APIKeyStatus.ACTIVE.value,
-                         datetime.utcnow().isoformat())
-                    )
-                    await conn.commit()
-
-            logger.debug("Cleaned up expired API keys")
-
+            repo = self._get_repo()
+            updated = await repo.expire_keys_before(
+                now=datetime.utcnow(),
+                expired_status=APIKeyStatus.EXPIRED.value,
+                active_status=APIKeyStatus.ACTIVE.value,
+            )
+            logger.debug("Cleaned up expired API keys (updated={})", updated)
         except Exception as e:
             logger.error(f"Failed to cleanup expired keys: {e}")
 

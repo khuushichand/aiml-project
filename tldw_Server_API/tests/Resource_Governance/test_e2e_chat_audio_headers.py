@@ -66,6 +66,8 @@ async def test_e2e_audio_websocket_streams_limit(monkeypatch):
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key")
+    # Enable audio integration with Resource Governor for concurrency via audio_quota
+    monkeypatch.setenv("RG_ENABLE_AUDIO", "1")
     # RG config (file store + memory backend)
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_STORE", "file")
@@ -86,18 +88,12 @@ async def test_e2e_audio_websocket_streams_limit(monkeypatch):
     # Allow streaming quotas at the module level to avoid DB/Redis dependencies
     import tldw_Server_API.app.api.v1.endpoints.audio as audio_ep
 
-    async def _ok_stream(user_id: int):
-        return True, ""
-
     async def _noop(*args, **kwargs):
         return None
 
     async def _allow_minutes(user_id: int, minutes: float):
         return True, 0
 
-    monkeypatch.setattr(audio_ep, "can_start_stream", _ok_stream)
-    monkeypatch.setattr(audio_ep, "finish_stream", _noop)
-    monkeypatch.setattr(audio_ep, "heartbeat_stream", _noop, raising=False)
     monkeypatch.setattr(audio_ep, "check_daily_minutes_allow", _allow_minutes)
     monkeypatch.setattr(audio_ep, "add_daily_minutes", _noop)
 
@@ -168,6 +164,14 @@ async def test_e2e_audio_transcriptions_headers_and_mocked_stt(monkeypatch, tmp_
 
     # Mock audio quota + STT heavy parts
     import tldw_Server_API.app.api.v1.endpoints.audio as audio_ep
+
+    # Ensure Whisper model preflight check reports availability to avoid 503s
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
+
+    def _fake_check_status(model_name: str):
+        return {"available": True, "model": model_name}
+
+    monkeypatch.setattr(audio_files, "check_transcription_model_status", _fake_check_status)
 
     async def _ok_job(user_id: int):
         return True, ""

@@ -68,6 +68,20 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
 _ALLOWED_AUDIO_FORMATS = {"wav", "mp3", "ogg", "opus", "aac", "flac", "webm", "m4a"}
 
 
+def _normalize_audio_format(input_format: str) -> str:
+    """Normalize common audio format strings (extensions or MIME types) to bare extensions."""
+    fmt = input_format.lower().strip()
+    # Strip any MIME subtype and parameters (e.g., audio/wav;codec=... -> wav)
+    if "/" in fmt:
+        fmt = fmt.split("/", 1)[1]
+    if ";" in fmt:
+        fmt = fmt.split(";", 1)[0]
+    # Drop leading "x-" if present (audio/x-wav)
+    if fmt.startswith("x-"):
+        fmt = fmt[2:]
+    return fmt
+
+
 def _decode_base64_audio(data: str) -> bytes:
     """Decode base64 audio, raising HTTP 400 on failure."""
     try:
@@ -121,7 +135,7 @@ def _validate_audio_constraints(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="input_audio_format is required",
         )
-    fmt = input_format.lower()
+    fmt = _normalize_audio_format(input_format)
     if fmt not in _ALLOWED_AUDIO_FORMATS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -171,11 +185,15 @@ async def _execute_action(action_name: str, transcript: str, current_user: User)
     registry = get_module_registry()
     try:
         module = await registry.find_module_for_tool(action_name)
-    except Exception as exc:  # pragma: no cover - defensive
+    except Exception as exc:  # noqa: BLE001  # defensive: action failures must not break speech chat
+        logger.warning(
+            f"Action lookup failed: action={action_name}, error={exc}",
+            exc_info=True,
+        )
         return {
             "action": action_name,
             "status": "error",
-            "message": f"Action lookup failed: {exc}",
+            "message": "Action lookup failed; see server logs for details.",
             "user_id": user_id,
         }
 
@@ -195,12 +213,15 @@ async def _execute_action(action_name: str, transcript: str, current_user: User)
             "result": result,
             "user_id": user_id,
         }
-    except Exception as exc:
-        logger.warning(f"Action execution failed: action={action_name}, error={exc}")
+    except Exception as exc:  # noqa: BLE001  # defensive: action failures must not break speech chat
+        logger.warning(
+            f"Action execution failed: action={action_name}, error={exc}",
+            exc_info=True,
+        )
         return {
             "action": action_name,
             "status": "error",
-            "message": str(exc),
+            "message": "Action execution failed; see server logs for details.",
             "user_id": user_id,
         }
 
@@ -526,14 +547,19 @@ async def run_speech_chat_turn(
             }
         )
         if action_result is not None:
-            chat_db.add_message(
-                {
-                    "conversation_id": conversation_id,
-                    "sender": "tool",
-                    "content": json.dumps(action_result),
-                    "client_id": client_id,
-                }
-            )
+            try:
+                tool_content = json.dumps(action_result)
+            except TypeError as exc:
+                logger.warning(f"Failed to serialize action_result for chat history: {exc}")
+            else:
+                chat_db.add_message(
+                    {
+                        "conversation_id": conversation_id,
+                        "sender": "tool",
+                        "content": tool_content,
+                        "client_id": client_id,
+                    }
+                )
     except Exception as e:  # noqa: BLE001
         logger.error(f"Failed to persist speech chat messages: {e}", exc_info=True)
         # Do not fail the user-facing request solely due to DB persistence issues
@@ -593,7 +619,7 @@ async def run_speech_chat_turn(
         tts_ms=tts_ms,
     )
 
-    # End-to-end latency metric
+    # End-to-end latency metric (defensive: metrics must not break the request)
     try:
         total_latency = max(0.0, time.time() - req_start)
         reg = get_metrics_registry()
@@ -606,8 +632,8 @@ async def run_speech_chat_turn(
                 "tts_provider": (tts_config.provider if tts_config and tts_config.provider else "default"),
             },
         )
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"Failed to record audio_chat_latency_seconds: {exc}")
 
     return SpeechChatResponse(
         session_id=conversation_id,

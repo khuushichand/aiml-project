@@ -15,19 +15,6 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations_crud import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
 
-def _make_request(scope_overrides: Dict[str, Any] | None = None) -> Request:
-    scope: Scope = {
-        "type": "http",
-        "method": "GET",
-        "path": "/api/v1/evaluations/",
-        "headers": [],
-        "client": ("127.0.0.1", 12345),
-    }
-    if scope_overrides:
-        scope.update(scope_overrides)
-    return Request(scope)
-
-
 def _build_app_with_overrides(principal: AuthPrincipal):
     from fastapi import FastAPI, Depends
 
@@ -79,6 +66,7 @@ def _build_app_with_overrides(principal: AuthPrincipal):
     return app
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_evaluations_list_requires_auth_principal_and_api_key():
     app = _build_app_with_overrides(
@@ -102,6 +90,7 @@ async def test_evaluations_list_requires_auth_principal_and_api_key():
     assert resp.status_code in (401, 403)
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_evaluations_list_forbidden_without_claims():
     principal = AuthPrincipal(
@@ -124,6 +113,7 @@ async def test_evaluations_list_forbidden_without_claims():
     assert resp.status_code == 403
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_evaluations_list_allows_with_evals_read(monkeypatch):
     principal = AuthPrincipal(
@@ -168,6 +158,7 @@ async def test_evaluations_list_allows_with_evals_read(monkeypatch):
     assert isinstance(body.get("data"), list)
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_evaluations_admin_cleanup_respects_require_admin(monkeypatch):
     """
@@ -232,6 +223,7 @@ def _build_app_with_admin_cleanup(principal: AuthPrincipal):
     return app
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_evaluations_admin_cleanup_forbidden_without_admin_role(monkeypatch):
     principal = AuthPrincipal(
@@ -255,6 +247,7 @@ async def test_evaluations_admin_cleanup_forbidden_without_admin_role(monkeypatc
     assert resp.status_code == 403
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_evaluations_admin_cleanup_allowed_with_admin_role(monkeypatch, tmp_path):
     principal = AuthPrincipal(

@@ -106,8 +106,8 @@ def _build_app_with_overrides(
 @pytest.mark.asyncio
 async def test_media_add_forbidden_when_principal_lacks_media_create_but_user_has_claim():
     """
-    PermissionChecker sees media.create on the User object, but the AuthPrincipal
-    lacks MEDIA_CREATE in its permissions. The request must still be forbidden,
+    The User object exposes media.create in its permissions, but the AuthPrincipal
+    lacks MEDIA_CREATE in its claims. The request must still be forbidden,
     demonstrating that require_permissions(MEDIA_CREATE) is the effective gate.
     """
     principal = _make_principal(

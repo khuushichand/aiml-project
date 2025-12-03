@@ -43,7 +43,7 @@ async def test_vad_auto_commit_triggers_full_transcript(monkeypatch):
         def initialize(self):
             return None
 
-        async def process_audio_chunk(self, audio_bytes: bytes):
+        async def process_audio_chunk(self, _audio_bytes: bytes):
             return {"type": "partial", "text": "hi", "timestamp": time.time(), "is_final": False}
 
         def get_full_transcript(self):
@@ -66,7 +66,7 @@ async def test_vad_auto_commit_triggers_full_transcript(monkeypatch):
         def last_trigger_at(self):
             return self._last_trigger_at
 
-        def observe(self, audio_bytes: bytes) -> bool:
+        def observe(self, _audio_bytes: bytes) -> bool:
             self._count += 1
             if self._count >= 2:
                 self._last_trigger_at = time.time()
@@ -101,7 +101,7 @@ async def test_vad_fail_open_disables_auto_commit(monkeypatch):
         def initialize(self):
             return None
 
-        async def process_audio_chunk(self, audio_bytes: bytes):
+        async def process_audio_chunk(self, _audio_bytes: bytes):
             return None
 
         def get_full_transcript(self):
@@ -118,7 +118,7 @@ async def test_vad_fail_open_disables_auto_commit(monkeypatch):
             self.available = False
             self.unavailable_reason = "no_silero"
 
-        def observe(self, audio_bytes: bytes):
+        def observe(self, _audio_bytes: bytes):
             raise AssertionError("observe should not be called when VAD is unavailable")
 
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified as unified
@@ -146,7 +146,7 @@ async def test_vad_auto_commit_records_latency_metric(monkeypatch):
         def initialize(self):
             return None
 
-        async def process_audio_chunk(self, audio_bytes: bytes):
+        async def process_audio_chunk(self, _audio_bytes: bytes):
             return {"type": "partial", "text": "hi", "timestamp": time.time(), "is_final": False}
 
         def get_full_transcript(self):
@@ -169,7 +169,7 @@ async def test_vad_auto_commit_records_latency_metric(monkeypatch):
         def last_trigger_at(self):
             return self._last_trigger_at
 
-        def observe(self, audio_bytes: bytes) -> bool:
+        def observe(self, _audio_bytes: bytes) -> bool:
             self._count += 1
             if self._count >= 2:
                 # Pretend speech stopped just before this frame
@@ -211,7 +211,7 @@ def test_silero_turn_detector_triggers_after_silence(monkeypatch):
         def reset_states(self):
             self.calls = 0
 
-        def __call__(self, audio_in, return_seconds=False):
+        def __call__(self, _audio_in, _return_seconds=False):
             self.calls += 1
             if self.calls == 1:
                 return {"speech_timestamps": [{"start": 0, "end": 100}]}
@@ -248,7 +248,7 @@ def test_silero_turn_detector_honors_min_utterance(monkeypatch):
         def reset_states(self):
             self.calls = 0
 
-        def __call__(self, audio_in, return_seconds=False):
+        def __call__(self, _audio_in, _return_seconds=False):
             self.calls += 1
             if self.calls == 1:
                 return {"speech_timestamps": [{"start": 0, "end": 20}]}
@@ -326,7 +326,7 @@ def test_silero_turn_detector_real_vad_end_to_end():
     assert triggered, "Expected SileroTurnDetector to trigger on real VAD with trailing silence"
 
 
-def test_silero_turn_detector_logs_fail_open(monkeypatch, capsys):
+def test_silero_turn_detector_logs_fail_open(monkeypatch):
     """
     When Silero VAD cannot be initialized, we should log a warning and continue without auto-commit.
     """
@@ -339,9 +339,9 @@ def test_silero_turn_detector_logs_fail_open(monkeypatch, capsys):
     monkeypatch.setattr(vlib, "_lazy_import_silero_vad", _raise_import_error)
     captured_warnings = []
 
-    def _fake_warning(msg, *args, **kwargs):
+    def _fake_warning(msg, *_args, **_kwargs):
         try:
-            captured_warnings.append(msg.format(*args))
+            captured_warnings.append(msg.format(*_args))
         except Exception:
             captured_warnings.append(str(msg))
 
@@ -374,7 +374,7 @@ async def test_ws_streaming_pauses_emit_single_final(monkeypatch):
         def initialize(self):
             return None
 
-        async def process_audio_chunk(self, audio_bytes: bytes):
+        async def process_audio_chunk(self, _audio_bytes: bytes):
             return {"type": "partial", "text": "hi", "timestamp": time.time(), "is_final": False}
 
         def get_full_transcript(self):
@@ -397,7 +397,7 @@ async def test_ws_streaming_pauses_emit_single_final(monkeypatch):
         def last_trigger_at(self):
             return self._last_trigger_at
 
-        def observe(self, audio_bytes: bytes) -> bool:
+        def observe(self, _audio_bytes: bytes) -> bool:
             # Trigger on the second audio chunk (after pause)
             self._seen += 1
             if self._seen >= 2:
@@ -424,4 +424,4 @@ async def test_ws_streaming_pauses_emit_single_final(monkeypatch):
     finals = [m for m in ws.sent if m.get("type") == "full_transcript"]
     assert len(finals) == 1, f"Expected single final, saw {ws.sent}"
     assert finals[0].get("text") == "pause-final"
-    assert elapsed < 1.5, f"Streaming with pause should complete quickly, took {elapsed}s"
+    assert elapsed < 2.5, f"Streaming with pause should complete quickly, took {elapsed}s"

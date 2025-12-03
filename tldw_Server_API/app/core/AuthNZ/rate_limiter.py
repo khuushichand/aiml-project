@@ -73,6 +73,8 @@ class RateLimiter:
         # Service account limits
         self.service_limit = self.settings.SERVICE_ACCOUNT_RATE_LIMIT
 
+        self._rate_limits_repo: Optional[AuthnzRateLimitsRepo] = None
+
     async def initialize(self):
         """Initialize rate limiter"""
         if self._initialized:
@@ -106,9 +108,20 @@ class RateLimiter:
         except Exception as e:
             logger.warning(f"RateLimiter schema ensure warning: {e}")
 
+        if self.db_pool and self._rate_limits_repo is None:
+            self._rate_limits_repo = AuthnzRateLimitsRepo(self.db_pool)
+
         self._initialized = True
         logger.info(f"RateLimiter initialized (enabled={self.enabled})")
         log_counter("auth_rate_limiter_initialized", labels={"enabled": str(self.enabled)})
+
+    def _get_rate_limits_repo(self) -> AuthnzRateLimitsRepo:
+        """Return cached AuthnzRateLimitsRepo instance."""
+        if not self.db_pool:
+            raise RateLimitError("RateLimiter database pool is not initialized")
+        if self._rate_limits_repo is None:
+            self._rate_limits_repo = AuthnzRateLimitsRepo(self.db_pool)
+        return self._rate_limits_repo
 
     async def _ensure_sqlite_schema(self):
         """Create SQLite tables used by rate limiter if they do not exist."""
@@ -289,7 +302,7 @@ class RateLimiter:
                 logger.warning(f"Redis error in record_failed_attempt: {e}")
 
         # Database fallback
-        repo = AuthnzRateLimitsRepo(self.db_pool)
+        repo = self._get_rate_limits_repo()
         result = await repo.record_failed_attempt_and_lockout(
             identifier=identifier,
             attempt_type=attempt_type,
@@ -357,7 +370,7 @@ class RateLimiter:
                 logger.warning(f"Redis error in check_lockout: {e}")
 
         # Database fallback
-        repo = AuthnzRateLimitsRepo(self.db_pool)
+        repo = self._get_rate_limits_repo()
         locked_until = await repo.get_active_lockout(identifier=identifier, now=now)
         if locked_until is not None:
             return True, locked_until
@@ -385,7 +398,7 @@ class RateLimiter:
                 logger.warning(f"Redis error in reset_failed_attempts: {e}")
 
         # Clear from database
-        repo = AuthnzRateLimitsRepo(self.db_pool)
+        repo = self._get_rate_limits_repo()
         await repo.reset_failed_attempts_and_lockout(
             identifier=identifier,
             attempt_type=attempt_type,
@@ -520,7 +533,7 @@ class RateLimiter:
         window_start = _compute_window_start(now, window_minutes)
 
         try:
-            repo = AuthnzRateLimitsRepo(self.db_pool)
+            repo = self._get_rate_limits_repo()
             current_count = await repo.increment_rate_limit_window(
                 identifier=identifier,
                 endpoint=endpoint,
@@ -677,7 +690,7 @@ class RateLimiter:
             await self.initialize()
 
         try:
-            repo = AuthnzRateLimitsRepo(self.db_pool)
+            repo = self._get_rate_limits_repo()
 
             # Collect distinct endpoints for Redis cleanup before DB deletion when endpoint is None
             endpoints_for_cleanup: Optional[list[str]] = None
@@ -729,7 +742,7 @@ class RateLimiter:
 
         try:
             cutoff = datetime.utcnow() - timedelta(hours=hours)
-            repo = AuthnzRateLimitsRepo(self.db_pool)
+            repo = self._get_rate_limits_repo()
             deleted = await repo.cleanup_rate_limits_older_than(cutoff)
             if deleted:
                 logger.info(f"Cleaned up {deleted} old rate limit entries")

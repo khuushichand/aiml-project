@@ -11,7 +11,7 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
     get_usage_event_logger,
 )
-from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE, PermissionChecker
+from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
@@ -26,7 +26,6 @@ router = APIRouter()
     "/add",
     # Status code is determined dynamically based on per-item results.
     dependencies=[
-        Depends(PermissionChecker(MEDIA_CREATE)),
         Depends(require_permissions(MEDIA_CREATE)),
         Depends(rbac_rate_limit("media.create")),
     ],

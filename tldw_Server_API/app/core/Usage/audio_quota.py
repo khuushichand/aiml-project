@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import os
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 from functools import lru_cache
 
 from loguru import logger
@@ -35,6 +35,54 @@ except Exception:  # pragma: no cover
     get_metrics_registry = None  # type: ignore
     MetricDefinition = None  # type: ignore
     MetricType = None  # type: ignore
+
+try:
+    # Resource Governor (optional, guarded by RG_ENABLE_AUDIO)
+    from tldw_Server_API.app.core.Resource_Governance import (
+        RGRequest,
+        MemoryResourceGovernor,
+        RedisResourceGovernor,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+        PolicyLoader,
+        PolicyReloadConfig,
+        db_policy_loader,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.authnz_policy_store import (
+        AuthNZPolicyStore,
+    )
+    from tldw_Server_API.app.core.config import (
+        rg_enabled,
+        rg_policy_store,
+        rg_policy_reload_enabled,
+        rg_policy_reload_interval_sec,
+        rg_policy_path,
+        rg_backend,
+    )
+except Exception:  # pragma: no cover - RG is optional for audio quotas
+    RGRequest = None  # type: ignore
+    MemoryResourceGovernor = None  # type: ignore
+    RedisResourceGovernor = None  # type: ignore
+    PolicyLoader = None  # type: ignore
+    PolicyReloadConfig = None  # type: ignore
+    db_policy_loader = None  # type: ignore
+    AuthNZPolicyStore = None  # type: ignore
+    rg_enabled = None  # type: ignore
+    rg_policy_store = None  # type: ignore
+    rg_policy_reload_enabled = None  # type: ignore
+    rg_policy_reload_interval_sec = None  # type: ignore
+    rg_policy_path = None  # type: ignore
+    rg_backend = None  # type: ignore
+
+try:
+    # Generic daily ledger (optional; used in shadow mode)
+    from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import (
+        ResourceDailyLedger,
+        LedgerEntry,
+    )
+except Exception:  # pragma: no cover
+    ResourceDailyLedger = None  # type: ignore
+    LedgerEntry = None  # type: ignore
 
 
 # Default tier limits (can be extended later via configuration or DB)
@@ -65,6 +113,105 @@ _active_jobs: Dict[int, int] = {}
 _lock = asyncio.Lock()
 
 _redis_client = None
+
+
+def _rg_audio_enabled() -> bool:
+    """
+    Return True when audio quotas should use the shared Resource Governor for
+    streams/jobs concurrency instead of Redis/in-process counters.
+
+    Resolution order:
+      1) Explicit module env flag RG_ENABLE_AUDIO=1|true|yes|on
+      2) [ResourceGovernor] enable_audio in config.txt (bool)
+      3) Global RG_ENABLED flag via config.rg_enabled()
+
+    When all are unset/false or when the governor cannot be initialized,
+    legacy behavior remains in effect.
+    """
+    try:
+        v = os.getenv("RG_ENABLE_AUDIO")
+        if v is not None:
+            return v.strip().lower() in {"1", "true", "yes", "on"}
+        # Config-based module toggle
+        try:
+            from tldw_Server_API.app.core.config import load_comprehensive_config  # lazy import
+
+            cfg = load_comprehensive_config()
+            if cfg and cfg.has_section("ResourceGovernor") and cfg.has_option("ResourceGovernor", "enable_audio"):
+                try:
+                    return cfg.getboolean("ResourceGovernor", "enable_audio", fallback=False)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Inherit from global RG_ENABLED when module flag is unset
+        if rg_enabled is not None:
+            try:
+                return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+            except Exception:
+                return False
+        return False
+    except Exception:
+        return False
+
+
+_rg_audio_governor = None
+_rg_audio_loader = None
+_rg_audio_lock = asyncio.Lock()
+_rg_stream_handles: Dict[int, List[str]] = {}
+_rg_job_handles: Dict[int, List[str]] = {}
+
+
+async def _get_audio_rg_governor():
+    """
+    Lazily initialize a process-local ResourceGovernor instance for audio
+    streams/jobs using the same configuration helpers as app.main.
+
+    On failure, returns None and callers must fall back to legacy counters.
+    """
+    global _rg_audio_governor, _rg_audio_loader
+    if not _rg_audio_enabled():
+        return None
+    # If RG is not available in this environment, keep legacy behavior.
+    if RGRequest is None or PolicyLoader is None or PolicyReloadConfig is None or rg_policy_store is None:
+        return None
+    if _rg_audio_governor is not None:
+        return _rg_audio_governor
+    async with _rg_audio_lock:
+        if _rg_audio_governor is not None:
+            return _rg_audio_governor
+        try:
+            store_mode = rg_policy_store()  # type: ignore[operator]
+        except Exception:
+            store_mode = "file"
+        try:
+            if store_mode == "db" and AuthNZPolicyStore is not None and db_policy_loader is not None:
+                store = AuthNZPolicyStore()  # type: ignore[call-arg]
+                interval = rg_policy_reload_interval_sec() if rg_policy_reload_interval_sec else 10  # type: ignore[operator]
+                loader = db_policy_loader(store, PolicyReloadConfig(enabled=True, interval_sec=interval))  # type: ignore[call-arg]
+            else:
+                # File-based loader mirroring app.main behavior
+                enabled = rg_policy_reload_enabled() if rg_policy_reload_enabled else True  # type: ignore[operator]
+                interval = rg_policy_reload_interval_sec() if rg_policy_reload_interval_sec else 10  # type: ignore[operator]
+                path = rg_policy_path() if rg_policy_path else "Config_Files/resource_governor_policies.yaml"  # type: ignore[operator]
+                loader = PolicyLoader(path, PolicyReloadConfig(enabled=enabled, interval_sec=interval))  # type: ignore[call-arg]
+            await loader.load_once()
+            _rg_audio_loader = loader
+            try:
+                backend = rg_backend() if rg_backend else "memory"  # type: ignore[operator]
+            except Exception:
+                backend = "memory"
+            if backend == "redis" and RedisResourceGovernor is not None:
+                gov = RedisResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            else:
+                gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            _rg_audio_governor = gov
+            return gov
+        except Exception as e:
+            logger.debug(f"Audio quotas: ResourceGovernor initialization failed; falling back to legacy counters: {e}")
+            _rg_audio_governor = None
+            _rg_audio_loader = None
+            return None
 
 
 @lru_cache(maxsize=1)
@@ -311,6 +458,38 @@ async def get_daily_minutes_used(user_id: int) -> float:
         return 0.0
 
 
+_daily_ledger: Optional[ResourceDailyLedger] = None  # type: ignore[assignment]
+_daily_ledger_lock = asyncio.Lock()
+
+
+async def _get_daily_ledger() -> Optional[ResourceDailyLedger]:
+    """
+    Lazily initialize the shared ResourceDailyLedger for audio minutes.
+
+    This runs in "shadow mode": failures are logged but never affect quota
+    enforcement, which continues to rely on audio_usage_daily as the source
+    of truth until a future cutover.
+    """
+    global _daily_ledger
+    # If the ledger implementation is not available, skip silently.
+    if ResourceDailyLedger is None or LedgerEntry is None:
+        return None
+    if _daily_ledger is not None:
+        return _daily_ledger
+    async with _daily_ledger_lock:
+        if _daily_ledger is not None:
+            return _daily_ledger
+        try:
+            ledger = ResourceDailyLedger()  # type: ignore[call-arg]
+            await ledger.initialize()
+            _daily_ledger = ledger
+            return ledger
+        except Exception as e:  # pragma: no cover - best-effort shadow path
+            logger.debug(f"Audio quotas: ResourceDailyLedger init failed; continuing without ledger: {e}")
+            _daily_ledger = None
+            return None
+
+
 async def add_daily_minutes(user_id: int, minutes: float) -> None:
     if minutes <= 0:
         return
@@ -342,6 +521,30 @@ async def add_daily_minutes(user_id: int, minutes: float) -> None:
             )
     except Exception as e:
         logger.debug(f"add_daily_minutes failed: {e}")
+    # Shadow-mode: attempt to mirror minutes usage into the generic daily ledger
+    # for observability and future migration. Enforcement logic continues to
+    # rely on audio_usage_daily.
+    try:
+        ledger = await _get_daily_ledger()
+        if ledger is not None and LedgerEntry is not None:
+            # Record minutes in whole seconds for finer-grained accounting.
+            units = int(max(0, round(float(minutes) * 60.0)))
+            if units <= 0:
+                return
+            entry = LedgerEntry(  # type: ignore[call-arg]
+                entity_scope="user",
+                entity_value=str(int(user_id)),
+                category="minutes",
+                units=units,
+                op_id=f"audio-minutes:{int(user_id)}:{day}:{units}",
+                occurred_at=datetime.now(timezone.utc),
+            )
+            try:
+                await ledger.add(entry)
+            except Exception as le:
+                logger.debug(f"Audio quotas: ResourceDailyLedger add failed; shadow-only: {le}")
+    except Exception as outer:
+        logger.debug(f"Audio quotas: ResourceDailyLedger shadow path failed; ignoring: {outer}")
 
 
 async def increment_jobs_started(user_id: int) -> None:
@@ -382,6 +585,33 @@ async def can_start_job(user_id: int) -> Tuple[bool, str]:
     Returns:
         (bool, str): `True` and `"OK"` if the job may start and the active-job counter was incremented; `False` and an explanatory message like `"Concurrent job limit reached (<max>)"` if starting the job would exceed the user's concurrency limit.
     """
+    # When RG audio integration is enabled and available, prefer streams/jobs
+    # concurrency via the shared governor. Legacy Redis/in-process counters are
+    # retained as a fallback when RG cannot be used.
+    gov = await _get_audio_rg_governor()
+    if gov is not None and RGRequest is not None:
+        try:
+            entity = f"user:{int(user_id)}"
+            policy_id = "audio.default"
+            req = RGRequest(
+                entity=entity,
+                categories={"jobs": {"units": 1}},  # type: ignore[call-arg]
+                tags={"policy_id": policy_id, "endpoint": "audio.jobs"},
+            )
+            dec, handle_id = await gov.reserve(req, op_id=f"audio-job:{entity}")
+            if not dec.allowed or not handle_id:
+                _metrics_increment("audio_quota_violations_total", {"type": "concurrent_jobs"})
+                return False, "Concurrent job limit reached"
+            # Track handle for explicit release in finish_job
+            handles = _rg_job_handles.setdefault(int(user_id), [])
+            handles.append(handle_id)
+            # Approximate active count via local handles for metrics
+            _metrics_set_gauge("audio_jobs_active", float(len(handles)), {"user_id": str(int(user_id))})
+            return True, "OK"
+        except Exception as e:
+            logger.debug(f"RG error in can_start_job; falling back to legacy counters: {e}")
+
+    # Legacy path: per-tier concurrent_jobs enforced via Redis / in-process counters.
     limits = await get_limits_for_user(user_id)
     max_jobs = int(limits.get("concurrent_jobs") or 0)
     r = await _get_redis()
@@ -417,6 +647,27 @@ async def finish_job(user_id: int) -> None:
     Parameters:
         user_id (int): Numeric identifier of the user whose active-job count should be decremented.
     """
+    # When RG audio integration is enabled, release one jobs concurrency lease
+    # for this user if present, then fall back to legacy counters for metrics.
+    gov = await _get_audio_rg_governor()
+    if gov is not None:
+        try:
+            handles = _rg_job_handles.get(int(user_id)) or []
+            if handles:
+                handle_id = handles.pop()
+                try:
+                    await gov.release(handle_id)
+                except Exception as e:
+                    logger.debug(f"RG finish_job release failed: {e}")
+            # Update gauge based on remaining handles (best-effort)
+            remaining = len(_rg_job_handles.get(int(user_id)) or [])
+            _metrics_set_gauge("audio_jobs_active", float(remaining), {"user_id": str(int(user_id))})
+            # Even when RG is in use, do not touch Redis/in-process counters here
+            # to avoid double-decrement; legacy state is not used when RG_ENABLE_AUDIO=1.
+            return
+        except Exception as e:
+            logger.debug(f"RG error in finish_job; falling back to legacy counters: {e}")
+
     r = await _get_redis()
     if r:
         try:
@@ -445,6 +696,28 @@ async def can_start_stream(user_id: int) -> Tuple[bool, str]:
     Returns:
         (bool, str): `True` and `"OK"` if a slot was reserved and the stream may start, `False` and a human-readable reason (e.g., "Concurrent streams limit reached (<n>)") otherwise.
     """
+    # Prefer ResourceGovernor-based concurrency when enabled for audio.
+    gov = await _get_audio_rg_governor()
+    if gov is not None and RGRequest is not None:
+        try:
+            entity = f"user:{int(user_id)}"
+            policy_id = "audio.default"
+            req = RGRequest(
+                entity=entity,
+                categories={"streams": {"units": 1}},  # type: ignore[call-arg]
+                tags={"policy_id": policy_id, "endpoint": "audio.stream"},
+            )
+            dec, handle_id = await gov.reserve(req, op_id=f"audio-stream:{entity}")
+            if not dec.allowed or not handle_id:
+                _metrics_increment("audio_quota_violations_total", {"type": "concurrent_streams"})
+                return False, "Concurrent streams limit reached"
+            handles = _rg_stream_handles.setdefault(int(user_id), [])
+            handles.append(handle_id)
+            _metrics_set_gauge("audio_streaming_active", float(len(handles)), {"user_id": str(int(user_id))})
+            return True, "OK"
+        except Exception as e:
+            logger.debug(f"RG error in can_start_stream; falling back to legacy counters: {e}")
+
     limits = await get_limits_for_user(user_id)
     max_streams = int(limits.get("concurrent_streams") or 0)
     r = await _get_redis()
@@ -482,6 +755,24 @@ async def finish_stream(user_id: int) -> None:
 
     If a Redis client is available, the Redis counter for the user is decremented and clamped to zero; otherwise an in-process counter protected by an async lock is decremented and clamped to zero. Always emits the updated `audio_streaming_active` gauge with the user's id as a label.
     """
+    # When RG audio integration is enabled, release one streams concurrency
+    # lease for this user if present and update metrics from local handles.
+    gov = await _get_audio_rg_governor()
+    if gov is not None:
+        try:
+            handles = _rg_stream_handles.get(int(user_id)) or []
+            if handles:
+                handle_id = handles.pop()
+                try:
+                    await gov.release(handle_id)
+                except Exception as e:
+                    logger.debug(f"RG finish_stream release failed: {e}")
+            remaining = len(_rg_stream_handles.get(int(user_id)) or [])
+            _metrics_set_gauge("audio_streaming_active", float(remaining), {"user_id": str(int(user_id))})
+            return
+        except Exception as e:
+            logger.debug(f"RG error in finish_stream; falling back to legacy counters: {e}")
+
     r = await _get_redis()
     if r:
         try:
@@ -553,6 +844,21 @@ async def heartbeat_stream(user_id: int) -> None:
 
     If Redis is unavailable this is a no-op; does nothing for in-process counters.
     """
+    # When RG audio integration is enabled, renew any active RG streams leases
+    # for this user using the configured stream TTL. Legacy Redis TTL refresh
+    # remains as a fallback when RG is unavailable.
+    gov = await _get_audio_rg_governor()
+    if gov is not None:
+        try:
+            ttl = _get_stream_ttl_seconds()
+            for handle_id in list(_rg_stream_handles.get(int(user_id)) or []):
+                try:
+                    await gov.renew(handle_id, ttl_s=ttl)
+                except Exception as e:
+                    logger.debug(f"RG heartbeat_stream renew failed for handle {handle_id}: {e}")
+        except Exception as e:
+            logger.debug(f"RG error in heartbeat_stream; falling back to legacy Redis TTL: {e}")
+
     r = await _get_redis()
     if not r:
         return
@@ -575,6 +881,16 @@ async def active_streams_count(user_id: int) -> int:
     Returns:
         int: Active stream count for the user.
     """
+    # When RG audio integration is enabled, approximate active streams using
+    # the in-process handle registry; peeking via the governor is possible but
+    # not required for the status/limits endpoint semantics.
+    gov = await _get_audio_rg_governor()
+    if gov is not None:
+        try:
+            return len(_rg_stream_handles.get(int(user_id)) or [])
+        except Exception as e:
+            logger.debug(f"RG error in active_streams_count; falling back to legacy counters: {e}")
+
     r = await _get_redis()
     if r:
         try:

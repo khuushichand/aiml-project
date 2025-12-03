@@ -36,6 +36,10 @@ class WatchlistDeleteResponse(BaseModel):
     id: str
 
 
+class WatchlistsReloadResponse(BaseModel):
+    status: str = Field("ok", description="Status of the watchlist reload operation")
+
+
 class AlertItem(BaseModel):
     id: int
     created_at: str

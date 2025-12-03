@@ -168,19 +168,17 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
 
             base_user = User_DB_Handling.get_single_user_instance()
             # Mirror the claims semantics from get_request_user's single-user branch
+            settings = get_settings()
             user = User(
                 id=base_user.id,
                 username=base_user.username,
                 email=base_user.email,
                 is_active=base_user.is_active,
                 roles=["admin"],
-                permissions=[
-                    "system.configure",
-                    "media.read",
-                    "media.create",
-                    "media.update",
-                    "media.delete",
-                ],
+                permissions=list(
+                    getattr(settings, "SINGLE_USER_DEFAULT_PERMISSIONS", [])
+                    or []
+                ),
                 is_admin=True,
             )
 

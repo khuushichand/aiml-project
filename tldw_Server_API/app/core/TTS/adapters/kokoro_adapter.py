@@ -194,7 +194,8 @@ class KokoroAdapter(TTSAdapter):
         )
         try:
             self._global_override_entries: List[PhonemeOverrideEntry] = load_override_entries(self.phoneme_override_path)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"{self.provider_name}: Failed to load global phoneme overrides: {exc}")
             self._global_override_entries = []
 
         # Performance settings

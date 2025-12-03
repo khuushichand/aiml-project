@@ -47,6 +47,7 @@ policies:
     # are not denied by middleware. Concurrency/minutes are enforced separately.
     requests: { rpm: 300, burst: 2.0 }
     streams: { max_concurrent: 2, ttl_sec: 90 }
+    jobs:    { max_concurrent: 2, ttl_sec: 600 }
     minutes: { daily_cap: 120, rounding: ceil }
     scopes: [user, ip]
     fail_mode: fail_closed
