@@ -161,7 +161,10 @@ async def get_resource_governor_policy(
 
 # --- Admin endpoints (gated) ---
 from pydantic import BaseModel, Field
-from tldw_Server_API.app.core.Resource_Governance.policy_admin import AuthNZPolicyAdmin
+from tldw_Server_API.app.core.Resource_Governance.policy_admin import (
+    AuthNZPolicyAdmin,
+    PolicyVersionConflictError,
+)
 
 
 class PolicyUpsertRequest(BaseModel):
@@ -190,6 +193,17 @@ async def upsert_policy(
         except Exception as _ref_e:
             logger.debug(f"Policy upsert refresh skipped: {_ref_e}")
         return JSONResponse({"status": "ok", "policy_id": policy_id})
+    except PolicyVersionConflictError as e:
+        logger.debug(f"upsert_policy version conflict for {policy_id}: {e}")
+        return JSONResponse(
+            {
+                "status": "conflict",
+                "error": "version_conflict",
+                "policy_id": policy_id,
+                "detail": str(e),
+            },
+            status_code=409,
+        )
     except Exception as e:
         logger.exception("upsert_policy failed")
         return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)

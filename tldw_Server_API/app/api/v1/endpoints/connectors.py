@@ -18,7 +18,8 @@ from tldw_Server_API.app.api.v1.schemas.connectors import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_current_active_user,
-    require_admin,
+    get_auth_principal,
+    require_roles,
     get_db_transaction,
     get_user_org_policy,
     get_org_policy_from_principal,
@@ -361,7 +362,11 @@ async def get_job_status(job_id: int) -> Dict[str, Any]:
 @router.get(
     "/admin/policy",
     response_model=ConnectorPolicy,
-    dependencies=[Depends(require_admin), Depends(require_permissions(SYSTEM_CONFIGURE))],
+    dependencies=[
+        Depends(get_auth_principal),
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+    ],
 )
 async def get_org_policy(
     org_id: int = Query(..., ge=1),
@@ -390,7 +395,11 @@ async def get_org_policy(
 @router.put(
     "/admin/policy",
     response_model=ConnectorPolicy,
-    dependencies=[Depends(require_admin), Depends(require_permissions(SYSTEM_CONFIGURE))],
+    dependencies=[
+        Depends(get_auth_principal),
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+    ],
 )
 async def upsert_org_policy(
     policy: ConnectorPolicy,

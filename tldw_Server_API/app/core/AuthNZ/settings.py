@@ -959,6 +959,16 @@ def get_profile() -> Optional[str]:
     return None
 
 
+def is_single_user_profile_mode() -> bool:
+    """Return True when PROFILE hints at a single-user deployment."""
+    profile = get_profile()
+    if profile:
+        lowered = profile.strip().lower()
+        if lowered in {"single_user", "local-single-user", "desktop"}:
+            return True
+    return is_single_user_mode()
+
+
 def get_database_url() -> str:
     """Get the configured database URL"""
     return get_settings().DATABASE_URL

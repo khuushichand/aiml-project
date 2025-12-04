@@ -217,6 +217,47 @@ class AuthnzApiKeysRepo:
             logger.error(f"AuthnzApiKeysRepo.fetch_active_by_hash_candidates failed: {exc}")
             raise
 
+    async def fetch_key_for_user(self, key_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        """Fetch a specific key row for a user (id + user_id match)."""
+        try:
+            if getattr(self.db_pool, "pool", None) is not None:
+                row = await self.db_pool.fetchone(
+                    "SELECT * FROM api_keys WHERE id = $1 AND user_id = $2",
+                    key_id,
+                    user_id,
+                )
+            else:
+                row = await self.db_pool.fetchone(
+                    "SELECT * FROM api_keys WHERE id = ? AND user_id = ?",
+                    key_id,
+                    user_id,
+                )
+            return dict(row) if row else None
+        except Exception as exc:
+            logger.error(f"AuthnzApiKeysRepo.fetch_key_for_user failed: {exc}")
+            raise
+
+    async def update_key_hash(self, key_id: int, key_hash: str) -> None:
+        """Normalize the stored key_hash for a key id."""
+        if not key_hash:
+            return
+        try:
+            if getattr(self.db_pool, "pool", None) is not None:
+                await self.db_pool.execute(
+                    "UPDATE api_keys SET key_hash = $1 WHERE id = $2",
+                    key_hash,
+                    key_id,
+                )
+            else:
+                await self.db_pool.execute(
+                    "UPDATE api_keys SET key_hash = ? WHERE id = ?",
+                    key_hash,
+                    key_id,
+                )
+        except Exception as exc:
+            logger.error(f"AuthnzApiKeysRepo.update_key_hash failed: {exc}")
+            raise
+
     async def fetch_key_limits(
         self,
         key_id: int,

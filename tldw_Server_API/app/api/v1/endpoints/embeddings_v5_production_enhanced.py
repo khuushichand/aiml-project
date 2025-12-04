@@ -51,9 +51,11 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
     require_roles,
+    require_permissions,
 )
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings, get_profile
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 
 # Configuration
 from tldw_Server_API.app.core.config import settings
@@ -2435,7 +2437,7 @@ class CollectionStatsResponse(BaseModel):
 @router.post(
     "/embeddings/models/warmup",
     summary="Warmup (preload) an embedding model (admin)",
-    dependencies=[Depends(require_roles("admin"))],
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def warmup_model(
     payload: ModelActionRequest,
@@ -2465,7 +2467,7 @@ async def warmup_model(
 @router.post(
     "/embeddings/models/download",
     summary="Download/prepare a model (admin)",
-    dependencies=[Depends(require_roles("admin"))],
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def download_model(
     payload: ModelActionRequest,
@@ -2495,7 +2497,7 @@ async def download_model(
 @router.delete(
     "/embeddings/cache",
     summary="Clear embedding cache (admin only)",
-    dependencies=[Depends(require_roles("admin"))],
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def clear_cache(
     current_user: User = Depends(get_request_user)
@@ -2735,7 +2737,7 @@ async def health_check():
 @router.get(
     "/embeddings/circuit-breakers",
     summary="Get circuit breaker status (admin only)",
-    dependencies=[Depends(require_roles("admin"))],
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def get_circuit_breakers(
     current_user: User = Depends(get_request_user)
@@ -2749,7 +2751,7 @@ async def get_circuit_breakers(
 @router.post(
     "/embeddings/circuit-breakers/{provider}/reset",
     summary="Reset circuit breaker (admin only)",
-    dependencies=[Depends(require_roles("admin"))],
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def reset_circuit_breaker(
     provider: str,
@@ -2785,7 +2787,7 @@ async def reset_circuit_breaker(
 @router.get(
     "/embeddings/metrics",
     summary="Get service metrics (admin only)",
-    dependencies=[Depends(require_roles("admin"))],
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def get_metrics(
     current_user: User = Depends(get_request_user)

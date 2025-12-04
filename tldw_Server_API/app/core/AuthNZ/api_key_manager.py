@@ -397,11 +397,8 @@ class APIKeyManager:
 
             if stored_hash and stored_hash != primary_hash:
                 try:
-                    await self.db_pool.execute(
-                        "UPDATE api_keys SET key_hash = ? WHERE id = ?",
-                        primary_hash,
-                        key_info["id"],
-                    )
+                    repo = self._get_repo()
+                    await repo.update_key_hash(key_info["id"], primary_hash)
                     key_info["key_hash"] = primary_hash
                 except Exception as normalize_exc:
                     logger.warning(
@@ -453,17 +450,12 @@ class APIKeyManager:
             await self.initialize()
 
         try:
+            repo = self._get_repo()
             # Get existing key info (authorization check remains here)
-            old_key = await self.db_pool.fetchone(
-                "SELECT * FROM api_keys WHERE id = ? AND user_id = ?",
-                key_id,
-                user_id,
-            )
+            old_key = await repo.fetch_key_for_user(key_id=key_id, user_id=user_id)
 
             if not old_key:
                 raise ValueError("API key not found or unauthorized")
-
-            old_key = dict(old_key)
 
             # Normalize stored JSON/JSONB fields that may already be parsed by the driver
             def _coerce_json_field(value):
@@ -488,7 +480,6 @@ class APIKeyManager:
             )
 
             # Update rotation references via repository
-            repo = self._get_repo()
             await repo.mark_rotated(
                 old_key_id=key_id,
                 new_key_id=new_key_result["id"],

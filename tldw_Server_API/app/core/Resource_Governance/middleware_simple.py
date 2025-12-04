@@ -267,24 +267,25 @@ class RGSimpleMiddleware:
                 "retry_after": retry_after,
             }, status_code=429)
             resp.headers["Retry-After"] = str(retry_after)
-            # Generic X-RateLimit-* headers use the primary category's limit and retry
-            if limit:
+            # Generic X-RateLimit-* headers apply only to requests/tokens to
+            # avoid misleading headers on concurrency-only denials.
+            if primary in {"requests", "tokens"} and limit:
                 resp.headers["X-RateLimit-Limit"] = str(limit)
                 resp.headers["X-RateLimit-Remaining"] = "0"
                 resp.headers["X-RateLimit-Reset"] = str(retry_after)
-            # Tokens per-minute headers if tokens is the denying category
-            if primary == "tokens":
-                try:
-                    loader = getattr(request.app.state, "rg_policy_loader", None)
-                    if loader is not None:
-                        pol = loader.get_policy(policy_id) or {}
-                        per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
-                        if per_min > 0:
-                            resp.headers["X-RateLimit-PerMinute-Limit"] = str(per_min)
-                            resp.headers["X-RateLimit-PerMinute-Remaining"] = "0"
-                            resp.headers["X-RateLimit-Tokens-Remaining"] = "0"
-                except Exception:
-                    pass
+                # Tokens per-minute headers if tokens is the denying category
+                if primary == "tokens":
+                    try:
+                        loader = getattr(request.app.state, "rg_policy_loader", None)
+                        if loader is not None:
+                            pol = loader.get_policy(policy_id) or {}
+                            per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
+                            if per_min > 0:
+                                resp.headers["X-RateLimit-PerMinute-Limit"] = str(per_min)
+                                resp.headers["X-RateLimit-PerMinute-Remaining"] = "0"
+                                resp.headers["X-RateLimit-Tokens-Remaining"] = "0"
+                    except Exception:
+                        pass
             await resp(scope, receive, send)
             return
 

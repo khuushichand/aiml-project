@@ -9,6 +9,22 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool, is_postgres_backend
 
 
+class PolicyVersionConflictError(Exception):
+    """
+    Raised when an optimistic-concurrency check for an rg_policies row fails.
+
+    Used by the Resource-Governor admin API to return HTTP 409 when a client
+    supplies an expected version that does not match the stored version.
+    """
+
+    def __init__(self, policy_id: str, expected: int, actual: int | None):
+        self.policy_id = policy_id
+        self.expected = expected
+        self.actual = actual
+        msg = f"rg_policies version conflict for '{policy_id}' (expected={expected}, actual={actual})"
+        super().__init__(msg)
+
+
 class AuthNZPolicyAdmin:
     """
     Admin DAL for Resource Governor policies in the AuthNZ DB (SoT).
@@ -61,22 +77,47 @@ class AuthNZPolicyAdmin:
         is_pg = await is_postgres_backend()
         now = datetime.now(timezone.utc)
         try:
+            # When version is provided, enforce optimistic concurrency:
+            # - If a row exists and its version differs, raise PolicyVersionConflictError.
+            # - When versions match, bump to version+1 on update.
+            # - When no row exists yet, treat as a create and use the supplied version.
+            if version is not None:
+                expected = int(version)
+                if is_pg:
+                    row = await self.db_pool.fetchone("SELECT version FROM rg_policies WHERE id = $1", policy_id)
+                else:
+                    row = await self.db_pool.fetchone("SELECT version FROM rg_policies WHERE id = ?", policy_id)
+
+                if row is None:
+                    current: Optional[int] = None
+                    new_version = expected
+                else:
+                    if isinstance(row, dict):
+                        current = int(row.get("version") or 0)
+                    else:
+                        current = int(row[0] or 0)
+                    if current != expected:
+                        raise PolicyVersionConflictError(policy_id, expected=expected, actual=current)
+                    new_version = expected + 1
+            else:
+                # Auto-increment when version is omitted.
+                new_version = await self._next_version(policy_id)
+                current = None
+
             if is_pg:
                 upsert_sql = (
                     "INSERT INTO rg_policies (id, payload, version, updated_at) "
                     "VALUES ($1, $2::jsonb, $3, $4) "
                     "ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload, version=EXCLUDED.version, updated_at=EXCLUDED.updated_at"
                 )
-                ver = int(version) if version is not None else await self._next_version(policy_id)
-                await self.db_pool.execute(upsert_sql, policy_id, json.dumps(payload), ver, now)
+                await self.db_pool.execute(upsert_sql, policy_id, json.dumps(payload), int(new_version), now)
             else:
                 # SQLite: store payload as TEXT (JSON string)
-                ver = int(version) if version is not None else await self._next_version(policy_id)
                 await self.db_pool.execute(
                     "INSERT OR REPLACE INTO rg_policies (id, payload, version, updated_at) VALUES (?, ?, ?, ?)",
                     policy_id,
                     json.dumps(payload),
-                    ver,
+                    int(new_version),
                     now.isoformat(),
                 )
         except Exception as e:

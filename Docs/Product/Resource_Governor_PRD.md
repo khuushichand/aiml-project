@@ -678,10 +678,11 @@ Notes:
   - Daily minutes remain enforced via the existing `audio_usage_daily` tables; usage is mirrored into `ResourceDailyLedger` in shadow mode for observability and future cutover.
   - The audio WebSocket transcription endpoint consumes `audio_quota` helpers, which in turn use the governor for streams concurrency when `RG_ENABLE_AUDIO=1`; legacy Redis counters are bypassed in this mode.
 - Embeddings:
-  - The legacy per-user sliding-window limiter remains the enforcement path (`UserRateLimiter`); `embeddings.default` policy and route-map entries are defined but request paths have not yet been migrated to RG.
+  - Async embeddings paths (`async_embeddings.py` and `request_batching.py`) consult `AsyncRateLimiter`, which delegates enforcement to the ResourceGovernor when `RG_ENABLE_EMBEDDINGS=1` (using `embeddings.default` policy and `RGRequest(entity="user:{id}", categories={"requests": {"units": 1}})`); the per-user sliding-window `UserRateLimiter` remains as a shadow/fallback compatibility shim when RG is disabled or unavailable.
+  - Route-map entries for `/api/v1/embeddings*` are wired through `RGSimpleMiddleware`, and end-to-end tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_chat_audio_headers.py` exercise success and 429 deny behavior (with `Retry-After` / `X-RateLimit-*` headers) on `/api/v1/embeddings/providers-config`.
 - MCP & SlowAPI:
-  - MCP unified limiter still uses its in-memory/Redis implementation; `mcp.ingestion` policies exist and are exercised in RG unit tests, but production MCP ingress has not yet been fully cut over.
-  - SlowAPI-decorated routes continue to use the existing limiter by default; `RGSimpleMiddleware` can be enabled as a façade in front of selected ingress paths when `RG_ENABLED` and `RG_ENABLE_SLOWAPI` are set.
+  - MCP unified `RateLimiter.check_rate_limit` now enforces via the ResourceGovernor when `RG_ENABLE_MCP=1`, reserving against `mcp.{category}` policies (`entity="client:{key}"`, `categories={"requests": {"units": 1}}`) and raising `RateLimitExceeded` based on RG decisions; the in-memory/Redis limiter is retained as a shadow/fail-open compatibility path when RG is disabled or errors, with cutover behavior locked in by `tldw_Server_API/tests/Resource_Governance/test_rg_cutover_embeddings_mcp.py`.
+  - SlowAPI-decorated routes continue to use the existing limiter by default; `RGSimpleMiddleware` can be enabled as a façade in front of selected ingress paths when `RG_ENABLED` and `RG_ENABLE_SLOWAPI` are set, and end-to-end tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_chat_audio_headers.py` assert RG-style headers on representative chat, MCP, audio, and embeddings routes.
 
 ## Appendix — Mapping table (initial examples)
 

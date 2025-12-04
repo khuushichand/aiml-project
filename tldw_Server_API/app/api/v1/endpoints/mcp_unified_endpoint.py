@@ -31,7 +31,7 @@ from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, is_single_user_profile_mode, get_settings
 from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_permissions,
@@ -153,7 +153,7 @@ async def get_current_user(
             # Single-user mode: accept the configured SINGLE_USER_API_KEY directly,
             # mirroring the semantics in get_request_user/get_auth_principal.
             try:
-                if is_single_user_mode():
+                if is_single_user_mode() or is_single_user_profile_mode():
                     settings = get_settings()
                     test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {
                         "1",

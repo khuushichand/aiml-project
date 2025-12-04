@@ -17,7 +17,7 @@ from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService, ge
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService, get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager, get_session_manager
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, is_single_user_profile_mode, get_settings
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_limiter
 from tldw_Server_API.app.services.registration_service import RegistrationService, get_registration_service
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService, get_storage_service
@@ -949,7 +949,7 @@ async def get_org_policy_from_principal(
         memberships = current_user.get("org_memberships") or []
         if memberships:
             org_id = memberships[0].get("org_id")
-        elif is_single_user_mode():
+        elif is_single_user_profile_mode():
             # 3) Single-user profile: synthetic org_id=1 to mirror legacy behaviour.
             org_id = 1
         else:

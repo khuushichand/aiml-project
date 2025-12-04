@@ -542,9 +542,32 @@ async def _get_daily_ledger() -> Optional[ResourceDailyLedger]:
 async def add_daily_minutes(user_id: int, minutes: float) -> None:
     if minutes <= 0:
         return
+    day = datetime.now(timezone.utc).date().isoformat()
+
+    # First, record against the shared ResourceDailyLedger so enforcement can
+    # rely on the ledger even when legacy counters fail.
+    units = int(max(0, round(float(minutes) * 60.0)))
+    try:
+        ledger = await _get_daily_ledger()
+        if ledger is not None and LedgerEntry is not None and units > 0:
+            entry = LedgerEntry(  # type: ignore[call-arg]
+                entity_scope="user",
+                entity_value=str(int(user_id)),
+                category="minutes",
+                units=units,
+                op_id=f"audio-minutes:{int(user_id)}:{day}:{units}",
+                occurred_at=datetime.now(timezone.utc),
+            )
+            try:
+                await ledger.add(entry)
+            except Exception as le:
+                logger.debug(f"Audio quotas: ResourceDailyLedger add failed; shadow-only: {le}")
+    except Exception as outer:
+        logger.debug(f"Audio quotas: ResourceDailyLedger shadow path failed; ignoring: {outer}")
+
+    # Legacy counter retained for backward compatibility/observability only.
     pool = await get_db_pool()
     await _ensure_tables(pool)
-    day = datetime.now(timezone.utc).date().isoformat()
     try:
         if pool.pool:
             await pool.execute(
@@ -570,30 +593,6 @@ async def add_daily_minutes(user_id: int, minutes: float) -> None:
             )
     except Exception as e:
         logger.debug(f"add_daily_minutes failed: {e}")
-    # Shadow-mode: attempt to mirror minutes usage into the generic daily ledger
-    # for observability and future migration. Enforcement logic continues to
-    # rely on audio_usage_daily.
-    try:
-        ledger = await _get_daily_ledger()
-        if ledger is not None and LedgerEntry is not None:
-            # Record minutes in whole seconds for finer-grained accounting.
-            units = int(max(0, round(float(minutes) * 60.0)))
-            if units <= 0:
-                return
-            entry = LedgerEntry(  # type: ignore[call-arg]
-                entity_scope="user",
-                entity_value=str(int(user_id)),
-                category="minutes",
-                units=units,
-                op_id=f"audio-minutes:{int(user_id)}:{day}:{units}",
-                occurred_at=datetime.now(timezone.utc),
-            )
-            try:
-                await ledger.add(entry)
-            except Exception as le:
-                logger.debug(f"Audio quotas: ResourceDailyLedger add failed; shadow-only: {le}")
-    except Exception as outer:
-        logger.debug(f"Audio quotas: ResourceDailyLedger shadow path failed; ignoring: {outer}")
 
 
 async def _ledger_remaining_minutes(user_id: int, daily_limit_minutes: float) -> Optional[float]:
@@ -991,6 +990,15 @@ def _get_job_ttl_seconds() -> int:
     except Exception:
         pass
     return 600
+
+
+def get_job_heartbeat_interval_seconds() -> int:
+    """Return a safe heartbeat interval derived from the job TTL."""
+    ttl = _get_job_ttl_seconds()
+    if ttl <= 10:
+        return ttl
+    # Refresh roughly twice per TTL window while avoiding overly chatty loops.
+    return max(10, ttl // 2)
 
 
 async def heartbeat_jobs(user_id: int) -> None:

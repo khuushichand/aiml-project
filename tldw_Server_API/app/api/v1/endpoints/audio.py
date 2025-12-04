@@ -78,9 +78,11 @@ from tldw_Server_API.app.core.Usage.audio_quota import (
 try:
     from tldw_Server_API.app.core.Usage.audio_quota import (
         heartbeat_stream as heartbeat_stream,
+        heartbeat_jobs as heartbeat_jobs,
         active_streams_count as active_streams_count,
         get_daily_minutes_used as get_daily_minutes_used,
         get_user_tier as get_user_tier,
+        get_job_heartbeat_interval_seconds as get_job_heartbeat_interval_seconds,
     )
 except ImportError as e:
     # Optional helpers may be unavailable in some environments; log at debug level
@@ -697,6 +699,32 @@ async def create_transcription(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=f"Unsupported media type: {file.content_type}"
         )
 
+    job_heartbeat_task: Optional[asyncio.Task] = None
+
+    async def _maybe_start_job_heartbeat(user_id: int) -> Optional[asyncio.Task]:
+        """Best-effort RG job heartbeat loop (no-op when unsupported)."""
+        try:
+            interval = get_job_heartbeat_interval_seconds()
+        except Exception:
+            return None
+        if not interval or interval <= 0:
+            return None
+
+        async def _hb_loop():
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    await heartbeat_jobs(user_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as hb_exc:
+                    logger.debug(f"audio.transcriptions heartbeat_jobs failed: {hb_exc}")
+
+        try:
+            return asyncio.create_task(_hb_loop())
+        except Exception:
+            return None
+
     # Resolve per-tier file size limit
     rid = None
     try:
@@ -734,6 +762,10 @@ async def create_transcription(
     ok_job, msg_job = await can_start_job(current_user.id)
     if not ok_job:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=msg_job)
+    try:
+        job_heartbeat_task = await _maybe_start_job_heartbeat(current_user.id)
+    except Exception:
+        job_heartbeat_task = None
 
     # Record job start (best-effort)
     acquired_job_slot = False
@@ -945,6 +977,12 @@ async def create_transcription(
         finally:
             # Make sure we always release job slot on any path
             try:
+                if job_heartbeat_task:
+                    job_heartbeat_task.cancel()
+                    try:
+                        await job_heartbeat_task
+                    except asyncio.CancelledError:
+                        pass
                 if acquired_job_slot:
                     await finish_job(current_user.id)
             except EXPECTED_DB_EXC as e:

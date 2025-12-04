@@ -31,6 +31,39 @@ async def test_check_daily_minutes_prefers_ledger(monkeypatch):
     assert called_legacy["used"] is False  # ledger path short-circuited legacy usage
 
 
+@pytest.mark.asyncio
+async def test_add_daily_minutes_records_ledger_even_on_legacy_failure(monkeypatch):
+    fake_ledger_entries = []
+
+    class _FakeLedger:
+        async def initialize(self):
+            return None
+
+        async def add(self, entry):
+            fake_ledger_entries.append(entry)
+            return True
+
+    async def _fake_get_daily_ledger():
+        return _FakeLedger()
+
+    class _Pool:
+        pool = None
+
+        async def execute(self, *args, **kwargs):
+            raise RuntimeError("legacy write failed")
+
+    async def _fake_get_db_pool():
+        return _Pool()
+
+    monkeypatch.setattr(audio_quota, "_get_daily_ledger", _fake_get_daily_ledger)
+    monkeypatch.setattr(audio_quota, "get_db_pool", _fake_get_db_pool)
+
+    await audio_quota.add_daily_minutes(user_id=7, minutes=1.5)
+
+    assert len(fake_ledger_entries) == 1
+    assert fake_ledger_entries[0].units == int(round(1.5 * 60))
+
+
 class _FakeGovernor:
     def __init__(self):
         self.renewed = []
