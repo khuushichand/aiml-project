@@ -209,10 +209,8 @@ def test_rag_search_jwt_principal_and_state_alignment(isolated_test_environment,
 
     # Lightweight stubs for RAG dependencies to keep the test focused on auth.
     from tldw_Server_API.app.main import app as fastapi_app
-    from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import (
-        get_chacha_db_for_user,
-        get_media_db_for_user,
-    )
+    from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+    from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
     from tldw_Server_API.app.api.v1.endpoints import rag_unified as rag_mod
 
     fastapi_app.dependency_overrides[get_media_db_for_user] = lambda: type("DB", (), {"db_path": ":memory:"})()

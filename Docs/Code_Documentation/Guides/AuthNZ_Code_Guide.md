@@ -24,13 +24,28 @@ See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentati
 - Admin + RBAC mgmt: `tldw_Server_API/app/api/v1/endpoints/admin.py`, `.../users.py`, `.../privileges.py`, `.../register.py`
 - Debug helpers: `tldw_Server_API/app/api/v1/endpoints/authnz_debug.py`
 
-## Modes & Request Flow
+## Modes, Profiles & Request Flow
+
+### Modes vs Profiles (AUTH_MODE today, PROFILE tomorrow)
+
+- `AUTH_MODE` currently distinguishes:
+  - `single_user` – fixed API key, synthetic admin user, SQLite-backed by default.
+  - `multi_user` – username/password + MFA + JWT, sessions, RBAC, orgs/teams, API keys.
+- In code, helpers `is_single_user_mode()` / `is_multi_user_mode()` read `AUTH_MODE` via `get_settings()`.
+- Over time, this will be complemented by an explicit `PROFILE` setting (see `Docs/Product/User-Unification-PRD.md`), e.g.:
+  - `PROFILE=local-single-user` (or legacy alias `single_user`).
+  - `PROFILE=multi-user-postgres`.
+  - Optional `PROFILE=multi-user-sqlite` for small dev setups.
+- New code should treat mode/profile as **coordination/UX** inputs (bootstrap, banners, WebUI hints, quotas), not as authorization shortcuts. Auth decisions must use `AuthPrincipal` claims via the dependencies below.
 
 ### Single-User Mode (X-API-KEY)
-- Configure `AUTH_MODE=single_user` and `SINGLE_USER_API_KEY`.
-- `get_current_user` accepts either `X-API-KEY: <key>` header or `Authorization: Bearer <key>`.
+- Configure `AUTH_MODE=single_user` and `SINGLE_USER_API_KEY` (and eventually `PROFILE=local-single-user`).
+- `get_current_user` and `get_request_user` accept either:
+  - `X-API-KEY: <key>`
+  - `Authorization: Bearer <key>` (for OpenAI-compatible clients).
 - Optional IP allowlist via `SINGLE_USER_ALLOWED_IPS`.
-- JWT/session/blacklist are bypassed; user is treated as admin with full permissions.
+- JWT/session/blacklist are bypassed; the principal is treated as an admin-style user whose permissions are governed by claims:
+  - Single-user claims and permissions are exercised and constrained by `tldw_Server_API/tests/AuthNZ/integration/test_single_user_claims_permissions.py`.
 
 ### Multi-User Mode (JWT)
 - Configure `AUTH_MODE=multi_user` and `JWT_SECRET_KEY` (or RS/ES keys).
@@ -232,7 +247,7 @@ Notes:
     - `AuthnzUsageRepo` (`app/core/AuthNZ/repos/usage_repo.py`) provides aggregate and pruning helpers for `usage_log`, `usage_daily`, `llm_usage_log`, and `llm_usage_daily`, and is used by `virtual_keys` and the AuthNZ scheduler.
     - `AuthnzRateLimitsRepo` (`app/core/AuthNZ/repos/rate_limits_repo.py`) encapsulates all DB-backed rate-limiter tables (`rate_limits`, `failed_attempts`, `account_lockouts`) and is used by `rate_limiter.RateLimiter` for counters, lockouts, and cleanup.
   - New AuthNZ code should **not** add fresh backend-specific SQL for these tables; prefer adding small, task-focused methods to the appropriate repo and calling them from business logic.
-  - New code MUST NOT introduce fresh `is_single_user_mode()` branches in endpoint/business logic. Mode checks are confined to a small number of coordination points (bootstrap, DB selection, and legacy compatibility helpers); authorization should flow through `AuthPrincipal` + claim-first dependencies instead.
+  - New code MUST NOT introduce fresh `is_single_user_mode()` branches in endpoint/business logic. Mode/profile checks are confined to a small number of coordination points (bootstrap, DB selection, and legacy compatibility helpers); authorization should flow through `AuthPrincipal` + claim-first dependencies instead.
   - New code **must not** introduce new usages of `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, or `AllPermissionsChecker` on endpoints. Treat these as legacy compatibility shims kept only for existing routes and tests; new surfaces should always use `get_auth_principal`, `require_permissions`, and `require_roles`.
   - AuthNZ-facing documentation (usage examples, API integration guides) should treat this guide as canonical and mirror its claim-first patterns. When decorator-style helpers appear in historical examples, they should be clearly labeled as legacy.
 
@@ -247,9 +262,15 @@ References:
 
 ## Rate Limiting & Quotas
 
-- General limiter: `rate_limiter.py` implements a token bucket; DI provides `get_rate_limiter_dep`.
-- Endpoint helper: `check_rate_limit` extracts a stable client identity (IP or user) and enforces limits; authentication routes use `check_auth_rate_limit` with stricter defaults.
-- LLM budgets: `llm_budget_middleware.py` and `llm_budget_guard.py` enforce endpoint/provider/model quotas when configured. Settings are `LLM_BUDGET_ENFORCE` (on/off) and `LLM_BUDGET_ENDPOINTS` (paths). Virtual key features are gated by `VIRTUAL_KEYS_ENABLED` (defaults true).
+- General limiter: `rate_limiter.py` implements a token bucket over the AuthNZ `rate_limits` tables; DI provides `get_rate_limiter_dep`.
+- Governance facade: `AuthGovernor` (`auth_governor.py`) is the canonical entry point for AuthNZ guardrails. It wraps the shared `RateLimiter` and virtual-key budget helpers so core flows no longer talk to those primitives directly:
+  - `check_llm_budget_for_api_key(principal, api_key_id)` decorates `is_key_over_budget(...)` with `AuthPrincipal` metadata and is used by `llm_budget_guard` and `llm_budget_middleware`.
+  - `check_lockout(identifier, attempt_type="login", rate_limiter=...)` and `record_auth_failure(identifier, attempt_type, rate_limiter=...)` mediate login lockout and suspicious-activity tracking and are used by the `/auth/login` endpoint.
+  - `check_rate_limit(identifier, endpoint, limit=None, window_minutes=None, rate_limiter=...)` is the generic AuthNZ-level rate-limit helper used by `check_rate_limit` / `check_auth_rate_limit` to enforce 429 semantics.
+- Endpoint helpers:
+  - `check_rate_limit` extracts a stable client identity (IP or user) and calls `AuthGovernor.check_rate_limit` with defaults, raising HTTP 429 on failure.
+  - `check_auth_rate_limit` uses `AuthGovernor.check_rate_limit` with stricter defaults (`limit=5`, `window_minutes=1`) for authentication routes.
+- LLM budgets: `llm_budget_middleware.py` and `llm_budget_guard.py` enforce endpoint/provider/model quotas when configured, always via `AuthGovernor.check_llm_budget_for_api_key`. Settings are `LLM_BUDGET_ENFORCE` (on/off) and `LLM_BUDGET_ENDPOINTS` (paths). Virtual key features are gated by `VIRTUAL_KEYS_ENABLED` (defaults true).
 
 References:
 - `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#get_rate_limiter_dep`
@@ -257,6 +278,7 @@ References:
 - `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#check_auth_rate_limit`
 - `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#rbac_rate_limit`
 - `tldw_Server_API/app/core/AuthNZ/rate_limiter.py#RateLimiter`
+- `tldw_Server_API/app/core/AuthNZ/auth_governor.py#AuthGovernor`
 
 RBAC-aware selector (logging-only for now):
 - `auth_deps.rbac_rate_limit(resource)` logs the strictest configured limit selected for a user/role-resource pair; it does not enforce yet (use `check_rate_limit` for enforcement).

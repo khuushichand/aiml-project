@@ -48,15 +48,14 @@ are explicitly tested. For each, tests assert alignment between:
 | Evaluations – admin cleanup (idempotency)      | Bearer JWT            | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_evaluations_invariants.py::test_evaluations_admin_cleanup_jwt_principal_and_state_alignment` |
 | MCP – modules health (`/api/v1/mcp/modules/health`) | Bearer JWT       | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_mcp_monitoring_invariants.py::test_mcp_modules_health_jwt_principal_and_state_alignment` |
 | Monitoring – watchlists (`/api/v1/monitoring/watchlists`) | Bearer JWT   | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_mcp_monitoring_invariants.py::test_monitoring_watchlists_jwt_principal_and_state_alignment` |
+| Resource-Governor admin (`/api/v1/resource-governor/policy`) | Bearer JWT | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_resource_governor_invariants.py::test_resource_governor_policy_jwt_principal_and_state_alignment` |
+| Prompt Studio projects (`/api/v1/prompt-studio/projects/`) | Bearer JWT   | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_prompt_studio_invariants.py::test_prompt_studio_projects_jwt_principal_and_state_alignment` |
 | Single-user profile (bootstrapped admin)       | X-API-KEY (single_user) | `single_user`   | `tldw_Server_API/tests/AuthNZ/integration/test_single_user_claims_permissions.py`                        |
+| Evaluations – admin cleanup (idempotency, API key) | AuthNZ API key  | `api_key`         | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_evaluations_invariants.py::test_evaluations_admin_cleanup_api_key_principal_and_state_alignment` |
+| LLM budget guard (chat overage)                | AuthNZ API key        | `api_key`         | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_llm_budget_invariants.py::test_llm_budget_guard_overage_preserves_principal_state_alignment` |
 
 Additional claim-first / permissions surfaces (without dedicated principal-state
 capture wrappers) include:
-- Resource-Governor admin and diagnostics endpoints (`/api/v1/resource-governor/*`)
-  – claim-first via `require_roles("admin")` with behavior locked in by:
-  - `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py`
-  - `tldw_Server_API/tests/Resource_Governance/test_rg_capabilities_endpoint.py`
-  - `tldw_Server_API/tests/Resource_Governance/test_resource_governor_endpoint.py`
 - Metrics admin (`/api/v1/metrics/reset`) – claim-first admin via
   `require_roles("admin")`, covered by
   `tldw_Server_API/tests/AuthNZ_Unit/test_metrics_permissions_claims.py`.

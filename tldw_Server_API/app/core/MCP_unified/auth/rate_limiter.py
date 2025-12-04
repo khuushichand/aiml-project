@@ -4,20 +4,46 @@ Rate limiting for unified MCP module
 Supports both in-memory and distributed (Redis) rate limiting.
 """
 
-import time
-import os
 import asyncio
 import inspect
-from typing import Optional, Dict, Any
+import os
+import time
+from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
-from abc import ABC, abstractmethod
+from typing import Any, Dict, Optional
+
 from loguru import logger
 
 from ..config import get_config
 from tldw_Server_API.app.core.Infrastructure.redis_factory import (
     create_async_redis_client,
 )
+
+try:
+    from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
+        MemoryResourceGovernor,
+        RedisResourceGovernor,
+        RGRequest,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.metrics_rg import (  # type: ignore
+        record_shadow_mismatch,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.policy_loader import (  # type: ignore
+        PolicyLoader,
+        PolicyReloadConfig,
+        default_policy_loader,
+    )
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
+except Exception:  # pragma: no cover - RG optional
+    MemoryResourceGovernor = None  # type: ignore
+    RedisResourceGovernor = None  # type: ignore
+    RGRequest = None  # type: ignore
+    record_shadow_mismatch = None  # type: ignore
+    PolicyLoader = None  # type: ignore
+    PolicyReloadConfig = None  # type: ignore
+    default_policy_loader = None  # type: ignore
+    rg_enabled = None  # type: ignore
 
 
 class RateLimitExceeded(Exception):
@@ -556,7 +582,32 @@ class RateLimiter:
         self._ensure_cleanup_task()
 
         limiter = limiter or self.default_limiter
+        category = _derive_category(limiter, self)
+
+        # Prefer Resource Governor when enabled; shadow legacy for comparison.
+        rg_decision = await _maybe_enforce_with_rg_mcp(key=key, category=category)
+
         allowed, retry_after = await limiter.is_allowed(key)
+
+        # Shadow comparison (best-effort)
+        if rg_decision is not None and record_shadow_mismatch is not None:
+            try:
+                if bool(allowed) != bool(rg_decision["allowed"]):
+                    record_shadow_mismatch(
+                        module="mcp",
+                        route=f"/api/v1/mcp/{category}",
+                        policy_id=rg_decision.get("policy_id", f"mcp.{category}"),
+                        legacy="allow" if allowed else "deny",
+                        rg="allow" if rg_decision["allowed"] else "deny",
+                    )
+            except Exception:
+                logger.debug("MCP RG shadow metric failed", exc_info=True)
+
+        # Enforce RG decision if present, otherwise use legacy result
+        if rg_decision is not None:
+            if not rg_decision["allowed"]:
+                raise RateLimitExceeded(rg_decision.get("retry_after") or 1)
+            return
 
         if not allowed:
             logger.warning(f"Rate limit exceeded for key: {key}")
@@ -634,3 +685,94 @@ async def shutdown_rate_limiter() -> None:
             await _rate_limiter.shutdown()
     except Exception:
         pass
+
+
+# --- Resource Governor plumbing (optional) ---
+_rg_mcp_governor = None
+_rg_mcp_loader = None
+_rg_mcp_lock = asyncio.Lock()
+
+
+def _rg_mcp_enabled() -> bool:
+    flag = os.getenv("RG_ENABLE_MCP")
+    if flag is not None:
+        return flag.strip().lower() in {"1", "true", "yes", "on"}
+    if rg_enabled:
+        try:
+            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+        except Exception:
+            return False
+    return False
+
+
+def _derive_category(limiter: BaseRateLimiter, owner: RateLimiter) -> str:
+    try:
+        if limiter is owner.ingestion_limiter:
+            return "ingestion"
+        if limiter is owner.read_limiter:
+            return "read"
+    except Exception:
+        pass
+    return "default"
+
+
+async def _get_mcp_rg_governor():
+    global _rg_mcp_governor, _rg_mcp_loader
+    if not _rg_mcp_enabled():
+        return None
+    if RGRequest is None or PolicyLoader is None:
+        return None
+    if _rg_mcp_governor is not None:
+        return _rg_mcp_governor
+    async with _rg_mcp_lock:
+        if _rg_mcp_governor is not None:
+            return _rg_mcp_governor
+        try:
+            loader = default_policy_loader() if default_policy_loader else PolicyLoader(
+                os.getenv("RG_POLICY_PATH", "tldw_Server_API/Config_Files/resource_governor_policies.yaml"),
+                PolicyReloadConfig(enabled=True, interval_sec=int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10")),
+            )
+            await loader.load_once()
+            _rg_mcp_loader = loader
+            backend = os.getenv("RG_BACKEND", "memory").lower()
+            if backend == "redis" and RedisResourceGovernor is not None:
+                gov = RedisResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            else:
+                gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            _rg_mcp_governor = gov
+            return gov
+        except Exception as exc:  # pragma: no cover - optional
+            logger.debug(f"MCP RG governor init failed; using legacy limiter: {exc}")
+            return None
+
+
+async def _maybe_enforce_with_rg_mcp(*, key: str, category: str) -> Optional[Dict[str, object]]:
+    gov = await _get_mcp_rg_governor()
+    if gov is None:
+        return None
+    policy_id = f"mcp.{category}"
+    op_id = f"mcp-{category}-{key}-{time.time_ns()}"
+    try:
+        decision, handle = await gov.reserve(
+            RGRequest(
+                entity=f"client:{key}",
+                categories={"requests": {"units": 1}},
+                tags={"policy_id": policy_id, "module": "mcp", "category": category},
+            ),
+            op_id=op_id,
+        )
+        if decision.allowed:
+            if handle:
+                try:
+                    await gov.commit(handle, None, op_id=op_id)
+                except Exception:
+                    logger.debug("MCP RG commit failed", exc_info=True)
+            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
+        return {
+            "allowed": False,
+            "retry_after": decision.retry_after or 1,
+            "policy_id": policy_id,
+        }
+    except Exception as exc:
+        logger.debug(f"MCP RG reserve failed; falling back to legacy: {exc}")
+        return None

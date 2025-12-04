@@ -119,6 +119,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
     require_token_scope,
     require_permissions,
+    get_auth_principal,
 )
 from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
 from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
@@ -890,6 +891,7 @@ async def _save_message_turn_to_db(
     dependencies=[
         Depends(rbac_rate_limit("chat.create")),
         Depends(require_token_scope("any", require_if_present=False, endpoint_id="chat.completions", count_as="call")),
+        Depends(get_auth_principal),  # Establish AuthPrincipal/AuthContext early for guardrails
         Depends(enforce_llm_budget),  # Hard budget stop before handler runs
     ]
 )

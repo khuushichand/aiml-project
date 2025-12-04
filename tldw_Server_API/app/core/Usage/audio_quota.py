@@ -128,31 +128,29 @@ def _rg_audio_enabled() -> bool:
     When all are unset/false or when the governor cannot be initialized,
     legacy behavior remains in effect.
     """
+    # 1) Env flag wins
+    v = os.getenv("RG_ENABLE_AUDIO")
+    if v is not None:
+        return v.strip().lower() in {"1", "true", "yes", "on"}
+    # 2) Config toggle
     try:
-        v = os.getenv("RG_ENABLE_AUDIO")
-        if v is not None:
-            return v.strip().lower() in {"1", "true", "yes", "on"}
-        # Config-based module toggle
-        try:
-            from tldw_Server_API.app.core.config import load_comprehensive_config  # lazy import
+        from tldw_Server_API.app.core.config import load_comprehensive_config  # lazy import
 
-            cfg = load_comprehensive_config()
-            if cfg and cfg.has_section("ResourceGovernor") and cfg.has_option("ResourceGovernor", "enable_audio"):
-                try:
-                    return cfg.getboolean("ResourceGovernor", "enable_audio", fallback=False)
-                except Exception:
-                    logger.debug("Failed to parse ResourceGovernor.enable_audio as boolean")
+        cfg = load_comprehensive_config()
+        if cfg and cfg.has_section("ResourceGovernor") and cfg.has_option("ResourceGovernor", "enable_audio"):
+            try:
+                return cfg.getboolean("ResourceGovernor", "enable_audio", fallback=False)
+            except Exception:
+                logger.debug("Failed to parse ResourceGovernor.enable_audio as boolean")
     except Exception as e:
         logger.debug(f"Failed to load config for RG audio check: {e}")
-        # Inherit from global RG_ENABLED when module flag is unset
-        if rg_enabled is not None:
-            try:
-                return bool(rg_enabled(False))  # type: ignore[func-returns-value]
-            except Exception:
-                return False
-        return False
-    except Exception:
-        return False
+    # 3) Inherit global flag
+    if rg_enabled is not None:
+        try:
+            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+        except Exception:
+            return False
+    return False
 
 
 _rg_audio_governor = None
@@ -598,6 +596,30 @@ async def add_daily_minutes(user_id: int, minutes: float) -> None:
         logger.debug(f"Audio quotas: ResourceDailyLedger shadow path failed; ignoring: {outer}")
 
 
+async def _ledger_remaining_minutes(user_id: int, daily_limit_minutes: float) -> Optional[float]:
+    """
+    Compute remaining minutes using the ResourceDailyLedger when available.
+
+    Returns None when the ledger is unavailable; otherwise returns remaining
+    minutes (float) based on a per-day cap (converted to seconds internally).
+    """
+    ledger = await _get_daily_ledger()
+    if ledger is None:
+        return None
+    try:
+        cap_units = int(max(0, round(daily_limit_minutes * 60.0)))
+        remaining_units = await ledger.remaining_for_day(
+            entity_scope="user",
+            entity_value=str(int(user_id)),
+            category="minutes",
+            daily_cap=cap_units,
+        )
+        return float(remaining_units) / 60.0
+    except Exception as e:
+        logger.debug(f"Audio quotas: ledger remaining check failed; fallback to legacy: {e}")
+        return None
+
+
 async def increment_jobs_started(user_id: int) -> None:
     pool = await get_db_pool()
     await _ensure_tables(pool)
@@ -877,6 +899,16 @@ async def check_daily_minutes_allow(user_id: int, minutes_requested: float) -> T
     limit = limits.get("daily_minutes")
     if limit is None:
         return True, None
+
+    # Prefer the shared ResourceDailyLedger when available to enforce daily caps.
+    ledger_remaining = await _ledger_remaining_minutes(user_id=int(user_id), daily_limit_minutes=float(limit))
+    if ledger_remaining is not None:
+        if minutes_requested > ledger_remaining:
+            _metrics_increment("audio_quota_violations_total", {"type": "daily_minutes"})
+            return False, max(0.0, ledger_remaining)
+        return True, ledger_remaining - minutes_requested
+
+    # Fallback to legacy audio_usage_daily enforcement.
     used = await get_daily_minutes_used(user_id)
     remaining = float(limit) - float(used)
     if minutes_requested > remaining:
@@ -935,6 +967,55 @@ async def heartbeat_stream(user_id: int) -> None:
             await r.expire(key, _get_stream_ttl_seconds())
     except Exception as e:
         logger.debug(f"Redis heartbeat_stream failed: {e}")
+
+
+def _get_job_ttl_seconds() -> int:
+    """Determine TTL for RG job leases; defaults to 600 seconds."""
+    val_env = os.getenv("AUDIO_JOB_TTL_SECONDS")
+    if val_env:
+        try:
+            v = int(val_env)
+            return max(30, min(3600, v))
+        except Exception:
+            pass
+    try:
+        from tldw_Server_API.app.core.config import load_comprehensive_config  # lazy import
+
+        cfg = load_comprehensive_config()
+        if cfg and cfg.has_section("Audio-Quota"):
+            try:
+                v = int(cfg.get("Audio-Quota", "job_ttl_seconds", fallback="600"))
+            except Exception:
+                v = 600
+            return max(30, min(3600, v))
+    except Exception:
+        pass
+    return 600
+
+
+async def heartbeat_jobs(user_id: int) -> None:
+    """
+    Renew active RG job leases to prevent premature expiry during long-running jobs.
+
+    Legacy Redis/in-process counters are not renewed here; they do not rely on TTL.
+    """
+    gov = await _get_audio_rg_governor()
+    if gov is None:
+        return
+    try:
+        ttl = _get_job_ttl_seconds()
+        handles = list(_rg_job_handles.get(int(user_id)) or [])
+        if not handles:
+            return
+        job_lock = await _get_job_handle_lock(int(user_id))
+        async with job_lock:
+            for handle_id in list(_rg_job_handles.get(int(user_id)) or []):
+                try:
+                    await gov.renew(handle_id, ttl_s=ttl)
+                except Exception as e:
+                    logger.debug(f"RG heartbeat_jobs renew failed for handle {handle_id}: {e}")
+    except Exception as e:
+        logger.debug(f"RG error in heartbeat_jobs: {e}")
 
 
 async def active_streams_count(user_id: int) -> int:

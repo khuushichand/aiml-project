@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     """Configuration with persistent secret management for user registration system"""
 
     # ===== Core Settings =====
+    PROFILE: Optional[str] = Field(
+        default=None,
+        description=(
+            "Deployment profile hint (e.g., local-single-user, multi-user-postgres). "
+            "AUTH_MODE remains the canonical switch for behavior; PROFILE is "
+            "used for coordination/UX and future drift reduction."
+        ),
+    )
+
     AUTH_MODE: Literal["single_user", "multi_user"] = Field(
         default="single_user",
         description="Authentication mode: single_user (API key) or multi_user (JWT)"
@@ -915,13 +924,39 @@ def get_settings_generation() -> int:
 
 # ===== Utility Functions =====
 def is_multi_user_mode() -> bool:
-    """Check if system is in multi-user mode"""
+    """Return True when the effective runtime mode is multi-user.
+
+    AUTH_MODE remains the canonical switch; PROFILE is advisory and
+    may be used by higher-level helpers for UX/coordination. This
+    helper deliberately ignores PROFILE so that existing behavior is
+    preserved while we phase in profile-aware helpers elsewhere.
+    """
     return get_settings().AUTH_MODE == "multi_user"
 
 
 def is_single_user_mode() -> bool:
-    """Check if system is in single-user mode"""
+    """Return True when the effective runtime mode is single-user.
+
+    AUTH_MODE remains the canonical switch; PROFILE is advisory and
+    must not be used to silently relax or tighten auth behavior.
+    """
     return get_settings().AUTH_MODE == "single_user"
+
+
+def get_profile() -> Optional[str]:
+    """Return the configured deployment profile, if any.
+
+    When unset, callers should treat this as "derive from AUTH_MODE".
+    New helpers that need profile semantics should read PROFILE first
+    but always choose defaults that preserve current behavior.
+    """
+    try:
+        value = getattr(get_settings(), "PROFILE", None)
+    except Exception:
+        value = None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 def get_database_url() -> str:

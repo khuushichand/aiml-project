@@ -1,4 +1,5 @@
 from typing import List, Optional, Literal
+from uuid import UUID
 from pydantic import BaseModel, Field
 
 
@@ -33,7 +34,7 @@ class FlashcardCreate(BaseModel):
 
 
 class Flashcard(BaseModel):
-    uuid: str
+    uuid: UUID
     deck_id: Optional[int] = None
     deck_name: Optional[str] = None
     front: str
@@ -70,7 +71,7 @@ class FlashcardReviewRequest(BaseModel):
 
 
 class FlashcardReviewResponse(BaseModel):
-    uuid: str
+    uuid: UUID
     ef: float
     interval_days: int
     repetitions: int

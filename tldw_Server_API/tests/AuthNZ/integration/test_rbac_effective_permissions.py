@@ -42,6 +42,7 @@ def _fresh_client() -> TestClient:
     return client
 
 
+@pytest.mark.timeout(60)
 def test_user_overrides_affect_effective_permissions():
     settings = get_settings()
     user_id = settings.SINGLE_USER_FIXED_ID

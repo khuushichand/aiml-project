@@ -35,7 +35,15 @@ def client_with_flashcards_db(flashcards_db: CharactersRAGDB):
             pass
     # Also bypass AuthNZ in tests by returning a fixed user
     async def override_user():
-        return User(id=1, username="testuser", email="test@example.com", is_active=True)
+        # Use an admin-capable user so tests can exercise admin-only query caps
+        return User(
+            id=1,
+            username="testuser",
+            email="test@example.com",
+            is_active=True,
+            roles=["admin"],
+            is_admin=True,
+        )
 
     # Apply dependency overrides
     fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_get_db

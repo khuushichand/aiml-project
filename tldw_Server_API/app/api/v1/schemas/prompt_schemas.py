@@ -2,6 +2,7 @@
 #
 # Imports
 from typing import List, Optional, Dict, Any
+from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, validator
 from datetime import datetime
 #
@@ -22,7 +23,7 @@ class KeywordCreate(KeywordBase):
 
 class KeywordResponse(KeywordBase):
     id: int
-    uuid: str
+    uuid: UUID
 
     # last_modified: datetime # If you want to expose these
     # version: int
@@ -54,7 +55,7 @@ class PromptUpdate(BaseModel):  # For partial updates if we add a PATCH endpoint
 
 class PromptResponse(PromptBase):
     id: int
-    uuid: str
+    uuid: UUID
     last_modified: datetime
     version: int
     keywords: List[str] = Field(default_factory=list, description="Keywords associated with the prompt.")
@@ -65,7 +66,7 @@ class PromptResponse(PromptBase):
 
 class PromptBriefResponse(BaseModel):
     id: int
-    uuid: str
+    uuid: UUID
     name: str
     author: Optional[str]
     last_modified: datetime
@@ -101,7 +102,7 @@ class ExportResponse(BaseModel):
 class SyncLogEntryResponse(BaseModel):
     change_id: int
     entity: str
-    entity_uuid: str
+    entity_uuid: UUID
     operation: str
     timestamp: datetime
     client_id: str

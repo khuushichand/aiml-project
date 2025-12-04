@@ -856,12 +856,14 @@ async def lifespan(app: FastAPI):
             await ensure_authnz_schema_ready_once()
         except Exception as _e:
             logger.debug(f"App Startup: Skipped AuthNZ SQLite migration ensure: {_e}")
-        # Postgres-only: ensure additive extras (tool catalogs, privilege snapshots)
+        # Postgres-only: ensure additive extras (tool catalogs, privilege snapshots, usage tables, VK counters)
         try:
             if getattr(db_pool, "pool", None):
                 from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
                     ensure_tool_catalogs_tables_pg,
                     ensure_privilege_snapshots_table_pg,
+                    ensure_usage_tables_pg,
+                    ensure_virtual_key_counters_pg,
                 )
 
                 ok_catalogs = await ensure_tool_catalogs_tables_pg(db_pool)
@@ -870,6 +872,12 @@ async def lifespan(app: FastAPI):
                 ok_priv_snapshots = await ensure_privilege_snapshots_table_pg(db_pool)
                 if ok_priv_snapshots:
                     logger.info("App Startup: Ensured PG privilege_snapshots table")
+                ok_usage_pg = await ensure_usage_tables_pg(db_pool)
+                if ok_usage_pg:
+                    logger.info("App Startup: Ensured PG usage tables")
+                ok_vk_pg = await ensure_virtual_key_counters_pg(db_pool)
+                if ok_vk_pg:
+                    logger.info("App Startup: Ensured PG virtual-key counters tables")
         except Exception as _pg_e:
             logger.debug(f"App Startup: PG extras ensure failed/skipped: {_pg_e}")
         # Ensure RBAC seed exists in single-user mode (idempotent; both backends)

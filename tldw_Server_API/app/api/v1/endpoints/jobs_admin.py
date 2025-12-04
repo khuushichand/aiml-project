@@ -210,8 +210,14 @@ async def prune_jobs_endpoint(
         except Exception:
             raw_body = {}
         admin_user = _make_admin_user_from_principal(principal)
-        # Enforce domain-scoped RBAC (403) even if request body is incomplete
-        _enforce_domain_scope(admin_user, (raw_body or {}).get("domain"))
+        # Enforce domain-scoped RBAC (403) even if request body is incomplete.
+        # When JOBS_DOMAIN_RBAC_PRINCIPAL is enabled, drive enforcement from
+        # AuthPrincipal; otherwise fall back to the legacy user dict path.
+        domain_val = (raw_body or {}).get("domain")
+        if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+            _enforce_domain_scope_from_principal(principal, domain_val)
+        else:
+            _enforce_domain_scope(admin_user, domain_val)
         # Confirm header for destructive action (skip when dry_run or in TEST_MODE)
         if not bool((raw_body or {}).get("dry_run")):
             is_test = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}
@@ -303,7 +309,10 @@ async def queue_control_endpoint(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> QueueFlagsResponse:
     admin_user = _make_admin_user_from_principal(principal)
-    _enforce_domain_scope(admin_user, req.domain)
+    if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+        _enforce_domain_scope_from_principal(principal, req.domain)
+    else:
+        _enforce_domain_scope(admin_user, req.domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     if backend == "postgres":
@@ -357,7 +366,10 @@ async def reschedule_jobs_endpoint(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> AffectedResponse:
     admin_user = _make_admin_user_from_principal(principal)
-    _enforce_domain_scope(admin_user, req.domain)
+    if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+        _enforce_domain_scope_from_principal(principal, req.domain)
+    else:
+        _enforce_domain_scope(admin_user, req.domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     if backend == "postgres":
@@ -384,7 +396,10 @@ async def retry_now_jobs_endpoint(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> AffectedResponse:
     admin_user = _make_admin_user_from_principal(principal)
-    _enforce_domain_scope(admin_user, req.domain)
+    if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+        _enforce_domain_scope_from_principal(principal, req.domain)
+    else:
+        _enforce_domain_scope(admin_user, req.domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     if backend == "postgres":
@@ -463,7 +478,10 @@ async def upsert_sla_policy_endpoint(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> dict:
     admin_user = _make_admin_user_from_principal(principal)
-    _enforce_domain_scope(admin_user, req.domain)
+    if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+        _enforce_domain_scope_from_principal(principal, req.domain)
+    else:
+        _enforce_domain_scope(admin_user, req.domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     jm = JobManager(backend=backend, db_url=db_url)
@@ -486,7 +504,10 @@ async def list_sla_policies_endpoint(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> list[dict]:
     admin_user = _make_admin_user_from_principal(principal)
-    _enforce_domain_scope(admin_user, domain)
+    if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+        _enforce_domain_scope_from_principal(principal, domain)
+    else:
+        _enforce_domain_scope(admin_user, domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     jm = JobManager(backend=backend, db_url=db_url)
@@ -614,7 +635,10 @@ async def list_job_events(
     Intended for reliable polling by dashboards or external sinks.
     """
     admin_user = _make_admin_user_from_principal(principal)
-    _enforce_domain_scope(admin_user, domain)
+    if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+        _enforce_domain_scope_from_principal(principal, domain)
+    else:
+        _enforce_domain_scope(admin_user, domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     if backend == "postgres":
@@ -702,7 +726,10 @@ async def stream_job_events(
     This is a simple tailer that polls the outbox and emits events without loss.
     """
     admin_user = _make_admin_user_from_principal(principal)
-    _enforce_domain_scope(admin_user, domain)
+    if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+        _enforce_domain_scope_from_principal(principal, domain)
+    else:
+        _enforce_domain_scope(admin_user, domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     if backend == "postgres":
@@ -938,7 +965,11 @@ async def ttl_sweep_endpoint(
         except Exception:
             raw = {}
         admin_user = _make_admin_user_from_principal(principal)
-        _enforce_domain_scope(admin_user, (raw or {}).get("domain"))
+        domain_val = (raw or {}).get("domain")
+        if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+            _enforce_domain_scope_from_principal(principal, domain_val)
+        else:
+            _enforce_domain_scope(admin_user, domain_val)
         # Confirm header for destructive action (check before model validation for consistent 400s)
         hdr = str(request.headers.get("x-confirm", "")).lower()
         if hdr not in {"1", "true", "yes", "y", "on"}:
@@ -1068,7 +1099,10 @@ async def integrity_sweep_endpoint(
 ):
     try:
         admin_user = _make_admin_user_from_principal(principal)
-        _enforce_domain_scope(admin_user, req.domain)
+        if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+            _enforce_domain_scope_from_principal(principal, req.domain)
+        else:
+            _enforce_domain_scope(admin_user, req.domain)
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         if backend == "postgres":
@@ -1114,7 +1148,10 @@ async def get_jobs_stats(
     """Aggregate counts grouped by domain/queue/job_type for the WebUI."""
     try:
         admin_user = _make_admin_user_from_principal(principal)
-        _enforce_domain_scope(admin_user, domain)
+        if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+            _enforce_domain_scope_from_principal(principal, domain)
+        else:
+            _enforce_domain_scope(admin_user, domain)
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         if backend == "postgres":
@@ -1214,7 +1251,10 @@ async def list_jobs_endpoint(
 ):
     try:
         admin_user = _make_admin_user_from_principal(principal)
-        _enforce_domain_scope(admin_user, domain)
+        if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+            _enforce_domain_scope_from_principal(principal, domain)
+        else:
+            _enforce_domain_scope(admin_user, domain)
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         if backend == "postgres":
@@ -1273,7 +1313,10 @@ async def stale_processing_endpoint(
 ):
     try:
         admin_user = _make_admin_user_from_principal(principal)
-        _enforce_domain_scope(admin_user, domain)
+        if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+            _enforce_domain_scope_from_principal(principal, domain)
+        else:
+            _enforce_domain_scope(admin_user, domain)
         # Use explicit backend/db_url selection for consistency with other admin endpoints
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
@@ -1342,7 +1385,10 @@ async def batch_cancel_endpoint(
 ):
     try:
         admin_user = _make_admin_user_from_principal(principal)
-        _enforce_domain_scope(admin_user, req.domain)
+        if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+            _enforce_domain_scope_from_principal(principal, req.domain)
+        else:
+            _enforce_domain_scope(admin_user, req.domain)
         # Require confirm header unless dry_run
         if not req.dry_run:
             hdr = str(request.headers.get("x-confirm", "")).lower()
@@ -1557,7 +1603,10 @@ async def batch_reschedule_endpoint(
 ):
     try:
         admin_user = _make_admin_user_from_principal(principal)
-        _enforce_domain_scope(admin_user, req.domain)
+        if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+            _enforce_domain_scope_from_principal(principal, req.domain)
+        else:
+            _enforce_domain_scope(admin_user, req.domain)
         if not req.dry_run:
             hdr = str(request.headers.get("x-confirm", "")).lower()
             if hdr not in {"1", "true", "yes", "y", "on"}:
@@ -1760,7 +1809,10 @@ async def batch_requeue_quarantined_endpoint(
 ):
     try:
         admin_user = _make_admin_user_from_principal(principal)
-        _enforce_domain_scope(admin_user, req.domain)
+        if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+            _enforce_domain_scope_from_principal(principal, req.domain)
+        else:
+            _enforce_domain_scope(admin_user, req.domain)
         if not req.dry_run:
             hdr = str(request.headers.get("x-confirm", "")).lower()
             if hdr not in {"1", "true", "yes", "y", "on"}:

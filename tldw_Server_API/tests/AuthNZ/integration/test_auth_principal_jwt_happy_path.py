@@ -9,6 +9,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
     get_current_user,
 )
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 
@@ -30,6 +31,7 @@ def _attach_whoami_router(app: FastAPI) -> None:
         request: Request,
         principal: AuthPrincipal = Depends(get_auth_principal),
         user: Dict[str, Any] = Depends(get_current_user),
+        request_user: User = Depends(get_request_user),
     ) -> Dict[str, Any]:
         auth_ctx = getattr(request.state, "auth", None)
         if auth_ctx is not None:
@@ -65,6 +67,12 @@ def _attach_whoami_router(app: FastAPI) -> None:
                 "permissions": user.get("permissions"),
                 "is_active": user.get("is_active"),
                 "is_verified": user.get("is_verified"),
+            },
+            "request_user": {
+                "id": getattr(request_user, "id", None),
+                "roles": list(getattr(request_user, "roles", []) or []),
+                "permissions": list(getattr(request_user, "permissions", []) or []),
+                "is_admin": bool(getattr(request_user, "is_admin", False)),
             },
             "state": {
                 "user_id": getattr(request.state, "user_id", None),
@@ -155,6 +163,7 @@ async def test_multi_user_jwt_happy_path_principal_matches_state(
     payload = whoami_response.json()
     principal = payload["principal"]
     user = payload["user"]
+    request_user = payload["request_user"]
     state = payload["state"]
     state_auth_principal = payload["state_auth_principal"]
 
@@ -162,6 +171,7 @@ async def test_multi_user_jwt_happy_path_principal_matches_state(
     assert principal["kind"] == "user"
     assert principal["user_id"] is not None
     assert str(principal["user_id"]) == str(user["id"])
+    assert str(principal["user_id"]) == str(request_user["id"])
 
     # request.state mirrors the principal's identity
     assert str(state["user_id"]) == str(principal["user_id"])
@@ -179,6 +189,6 @@ async def test_multi_user_jwt_happy_path_principal_matches_state(
     assert state["org_ids"] == principal["org_ids"]
     assert state["team_ids"] == principal["team_ids"]
 
-    # Claims on AuthPrincipal and User should be aligned (may be empty but consistent)
-    assert principal["roles"] == user["roles"]
-    assert principal["permissions"] == user["permissions"]
+    # Claims on AuthPrincipal, get_current_user, and get_request_user should be aligned
+    assert principal["roles"] == user["roles"] == request_user["roles"]
+    assert principal["permissions"] == user["permissions"] == request_user["permissions"]

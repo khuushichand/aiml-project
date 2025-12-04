@@ -14,12 +14,22 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensu
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    require_admin,
+    require_permissions,
+    require_roles,
+)
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_MAINTENANCE
 from tldw_Server_API.app.core.Usage.audio_quota import TIER_LIMITS
 
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_MAINTENANCE)),
+    ]
+)
 
 
 class SubmitAudioJobRequest(BaseModel):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
+from uuid import UUID
 from pydantic import BaseModel, Field, AnyUrl, validator
 
 
@@ -248,7 +249,7 @@ class ScrapedItem(BaseModel):
     job_id: int
     source_id: int
     media_id: Optional[int] = None
-    media_uuid: Optional[str] = None
+    media_uuid: Optional[UUID] = None
     url: Optional[str] = None
     title: Optional[str] = None
     summary: Optional[str] = None

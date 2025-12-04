@@ -420,135 +420,23 @@ async def setup_database():
             api_mgr = APIKeyManager()
             await api_mgr.initialize()
 
-            # Now create usage tables that reference api_keys
-            pool = await get_db_pool()
-            async with pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # Extend api_keys with Virtual Key fields (apply after base api_keys created)
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS is_virtual BOOLEAN DEFAULT FALSE")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS parent_key_id INTEGER REFERENCES api_keys(id)")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_tokens BIGINT")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_tokens BIGINT")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_usd DOUBLE PRECISION")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_usd DOUBLE PRECISION")
-                    # Store allowlists as TEXT (JSON string) for compatibility across asyncpg versions
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_endpoints TEXT")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_providers TEXT")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_models TEXT")
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS usage_log (
-                            id SERIAL PRIMARY KEY,
-                            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                            key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
-                            endpoint TEXT,
-                            status INTEGER,
-                            latency_ms INTEGER,
-                            bytes BIGINT,
-                            bytes_in BIGINT,
-                            meta JSONB,
-                            request_id TEXT
-                        )
-                    """)
-                    # Extend existing table (if created before) with request_id column
-                    await conn.execute("ALTER TABLE usage_log ADD COLUMN IF NOT EXISTS request_id TEXT")
-                    # Extend existing table with bytes_in if missing
-                    await conn.execute("ALTER TABLE usage_log ADD COLUMN IF NOT EXISTS bytes_in BIGINT")
-                    # Helpful indexes
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_log(ts)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_user ON usage_log(user_id)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_status ON usage_log(status)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_endpoint ON usage_log(endpoint)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_request_id ON usage_log(request_id)")
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS usage_daily (
-                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                            day DATE NOT NULL,
-                            requests INTEGER DEFAULT 0,
-                            errors INTEGER DEFAULT 0,
-                            bytes_total BIGINT DEFAULT 0,
-                            bytes_in_total BIGINT DEFAULT 0,
-                            latency_avg_ms DOUBLE PRECISION,
-                            PRIMARY KEY (user_id, day)
-                        )
-                    """)
-                    # Indexes for reporting
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_daily_day_user ON usage_daily(day, user_id)")
-                    # Extend existing table with bytes_in_total
-                    await conn.execute("ALTER TABLE usage_daily ADD COLUMN IF NOT EXISTS bytes_in_total BIGINT")
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS llm_usage_log (
-                            id SERIAL PRIMARY KEY,
-                            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                            key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
-                            endpoint TEXT,
-                            operation TEXT,
-                            provider TEXT,
-                            model TEXT,
-                            status INTEGER,
-                            latency_ms INTEGER,
-                            prompt_tokens INTEGER,
-                            completion_tokens INTEGER,
-                            total_tokens INTEGER,
-                            prompt_cost_usd DOUBLE PRECISION,
-                            completion_cost_usd DOUBLE PRECISION,
-                            total_cost_usd DOUBLE PRECISION,
-                            currency TEXT DEFAULT 'USD',
-                            estimated BOOLEAN DEFAULT FALSE,
-                            request_id TEXT
-                        )
-                    """)
-                    # Helpful indexes
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_ts ON llm_usage_log(ts)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_user ON llm_usage_log(user_id)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_provider_model ON llm_usage_log(provider, model)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_op_ts ON llm_usage_log(operation, ts)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_operation ON llm_usage_log(operation)")
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS llm_usage_daily (
-                            day DATE NOT NULL,
-                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                            operation TEXT NOT NULL,
-                            provider TEXT NOT NULL,
-                            model TEXT NOT NULL,
-                            requests INTEGER DEFAULT 0,
-                            errors INTEGER DEFAULT 0,
-                            input_tokens BIGINT DEFAULT 0,
-                            output_tokens BIGINT DEFAULT 0,
-                            total_tokens BIGINT DEFAULT 0,
-                            total_cost_usd DOUBLE PRECISION DEFAULT 0.0,
-                            latency_avg_ms DOUBLE PRECISION,
-                            PRIMARY KEY (day, user_id, operation, provider, model)
-                        )
-                    """)
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_daily_day_user_op_prov_model ON llm_usage_daily(day, user_id, operation, provider, model)")
+            # Ensure usage/LLM usage tables and virtual-key counters for Postgres.
+            # The SQLite path is covered by AuthNZ migrations; on Postgres we rely
+            # on these additive helpers instead of inline DDL here.
+            from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
+                ensure_usage_tables_pg,
+                ensure_virtual_key_counters_pg,
+            )
 
-                    # Cross-instance quota counters for virtual keys (JWT + API keys)
-                    await conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS vk_jwt_counters (
-                            jti TEXT NOT NULL,
-                            counter_type TEXT NOT NULL,
-                            count BIGINT DEFAULT 0,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            PRIMARY KEY (jti, counter_type)
-                        )
-                        """
-                    )
-                    await conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS vk_api_key_counters (
-                            api_key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
-                            counter_type TEXT NOT NULL,
-                            count BIGINT DEFAULT 0,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            PRIMARY KEY (api_key_id, counter_type)
-                        )
-                        """
-                    )
+            pool = await get_db_pool()
+            try:
+                await ensure_usage_tables_pg(pool)
+            except Exception as usage_err:
+                logger.debug(f"AuthNZ initialize: usage tables ensure skipped/failed: {usage_err}")
+            try:
+                await ensure_virtual_key_counters_pg(pool)
+            except Exception as vk_err:
+                logger.debug(f"AuthNZ initialize: virtual-key counters ensure skipped/failed: {vk_err}")
 
             print("✅ Basic schema ensured for Postgres (users, api keys, sessions, registration_codes, RBAC, orgs/teams, usage tables)")
         except Exception as e:

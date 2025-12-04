@@ -1,14 +1,43 @@
 # rate_limiter.py
 # Per-user rate limiting for embeddings service
 
+import asyncio
+import os
 import time
 import threading
-from typing import Dict, Optional
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
+from typing import Dict, Optional
 
 from loguru import logger
+
 from tldw_Server_API.app.core.Embeddings.audit_adapter import log_security_violation
+
+try:
+    # Resource Governor (optional; enabled via RG flags)
+    from tldw_Server_API.app.core.Resource_Governance import (
+        MemoryResourceGovernor,
+        RedisResourceGovernor,
+        RGRequest,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.metrics_rg import (
+        record_shadow_mismatch,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+        PolicyLoader,
+        PolicyReloadConfig,
+        default_policy_loader,
+    )
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
+except Exception:  # pragma: no cover - RG is optional for embeddings
+    MemoryResourceGovernor = None  # type: ignore
+    RedisResourceGovernor = None  # type: ignore
+    RGRequest = None  # type: ignore
+    record_shadow_mismatch = None  # type: ignore
+    PolicyLoader = None  # type: ignore
+    PolicyReloadConfig = None  # type: ignore
+    default_policy_loader = None  # type: ignore
+    rg_enabled = None  # type: ignore
 
 
 class UserRateLimiter:
@@ -376,6 +405,10 @@ class AsyncRateLimiter:
     def __init__(self, rate_limiter: Optional[UserRateLimiter] = None):
         self.rate_limiter = rate_limiter or get_rate_limiter()
         self.executor = None
+        # Shadow-mode flag for comparing legacy vs RG behavior without breaking callers
+        self.shadow_enabled = (
+            os.getenv("RG_SHADOW_EMBEDDINGS", "1").lower() in {"1", "true", "yes", "on"}
+        )
 
     async def check_rate_limit_async(
         self,
@@ -394,14 +427,37 @@ class AsyncRateLimiter:
         Returns:
             Tuple of (allowed, retry_after_seconds)
         """
+        # Prefer Resource Governor when configured; fallback to legacy limiter otherwise.
+        rg_decision = await _maybe_enforce_with_rg(user_id=user_id, cost=cost)
+
+        # Always evaluate legacy limiter for shadow metrics and fallback.
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
+        legacy_allowed, legacy_retry = await loop.run_in_executor(
             self.executor,
             self.rate_limiter.check_rate_limit,
             user_id,
             cost,
-            ip_address
+            ip_address,
         )
+
+        if rg_decision is None:
+            return legacy_allowed, legacy_retry
+
+        # Shadow comparison (best-effort)
+        if self.shadow_enabled and record_shadow_mismatch is not None:
+            try:
+                if bool(legacy_allowed) != bool(rg_decision["allowed"]):
+                    record_shadow_mismatch(
+                        module="embeddings",
+                        route="/api/v1/embeddings",
+                        policy_id=rg_decision.get("policy_id", "embeddings.default"),
+                        legacy="allow" if legacy_allowed else "deny",
+                        rg="allow" if rg_decision["allowed"] else "deny",
+                    )
+            except Exception:
+                logger.debug("Embeddings RG shadow metric failed", exc_info=True)
+
+        return rg_decision["allowed"], rg_decision.get("retry_after")
 
     async def record_usage_async(self, user_id: str, cost: int = 1):
         """Record usage asynchronously (for post-processing)"""
@@ -428,3 +484,91 @@ def get_async_rate_limiter() -> AsyncRateLimiter:
     if _async_rate_limiter is None:
         _async_rate_limiter = AsyncRateLimiter()
     return _async_rate_limiter
+
+
+# --- Resource Governor plumbing (optional) ---
+_rg_embeddings_governor = None
+_rg_embeddings_loader = None
+_rg_embeddings_lock = asyncio.Lock()
+
+
+def _rg_embeddings_enabled() -> bool:
+    # Env wins; otherwise inherit global RG flag when present
+    flag = os.getenv("RG_ENABLE_EMBEDDINGS")
+    if flag is not None:
+        return flag.strip().lower() in {"1", "true", "yes", "on"}
+    if rg_enabled:
+        try:
+            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+        except Exception:
+            return False
+    return False
+
+
+async def _get_embeddings_rg_governor():
+    """Lazily initialize a ResourceGovernor for embeddings if enabled."""
+    global _rg_embeddings_governor, _rg_embeddings_loader
+    if not _rg_embeddings_enabled():
+        return None
+    if RGRequest is None or PolicyLoader is None:
+        return None
+    if _rg_embeddings_governor is not None:
+        return _rg_embeddings_governor
+    async with _rg_embeddings_lock:
+        if _rg_embeddings_governor is not None:
+            return _rg_embeddings_governor
+        try:
+            loader = default_policy_loader() if default_policy_loader else PolicyLoader(
+                os.getenv("RG_POLICY_PATH", "tldw_Server_API/Config_Files/resource_governor_policies.yaml"),
+                PolicyReloadConfig(enabled=True, interval_sec=int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10")),
+            )
+            await loader.load_once()
+            _rg_embeddings_loader = loader
+            backend = os.getenv("RG_BACKEND", "memory").lower()
+            if backend == "redis" and RedisResourceGovernor is not None:
+                gov = RedisResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            else:
+                gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            _rg_embeddings_governor = gov
+            return gov
+        except Exception as exc:  # pragma: no cover - optional path
+            logger.debug(f"Embeddings RG governor init failed; falling back to legacy limiter: {exc}")
+            return None
+
+
+async def _maybe_enforce_with_rg(user_id: str, cost: int) -> Optional[Dict[str, object]]:
+    """
+    Attempt to enforce embeddings request limits via Resource Governor.
+
+    Returns a decision dict when RG is used, or None when RG is unavailable/disabled.
+    """
+    gov = await _get_embeddings_rg_governor()
+    if gov is None:
+        return None
+    policy_id = os.getenv("RG_EMBEDDINGS_POLICY_ID", "embeddings.default")
+    op_id = f"emb-{user_id}-{time.time_ns()}"
+    try:
+        decision, handle = await gov.reserve(
+            RGRequest(
+                entity=f"user:{user_id}",
+                categories={"requests": {"units": cost}},
+                tags={"policy_id": policy_id, "module": "embeddings"},
+            ),
+            op_id=op_id,
+        )
+        if decision.allowed:
+            # Treat reserve as consumption and finalize immediately to keep semantics simple.
+            if handle:
+                try:
+                    await gov.commit(handle, None, op_id=op_id)
+                except Exception:
+                    logger.debug("Embeddings RG commit failed", exc_info=True)
+            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
+        return {
+            "allowed": False,
+            "retry_after": decision.retry_after or 1,
+            "policy_id": policy_id,
+        }
+    except Exception as exc:
+        logger.debug(f"Embeddings RG reserve failed; falling back to legacy: {exc}")
+        return None

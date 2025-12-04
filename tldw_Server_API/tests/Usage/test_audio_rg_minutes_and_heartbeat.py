@@ -1,0 +1,58 @@
+import asyncio
+
+import pytest
+
+from tldw_Server_API.app.core.Usage import audio_quota
+
+
+@pytest.mark.asyncio
+async def test_check_daily_minutes_prefers_ledger(monkeypatch):
+    # Ensure legacy usage path is not invoked when ledger is available
+    called_legacy = {"used": False}
+
+    async def _fake_limits(user_id: int):
+        return {"daily_minutes": 10}
+
+    async def _fake_ledger_remaining(user_id: int, daily_limit_minutes: float):
+        return 2.0  # minutes remaining
+
+    async def _fake_get_daily_minutes_used(user_id: int):
+        called_legacy["used"] = True
+        return 0.0
+
+    monkeypatch.setattr(audio_quota, "get_limits_for_user", _fake_limits)
+    monkeypatch.setattr(audio_quota, "_ledger_remaining_minutes", _fake_ledger_remaining)
+    monkeypatch.setattr(audio_quota, "get_daily_minutes_used", _fake_get_daily_minutes_used)
+
+    allowed, remaining = await audio_quota.check_daily_minutes_allow(user_id=1, minutes_requested=3.0)
+
+    assert allowed is False
+    assert remaining == 2.0
+    assert called_legacy["used"] is False  # ledger path short-circuited legacy usage
+
+
+class _FakeGovernor:
+    def __init__(self):
+        self.renewed = []
+
+    async def renew(self, handle_id: str, ttl_s: int):
+        self.renewed.append((handle_id, ttl_s))
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_jobs_renews_rg_handles(monkeypatch):
+    audio_quota._reset_in_process_counters_for_tests()
+    fake = _FakeGovernor()
+    # Seed two job handles for the user
+    audio_quota._rg_job_handles[123] = ["h1", "h2"]
+
+    async def _fake_get_gov():
+        return fake
+
+    monkeypatch.setattr(audio_quota, "_get_audio_rg_governor", _fake_get_gov)
+    monkeypatch.setenv("AUDIO_JOB_TTL_SECONDS", "90")
+
+    await audio_quota.heartbeat_jobs(123)
+
+    assert len(fake.renewed) == 2
+    assert all(ttl == 90 for _, ttl in fake.renewed)

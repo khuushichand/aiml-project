@@ -21,6 +21,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_admin,
     get_db_transaction,
     get_user_org_policy,
+    get_org_policy_from_principal,
     require_permissions,
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
@@ -79,7 +80,7 @@ async def oauth_callback(
     state: Optional[str] = None,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
-    org_policy: Dict[str, Any] = Depends(get_user_org_policy),
+    org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
 ) -> ConnectorAccount:
     conn = get_connector_by_name(provider)
     pol = org_policy
@@ -208,7 +209,7 @@ async def add_source(
     payload: ConnectorSourceCreateRequest,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
-    org_policy: Dict[str, Any] = Depends(get_user_org_policy),
+    org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
 ) -> ConnectorSource:
     # payload keys: account_id, provider, remote_id, type, path, options
     account_id = int(payload.account_id)
@@ -308,7 +309,7 @@ async def import_source(
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
     request: Request = None,
-    org_policy: Dict[str, Any] = Depends(get_user_org_policy),
+    org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
     count_jobs_fn: Callable[[int], int] = Depends(get_connectors_job_counter),
 ) -> ImportJob:
     # Enforce per-role daily quota from org policy for all modes; single-user

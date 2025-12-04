@@ -22,6 +22,138 @@ class AuthnzApiKeysRepo:
 
     db_pool: DatabasePool
 
+    async def ensure_tables(self) -> None:
+        """
+        Ensure api_keys and api_key_audit_log tables exist with required columns
+        for both PostgreSQL and SQLite backends. This centralizes dialect-specific
+        DDL so runtime callers (e.g., APIKeyManager) do not embed raw SQL.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchval"):
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS api_keys (
+                            id SERIAL PRIMARY KEY,
+                            user_id INTEGER NOT NULL,
+                            key_hash VARCHAR(64) UNIQUE NOT NULL,
+                            key_prefix VARCHAR(16) NOT NULL,
+                            name VARCHAR(255),
+                            description TEXT,
+                            scope VARCHAR(50) DEFAULT 'read',
+                            status VARCHAR(20) DEFAULT 'active',
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            expires_at TIMESTAMP,
+                            last_used_at TIMESTAMP,
+                            last_used_ip VARCHAR(45),
+                            usage_count INTEGER DEFAULT 0,
+                            rate_limit INTEGER,
+                            allowed_ips TEXT,
+                            metadata JSONB,
+                            rotated_from INTEGER REFERENCES api_keys(id),
+                            rotated_to INTEGER REFERENCES api_keys(id),
+                            revoked_at TIMESTAMP,
+                            revoked_by INTEGER,
+                            revoke_reason TEXT,
+                            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                        )
+                        """
+                    )
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS api_key_audit_log (
+                            id SERIAL PRIMARY KEY,
+                            api_key_id INTEGER NOT NULL,
+                            action VARCHAR(50) NOT NULL,
+                            user_id INTEGER,
+                            ip_address VARCHAR(45),
+                            user_agent TEXT,
+                            details JSONB,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE
+                        )
+                        """
+                    )
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS is_virtual BOOLEAN DEFAULT FALSE")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS parent_key_id INTEGER REFERENCES api_keys(id)")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_tokens BIGINT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_tokens BIGINT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_usd DOUBLE PRECISION")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_usd DOUBLE PRECISION")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_endpoints TEXT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_providers TEXT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_models TEXT")
+                else:
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS api_keys (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_id INTEGER NOT NULL,
+                            key_hash TEXT UNIQUE NOT NULL,
+                            key_prefix TEXT NOT NULL,
+                            name TEXT,
+                            description TEXT,
+                            scope TEXT DEFAULT 'read',
+                            status TEXT DEFAULT 'active',
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            expires_at TIMESTAMP,
+                            last_used_at TIMESTAMP,
+                            last_used_ip TEXT,
+                            usage_count INTEGER DEFAULT 0,
+                            rate_limit INTEGER,
+                            allowed_ips TEXT,
+                            metadata TEXT,
+                            rotated_from INTEGER REFERENCES api_keys(id),
+                            rotated_to INTEGER REFERENCES api_keys(id),
+                            revoked_at TIMESTAMP,
+                            revoked_by INTEGER,
+                            revoke_reason TEXT,
+                            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                        )
+                        """
+                    )
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS api_key_audit_log (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            api_key_id INTEGER NOT NULL,
+                            action TEXT NOT NULL,
+                            user_id INTEGER,
+                            ip_address TEXT,
+                            user_agent TEXT,
+                            details TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE
+                        )
+                        """
+                    )
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS is_virtual BOOLEAN DEFAULT 0")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS parent_key_id INTEGER REFERENCES api_keys(id)")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_tokens BIGINT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_tokens BIGINT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_usd REAL")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_usd REAL")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_endpoints TEXT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_providers TEXT")
+                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_models TEXT")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_virtual ON api_keys(is_virtual)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(org_id)")
+                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_team ON api_keys(team_id)")
+        except Exception as exc:
+            logger.error(f"AuthnzApiKeysRepo.ensure_tables failed: {exc}")
+            raise
     async def fetch_active_by_hash_candidates(
         self,
         hash_candidates: List[str],

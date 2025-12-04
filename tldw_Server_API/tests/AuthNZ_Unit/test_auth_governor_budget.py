@@ -258,6 +258,63 @@ async def test_auth_governor_lockout_fallback_when_limiter_missing(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_auth_governor_rate_limit_delegates_to_limiter(monkeypatch):
+    calls: dict[str, Any] = {}
+
+    class _Limiter:
+        enabled = True
+
+        async def check_rate_limit(self, identifier, endpoint, **kwargs):
+            calls["identifier"] = identifier
+            calls["endpoint"] = endpoint
+            calls["kwargs"] = kwargs
+            return False, {"retry_after": 42}
+
+    async def _fake_get_rate_limiter():
+        return _Limiter()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.auth_governor.get_rate_limiter",
+        _fake_get_rate_limiter,
+    )
+
+    gov = AuthGovernor()
+    allowed, meta = await gov.check_rate_limit(
+        identifier="1.2.3.4",
+        endpoint="auth",
+        limit=5,
+        window_minutes=1,
+    )
+    assert allowed is False
+    assert meta.get("retry_after") == 42
+    assert calls["identifier"] == "1.2.3.4"
+    assert calls["endpoint"] == "auth"
+    assert calls["kwargs"]["limit"] == 5
+    assert calls["kwargs"]["window_minutes"] == 1
+
+
+@pytest.mark.asyncio
+async def test_auth_governor_rate_limit_fails_open_when_limiter_missing(monkeypatch):
+    async def _fake_get_rate_limiter():
+        raise RuntimeError("no limiter")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.auth_governor.get_rate_limiter",
+        _fake_get_rate_limiter,
+    )
+
+    gov = AuthGovernor()
+    allowed, meta = await gov.check_rate_limit(
+        identifier="1.2.3.4",
+        endpoint="auth",
+        limit=5,
+        window_minutes=1,
+    )
+    assert allowed is True
+    assert meta == {}
+
+
+@pytest.mark.asyncio
 async def test_enforce_llm_budget_allows_under_budget_chat(monkeypatch):
     fake_settings = SimpleNamespace(
         VIRTUAL_KEYS_ENABLED=True,

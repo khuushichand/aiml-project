@@ -17,6 +17,8 @@ import tiktoken
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles, require_permissions
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
     VectorStoreAdapter,
     VectorStoreConfig,
@@ -80,6 +82,10 @@ def _get_embeddings_fn():
 
 router = APIRouter(
     tags=["vector-stores"],
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+    ],
 )
 
 # Ensure DB is initialized for single-user default on import; per-user init done on demand

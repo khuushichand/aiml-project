@@ -7,7 +7,11 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Response
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    require_admin,
+    require_permissions,
+    require_roles,
+)
 from tldw_Server_API.app.api.v1.schemas.moderation_schemas import (
     ModerationUserOverride,
     ModerationBlocklistUpdate,
@@ -26,9 +30,15 @@ from tldw_Server_API.app.api.v1.schemas.moderation_schemas import (
     ModerationSettingsUpdate,
 )
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+    ]
+)
 
 
 @router.get("/moderation/users", response_model=ModerationUserOverridesResponse, summary="List all per-user moderation overrides", tags=["moderation"])

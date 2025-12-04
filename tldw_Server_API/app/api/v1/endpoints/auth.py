@@ -521,8 +521,12 @@ async def login(
 
         # Reset failed login attempts on successful login
         if getattr(rate_limiter, 'enabled', False):
-            await rate_limiter.reset_failed_attempts(client_ip, "login")
-            await rate_limiter.reset_failed_attempts(user['username'], "login")
+            try:
+                await rate_limiter.reset_failed_attempts(client_ip, "login")
+                await rate_limiter.reset_failed_attempts(user['username'], "login")
+            except Exception as rl_exc:
+                # Guardrails must not break successful logins; log and continue.
+                logger.debug(f"rate_limiter.reset_failed_attempts failed: {rl_exc}")
 
         # Audit log successful login
         await _safe_audit_log_login(

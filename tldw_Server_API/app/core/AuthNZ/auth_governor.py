@@ -158,6 +158,51 @@ class AuthGovernor:
 
         return {"is_locked": False, "remaining_attempts": 5}
 
+    async def check_rate_limit(
+        self,
+        identifier: str,
+        endpoint: str,
+        *,
+        limit: int | None = None,
+        window_minutes: int | None = None,
+        rate_limiter=None,
+    ) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Check a generic AuthNZ-scoped rate limit via the shared RateLimiter.
+
+        This wraps RateLimiter.check_rate_limit and normalizes the metadata
+        shape. On limiter errors or when the limiter is disabled/unavailable,
+        this method fails open and returns (True, {}).
+        """
+        limiter = rate_limiter
+        if limiter is None:
+            try:
+                limiter = await get_rate_limiter()
+            except Exception:
+                limiter = None
+
+        if limiter and getattr(limiter, "enabled", False):
+            try:
+                kwargs: Dict[str, Any] = {}
+                if limit is not None:
+                    kwargs["limit"] = int(limit)
+                if window_minutes is not None:
+                    kwargs["window_minutes"] = int(window_minutes)
+                allowed, meta = await limiter.check_rate_limit(identifier, endpoint, **kwargs)
+                if not isinstance(meta, dict):
+                    try:
+                        meta = dict(meta or {})
+                    except Exception:
+                        meta = {}
+                return bool(allowed), meta
+            except Exception as exc:
+                logger.debug(
+                    f"AuthGovernor rate-limit check failed for {identifier}:{endpoint}: {exc}"
+                )
+
+        # Fail-open when limiter is unavailable or disabled
+        return True, {}
+
 
 _AUTH_GOVERNOR_SINGLETON: AuthGovernor | None = None
 

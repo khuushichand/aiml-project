@@ -230,6 +230,49 @@ Internally, both share the same code paths; only bootstrap, DB URL, and enabled 
 
 Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular feature flags (`ENABLE_REGISTRATION`, `ENABLE_MFA`, etc.), but v1 keeps `AUTH_MODE` for compatibility and treats profiles as an interpretation of the existing settings.
 
+### AUTH_MODE → Profiles + Feature Flags (Migration Plan)
+
+To make “mode” an implementation detail of a higher-level deployment profile, we will:
+
+1. **Introduce an explicit profile setting** (backed by code + docs first, no behavior change):
+   - New setting/env env var: `PROFILE` with allowed values such as:
+     - `local-single-user` (or legacy alias `single_user`).
+     - `multi-user-postgres`.
+     - `multi-user-sqlite` (optional, for small multi-user dev setups).
+   - Initial behavior (v0.1.x):
+     - If `PROFILE` is unset, the system behaves exactly as today and infers behavior from `AUTH_MODE` + `DATABASE_URL`.
+     - If `PROFILE` is set, helper functions (e.g., `is_single_user_mode`, `is_multi_user_mode`) continue to read `AUTH_MODE` but may log/emit diagnostics when `PROFILE` and `AUTH_MODE` disagree (no hard failures yet).
+
+2. **Add feature flags that clarify UX vs auth semantics**, without changing defaults:
+   - Examples:
+     - `ENABLE_REGISTRATION` (default: `True` in multi-user, `False` in single-user profile).
+     - `ENABLE_MFA` (default: `False` in local-single-user, `True`/recommended in multi-user-postgres).
+     - `ENABLE_ORGS_TEAMS`, `ENABLE_VIRTUAL_KEYS`, `ENABLE_JOBS_DOMAIN_SCOPING`, etc. (all default to current behavior).
+   - For `v0.1.x`, these flags gate **UX/feature surface** (show/hide endpoints, admin controls, and WebUI affordances) rather than changing core auth semantics. All flags default to values that exactly match today’s behavior.
+
+3. **Gradually rewrite `is_single_user_mode()` callsites to profile/flags**, guided by tests:
+   - Classification:
+     - **Coordination/UX**: startup banners, WebUI config hints, background warm-ups, quota hints – these can switch to `PROFILE` + feature flags without impacting auth semantics.
+     - **Auth-adjacent**: shortcuts in auth deps, jobs admin, embeddings quotas, MCP auth compatibility – these must be backed by explicit principal/claims tests before any behavior change.
+   - Plan:
+     - Keep `is_single_user_mode()` as a thin wrapper over `get_settings().AUTH_MODE == "single_user"` for now, but add tests that assert:
+       - Single-user principal claims (roles/permissions) enforce the same constraints as multi-user admin/admin-lite principals.
+       - No auth path bypasses `get_auth_principal` / `require_permissions` / `require_roles` solely due to mode.
+     - For each auth-adjacent branch (beyond jobs-admin, which already has a principal-first path), design a claim-first alternative that takes an `AuthPrincipal` and/or `AuthContext` and:
+       - Enforces the same behavior via claims (roles, permissions, feature flags).
+       - Is gated by a dedicated env flag (e.g., `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE`, `MCP_SINGLE_USER_COMPAT_SHIM`) so we can test before flipping defaults.
+
+4. **Document migration for existing environments (no behavior changes by default)**:
+   - Existing deployments can safely upgrade by:
+     - Leaving `PROFILE` unset; `AUTH_MODE` continues to drive behavior as today.
+     - Optionally setting `PROFILE` to match current `AUTH_MODE`:
+       - `AUTH_MODE=single_user` → `PROFILE=local-single-user`.
+       - `AUTH_MODE=multi_user` + Postgres `DATABASE_URL` → `PROFILE=multi-user-postgres`.
+     - Not setting any new feature flags; defaults are chosen to preserve current endpoint availability and guardrail semantics.
+   - Future major versions can:
+     - Deprecate direct `AUTH_MODE` reads in business logic and treat it as a thin compatibility alias for `PROFILE`.
+     - Promote feature flags and `PROFILE` to the primary configuration model, with `AUTH_MODE` used only to infer defaults when missing.
+
 ---
 
 ## Scope
@@ -449,7 +492,7 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
   - Admin user in single-user profile can perform privileged operations.
   - Non-admin users (if any are created) are constrained by RBAC as expected.
 
-**Status**: In Progress
+**Status**: Done
 
 **Notes**:
 - `tldw_Server_API/app/core/AuthNZ/permissions.py` now:
@@ -484,7 +527,7 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
     - Tests in `tldw_Server_API/tests/AuthNZ_Unit/test_prompt_studio_user_claims.py` and `tldw_Server_API/tests/prompt_studio/unit/test_prompt_studio_deps_headers.py` cover claim propagation, header forwarding, and 401 behavior.
 - Remaining mode-based checks:
   - Coordination/governance only: startup banners, WebUI config (embedding the single-user API key in non-production), ChaChaNotes warm-up, backpressure and tenant-RPS decisions, embedding quota defaults, and a small number of diagnostics paths use `is_single_user_mode()` to choose profile-specific behavior without bypassing authorization.
-  - Jobs admin routes: `tldw_Server_API/app/api/v1/endpoints/jobs_admin.py` now adopt claim-first admin gating via `dependencies=[Depends(require_roles("admin"))]` on the router, while still using `require_admin` inside endpoints for legacy checks. Domain-scoped RBAC for jobs remains env-driven (`JOBS_DOMAIN_SCOPED_RBAC`, `JOBS_RBAC_FORCE`, `JOBS_DOMAIN_ALLOWLIST_*`) but no longer bypasses enforcement based on `AUTH_MODE`/`is_single_user_mode()`. HTTP-level claim tests in `tldw_Server_API/tests/AuthNZ_Unit/test_jobs_admin_permissions_claims.py` validate 401/403/200 behavior for a representative admin endpoint (`GET /api/v1/jobs/queue/status`) by overriding `get_auth_principal` and `require_admin`.
+- Jobs admin routes: `tldw_Server_API/app/api/v1/endpoints/jobs_admin.py` now adopt claim-first admin gating via `dependencies=[Depends(require_roles("admin"))]` on the router, while still using `require_admin` inside endpoints for legacy checks. Domain-scoped RBAC for jobs remains env-driven (`JOBS_DOMAIN_SCOPED_RBAC`, `JOBS_RBAC_FORCE`, `JOBS_DOMAIN_ALLOWLIST_*`), but all domain-scoped jobs-admin surfaces now have a principal-first domain RBAC path gated by `JOBS_DOMAIN_RBAC_PRINCIPAL`. When this flag is enabled, endpoints call `_enforce_domain_scope_from_principal(principal, domain)` to derive the jobs “admin user” from `AuthPrincipal` before applying the existing env-based allowlist logic; when it is disabled, they fall back to the legacy user-dict path. HTTP-level claim tests in `tldw_Server_API/tests/AuthNZ_Unit/test_jobs_admin_permissions_claims.py` validate 401/403/200 behavior and domain allowlist semantics for queue status/control, prune/reschedule/retry-now, events (list/SSE), and related maintenance endpoints under the principal-driven path. The long-term intent is to make the principal-based path the default and retire the legacy user-dict/env toggles once parity is confirmed in production deployments.
 
 ### Repo vs Inline-SQL Coverage (AuthNZ Tables)
 

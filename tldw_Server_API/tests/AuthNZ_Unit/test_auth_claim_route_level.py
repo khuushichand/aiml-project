@@ -1,7 +1,7 @@
 from typing import Any
 
 import pytest
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
@@ -35,6 +35,22 @@ async def role_protected(
     _principal: AuthPrincipal = Depends(require_roles("admin")),
 ) -> dict[str, Any]:
     return {"status": "ok"}
+
+
+router = APIRouter(
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions("system.configure")),
+    ]
+)
+
+
+@router.get("/router-guarded")
+async def router_guarded() -> dict[str, Any]:
+    return {"status": "router-ok"}
+
+
+app.include_router(router)
 
 
 client = TestClient(app)
@@ -113,6 +129,35 @@ async def test_require_permissions_http_403_when_missing_permission_adjusted(mon
     resp = local_client.get("/perm-protected")
     assert resp.status_code == 403
     assert "media.read" in resp.json().get("detail", "")
+
+
+@pytest.mark.asyncio
+async def test_router_dependencies_403_without_required_claims(monkeypatch):
+    async def _stub_get_auth_principal(request):  # type: ignore[override]
+        # Missing system.configure permission and admin role
+        return _make_principal(permissions=["other.perm"], roles=["user"])
+
+    monkeypatch.setattr(
+        auth_deps, "_resolve_auth_principal", _stub_get_auth_principal, raising=True
+    )
+
+    resp = client.get("/router-guarded")
+    assert resp.status_code == 403
+    assert "Required role(s)" in resp.json().get("detail", "")
+
+
+@pytest.mark.asyncio
+async def test_router_dependencies_200_for_admin(monkeypatch):
+    async def _stub_get_auth_principal(request):  # type: ignore[override]
+        return _make_principal(is_admin=True, roles=["admin"], permissions=["system.configure"])
+
+    monkeypatch.setattr(
+        auth_deps, "_resolve_auth_principal", _stub_get_auth_principal, raising=True
+    )
+
+    resp = client.get("/router-guarded")
+    assert resp.status_code == 200
+    assert resp.json().get("status") == "router-ok"
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@
 # Project and prompt schemas for Prompt Studio
 
 from typing import List, Optional, Dict, Any
+from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime
 
@@ -42,7 +43,7 @@ class ProjectResponse(ProjectBase, TimestampMixin, UUIDMixin):
 class ProjectListItem(BaseModel):
     """Simplified project for list views"""
     id: int
-    uuid: str
+    uuid: UUID
     name: str
     description: Optional[str]
     status: ProjectStatus
@@ -147,7 +148,7 @@ class PromptResponse(PromptBase, TimestampMixin, UUIDMixin):
 class PromptVersion(BaseModel):
     """Prompt version in history"""
     id: int
-    uuid: str
+    uuid: UUID
     version_number: int
     name: str
     change_description: Optional[str]

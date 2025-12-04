@@ -53,7 +53,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_roles,
 )
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings, get_profile
 
 # Configuration
 from tldw_Server_API.app.core.config import settings
@@ -419,6 +419,18 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
             except Exception:
                 pass
             try:
+                # Prefer explicit profile when configured; fall back to mode.
+                settings = get_settings()
+                profile = get_profile()
+                if isinstance(profile, str) and profile.strip():
+                    # Keep current behavior: profiles that explicitly signal a
+                    # local/single-user/desktop experience are treated as
+                    # non-multi-user for tenant quotas; everything else
+                    # behaves like multi_user.
+                    lowered = profile.strip().lower()
+                    if lowered in {"single_user", "local-single-user", "desktop"}:
+                        return False
+                    return True
                 return not is_single_user_mode()
             except Exception:
                 return False
@@ -2348,6 +2360,17 @@ class TenantQuotaResponse(BaseModel):
 
 @router.get("/embeddings/tenant/quotas", summary="Get current tenant quotas (if multi-tenant)")
 async def get_tenant_quotas(current_user: User = Depends(get_request_user)) -> TenantQuotaResponse:
+    # Prefer explicit PROFILE hints when present; keep behavior compatible
+    # with AUTH_MODE/is_single_user_mode defaults.
+    try:
+        settings = get_settings()
+        profile = get_profile()
+        if isinstance(profile, str) and profile.strip():
+            lowered = profile.strip().lower()
+            if lowered in {"single_user", "local-single-user", "desktop"} or TENANT_RPS <= 0:
+                return TenantQuotaResponse(limit_rps=0, remaining=None)
+    except Exception:
+        pass
     if is_single_user_mode() or TENANT_RPS <= 0:
         return TenantQuotaResponse(limit_rps=0, remaining=None)
     try:

@@ -112,7 +112,16 @@ async def get_current_user(
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     request: Request = None,
 ) -> Optional[TokenData]:
-    """Get current user (AuthNZ JWT, MCP JWT, or API key)."""
+    """Get current user (AuthNZ JWT, MCP JWT, or API key).
+
+    The resolution order deliberately mirrors the main AuthNZ stack:
+    1) AuthNZ access JWT (multi-user).
+    2) MCP JWT (for tools integrations).
+    3) API key:
+       - Single-user mode: treat SINGLE_USER_API_KEY (and, in TEST_MODE,
+         SINGLE_USER_TEST_API_KEY) as an admin-style principal.
+       - Multi-user: validate via APIKeyManager and map to a user id.
+    """
     # Try AuthNZ JWT first (multi-user)
     try:
         if credentials and credentials.credentials:
@@ -120,7 +129,13 @@ async def get_current_user(
             payload = jwt_service.decode_access_token(credentials.credentials)
             uid = str(payload.get("user_id") or payload.get("sub"))
             if uid:
-                return TokenData(sub=uid, username=payload.get("username"), roles=[], permissions=[], token_type="access")
+                return TokenData(
+                    sub=uid,
+                    username=payload.get("username"),
+                    roles=[],
+                    permissions=[],
+                    token_type="access",
+                )
     except Exception as e:
         logger.debug(f"AuthNZ JWT check failed: {e}")
 
@@ -135,33 +150,32 @@ async def get_current_user(
     # API key fallback
     try:
         if x_api_key:
-            # Single-user mode: accept the configured SINGLE_USER_API_KEY directly
+            # Single-user mode: accept the configured SINGLE_USER_API_KEY directly,
+            # mirroring the semantics in get_request_user/get_auth_principal.
             try:
                 if is_single_user_mode():
                     settings = get_settings()
-                    if x_api_key == settings.SINGLE_USER_API_KEY:
+                    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {
+                        "1",
+                        "true",
+                        "yes",
+                        "on",
+                    }
+                    allowed: set[str] = set()
+                    if settings.SINGLE_USER_API_KEY:
+                        allowed.add(settings.SINGLE_USER_API_KEY)
+                    if test_mode:
+                        allowed.add(os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345"))
+                    if x_api_key in {a for a in allowed if a}:
+                        roles = [UserRole.ADMIN.value]
+                        perms = ["*"] if test_mode else []
                         return TokenData(
                             sub=str(settings.SINGLE_USER_FIXED_ID),
                             username="single_user",
-                            roles=["admin"],
-                            permissions=[],
+                            roles=roles,
+                            permissions=perms,
                             token_type="access",
                         )
-                    # TEST_MODE convenience: honor SINGLE_USER_TEST_API_KEY for deterministic automation
-                    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
-                    if test_mode:
-                        allowed = {
-                            os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345"),
-                            settings.SINGLE_USER_API_KEY,
-                        }
-                        if x_api_key in {a for a in allowed if a}:
-                            return TokenData(
-                                sub=str(settings.SINGLE_USER_FIXED_ID),
-                                username="single_user",
-                                roles=[UserRole.ADMIN.value],
-                                permissions=["*"],
-                                token_type="access",
-                            )
             except Exception:
                 # Fall through to multi-user API key validation
                 pass
@@ -169,7 +183,13 @@ async def get_current_user(
             client_ip = request.client.host if request and getattr(request, "client", None) else None
             info = await api_mgr.validate_api_key(x_api_key, ip_address=client_ip)
             if info and info.get("user_id"):
-                return TokenData(sub=str(info["user_id"]), username=None, roles=["api_client"], permissions=[], token_type="access")
+                return TokenData(
+                    sub=str(info["user_id"]),
+                    username=None,
+                    roles=["api_client"],
+                    permissions=[],
+                    token_type="access",
+                )
     except Exception as e:
         logger.debug(f"API key check failed: {e}")
 

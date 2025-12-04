@@ -40,6 +40,7 @@ from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
 )
 from tldw_Server_API.app.core.External_Sources.connectors_service import get_policy
 from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
+from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
@@ -885,6 +886,14 @@ async def get_user_org_policy(
 ) -> Dict[str, Any]:
     """
     Resolve the active org policy for the current user and fail closed on errors.
+
+    Behaviour (v0.1 contract):
+    - If the user has explicit org memberships, the first membership's org_id is used.
+    - In single-user mode, a synthetic org_id=1 is used to mirror legacy behaviour.
+    - Otherwise, HTTP 400 is raised when no organization can be resolved.
+
+    Note: This helper remains mode-aware for now; future iterations may
+    accept an AuthPrincipal and drive org selection from principal claims.
     """
     memberships = current_user.get("org_memberships") or []
     if memberships:
@@ -901,6 +910,60 @@ async def get_user_org_policy(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Organization membership is missing org_id",
         )
+    try:
+        pol = await get_policy(db, org_id)
+        if not pol:
+            pol = get_default_policy_from_env(org_id)
+        return pol
+    except Exception as exc:
+        logger.exception(f"Failed to load organization policy for org_id={org_id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to load organization policy",
+        ) from exc
+
+
+async def get_org_policy_from_principal(
+    db=Depends(get_db_transaction),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """
+    Resolve organization policy primarily from ``AuthPrincipal``, with fallbacks.
+
+    Preference order:
+    1. First org_id in ``principal.org_ids`` (claim-first).
+    2. First org_id from ``current_user["org_memberships"]`` (legacy user dict).
+    3. Synthetic org_id=1 in single-user mode (for environments without orgs).
+    4. HTTP 400 when no organization can be resolved.
+
+    This helper is the principal-first counterpart to ``get_user_org_policy`` and
+    is intended for new code paths that already depend on ``get_auth_principal``.
+    """
+    # 1) Claim-first: use principal.org_ids when available.
+    org_ids = list(getattr(principal, "org_ids", []) or [])
+    if org_ids:
+        org_id = org_ids[0]
+    else:
+        # 2) Fallback to user org_memberships for compatibility.
+        memberships = current_user.get("org_memberships") or []
+        if memberships:
+            org_id = memberships[0].get("org_id")
+        elif is_single_user_mode():
+            # 3) Single-user profile: synthetic org_id=1 to mirror legacy behaviour.
+            org_id = 1
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User has no organization memberships",
+            )
+
+    if org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Organization membership is missing org_id",
+        )
+
     try:
         pol = await get_policy(db, org_id)
         if not pol:
@@ -1060,8 +1123,13 @@ async def check_rate_limit(
     # Get endpoint key
     endpoint = f"{request.method}:{request.url.path}"
 
-    # Check rate limit
-    allowed, metadata = await rate_limiter.check_rate_limit(client_ip, endpoint)
+    # Check rate limit via AuthGovernor (wraps RateLimiter)
+    auth_gov = await get_auth_governor()
+    allowed, metadata = await auth_gov.check_rate_limit(
+        identifier=client_ip,
+        endpoint=endpoint,
+        rate_limiter=rate_limiter,
+    )
 
     if not allowed:
         retry_after = 60
@@ -1115,12 +1183,14 @@ async def check_auth_rate_limit(
     # Get client IP
     client_ip = request.client.host if request.client else "unknown"
 
-    # Use stricter limits for auth endpoints
-    allowed, metadata = await rate_limiter.check_rate_limit(
-        client_ip,
-        "auth",
+    # Use stricter limits for auth endpoints via AuthGovernor
+    auth_gov = await get_auth_governor()
+    allowed, metadata = await auth_gov.check_rate_limit(
+        identifier=client_ip,
+        endpoint="auth",
         limit=5,  # Stricter limit (5 requests per minute)
-        window_minutes=1
+        window_minutes=1,
+        rate_limiter=rate_limiter,
     )
     retry_after = metadata.get("retry_after", 60)
 

@@ -2,6 +2,7 @@
 # Base schemas for Prompt Studio feature
 
 from typing import List, Optional, Dict, Any, Union
+from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime
 from enum import Enum
@@ -52,7 +53,7 @@ class SoftDeleteMixin(BaseModel):
 
 class UUIDMixin(BaseModel):
     """Mixin for UUID field"""
-    uuid: Optional[str] = None
+    uuid: Optional[UUID] = None
 
     model_config = ConfigDict(from_attributes=True)
 
