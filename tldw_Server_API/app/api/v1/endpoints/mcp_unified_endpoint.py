@@ -132,8 +132,8 @@ async def get_current_user(
                 return TokenData(
                     sub=uid,
                     username=payload.get("username"),
-                    roles=[],
-                    permissions=[],
+                    roles=payload.get("roles", []),
+                    permissions=payload.get("permissions", []),
                     token_type="access",
                 )
     except Exception as e:

@@ -38,6 +38,11 @@ See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentati
   - Optional `PROFILE=multi-user-sqlite` for small dev setups.
 - New code should treat mode/profile as **coordination/UX** inputs (bootstrap, banners, WebUI hints, quotas), not as authorization shortcuts. Auth decisions must use `AuthPrincipal` claims via the dependencies below.
 
+Recommended combinations (v0.1):
+- Local single-user desktop: `AUTH_MODE=single_user`, `PROFILE=local-single-user` (default SQLite users DB).
+- Multi-user with Postgres: `AUTH_MODE=multi_user`, `PROFILE=multi-user-postgres`, `DATABASE_URL=postgres://...`.
+- Multi-user with SQLite (dev only): `AUTH_MODE=multi_user`, `PROFILE=multi-user-sqlite`, `DATABASE_URL=sqlite:///./Databases/users.db`.
+
 ### Single-User Mode (X-API-KEY)
 - Configure `AUTH_MODE=single_user` and `SINGLE_USER_API_KEY` (and eventually `PROFILE=local-single-user`).
 - `get_current_user` and `get_request_user` accept either:

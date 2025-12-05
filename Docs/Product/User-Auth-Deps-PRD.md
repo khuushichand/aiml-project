@@ -361,10 +361,12 @@ Symptoms:
 
 **Notes**:
 - `AuthPrincipal` / `AuthContext` are implemented in `tldw_Server_API/app/core/AuthNZ/principal_model.py`, and `get_auth_principal(request)` is implemented in `tldw_Server_API/app/core/AuthNZ/auth_principal_resolver.py` with unit tests for single-user, JWT, and API-key flows.
-- Core dependencies (`auth_deps.get_current_user`, `User_DB_Handling.verify_jwt_and_fetch_user` / `get_request_user`) now populate `request.state.auth` / `AuthPrincipal` from their resolved user context and, in multi-user flows, reuse an existing `AuthContext`/`AuthPrincipal` when present instead of re-running JWT/API-key logic, while preserving existing 401/403 semantics.
+- Core dependencies (`auth_deps.get_current_user`, `auth_deps.get_current_active_user`, `User_DB_Handling.verify_jwt_and_fetch_user` / `get_request_user`) now populate `request.state.auth` / `AuthPrincipal` from their resolved user context and, in multi-user flows, reuse an existing `AuthContext`/`AuthPrincipal` when present instead of re-running JWT/API-key logic, while preserving existing 401/403 semantics.
 - Integration coverage includes:
-  - `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_state_consistency.py` – single-user API-key flow and 401 semantics for `get_current_user` vs `get_auth_principal`.
-  - `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_jwt_happy_path.py` – full multi-user JWT flow (register → login → protected endpoint) asserting that `AuthPrincipal` aligns with `get_current_user` and `request.state` on a real FastAPI app instance.
+  - `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_state_consistency.py` – single-user API-key flow and 401 semantics for `get_current_user` vs `get_auth_principal`, plus alignment between `get_current_user` / `get_request_user` and `AuthPrincipal`.
+  - `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_jwt_happy_path.py` – full multi-user JWT flow (register → login → protected endpoint) asserting that `AuthPrincipal` aligns with `get_current_user`, `get_request_user`, and `request.state` on a real FastAPI app instance.
+  - `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_api_key_happy_path.py` – multi-user API-key flow asserting that `AuthPrincipal`, `get_current_user`, `get_request_user`, and `request.state` stay in sync (including `api_key_id`) for a real FastAPI route.
+  - `tldw_Server_API/tests/AuthNZ_Unit/test_authnz_invariants.py` – unit-level invariants for 401 semantics on missing credentials and wrapper behavior for `get_current_user`, `get_current_active_user`, and `get_request_user` across single-user and multi-user modes.
 
 ### Stage 2: Claim-First Permissions
 **Goal**: Make runtime permission and role checks rely solely on claims in the common path.
@@ -466,7 +468,7 @@ Symptoms:
     - `get_auth_principal` → returns `AuthPrincipal` with roles/permissions.
     - `require_permissions` / `require_roles` → enforce claims and return the principal; representative usage is called out for media, RAG, notes graph, evaluations CRUD, scheduler workflows admin, and chat queue diagnostics (`system.logs`).
   - Legacy shims:
-    - `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker` in `permissions.py` are described as maintained for existing routes but not recommended for new endpoints.
+    - `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker` in `permissions.py` are described as maintained for existing routes but not recommended for new endpoints. A repository-wide audit of `tldw_Server_API/app/api/v1/endpoints` confirms that no FastAPI routes use these helpers as their primary gate; they remain only as legacy shims in `permissions.py` and in historical AuthNZ documentation/examples.
     - `require_admin` in evaluations auth is documented as an admin-only gate for heavy evaluations flows, while new admin surfaces should prefer `get_auth_principal` plus `require_permissions` / `require_roles`.
 - The code guide now includes a short “securing a new route” example that shows:
   - Defining a permission constant in `permissions.py`.

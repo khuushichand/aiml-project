@@ -82,10 +82,6 @@ def _get_embeddings_fn():
 
 router = APIRouter(
     tags=["vector-stores"],
-    dependencies=[
-        Depends(require_roles("admin")),
-        Depends(require_permissions(SYSTEM_CONFIGURE)),
-    ],
 )
 
 # Ensure DB is initialized for single-user default on import; per-user init done on demand
@@ -451,12 +447,11 @@ async def list_vector_stores(
     return {'data': stores}
 
 
-@router.get("/vector_stores/admin/users")
+@router.get(
+    "/vector_stores/admin/users",
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
+)
 async def list_vector_store_users(current_user: User = Depends(get_request_user)):
-    # Admin or single-user fixed id has access
-    if not (getattr(current_user, 'is_admin', False) or str(getattr(current_user,'id','')) == str(settings.get("SINGLE_USER_FIXED_ID","1"))):
-        raise HTTPException(status_code=403, detail="Admin privileges required")
-
     base_dir: pathlib.Path = settings.get("USER_DB_BASE_DIR")
     users = []
     try:
@@ -901,13 +896,12 @@ class HNSWEfSearchRequest(BaseModel):
 
 @router.get(
     "/vector_stores/{store_id}/admin/index_info",
-    dependencies=[Depends(auth_deps.require_roles("admin"))],
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def get_index_info(
     store_id: str = Path(...),
     current_user: User = Depends(get_request_user),
 ):
-    require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
     await adapter.initialize()
     get_fn = getattr(adapter, 'get_index_info', None)
@@ -925,13 +919,12 @@ async def get_index_info(
 
 @router.post(
     "/vector_stores/admin/hnsw_ef_search",
-    dependencies=[Depends(auth_deps.require_roles("admin"))],
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def set_hnsw_ef_search(
     payload: HNSWEfSearchRequest = Body(...),
     current_user: User = Depends(get_request_user),
 ):
-    require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
     await adapter.initialize()
     set_fn = getattr(adapter, 'set_ef_search', None)
@@ -951,14 +944,13 @@ class RebuildIndexRequest(BaseModel):
 
 @router.post(
     "/vector_stores/{store_id}/admin/rebuild_index",
-    dependencies=[Depends(auth_deps.require_roles("admin"))],
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def rebuild_index(
     store_id: str = Path(...),
     payload: RebuildIndexRequest = Body(...),
     current_user: User = Depends(get_request_user),
 ):
-    require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
     await adapter.initialize()
     rebuild_fn = getattr(adapter, 'rebuild_index', None)
@@ -984,14 +976,13 @@ class DeleteByFilterRequest(BaseModel):
 
 @router.post(
     "/vector_stores/{store_id}/admin/delete_by_filter",
-    dependencies=[Depends(auth_deps.require_roles("admin"))],
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def delete_by_filter(
     store_id: str = Path(...),
     payload: DeleteByFilterRequest = Body(...),
     current_user: User = Depends(get_request_user),
 ):
-    require_admin(current_user)
     # Guardrails: reject empty/overly broad deletes
     def _is_safe_filter(obj) -> bool:
         # Minimal safety: must be a non-empty dict with at least one concrete condition.
@@ -1039,10 +1030,9 @@ async def delete_by_filter(
 
 @router.get(
     "/vector_stores/admin/health",
-    dependencies=[Depends(auth_deps.require_roles("admin"))],
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def vector_stores_health(current_user: User = Depends(get_request_user)):
-    require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
     await adapter.initialize()
     fn = getattr(adapter, 'health', None)

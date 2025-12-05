@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
 from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
 from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import AuthnzMonitoringRepo
+from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import AuthnzRateLimitsRepo
 from tldw_Server_API.app.core.Metrics import set_gauge
 
 #######################################################################################################################
@@ -702,27 +703,13 @@ class AuthNZScheduler:
         try:
             db_pool = await get_db_pool()
             time_window = datetime.utcnow() - timedelta(minutes=15)
-            is_postgres = getattr(db_pool, "pool", None) is not None
-            cutoff = time_window if is_postgres else time_window.isoformat()
-
-            # Find IPs/users hitting rate limits
             rate_threshold = self.settings.RATE_LIMIT_PER_MINUTE * 15  # 15 minute threshold
-
-            results = await db_pool.fetchall(
-                """
-                SELECT
-                    identifier,
-                    endpoint,
-                    SUM(request_count) as total_requests,
-                    COUNT(*) as window_count
-                FROM rate_limits
-                WHERE window_start > ?
-                GROUP BY identifier, endpoint
-                HAVING SUM(request_count) > ?
-                ORDER BY total_requests DESC
-                LIMIT 20
-                """,
-                (cutoff, rate_threshold),
+            repo = AuthnzRateLimitsRepo(db_pool)
+            results = await repo.list_recent_violations(
+                cutoff=time_window,
+                rate_threshold=rate_threshold,
+                window_minutes=15,
+                limit=20,
             )
 
             if results:

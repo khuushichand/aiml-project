@@ -5,7 +5,10 @@ from fastapi import HTTPException, Response
 from starlette.requests import Request
 from starlette.types import Scope
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_current_user,
+    get_current_active_user,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 
@@ -114,3 +117,58 @@ async def test_get_request_user_single_user_valid_api_key_sets_user_id(monkeypat
 
     assert int(user.id) == fake_settings.SINGLE_USER_FIXED_ID
     assert getattr(request.state, "user_id", None) == fake_settings.SINGLE_USER_FIXED_ID
+
+
+@pytest.mark.asyncio
+async def test_get_current_active_user_passes_through_for_active_verified_user():
+    active_user = {
+        "id": 1,
+        "username": "active-user",
+        "is_active": True,
+        "is_verified": True,
+        "roles": ["user"],
+        "permissions": ["media.read"],
+    }
+
+    result = await get_current_active_user(current_user=active_user)
+
+    # get_current_active_user should be a thin wrapper over get_current_user
+    # for active, verified users and return the same dict unchanged.
+    assert result is active_user
+    assert result["id"] == active_user["id"]
+    assert result["roles"] == active_user["roles"]
+    assert result["permissions"] == active_user["permissions"]
+
+
+@pytest.mark.asyncio
+async def test_get_current_active_user_inactive_user_raises_403():
+    inactive_user = {
+        "id": 1,
+        "username": "inactive-user",
+        "is_active": False,
+        "is_verified": True,
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_active_user(current_user=inactive_user)
+
+    exc = exc_info.value
+    assert exc.status_code == 403
+    assert "inactive" in str(exc.detail)
+
+
+@pytest.mark.asyncio
+async def test_get_current_active_user_unverified_user_raises_403():
+    unverified_user = {
+        "id": 1,
+        "username": "unverified-user",
+        "is_active": True,
+        "is_verified": False,
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_active_user(current_user=unverified_user)
+
+    exc = exc_info.value
+    assert exc.status_code == 403
+    assert "Email verification required" in str(exc.detail)

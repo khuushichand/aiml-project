@@ -1060,7 +1060,7 @@ async def get_current_user_info(
     """
     return UserResponse(
         id=current_user['id'],
-        uuid=current_user.get('uuid') or '',  # Provide empty string if missing
+        uuid=current_user.get('uuid') or None,
         username=current_user['username'],
         email=current_user['email'],
         role=current_user['role'],

@@ -72,7 +72,7 @@ async def get_current_user_profile(
     """
     return UserResponse(
         id=current_user['id'],
-        uuid=current_user.get('uuid', ''),
+        uuid=current_user.get('uuid') or None,
         username=current_user['username'],
         email=current_user.get('email', ''),
         role=current_user.get('role', 'user'),

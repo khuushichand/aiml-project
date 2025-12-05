@@ -201,7 +201,7 @@ class TokenResponse(BaseModel):
 class UserResponse(BaseModel):
     """User information response"""
     id: int = Field(..., description="User ID")
-    uuid: UUID = Field(..., description="User UUID")
+    uuid: Optional[UUID] = Field(None, description="User UUID")
     username: str = Field(..., description="Username")
     email: str = Field(..., description="Email address")
     role: str = Field(..., description="User role")

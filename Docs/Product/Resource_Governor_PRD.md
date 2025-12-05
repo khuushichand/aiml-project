@@ -313,7 +313,7 @@ policies:
 - Admin (requires `admin` role; single-user treated as admin):
   - `GET /api/v1/resource-governor/policies` → list `{id, version, updated_at}`
   - `GET /api/v1/resource-governor/policy/{policy_id}` → `{id, version, updated_at, payload}`
-  - `PUT /api/v1/resource-governor/policy/{policy_id}` → upsert JSON payload; optional explicit `version` (auto-increments if omitted)
+  - `PUT /api/v1/resource-governor/policy/{policy_id}` → upsert JSON payload; optional explicit `version` for optimistic concurrency (auto-increments when omitted; see behavior notes below)
   - `DELETE /api/v1/resource-governor/policy/{policy_id}` → delete policy
   - Implementation note: in v0.1 these admin endpoints, and the diagnostics endpoints below, are part of the principal-governed admin surfaces described in `Docs/Product/Principal-Governance-PRD.md` (see “Admin Surfaces Governed by Principals” coverage snapshot) and are wired through the claim-first stack:
     - `get_auth_principal` to resolve identity and claims, with principal/claim semantics owned by the Principal & Governance PRD.
@@ -322,7 +322,10 @@ policies:
 - Behavior:
   - When `RG_POLICY_STORE=db`, successful writes trigger best-effort PolicyLoader refresh; file store remains read-only.
   - All responses include `{status: ok|error}` and details on errors; avoid logging PII.
-  - When a client supplies `version` on `PUT`, updates should enforce optimistic concurrency (update only when the stored version matches); conflicting updates return 409 with an error payload.
+  - When a client supplies `version` on `PUT` and `RG_POLICY_STORE=db`, updates enforce optimistic concurrency:
+    - If no row exists yet, the supplied `version` is used for the initial insert.
+    - If a row exists and its stored `version` matches the supplied `version`, the payload is updated and `version` is incremented.
+    - If a row exists and its stored `version` differs from the supplied `version`, the admin API returns HTTP `409 Conflict` with `{status: "conflict", error: "version_conflict", policy_id, detail}`; this behavior is locked in by `tldw_Server_API/tests/Resource_Governance/integration/test_policy_admin_optimistic_postgres.py`.
 
 ## Integration Plan (Phased Migration)
 

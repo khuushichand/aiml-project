@@ -275,6 +275,11 @@ An explicit audit of `hasattr(conn, 'fetch*')` usage in `tldw_Server_API/app/cor
     - `increment_usage`, `mark_key_expired`, and `insert_audit_log` for usage counters, status transitions, and audit logging.  
   - Remaining inline SQL is explicitly treated as **bootstrap/maintenance guardrails** for v0.1 and may be migrated into migrations or repo helpers in a later iteration once operational requirements are fully captured.
 
+- `rate_limiter.py` – **rate-limiter DDL guardrails + repo-backed runtime**  
+  - `_ensure_sqlite_schema` / `_ensure_postgres_schema` contain minimal DDL for `rate_limits`, `failed_attempts`, and `account_lockouts` to backstop environments that have not yet applied migrations. These helpers are invoked from `RateLimiter.initialize()` and are treated as bootstrap-only guardrails; canonical schema remains migration-driven (`migration_005_create_rate_limits_table` and related helpers).
+  - All runtime reads/writes for `rate_limits`, `failed_attempts`, and `account_lockouts` (including lockout accounting and per-window increments) are delegated to `AuthnzRateLimitsRepo`.
+  - The AuthNZ scheduler’s `_monitor_rate_limits` job now uses `AuthnzRateLimitsRepo.list_recent_violations` to surface aggregated rate-limit violations instead of embedding its own SQL, so rate-limit monitoring remains dialect-agnostic and repo-backed.
+
 - `initialize.py` – **bootstrap/DDL inline SQL (bootstrap only, partially consolidated)**  
   - Uses backend-branching DDL to ensure presence of `audit_logs`, `sessions`, `registration_codes`, RBAC tables, and organizations/teams in non-SQLite deployments.  
   - PostgreSQL DDL for usage tables (`usage_log`, `usage_daily`, `llm_usage_log`, `llm_usage_daily`) and virtual-key counters has been moved into `pg_migrations_extra.py` and is exercised via `ensure_usage_tables_pg` / `ensure_virtual_key_counters_pg`, which are called from both `initialize.setup_database` and FastAPI startup when a Postgres pool is present.  

@@ -273,6 +273,82 @@ class AuthnzRateLimitsRepo:
             )
             raise
 
+    async def list_recent_violations(
+        self,
+        *,
+        cutoff: datetime,
+        rate_threshold: int,
+        window_minutes: int = 15,
+        limit: int = 20,
+    ) -> Tuple[Dict[str, Any], ...]:
+        """
+        Return aggregated rate-limit buckets that exceed the given threshold.
+
+        The result mirrors the query used by the AuthNZ scheduler's
+        ``_monitor_rate_limits`` job and is intentionally backend-agnostic.
+
+        Each returned row is a mapping with keys:
+        - ``identifier``
+        - ``endpoint``
+        - ``total_requests``
+        - ``window_count``
+        """
+        try:
+            # SQLite stores window_start as TEXT; Postgres uses TIMESTAMPTZ.
+            is_postgres = bool(getattr(self.db_pool, "pool", None))
+            cutoff_param: Any = cutoff if is_postgres else cutoff.isoformat()
+
+            rows_raw = await self.db_pool.fetch(
+                """
+                SELECT
+                    identifier,
+                    endpoint,
+                    SUM(request_count) AS total_requests,
+                    COUNT(*) AS window_count
+                FROM rate_limits
+                WHERE window_start > ?
+                GROUP BY identifier, endpoint
+                HAVING SUM(request_count) > ?
+                ORDER BY total_requests DESC
+                LIMIT ?
+                """,
+                cutoff_param,
+                int(rate_threshold),
+                int(limit),
+            )
+
+            results: list[Dict[str, Any]] = []
+            for r in rows_raw or []:
+                try:
+                    if isinstance(r, dict):
+                        results.append(
+                            {
+                                "identifier": r.get("identifier"),
+                                "endpoint": r.get("endpoint"),
+                                "total_requests": int(r.get("total_requests", 0)),
+                                "window_count": int(r.get("window_count", 0)),
+                            }
+                        )
+                    else:
+                        # aiosqlite.Row-style access
+                        results.append(
+                            {
+                                "identifier": r["identifier"],
+                                "endpoint": r["endpoint"],
+                                "total_requests": int(r["total_requests"]),
+                                "window_count": int(r["window_count"]),
+                            }
+                        )
+                except Exception:
+                    continue
+
+            return tuple(results)
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(
+                f"AuthnzRateLimitsRepo.list_recent_violations failed: {exc}"
+            )
+            raise
+
     async def record_failed_attempt_and_lockout(
         self,
         *,

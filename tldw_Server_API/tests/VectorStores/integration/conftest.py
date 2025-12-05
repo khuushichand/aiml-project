@@ -63,12 +63,43 @@ def vectorstores_isolated_env():
 def admin_user():
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+    from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+    from fastapi import Request
 
     async def _admin():
         return User(id=42, username="admin", email="a@x", is_active=True, is_admin=True)
 
     app.dependency_overrides[get_request_user] = _admin
+
+    async def _principal_override(request: Request):
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=42,
+            api_key_id=None,
+            subject=None,
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["*"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        ip = request.client.host if getattr(request, "client", None) else None
+        ua = request.headers.get("User-Agent") if getattr(request, "headers", None) else None
+        request_id = request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None
+        request.state.auth = AuthContext(
+            principal=principal,
+            ip=ip,
+            user_agent=ua,
+            request_id=request_id,
+        )
+        return principal
+
+    app.dependency_overrides[auth_deps.get_auth_principal] = _principal_override
     try:
         yield
     finally:
         app.dependency_overrides.pop(get_request_user, None)
+        app.dependency_overrides.pop(auth_deps.get_auth_principal, None)

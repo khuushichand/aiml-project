@@ -815,7 +815,9 @@ async def get_request_user(
             email=base.email,
             is_active=base.is_active,
             roles=["admin"],
-            permissions=["system.configure", "media.read", "media.create", "media.update", "media.delete"],
+            permissions=list(
+                getattr(settings, "SINGLE_USER_DEFAULT_PERMISSIONS", []) or []
+            ),
             is_admin=True,
         )
         try:

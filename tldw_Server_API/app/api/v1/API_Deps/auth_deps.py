@@ -442,7 +442,9 @@ async def get_current_user(
                     "email": None,
                     "role": "admin",
                     "roles": ["admin"],
-                    "permissions": ["*"],
+                    "permissions": list(
+                        getattr(settings, "SINGLE_USER_DEFAULT_PERMISSIONS", []) or []
+                    ),
                     "is_active": True,
                     "is_verified": True,
                 }
@@ -472,7 +474,9 @@ async def get_current_user(
                         "email": None,
                         "role": "admin",
                         "roles": ["admin"],
-                        "permissions": ["*"],
+                        "permissions": list(
+                            getattr(settings, "SINGLE_USER_DEFAULT_PERMISSIONS", []) or []
+                        ),
                         "is_active": True,
                         "is_verified": True,
                     }
