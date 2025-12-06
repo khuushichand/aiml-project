@@ -801,6 +801,7 @@ class RateLimiter:
         identifier: str,
         endpoint: str,
         window_minutes: int = 1,
+        limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Get current rate limit usage for an identifier
@@ -818,6 +819,7 @@ class RateLimiter:
 
         now = datetime.now(timezone.utc)
         window_start = _compute_window_start(now, window_minutes)
+        effective_limit = limit if limit is not None else self.default_limit
 
         try:
             repo = self._get_rate_limits_repo()
@@ -832,8 +834,8 @@ class RateLimiter:
                 "identifier": identifier,
                 "endpoint": endpoint,
                 "current_count": current_count,
-                "limit": self.default_limit,
-                "remaining": max(0, self.default_limit - current_count),
+                "limit": effective_limit,
+                "remaining": max(0, effective_limit - current_count),
                 "window_start": window_start.isoformat(),
                 "window_end": (window_start + timedelta(minutes=window_minutes)).isoformat()
             }
@@ -918,6 +920,8 @@ async def _get_authnz_rg_governor():
             _rg_authnz_governor = gov
             return gov
         except Exception as exc:  # pragma: no cover - optional path
+            # Broad catch is intentional here: ResourceGovernor integration is
+            # strictly optional and failures must never block AuthNZ traffic.
             logger.debug(
                 "AuthNZ RG governor init failed; using legacy rate limiter: {}", exc
             )
@@ -929,7 +933,7 @@ async def _maybe_enforce_with_rg_authnz(
     identifier: str,
     endpoint: str,
     limit: int,
-) -> Optional[Dict[str, object]]:
+    ) -> Optional[Dict[str, object]]:
     """
     Optionally enforce AuthNZ request limits via ResourceGovernor.
 
@@ -950,6 +954,9 @@ async def _maybe_enforce_with_rg_authnz(
                     "policy_id": policy_id,
                     "module": "authnz",
                     "endpoint": endpoint,
+                    # Include the effective limit for observability in RG
+                    # decisions; tags are arbitrary string-valued metadata.
+                    "limit": str(limit),
                 },
             ),
             op_id=op_id,
@@ -967,6 +974,9 @@ async def _maybe_enforce_with_rg_authnz(
             "policy_id": policy_id,
         }
     except Exception as exc:
+        # Broad catch is intentional: RG is a best-effort gating layer and any
+        # failure should fall back to the legacy rate limiter rather than
+        # impacting request handling.
         logger.debug("AuthNZ RG reserve failed; falling back to legacy: {}", exc)
         return None
 

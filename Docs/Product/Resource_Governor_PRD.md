@@ -670,7 +670,7 @@ Notes:
 
 - New `ResourceGovernor` module with memory + Redis backends and the specified API.
 - MCP, Chat, and SlowAPI ingress paths migrated to the unified governor with no regression in public API or tests.
-- Audio streams concurrency and minutes cap enforced via the governor, with durable minutes persisted as before.
+- Audio streams concurrency enforced via the governor and daily minutes enforced via the shared `ResourceDailyLedger` when available, with the legacy `audio_usage_daily` tables retained as a compatibility/fallback ledger.
 - Embeddings limiter replaced; Evaluations/AuthNZ/Character Chat/Web Scraping scheduled for follow-on.
 - Consistent test-mode bypass and refund semantics demonstrated in tests.
 - Metrics emitted with the standardized label set; basic dashboards updated.
@@ -685,13 +685,13 @@ Notes:
   - File and DB policy stores are wired via `rg_policy_store`/`rg_policy_path`, with the default YAML at `tldw_Server_API/Config_Files/resource_governor_policies.yaml` and AuthNZ-backed `rg_policies` support.
 - Ingress middleware:
   - `RGSimpleMiddleware` is available and can be enabled for representative routes via `RG_ENABLED`+`RG_ENABLE_SLOWAPI` or directly via `RG_ENABLE_SIMPLE_MIDDLEWARE` (tests use the latter).
-  - Route-map based resolution is in place for `/api/v1/chat/*`, `/api/v1/audio/*`, `/api/v1/embeddings*`, `/api/v1/mcp/*`, and `/api/v1/evaluations/*`, with standard `Retry-After` / `X-RateLimit-*` headers on deny and success.
+  - route-map-based resolution is in place for `/api/v1/chat/*`, `/api/v1/audio/*`, `/api/v1/embeddings*`, `/api/v1/mcp/*`, and `/api/v1/evaluations/*`, with standard `Retry-After` / `X-RateLimit-*` headers on deny and success.
 - Chat:
   - Endpoint-level token reservation can be enabled with `RG_ENDPOINT_ENFORCE_TOKENS`, using `chat.default` policy and `derive_entity_key` for entities; RGSimpleMiddleware can enforce `requests` on `/api/v1/chat/*`.
   - A shadow-mode helper (`RG_SHADOW_CHAT=1`) compares the legacy `ConversationRateLimiter` decision with a governor decision for chat completions and emits `rg_shadow_decision_mismatch_total{module=\"chat\",route=\"/api/v1/chat/completions\",policy_id,...}` when they differ.
 - Audio:
   - Streams/jobs concurrency is enforced via the governor (`audio.default` policy, `streams`/`jobs` categories) when `RG_ENABLE_AUDIO` is enabled, with Redis/in-process counters retained as a fail-open fallback.
-  - Daily minutes remain enforced via the existing `audio_usage_daily` tables; usage is mirrored into `ResourceDailyLedger` in shadow mode for observability and future cutover.
+  - Daily minutes are now enforced via the shared `ResourceDailyLedger` when available (primary path), with `audio_usage_daily` retained as a compatibility/fallback ledger when the generic daily ledger is unavailable; tests such as `tldw_Server_API/tests/Audio/test_audio_quota_rg_and_ledger.py` and `tldw_Server_API/tests/Usage/test_audio_rg_minutes_and_heartbeat.py` lock in this behavior.
   - The audio WebSocket transcription endpoint consumes `audio_quota` helpers, which in turn use the governor for streams concurrency when `RG_ENABLE_AUDIO=1`; legacy Redis counters are bypassed in this mode.
 - Embeddings:
   - Async embeddings paths (`async_embeddings.py` and `request_batching.py`) consult `AsyncRateLimiter`, which delegates enforcement to the ResourceGovernor when `RG_ENABLE_EMBEDDINGS=1` (using `embeddings.default` policy and `RGRequest(entity="user:{id}", categories={"requests": {"units": 1}})`); the per-user sliding-window `UserRateLimiter` remains as a shadow/fallback compatibility shim when RG is disabled or unavailable.

@@ -50,6 +50,7 @@ https://github.com/fastrepl/hyprnote
 https://github.com/travisvn/chatterbox-tts-api
 https://huggingface.co/maya-research/maya1
 https://github.com/thxxx/harper?tab=readme-ov-file
+https://huggingface.co/microsoft/VibeVoice-Realtime-0.5B/tree/main
 https://github.com/nari-labs/dia2
 https://huggingface.co/nvidia/audio-flamingo-3-chat
 https://deepgram.com/

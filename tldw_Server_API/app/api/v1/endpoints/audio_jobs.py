@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from pydantic import BaseModel, Field
@@ -15,13 +16,12 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensu
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    require_admin,
     require_permissions,
     require_roles,
 )
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_MAINTENANCE
-from tldw_Server_API.app.core.Usage.audio_quota import TIER_LIMITS
+from tldw_Server_API.app.core.Usage.audio_quota import TIER_LIMITS, get_user_tier, set_user_tier
 
 
 router = APIRouter(
@@ -30,6 +30,15 @@ router = APIRouter(
         Depends(require_permissions(SYSTEM_MAINTENANCE)),
     ]
 )
+
+
+def get_job_manager() -> JobManager:
+    """
+    Dependency helper to construct a JobManager using JOBS_DB_URL.
+    """
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    return JobManager(backend=backend, db_url=db_url)
 
 
 class SubmitAudioJobRequest(BaseModel):
@@ -78,6 +87,7 @@ class SubmitAudioJobResponse(BaseModel):
 async def submit_audio_job(
     req: SubmitAudioJobRequest,
     current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
     request: Request = None,
 ):
     """
@@ -90,12 +100,6 @@ async def submit_audio_job(
     tp = ensure_traceparent(request) if request is not None else ""
 
     try:
-        # Determine backend from env similar to jobs admin
-        import os
-        db_url = os.getenv("JOBS_DB_URL")
-        backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
-        jm = JobManager(backend=backend, db_url=db_url)
-
         payload: Dict[str, Any] = {
             "model": req.model,
             "perform_chunking": bool(req.perform_chunking),
@@ -157,30 +161,18 @@ class AudioJob(BaseModel):
 
 
 @router.get("/jobs/{job_id}", response_model=AudioJob, summary="Get audio job status")
-async def get_audio_job(job_id: int, current_user: User = Depends(get_request_user)):
+async def get_audio_job(
+    job_id: int,
+    current_user: User = Depends(get_request_user),
+    jm: JobManager = Depends(get_job_manager),
+):
     """
     Return a single audio job if it belongs to the caller (or the caller is admin).
     """
     try:
-        import os
-        jm = JobManager(backend="postgres" if (os.getenv("JOBS_DB_URL", "").startswith("postgres")) else None,
-                        db_url=os.getenv("JOBS_DB_URL"))
-        conn = jm._connect()
-        try:
-            if jm.backend == "postgres":
-                with jm._pg_cursor(conn) as cur:
-                    cur.execute("SELECT * FROM jobs WHERE id=%s AND domain=%s", (int(job_id), "audio"))
-                    row = cur.fetchone()
-                    if not row:
-                        raise HTTPException(status_code=404, detail="Job not found")
-                    d = dict(row)
-            else:
-                row = conn.execute("SELECT * FROM jobs WHERE id=? AND domain=?", (int(job_id), "audio")).fetchone()
-                if not row:
-                    raise HTTPException(status_code=404, detail="Job not found")
-                d = dict(row)
-        finally:
-            conn.close()
+        d = jm.get_job(int(job_id))
+        if not d or str(d.get("domain") or "") != "audio":
+            raise HTTPException(status_code=404, detail="Job not found")
         # Owner/admin check
         owner = str(d.get("owner_user_id") or "")
         if not (current_user.is_admin or owner == str(current_user.id)):
@@ -202,46 +194,17 @@ async def list_audio_jobs_admin(
     status_filter: Optional[str] = Query(None, description="Filter by status: queued|processing|completed|failed|cancelled"),
     owner_user_id: Optional[str] = Query(None, description="Filter by owner user id"),
     limit: int = Query(50, ge=1, le=200),
-    _=Depends(require_admin),
+    jm: JobManager = Depends(get_job_manager),
 ):
     try:
-        import os
-        jm = JobManager(backend="postgres" if (os.getenv("JOBS_DB_URL", "").startswith("postgres")) else None,
-                        db_url=os.getenv("JOBS_DB_URL"))
-        conn = jm._connect()
-        try:
-            jobs: List[Dict[str, Any]] = []
-            if jm.backend == "postgres":
-                q = "SELECT * FROM jobs WHERE domain=%s"
-                params: List[Any] = ["audio"]
-                if status_filter:
-                    q += " AND status=%s"
-                    params.append(status_filter)
-                if owner_user_id:
-                    q += " AND owner_user_id=%s"
-                    params.append(str(owner_user_id))
-                q += " ORDER BY created_at DESC LIMIT %s"
-                params.append(int(limit))
-                with jm._pg_cursor(conn) as cur:
-                    cur.execute(q, tuple(params))
-                    rows = cur.fetchall() or []
-                    jobs = [dict(r) for r in rows]
-            else:
-                q = "SELECT * FROM jobs WHERE domain=?"
-                params2: List[Any] = ["audio"]
-                if status_filter:
-                    q += " AND status=?"
-                    params2.append(status_filter)
-                if owner_user_id:
-                    q += " AND owner_user_id=?"
-                    params2.append(str(owner_user_id))
-                q += " ORDER BY created_at DESC LIMIT ?"
-                params2.append(int(limit))
-                cur2 = conn.execute(q, tuple(params2))
-                rows = cur2.fetchall() or []
-                jobs = [dict(r) for r in rows]
-        finally:
-            conn.close()
+        jobs = jm.list_jobs(
+            domain="audio",
+            status=status_filter,
+            owner_user_id=str(owner_user_id) if owner_user_id is not None else None,
+            limit=int(limit),
+            sort_by="created_at",
+            sort_order="desc",
+        )
         # Project to model
         out = [AudioJob(**{k: j.get(k) for k in AudioJob.model_fields.keys()}) for j in jobs]
         return ListAudioJobsResponse(jobs=out)
@@ -261,43 +224,23 @@ class AudioJobsSummary(BaseModel):
 @router.get("/jobs/admin/summary", response_model=AudioJobsSummary, summary="Summarize audio jobs by status (admin)")
 async def summarize_audio_jobs_admin(
     owner_user_id: Optional[str] = Query(None, description="Optional owner filter"),
-    _=Depends(require_admin),
+    jm: JobManager = Depends(get_job_manager),
 ):
     try:
-        import os
-        jm = JobManager(backend="postgres" if (os.getenv("JOBS_DB_URL", "").startswith("postgres")) else None,
-                        db_url=os.getenv("JOBS_DB_URL"))
-        conn = jm._connect()
         by_status: Dict[str, int] = {}
         total = 0
-        try:
-            if jm.backend == "postgres":
-                with jm._pg_cursor(conn) as cur:
-                    if owner_user_id:
-                        cur.execute(
-                            "SELECT status, COUNT(*) AS c FROM jobs WHERE domain=%s AND owner_user_id=%s GROUP BY status",
-                            ("audio", str(owner_user_id)),
-                        )
-                    else:
-                        cur.execute(
-                            "SELECT status, COUNT(*) AS c FROM jobs WHERE domain=%s GROUP BY status",
-                            ("audio",),
-                        )
-                    rows = cur.fetchall() or []
-                    for r in rows:
-                        by_status[str(r["status"])]= int(r["c"])  # type: ignore[index]
-            else:
-                if owner_user_id:
-                    q = "SELECT status, COUNT(*) FROM jobs WHERE domain=? AND owner_user_id=? GROUP BY status"
-                    args = ("audio", str(owner_user_id))
-                else:
-                    q = "SELECT status, COUNT(*) FROM jobs WHERE domain=? GROUP BY status"
-                    args = ("audio",)
-                rows = conn.execute(q, args).fetchall() or []
-                for r in rows:
-                    by_status[str(r[0])] = int(r[1])
-        finally:
-            conn.close()
+        # Use list_jobs and aggregate counts in Python to avoid relying on private JobManager internals.
+        jobs = jm.list_jobs(
+            domain="audio",
+            owner_user_id=str(owner_user_id) if owner_user_id is not None else None,
+            # Use a generous limit for summaries; callers can adjust if needed.
+            limit=1000,
+        )
+        for job in jobs:
+            status_val = str(job.get("status") or "")
+            if not status_val:
+                continue
+            by_status[status_val] = by_status.get(status_val, 0) + 1
         total = sum(by_status.values())
         return AudioJobsSummary(counts_by_status=by_status, total=total, owner_user_id=owner_user_id)
     except HTTPException:
@@ -318,32 +261,28 @@ class AudioJobsSummaryByOwner(BaseModel):
 
 
 @router.get("/jobs/admin/summary-by-owner", response_model=AudioJobsSummaryByOwner, summary="Summarize audio jobs by owner and status (admin)")
-async def summary_by_owner_admin(_=Depends(require_admin)):
+async def summary_by_owner_admin(jm: JobManager = Depends(get_job_manager)):
     try:
-        import os
-        jm = JobManager(backend="postgres" if (os.getenv("JOBS_DB_URL", "").startswith("postgres")) else None,
-                        db_url=os.getenv("JOBS_DB_URL"))
-        conn = jm._connect()
-        items = []
-        try:
-            if jm.backend == "postgres":
-                with jm._pg_cursor(conn) as cur:
-                    cur.execute(
-                        "SELECT owner_user_id, status, COUNT(*) FROM jobs WHERE domain=%s GROUP BY owner_user_id, status",
-                        ("audio",),
-                    )
-                    rows = cur.fetchall() or []
-                    for (owner_user_id, status, count) in rows:
-                        items.append(AudioJobsOwnerSummaryItem(owner_user_id=str(owner_user_id) if owner_user_id is not None else None, status=str(status), count=int(count)))
-            else:
-                rows = conn.execute(
-                    "SELECT owner_user_id, status, COUNT(*) FROM jobs WHERE domain=? GROUP BY owner_user_id, status",
-                    ("audio",),
-                ).fetchall() or []
-                for (owner_user_id, status, count) in rows:
-                    items.append(AudioJobsOwnerSummaryItem(owner_user_id=str(owner_user_id) if owner_user_id is not None else None, status=str(status), count=int(count)))
-        finally:
-            conn.close()
+        items: List[AudioJobsOwnerSummaryItem] = []
+        # Aggregate by owner and status using list_jobs to avoid private internals.
+        jobs = jm.list_jobs(domain="audio", limit=1000)
+        summary: Dict[tuple[Optional[str], str], int] = {}
+        for job in jobs:
+            owner = job.get("owner_user_id")
+            owner_str: Optional[str] = str(owner) if owner is not None else None
+            status_val = str(job.get("status") or "")
+            if not status_val:
+                continue
+            key = (owner_str, status_val)
+            summary[key] = summary.get(key, 0) + 1
+        for (owner_str, status_val), count in summary.items():
+            items.append(
+                AudioJobsOwnerSummaryItem(
+                    owner_user_id=owner_str,
+                    status=status_val,
+                    count=int(count),
+                )
+            )
         return AudioJobsSummaryByOwner(items=items)
     except HTTPException:
         raise
@@ -361,33 +300,18 @@ class OwnerProcessingSummary(BaseModel):
 @router.get("/jobs/admin/owner/{owner_user_id}/processing", response_model=OwnerProcessingSummary, summary="Get owner's processing count and limit (admin)")
 async def owner_processing_summary(
     owner_user_id: str,
-    _=Depends(require_admin),
+    jm: JobManager = Depends(get_job_manager),
     request: Request = None,
 ):
     try:
-        import os
-        jm = JobManager(backend="postgres" if (os.getenv("JOBS_DB_URL", "").startswith("postgres")) else None,
-                        db_url=os.getenv("JOBS_DB_URL"))
-        # Count processing
-        conn = jm._connect()
-        processing = 0
-        try:
-            if jm.backend == "postgres":
-                with jm._pg_cursor(conn) as cur:
-                    cur.execute(
-                        "SELECT COUNT(*) AS c FROM jobs WHERE domain=%s AND status='processing' AND owner_user_id=%s",
-                        ("audio", str(owner_user_id)),
-                    )
-                    row = cur.fetchone()
-                    processing = int(row["c"]) if row else 0
-            else:
-                row = conn.execute(
-                    "SELECT COUNT(*) FROM jobs WHERE domain=? AND status='processing' AND owner_user_id=?",
-                    ("audio", str(owner_user_id)),
-                ).fetchone()
-                processing = int(row[0]) if row else 0
-        finally:
-            conn.close()
+        # Count processing jobs for this owner using JobManager APIs.
+        jobs = jm.list_jobs(
+            domain="audio",
+            status="processing",
+            owner_user_id=str(owner_user_id),
+            limit=1000,
+        )
+        processing = len(jobs)
         # Limit
         # Correlate logs with request_id if available
         rid = ensure_request_id(request) if request is not None else None
@@ -430,24 +354,9 @@ class SetUserTierRequest(BaseModel):
 
 
 @router.get("/jobs/admin/tiers/{user_id}", response_model=UserTierResponse, summary="Get user's audio tier (admin)")
-async def get_user_tier_admin(user_id: int, _=Depends(require_admin)):
+async def get_user_tier_admin(user_id: int):
     try:
-        pool = await get_db_pool()
-        # Ensure table exists
-        await pool.execute(
-            """
-            CREATE TABLE IF NOT EXISTS audio_user_tiers (
-                user_id INTEGER PRIMARY KEY,
-                tier TEXT NOT NULL
-            );
-            """
-        )
-        if pool.pool:
-            row = await pool.fetchrow("SELECT tier FROM audio_user_tiers WHERE user_id=$1", int(user_id))
-            tier = str(row["tier"]) if row and row.get("tier") else "free"
-        else:
-            rows = await pool.fetch("SELECT tier FROM audio_user_tiers WHERE user_id=?", int(user_id))
-            tier = str(rows[0][0]) if rows and rows[0] and rows[0][0] else "free"
+        tier = await get_user_tier(int(user_id))
         return UserTierResponse(user_id=int(user_id), tier=tier)
     except Exception as e:
         logger.error(f"Failed to get user tier: {e}")
@@ -455,32 +364,13 @@ async def get_user_tier_admin(user_id: int, _=Depends(require_admin)):
 
 
 @router.put("/jobs/admin/tiers/{user_id}", response_model=UserTierResponse, summary="Set user's audio tier (admin)")
-async def set_user_tier_admin(user_id: int, req: SetUserTierRequest, _=Depends(require_admin)):
+async def set_user_tier_admin(user_id: int, req: SetUserTierRequest):
     try:
         tier = req.tier.strip().lower()
         allowed = set(TIER_LIMITS.keys())
         if tier not in allowed:
             raise HTTPException(status_code=400, detail=f"Invalid tier. Allowed: {', '.join(sorted(allowed))}")
-        pool = await get_db_pool()
-        # Ensure table exists
-        await pool.execute(
-            """
-            CREATE TABLE IF NOT EXISTS audio_user_tiers (
-                user_id INTEGER PRIMARY KEY,
-                tier TEXT NOT NULL
-            );
-            """
-        )
-        if pool.pool:
-            await pool.execute(
-                "INSERT INTO audio_user_tiers (user_id, tier) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET tier = EXCLUDED.tier",
-                int(user_id), tier,
-            )
-        else:
-            await pool.execute(
-                "INSERT INTO audio_user_tiers (user_id, tier) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET tier=excluded.tier",
-                int(user_id), tier,
-            )
+        await set_user_tier(int(user_id), tier)
         return UserTierResponse(user_id=int(user_id), tier=tier)
     except HTTPException:
         raise

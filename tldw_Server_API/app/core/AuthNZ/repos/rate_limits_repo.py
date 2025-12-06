@@ -55,7 +55,9 @@ class AuthnzRateLimitsRepo:
                 try:
                     await conn.commit()
                 except Exception as exc:
-                    logger.debug(f"AuthnzRateLimitsRepo SQLite commit failed during cleanup: {exc}")
+                    logger.warning(
+                        f"AuthnzRateLimitsRepo SQLite commit failed during cleanup: {exc}"
+                    )
                 return int(deleted)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzRateLimitsRepo.cleanup_rate_limits_older_than failed: {exc}")
@@ -264,8 +266,10 @@ class AuthnzRateLimitsRepo:
                     deleted = getattr(cursor, "rowcount", 0) or 0
                     try:
                         await conn.commit()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug(
+                            f"AuthnzRateLimitsRepo SQLite commit failed during delete: {exc}"
+                        )
             return int(deleted)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
@@ -339,7 +343,10 @@ class AuthnzRateLimitsRepo:
                                 "window_count": int(r["window_count"]),
                             }
                         )
-                except Exception:
+                except Exception as exc:
+                    logger.debug(
+                        f"Skipping malformed rate_limit row: {exc}"
+                    )
                     continue
 
             return tuple(results)

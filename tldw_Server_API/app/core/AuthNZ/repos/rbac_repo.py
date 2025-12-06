@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, TypedDict
+from typing import List, TypedDict, Optional
 
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
 
@@ -140,3 +140,19 @@ class AuthnzRbacRepo:
             "tool_permissions": tool_permissions,
             "all_permissions": all_permissions,
         }
+
+    def get_role_id_by_name(self, role_name: str) -> Optional[int]:
+        """
+        Look up a role id by its name.
+
+        This helper centralizes the roles table access so callers do not need to
+        embed backend-specific SQL.
+        """
+        db = self._db()
+        result = db.backend.execute(
+            "SELECT id FROM roles WHERE name = ?",
+            (str(role_name),),
+        )
+        if not result.rows:
+            return None
+        return int(result.rows[0]["id"])

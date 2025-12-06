@@ -648,8 +648,8 @@ async def reset_db_pool():
     try:
         from tldw_Server_API.app.core.AuthNZ.db_config import AuthDatabaseConfig as _AuthDatabaseConfig
         _AuthDatabaseConfig().reset()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring AuthDatabaseConfig reset error: {e}")
     if _db_pool:
         try:
             await _db_pool.close()

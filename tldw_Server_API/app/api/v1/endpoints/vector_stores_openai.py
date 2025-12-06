@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Set
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status as http_status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -16,8 +16,7 @@ from loguru import logger
 import tiktoken
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles, require_permissions
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles, require_permissions, rbac_rate_limit
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
     VectorStoreAdapter,
@@ -51,7 +50,8 @@ from tldw_Server_API.app.core.Embeddings.vector_store_meta_db import (
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
-from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+
+RBAC_VECTOR_ADMIN = rbac_rate_limit("vector.admin")
 
 # Embeddings batch generator hook. Tests may monkeypatch this attribute directly or
 # replace the provider resolver via _get_embeddings_fn(). We intentionally avoid
@@ -115,22 +115,6 @@ def _allowed_providers() -> Optional[List[str]]:
     except Exception:
         pass
     return None
-
-
-def require_admin(user: User) -> None:
-    """Admin guard for vector store admin endpoints.
-
-    Uses the same admin-style claims as the core auth
-    dependencies so that single-user and multi-user profiles
-    share the same RBAC surface.
-    """
-    is_admin_flag = bool(
-        getattr(user, "is_admin", False)
-        or getattr(user, "role", None) == "admin"
-        or ("admin" in (getattr(user, "roles", None) or []))
-    )
-    if not user or not is_admin_flag:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
 
 
 def _allowed_models() -> Optional[List[str]]:
@@ -449,7 +433,11 @@ async def list_vector_stores(
 
 @router.get(
     "/vector_stores/admin/users",
-    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+        Depends(RBAC_VECTOR_ADMIN),
+    ],
 )
 async def list_vector_store_users(current_user: User = Depends(get_request_user)):
     base_dir: pathlib.Path = settings.get("USER_DB_BASE_DIR")
@@ -896,7 +884,11 @@ class HNSWEfSearchRequest(BaseModel):
 
 @router.get(
     "/vector_stores/{store_id}/admin/index_info",
-    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+        Depends(RBAC_VECTOR_ADMIN),
+    ],
 )
 async def get_index_info(
     store_id: str = Path(...),
@@ -919,7 +911,11 @@ async def get_index_info(
 
 @router.post(
     "/vector_stores/admin/hnsw_ef_search",
-    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+        Depends(RBAC_VECTOR_ADMIN),
+    ],
 )
 async def set_hnsw_ef_search(
     payload: HNSWEfSearchRequest = Body(...),
@@ -944,7 +940,11 @@ class RebuildIndexRequest(BaseModel):
 
 @router.post(
     "/vector_stores/{store_id}/admin/rebuild_index",
-    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+        Depends(RBAC_VECTOR_ADMIN),
+    ],
 )
 async def rebuild_index(
     store_id: str = Path(...),
@@ -976,7 +976,11 @@ class DeleteByFilterRequest(BaseModel):
 
 @router.post(
     "/vector_stores/{store_id}/admin/delete_by_filter",
-    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+        Depends(RBAC_VECTOR_ADMIN),
+    ],
 )
 async def delete_by_filter(
     store_id: str = Path(...),
@@ -1030,7 +1034,11 @@ async def delete_by_filter(
 
 @router.get(
     "/vector_stores/admin/health",
-    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+        Depends(RBAC_VECTOR_ADMIN),
+    ],
 )
 async def vector_stores_health(current_user: User = Depends(get_request_user)):
     adapter = await _get_adapter_for_user(current_user, 1536)
@@ -1409,7 +1417,16 @@ async def list_vector_batches(
     # auth mode, while non-admins are restricted to their own batches.
     requested_user_id = str(getattr(current_user, "id", "1"))
     if user_id is not None and user_id != requested_user_id:
-        require_admin(current_user)
+        is_admin_flag = bool(
+            getattr(current_user, "is_admin", False)
+            or getattr(current_user, "role", None) == "admin"
+            or ("admin" in (getattr(current_user, "roles", None) or []))
+        )
+        if not is_admin_flag:
+            raise HTTPException(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                detail="Admin privileges required",
+            )
         requested_user_id = str(user_id)
     rows = db_list_batches(user_id=requested_user_id, status=status, limit=limit, offset=offset)
     return { 'data': rows, 'pagination': { 'limit': limit, 'offset': offset, 'count': len(rows) } }

@@ -31,7 +31,7 @@ def _is_truthy(v: Optional[str]) -> bool:
     return str(v or "").lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _make_admin_user_from_principal(principal: AuthPrincipal) -> dict:
+def _make_admin_user_from_principal(principal: AuthPrincipal) -> dict[str, Any]:
     """Derive the minimal jobs-admin user dict from an AuthPrincipal."""
     return {
         "id": principal.user_id,

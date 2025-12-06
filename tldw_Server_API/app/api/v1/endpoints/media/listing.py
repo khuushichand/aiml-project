@@ -128,6 +128,7 @@ async def list_media_endpoint(
         # Build base items and collect IDs for keyword lookup
         base_items: List[Dict[str, Any]] = []
         media_ids: List[int] = []
+        skipped_count = 0
         for r in rows or []:
             rid_raw = r["id"] if isinstance(r, dict) else r[0]
             title = r["title"] if isinstance(r, dict) else r[1]
@@ -137,6 +138,7 @@ async def list_media_endpoint(
             except (TypeError, ValueError):
                 # Skip rows with invalid IDs rather than failing the entire listing
                 logger.error("Skipping media row with invalid id: {}", rid_raw)
+                skipped_count += 1
                 continue
             media_ids.append(rid)
             base_items.append(
@@ -149,12 +151,14 @@ async def list_media_endpoint(
 
         # Optionally fetch keywords for all media items on this page in a single batch
         keywords_map: Dict[int, List[str]] = {}
+        keywords_available: Optional[bool] = None
         if include_keywords and media_ids:
             try:
                 keywords_map = fetch_keywords_for_media_batch(
                     media_ids=media_ids,
                     db_instance=db,
                 )
+                keywords_available = True
             except Exception as exc:
                 # Log and degrade gracefully if keyword lookup fails
                 logger.error(
@@ -165,6 +169,13 @@ async def list_media_endpoint(
                     exc_info=True,
                 )
                 keywords_map = {}
+                # Surface failure via a coarse availability flag so clients can
+                # distinguish "no keywords" from "keyword lookup failed".
+                keywords_available = False
+        elif include_keywords:
+            # Keywords were requested but there were no media_ids to look up;
+            # treat this as a successful (no-op) lookup.
+            keywords_available = True
 
         # Build response items, including keywords only when requested
         items: List[Dict[str, Any]] = []
@@ -189,6 +200,12 @@ async def list_media_endpoint(
                 "total_items": int(total_items),
             },
         }
+
+        if include_keywords and keywords_available is not None:
+            payload["keywords_available"] = keywords_available
+
+        if skipped_count > 0:
+            payload["skipped_count"] = skipped_count
 
         etag = generate_etag(payload)
         response.headers["ETag"] = etag

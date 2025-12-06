@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Backfill missing or invalid user UUIDs in the AuthNZ users table.
 
@@ -27,6 +26,9 @@ from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
+_ROW_EXTRACTION_ERROR = "Unable to extract id/uuid from row: {row!r}"
+
+
 def _extract_row(row: Any) -> Tuple[int, Any]:
     """Return (id, uuid_value) from a db row (dict or Row)."""
     try:
@@ -35,7 +37,7 @@ def _extract_row(row: Any) -> Tuple[int, Any]:
         # aiosqlite.Row supports both index and key access
         return int(row["id"]), row["uuid"]
     except Exception as exc:  # pragma: no cover - defensive
-        raise RuntimeError(f"Unable to extract id/uuid from row: {row!r}") from exc
+        raise RuntimeError(_ROW_EXTRACTION_ERROR.format(row=row)) from exc
 
 
 def _normalize_existing_uuids(rows: Iterable[Any]) -> Tuple[Dict[int, str | None], set[str]]:
@@ -51,7 +53,13 @@ def _normalize_existing_uuids(rows: Iterable[Any]) -> Tuple[Dict[int, str | None
         else:
             try:
                 value = str(raw).strip() or None
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Unable to normalize existing UUID value for user_id=%s: raw=%r (error=%r)",
+                    user_id,
+                    raw,
+                    exc,
+                )
                 value = None
         by_id[user_id] = value
         if value:
@@ -61,6 +69,11 @@ def _normalize_existing_uuids(rows: Iterable[Any]) -> Tuple[Dict[int, str | None
                 seen.add(parsed)
                 by_id[user_id] = parsed
             except Exception:
+                logger.debug(
+                    "Existing UUID value for user_id=%s is not a valid UUID and will be backfilled: value=%r",
+                    user_id,
+                    value,
+                )
                 # Leave as-is; will be backfilled
                 continue
 
@@ -103,7 +116,13 @@ async def backfill_user_uuids(*, dry_run: bool = False) -> int:
             # skipped invalid values, so treat them as missing.
             try:
                 UUID(current)
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "Existing UUID for user_id=%s is invalid and will be replaced: value=%r (error=%r)",
+                    user_id,
+                    current,
+                    exc,
+                )
                 new_uuid = str(uuid4())
                 while new_uuid in seen:
                     new_uuid = str(uuid4())
@@ -162,4 +181,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

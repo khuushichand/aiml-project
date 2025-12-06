@@ -591,7 +591,15 @@ class AuthnzApiKeysRepo:
                             WHERE table_name = 'api_keys' AND column_name = 'llm_allowed_endpoints'
                             """
                         )
-                    except Exception:
+                    except Exception as exc:
+                        logger.error(
+                            (
+                                "AuthnzApiKeysRepo.create_virtual_key_row: schema "
+                                "introspection failed for api_keys.llm_allowed_endpoints "
+                                "via information_schema.columns SELECT data_type: {}"
+                            ),
+                            exc,
+                        )
                         col_type = None
                     is_jsonb = isinstance(col_type, str) and ("json" in col_type.lower())
 

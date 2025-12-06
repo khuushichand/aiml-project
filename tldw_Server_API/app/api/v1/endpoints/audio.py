@@ -100,6 +100,27 @@ except ImportError as e:
     logger.debug(f"audio_quota job helpers not available: {e}")
 from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode, is_single_user_mode
 
+
+def _get_chat_history_max_messages() -> int:
+    """
+    Resolve the maximum number of chat history messages to retain
+    for streaming audio chat sessions.
+
+    Uses AUDIO_CHAT_HISTORY_MAX_MESSAGES env var when set, falling
+    back to a sensible default of 40.
+    """
+    raw = os.getenv("AUDIO_CHAT_HISTORY_MAX_MESSAGES", "").strip()
+    if not raw:
+        return 40
+    try:
+        value = int(raw)
+        return value if value > 0 else 40
+    except Exception:
+        return 40
+
+
+CHAT_HISTORY_MAX_MESSAGES: int = _get_chat_history_max_messages()
+
 # Optional DB/Redis drivers (for precise exception handling without hard dependencies)
 try:  # asyncpg is optional; used when PostgreSQL is configured
     import asyncpg  # type: ignore
@@ -2509,7 +2530,7 @@ async def websocket_transcribe(
                         increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_check"})
                     except Exception as m_err:
                         logger.debug(f"metrics increment failed (audio_failopen_cap_db_check): error={m_err}")
-                    raise _QuotaExceeded("daily_minutes")
+                    raise _QuotaExceeded("daily_minutes") from None
             if not allow:
                 # Raise structured signal to outer scope
                 raise _QuotaExceeded("daily_minutes")
@@ -2542,7 +2563,7 @@ async def websocket_transcribe(
                             increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_record"})
                         except Exception as m_err:
                             logger.debug(f"metrics increment failed (audio_failopen_cap_db_record): error={m_err}")
-                        raise _QuotaExceeded("daily_minutes")
+                        raise _QuotaExceeded("daily_minutes") from None
 
         async def _on_heartbeat() -> None:
             """
@@ -3094,8 +3115,8 @@ async def websocket_audio_chat_stream(
             chat_history.append({"role": "user", "content": transcript_text})
             if assistant_text:
                 chat_history.append({"role": "assistant", "content": assistant_text})
-            if len(chat_history) > 40:
-                chat_history = chat_history[-40:]
+            if len(chat_history) > CHAT_HISTORY_MAX_MESSAGES:
+                chat_history = chat_history[-CHAT_HISTORY_MAX_MESSAGES:]
             return assistant_text, finish_reason, usage_payload
 
         async def _stream_tts(text: str, voice_to_voice_start: float) -> None:
@@ -3241,7 +3262,7 @@ async def websocket_audio_chat_stream(
                                         f"audio.chat.stream consumer error frame send failed: error={send_exc}"
                                     )
                             break
-                except Exception as exc:
+                except Exception:
                     try:
                         reg.increment("audio_stream_errors_total", 1, labels=error_labels)
                     except Exception as m_err:
@@ -3719,7 +3740,7 @@ async def websocket_tts(
                                     f"audio.stream.tts consumer error frame send failed: error={send_exc}"
                                 )
                         break
-            except Exception as exc:
+            except Exception:
                 try:
                     reg.increment("audio_stream_errors_total", 1, labels=error_labels)
                 except Exception as m_err:

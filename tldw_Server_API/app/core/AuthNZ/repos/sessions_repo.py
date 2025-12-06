@@ -21,6 +21,24 @@ class AuthnzSessionsRepo:
 
     db_pool: DatabasePool
 
+    def _normalize_session_details(self, details: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalize datetime fields across backends so callers always
+        see ``expires_at`` and ``refresh_expires_at`` as datetime objects
+        when they are valid ISO strings.
+        """
+        for field in ("expires_at", "refresh_expires_at"):
+            value = details.get(field)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                try:
+                    details[field] = datetime.fromisoformat(value)
+                except ValueError:
+                    # Leave as-is on parse failure
+                    pass
+        return details
+
     async def create_session_record(
         self,
         *,
@@ -105,8 +123,12 @@ class AuthnzSessionsRepo:
                 session_id = getattr(cursor, "lastrowid", None)
                 try:
                     await conn.commit()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(
+                        "AuthnzSessionsRepo.create_session_record: commit failed for user_id=%s",
+                        user_id,
+                        exc_info=e,
+                    )
 
                 if session_id is None:
                     raise RuntimeError("Failed to obtain session id for new session row")
@@ -125,20 +147,6 @@ class AuthnzSessionsRepo:
         """
         Mark a single session as revoked and return its details for blacklist use.
         """
-        def _normalize_session_details(details: Dict[str, Any]) -> Dict[str, Any]:
-            # Normalize datetime fields across backends (Postgres returns datetime, SQLite returns ISO str)
-            for field in ("expires_at", "refresh_expires_at"):
-                value = details.get(field)
-                if value is None:
-                    continue
-                if isinstance(value, str):
-                    try:
-                        details[field] = datetime.fromisoformat(value)
-                    except ValueError:
-                        # Leave as-is on parse failure
-                        pass
-            return details
-
         try:
             async with self.db_pool.transaction() as conn:
                 session_details: Optional[Dict[str, Any]] = None
@@ -153,7 +161,7 @@ class AuthnzSessionsRepo:
                         session_id,
                     )
                     if session_row:
-                        session_details = _normalize_session_details(dict(session_row))
+                        session_details = self._normalize_session_details(dict(session_row))
 
                     await conn.execute(
                         """
@@ -180,14 +188,16 @@ class AuthnzSessionsRepo:
                     )
                     row = await cursor.fetchone()
                     if row:
-                        session_details = _normalize_session_details({
-                            "id": row[0],
-                            "user_id": row[1],
-                            "access_jti": row[2],
-                            "refresh_jti": row[3],
-                            "expires_at": row[4],
-                            "refresh_expires_at": row[5],
-                        })
+                        session_details = self._normalize_session_details(
+                            {
+                                "id": row[0],
+                                "user_id": row[1],
+                                "access_jti": row[2],
+                                "refresh_jti": row[3],
+                                "expires_at": row[4],
+                                "refresh_expires_at": row[5],
+                            }
+                        )
                     await conn.execute(
                         """
                         UPDATE sessions
@@ -310,7 +320,10 @@ class AuthnzSessionsRepo:
                         """,
                         user_id,
                     )
-                    return [dict(row) for row in rows]
+                    return [
+                        self._normalize_session_details(dict(row))
+                        for row in rows
+                    ]
 
                 cursor = await conn.execute(
                     """
@@ -324,13 +337,15 @@ class AuthnzSessionsRepo:
                 sessions: List[Dict[str, Any]] = []
                 for row in sqlite_rows:
                     sessions.append(
-                        {
-                            "id": row[0],
-                            "access_jti": row[1],
-                            "refresh_jti": row[2],
-                            "expires_at": row[3],
-                            "refresh_expires_at": row[4],
-                        }
+                        self._normalize_session_details(
+                            {
+                                "id": row[0],
+                                "access_jti": row[1],
+                                "refresh_jti": row[2],
+                                "expires_at": row[3],
+                                "refresh_expires_at": row[4],
+                            }
+                        )
                     )
                 return sessions
         except Exception as exc:  # pragma: no cover - surfaced via callers

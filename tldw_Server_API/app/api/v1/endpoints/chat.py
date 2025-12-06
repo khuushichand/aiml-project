@@ -1180,9 +1180,12 @@ async def create_chat_completion(
                             estimated_tokens=int(estimated_tokens or 0),
                             legacy_allowed=bool(allowed),
                         )
-                    except Exception:
+                    except Exception as exc:
                         # Shadow path must never affect primary rate-limiting behavior.
-                        pass
+                        logger.debug(
+                            "RG shadow helper failed; ignoring and continuing: {}",
+                            exc,
+                        )
 
                     if not allowed:
                         metrics.track_rate_limit(user_id)

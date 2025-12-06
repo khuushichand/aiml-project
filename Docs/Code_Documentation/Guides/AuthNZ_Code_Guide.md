@@ -36,7 +36,11 @@ See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentati
   - `PROFILE=local-single-user` (or legacy alias `single_user`).
   - `PROFILE=multi-user-postgres`.
   - Optional `PROFILE=multi-user-sqlite` for small dev setups.
-- New code should treat mode/profile as **coordination/UX** inputs (bootstrap, banners, WebUI hints, quotas), not as authorization shortcuts. Auth decisions must use `AuthPrincipal` claims via the dependencies below.
+- New code should treat mode/profile as **coordination/UX** inputs (bootstrap, banners, WebUI hints, quotas), not as authorization shortcuts. Auth decisions must use `AuthPrincipal` claims via the dependencies below and MUST NOT branch on `is_single_user_mode()` / `is_multi_user_mode()` to grant or bypass permissions.
+
+Admin role semantics (claims-first):
+- The `admin` role claim is interpreted consistently across profiles: a principal with `roles=["admin", ...]` is treated as having both admin- and user-level access regardless of `AUTH_MODE`/`PROFILE`.
+- Helpers such as `check_role`, `require_roles("admin")`, and `require_permissions(...)` rely on claims (`principal.roles`, `principal.permissions`, `principal.is_admin`) rather than re-reading mode, so new endpoints should always gate admin/control surfaces through these claim-first dependencies instead of adding new mode checks.
 
 Recommended combinations (v0.1):
 - Local single-user desktop: `AUTH_MODE=single_user`, `PROFILE=local-single-user` (default SQLite users DB).

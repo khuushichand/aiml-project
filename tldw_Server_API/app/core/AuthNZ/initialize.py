@@ -863,18 +863,28 @@ async def bootstrap_single_user_profile() -> bool:
         return True
 
     print("\n👤 Bootstrapping single-user profile (admin user + primary API key)...")
+    logger.info("Bootstrapping single-user profile (admin user + primary API key)...")
 
     # Ensure RBAC seed for the single-user account (roles, permissions, user row)
     try:
         await ensure_single_user_rbac_seed_if_needed()
     except Exception as e:
         print(f"⚠️  Single-user RBAC seed failed (continuing): {e}")
+        logger.warning(
+            "Single-user RBAC seed failed in bootstrap_single_user_profile "
+            "(continuing): %s",
+            e,
+        )
 
     api_key_value = settings.SINGLE_USER_API_KEY or ""
     if not api_key_value or api_key_value == "CHANGE_ME_TO_SECURE_API_KEY":
         print(
             "⚠️  SINGLE_USER_API_KEY is not set or uses the default placeholder; "
             "skipping primary API key bootstrap."
+        )
+        logger.warning(
+            "SINGLE_USER_API_KEY is not set or uses the default placeholder; "
+            "skipping single-user primary API key bootstrap."
         )
         return True
 
@@ -903,9 +913,14 @@ async def bootstrap_single_user_profile() -> bool:
         )
 
         print("✅ Single-user primary API key ensured in AuthNZ store")
+        logger.info("Single-user primary API key ensured in AuthNZ store")
         return True
     except Exception as e:
         print(f"⚠️  Failed to bootstrap single-user primary API key (continuing): {e}")
+        logger.warning(
+            "Failed to bootstrap single-user primary API key (continuing): %s",
+            e,
+        )
         return False
 
 async def test_authentication():
@@ -1018,7 +1033,23 @@ async def main():
                 await create_admin_user()
     else:
         # Single-user profile: ensure bootstrap user + primary API key
-        await bootstrap_single_user_profile()
+        bootstrap_ok = await bootstrap_single_user_profile()
+        if not bootstrap_ok:
+            print("\n❌ Single-user bootstrap failed")
+            logger.error("Single-user bootstrap failed during AuthNZ initialization")
+            test_mode = (
+                str(os.getenv("TEST_MODE", "")).strip().lower()
+                in {"1", "true", "yes", "y", "on"}
+            )
+            if not test_mode:
+                print("❌ Exiting due to single-user bootstrap failure.")
+                sys.exit(1)
+            print(
+                "⚠️  TEST_MODE is enabled; continuing despite single-user bootstrap failure."
+            )
+            logger.warning(
+                "TEST_MODE enabled; continuing despite single-user bootstrap failure"
+            )
 
     # Step 5: Test authentication
     if not await test_authentication():

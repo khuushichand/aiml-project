@@ -7,10 +7,11 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio
-async def test_add_daily_minutes_mirrors_to_resource_daily_ledger(tmp_path, monkeypatch):
+async def test_add_daily_minutes_writes_to_resource_daily_ledger(tmp_path, monkeypatch):
     """
-    Ensure add_daily_minutes continues to write to audio_usage_daily and also
-    mirrors usage into the generic ResourceDailyLedger in shadow mode.
+    Ensure add_daily_minutes records usage into the generic
+    ResourceDailyLedger, which is the canonical source of truth for audio
+    daily minutes caps.
     """
     # Point AuthNZ DB to a temporary SQLite file
     db_path = tmp_path / "users_audio_ledger.db"
@@ -24,7 +25,8 @@ async def test_add_daily_minutes_mirrors_to_resource_daily_ledger(tmp_path, monk
     await reset_db_pool()
     pool = await get_db_pool()
     try:
-        # Seed minimal audio tables
+        # Seed minimal audio tables (legacy audio_usage_daily table is present
+        # for compatibility but is no longer written to by add_daily_minutes).
         await pool.execute(
             """
             CREATE TABLE IF NOT EXISTS audio_usage_daily (
@@ -46,17 +48,9 @@ async def test_add_daily_minutes_mirrors_to_resource_daily_ledger(tmp_path, monk
         )
 
         user_id = 42
-        # Default tier is "free" with a nonzero daily_minutes cap; ledger is shadow-only.
+        # Default tier is "free" with a nonzero daily_minutes cap; ledger is
+        # the enforcement source of truth.
         await audio_quota.add_daily_minutes(user_id, 2.5)
-
-        # Verify audio_usage_daily was updated
-        rows = await pool.fetch(
-            "SELECT minutes_used FROM audio_usage_daily WHERE user_id=?",
-            user_id,
-        )
-        assert rows, "audio_usage_daily should have a row for the user"
-        minutes_used = float(rows[0][0])
-        assert minutes_used == pytest.approx(2.5)
 
         # ResourceDailyLedger lives in the same AuthNZ DB; query totals via DAL
         ledger = ResourceDailyLedger(db_pool=pool)

@@ -20,6 +20,8 @@ from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
+from tldw_Server_API.app.core.AuthNZ.rbac import get_effective_permissions
 # Utils
 from loguru import logger
 # API Dependencies
@@ -27,6 +29,9 @@ from tldw_Server_API.app.api.v1.API_Deps.v1_endpoint_deps import oauth2_scheme
 from tldw_Server_API.app.core.config import settings as app_settings
 
 #######################################################################################################################
+
+
+_RBAC_ENRICH_REPO = AuthnzRbacRepo(client_id="authnz_user_enrichment")
 
 
 async def _enrich_user_with_rbac(
@@ -45,62 +50,19 @@ async def _enrich_user_with_rbac(
         return roles, perms, is_admin_flag
 
     try:
-        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-
-        pool = await get_db_pool()
-        # Roles
-        r_rows = await pool.fetchall(
-            """
-            SELECT r.name AS role
-            FROM user_roles ur
-            JOIN roles r ON r.id = ur.role_id
-            WHERE ur.user_id = ?
-            """,
-            user_id,
-        )
-        for rrow in r_rows or []:
-            rname = rrow["role"] if isinstance(rrow, dict) else rrow[0]
-            if rname and rname not in roles:
-                roles.append(str(rname))
+        # Roles from centralized RBAC repository
+        role_rows = _RBAC_ENRICH_REPO.get_user_roles(int(user_id))
+        for row in role_rows or []:
+            role_name = row.get("name") or row.get("role") or row.get("role_name")
+            if role_name:
+                role_str = str(role_name)
+                if role_str not in roles:
+                    roles.append(role_str)
         if "admin" in roles:
             is_admin_flag = True
 
-        # Role permissions
-        rp_rows = await pool.fetchall(
-            """
-            SELECT DISTINCT p.name AS perm
-            FROM user_roles ur
-            JOIN role_permissions rp ON rp.role_id = ur.role_id
-            JOIN permissions p ON p.id = rp.permission_id
-            WHERE ur.user_id = ?
-            """,
-            user_id,
-        )
-        base_perms = set()
-        for rp in rp_rows or []:
-            pname = rp["perm"] if isinstance(rp, dict) else rp[0]
-            if pname:
-                base_perms.add(str(pname))
-
-        # User-level overrides
-        up_rows = await pool.fetchall(
-            """
-            SELECT p.name AS perm, up.granted
-            FROM user_permissions up
-            JOIN permissions p ON p.id = up.permission_id
-            WHERE up.user_id = ?
-            """,
-            user_id,
-        )
-        for up in up_rows or []:
-            pname = up["perm"] if isinstance(up, dict) else up[0]
-            granted = up.get("granted", 1) if isinstance(up, dict) else (up[1] if len(up) > 1 else 1)
-            if not pname:
-                continue
-            if granted:
-                base_perms.add(str(pname))
-            else:
-                base_perms.discard(str(pname))
+        # Effective permissions from RBAC helper (roles + user overrides)
+        base_perms = set(get_effective_permissions(int(user_id)))
 
         # Fallback: honor legacy role column when user_roles entries are absent
         if not roles:
@@ -111,22 +73,10 @@ async def _enrich_user_with_rbac(
                     roles.append(rname)
                     if rname == "admin":
                         is_admin_flag = True
-                    role_row_id = await pool.fetchval(
-                        "SELECT id FROM roles WHERE name = ?",
-                        rname,
-                    )
+                    role_row_id = _RBAC_ENRICH_REPO.get_role_id_by_name(rname)
                     if role_row_id is not None:
-                        rp_rows_fallback = await pool.fetchall(
-                            """
-                            SELECT p.name AS perm
-                            FROM role_permissions rp
-                            JOIN permissions p ON p.id = rp.permission_id
-                            WHERE rp.role_id = ?
-                            """,
-                            role_row_id,
-                        )
-                        for rp in rp_rows_fallback or []:
-                            pname = rp["perm"] if isinstance(rp, dict) else rp[0]
+                        rp_rows_fallback = _RBAC_ENRICH_REPO.get_role_effective_permissions(role_row_id)
+                        for pname in rp_rows_fallback.get("all_permissions", []):
                             if pname:
                                 base_perms.add(str(pname))
                 except Exception as rb_exc_fallback:  # pragma: no cover - fallback best-effort
@@ -732,9 +682,9 @@ async def get_request_user(
             if isinstance(existing_ctx, AuthContext) and isinstance(cached_user, User):
                 logger.debug("get_request_user: Reusing cached AuthPrincipal/_auth_user in multi-user mode.")
                 return cached_user
-    except Exception:
-        # Fall through to normal auth paths on any issues
-        pass
+    except Exception as fastpath_exc:
+        # Fall through to normal auth paths on any issues, but make failures observable.
+        logger.debug(f"get_request_user fast-path reuse failed; falling back to normal auth: {fastpath_exc}")
 
     #print(f"DEBUGPRINT: Inside get_request_user. api_key from header: '{api_key}', token from scheme: '{token}'") #DEBUGPRINT
     # Check mode from the settings
@@ -873,12 +823,7 @@ async def get_request_user(
         # Multi-User Mode: Prefer Bearer token, but allow X-API-KEY for SQLite multi-user setups.
         logger.debug("get_request_user: In MULTI_USER_MODE.")
         if token:
-            if settings.PII_REDACT_LOGS:
-                logger.debug("Multi-User Mode: Attempting to verify bearer token (redacted)")
-            else:
-                logger.debug(
-                    f"Multi-User Mode: Attempting to verify token: '{token[:15]}...'"
-                )
+            logger.debug("Multi-User Mode: Attempting to verify bearer token.")
             user = await verify_jwt_and_fetch_user(request, token)
             # verify_jwt_and_fetch_user already sets request.state.auth; return user
             try:

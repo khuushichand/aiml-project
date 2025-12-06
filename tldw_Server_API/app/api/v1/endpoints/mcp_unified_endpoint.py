@@ -9,7 +9,6 @@ import os
 import secrets
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, WebSocket, HTTPException, Depends, Query, Header, Security, status, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -22,11 +21,7 @@ from tldw_Server_API.app.core.MCP_unified import (
 from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
 from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
 from fastapi import Response
-from tldw_Server_API.app.core.MCP_unified.auth import (
-    JWTManager,
-    UserRole,
-    RBACPolicy
-)
+from tldw_Server_API.app.core.MCP_unified.auth import UserRole
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get_jwt_manager
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
@@ -165,7 +160,9 @@ async def get_current_user(
                     if settings.SINGLE_USER_API_KEY:
                         allowed.add(settings.SINGLE_USER_API_KEY)
                     if test_mode:
-                        allowed.add(os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345"))
+                        test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                        if test_key:
+                            allowed.add(test_key)
                     if x_api_key in {a for a in allowed if a}:
                         roles = [UserRole.ADMIN.value]
                         perms = ["*"] if test_mode else []
@@ -178,7 +175,9 @@ async def get_current_user(
                         )
             except Exception:
                 # Fall through to multi-user API key validation
-                pass
+                logger.debug(
+                    "Single-user API key check failed, falling through to multi-user validation"
+                )
             api_mgr = await get_api_key_manager()
             client_ip = request.client.host if request and getattr(request, "client", None) else None
             info = await api_mgr.validate_api_key(x_api_key, ip_address=client_ip)
@@ -1009,10 +1008,15 @@ async def health_check(
 
     server_status = await server.get_status()
 
-    if server_status["status"] != "healthy":
+    status_value = "unhealthy"
+    if isinstance(server_status, dict):
+        raw_status = server_status.get("status", "unhealthy")
+        status_value = raw_status if isinstance(raw_status, str) else "unhealthy"
+
+    if status_value != "healthy":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Server status: {server_status['status']}",
+            detail=f"Server status: {status_value}",
         )
 
     return {"status": "healthy"}

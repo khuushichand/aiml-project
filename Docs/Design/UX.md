@@ -80,6 +80,13 @@ https://www.a11y-collective.com/blog/accessible-writing/?ref=sidebar
 https://uxdesign.cc/right-narratives-shape-lasting-products-9a50e28caae9
 https://posthog.com/newsletter/building-ai-features
 https://savolai.net/ux/product-and-framework-thinkers-when-developers-and-uxers-dont-get-each-other/
+https://emesstyle.com/usability/
+https://medium.com/@ryan.almeida86/5-design-psychology-secrets-every-ui-ux-designer-should-know-0cb50532ff1c
+https://medium.com/design-bootcamp/the-end-of-the-single-truth-rethinking-ai-user-interfaces-to-combat-mode-collapse-36717074d0e5
+
+
+
+
 
 
 

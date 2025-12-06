@@ -478,6 +478,28 @@ async def get_user_tier(user_id: int) -> str:
         return "free"
 
 
+async def set_user_tier(user_id: int, tier: str) -> None:
+    """Set or update a user's audio tier in the DB."""
+    try:
+        pool = await get_db_pool()
+        await _ensure_tables(pool)
+        if pool.pool:
+            await pool.execute(
+                "INSERT INTO audio_user_tiers (user_id, tier) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET tier = EXCLUDED.tier",
+                int(user_id),
+                tier,
+            )
+        else:
+            await pool.execute(
+                "INSERT INTO audio_user_tiers (user_id, tier) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET tier=excluded.tier",
+                int(user_id),
+                tier,
+            )
+    except Exception as e:
+        logger.debug(f"set_user_tier failed for user_id={user_id}, tier={tier}: {e}")
+        raise
+
+
 async def get_limits_for_user(user_id: int) -> Dict[str, Optional[float]]:
     tier = await get_user_tier(user_id)
     return TIER_LIMITS.get(tier, TIER_LIMITS["free"]).copy()
@@ -509,6 +531,9 @@ async def get_daily_minutes_used(user_id: int) -> float:
 
 _daily_ledger: Optional[ResourceDailyLedger] = None  # type: ignore[assignment]
 _daily_ledger_lock = asyncio.Lock()
+# Tracks whether we have attempted to backfill legacy audio_usage_daily rows
+# into the shared ResourceDailyLedger for the current process.
+_audio_minutes_legacy_backfill_done = False
 
 
 async def _get_daily_ledger() -> Optional[ResourceDailyLedger]:
@@ -531,6 +556,17 @@ async def _get_daily_ledger() -> Optional[ResourceDailyLedger]:
         try:
             ledger = ResourceDailyLedger()  # type: ignore[call-arg]
             await ledger.initialize()
+            try:
+                # Best-effort backfill for upgrades: if legacy audio_usage_daily
+                # rows exist for the current UTC day, mirror them into the
+                # generic ResourceDailyLedger so that daily minutes caps remain
+                # accurate immediately after deploy. This runs once per process
+                # and is idempotent via LedgerEntry.op_id.
+                await _backfill_audio_usage_daily_to_ledger(ledger)
+            except Exception as backfill_exc:  # pragma: no cover - defensive
+                logger.debug(
+                    f"Audio quotas: legacy audio_usage_daily backfill failed; continuing without backfill: {backfill_exc}"
+                )
             _daily_ledger = ledger
             return ledger
         except Exception as e:  # pragma: no cover - best-effort shadow path
@@ -539,13 +575,79 @@ async def _get_daily_ledger() -> Optional[ResourceDailyLedger]:
             return None
 
 
+async def _backfill_audio_usage_daily_to_ledger(ledger: ResourceDailyLedger) -> None:
+    """
+    Best-effort migration helper: mirror today's audio_usage_daily minutes
+    into ResourceDailyLedger once per process.
+
+    This preserves in-progress daily minutes caps when upgrading from older
+    versions that only wrote to audio_usage_daily.
+    """
+    global _audio_minutes_legacy_backfill_done
+    if _audio_minutes_legacy_backfill_done:
+        return
+    try:
+        pool = await get_db_pool()
+        # Ensure legacy tables exist if callers created them previously; this
+        # is a no-op when they do not.
+        await _ensure_tables(pool)
+        day = datetime.now(timezone.utc).date().isoformat()
+        rows = []
+        if pool.pool:
+            try:
+                rows = await pool.fetch(
+                    "SELECT user_id, minutes_used FROM audio_usage_daily WHERE day=$1",
+                    day,
+                )
+                iterable = [(int(r["user_id"]), float(r["minutes_used"])) for r in rows or []]
+            except Exception as e:
+                logger.debug(f"Audio quotas: legacy backfill query (Postgres) failed: {e}")
+                iterable = []
+        else:
+            try:
+                rows = await pool.fetch(
+                    "SELECT user_id, minutes_used FROM audio_usage_daily WHERE user_id IS NOT NULL AND day=?",
+                    day,
+                )
+                iterable = [(int(r[0]), float(r[1])) for r in rows or []]
+            except Exception as e:
+                logger.debug(f"Audio quotas: legacy backfill query (SQLite) failed: {e}")
+                iterable = []
+
+        for user_id, minutes_used in iterable:
+            units = int(max(0, round(float(minutes_used) * 60.0)))
+            if units <= 0:
+                continue
+            entry = LedgerEntry(  # type: ignore[call-arg]
+                entity_scope="user",
+                entity_value=str(user_id),
+                category="minutes",
+                units=units,
+                op_id=f"audio-minutes-legacy:{user_id}:{day}",
+                occurred_at=datetime.now(timezone.utc),
+            )
+            try:
+                await ledger.add(entry)
+            except Exception as le:
+                logger.debug(
+                    f"Audio quotas: ResourceDailyLedger legacy backfill add failed for user_id={user_id}: {le}"
+                )
+        _audio_minutes_legacy_backfill_done = True
+    except Exception as exc:
+        logger.debug(
+            f"Audio quotas: legacy audio_usage_daily backfill to ResourceDailyLedger failed; continuing without backfill: {exc}"
+        )
+
+
 async def add_daily_minutes(user_id: int, minutes: float) -> None:
     if minutes <= 0:
         return
     day = datetime.now(timezone.utc).date().isoformat()
 
-    # First, record against the shared ResourceDailyLedger so enforcement can
-    # rely on the ledger even when legacy counters fail.
+    # Record against the shared ResourceDailyLedger; this is the canonical
+    # source of truth for audio daily minutes. Legacy audio_usage_daily
+    # counters are no longer written to and remain as compatibility state
+    # only for pre-upgrade rows.
     units = int(max(0, round(float(minutes) * 60.0)))
     try:
         ledger = await _get_daily_ledger()
@@ -565,34 +667,8 @@ async def add_daily_minutes(user_id: int, minutes: float) -> None:
     except Exception as outer:
         logger.debug(f"Audio quotas: ResourceDailyLedger shadow path failed; ignoring: {outer}")
 
-    # Legacy counter retained for backward compatibility/observability only.
-    pool = await get_db_pool()
-    await _ensure_tables(pool)
-    try:
-        if pool.pool:
-            await pool.execute(
-                """
-                INSERT INTO audio_usage_daily (user_id, day, minutes_used, jobs_started)
-                VALUES ($1, $2, $3, 0)
-                ON CONFLICT (user_id, day) DO UPDATE SET minutes_used = audio_usage_daily.minutes_used + EXCLUDED.minutes_used
-                """,
-                user_id,
-                day,
-                float(minutes),
-            )
-        else:
-            await pool.execute(
-                """
-                INSERT INTO audio_usage_daily (user_id, day, minutes_used, jobs_started)
-                VALUES (?, ?, ?, 0)
-                ON CONFLICT(user_id, day) DO UPDATE SET minutes_used = minutes_used + excluded.minutes_used
-                """,
-                user_id,
-                day,
-                float(minutes),
-            )
-    except Exception as e:
-        logger.debug(f"add_daily_minutes failed: {e}")
+    # Legacy audio_usage_daily writes have been removed; usage is tracked
+    # solely via ResourceDailyLedger for new events.
 
 
 async def _ledger_remaining_minutes(user_id: int, daily_limit_minutes: float) -> Optional[float]:

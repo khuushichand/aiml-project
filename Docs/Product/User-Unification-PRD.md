@@ -465,6 +465,8 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
 - The async helper `bootstrap_single_user_profile()` is implemented in `tldw_Server_API/app/core/AuthNZ/initialize.py`. It:
   - Ensures the single-user admin row (`SINGLE_USER_FIXED_ID`) and RBAC seed via `ensure_single_user_rbac_seed_if_needed()` when `AUTH_MODE=single_user`.
   - Uses `APIKeyManager` and the configured `SINGLE_USER_API_KEY` to upsert a non-virtual primary API key row keyed by `key_hash`, with `scope='admin'` and `status='active'`, for both Postgres and SQLite backends.
+  - Emits `logger.info` / `logger.warning` messages in addition to interactive `print` output so single-user bootstrap success/failure paths are visible in standard AuthNZ logs.
+  - When invoked via the AuthNZ initializer CLI (`initialize.main()`), treats bootstrap failures as a hard error in non-`TEST_MODE` runs (exiting with a non-zero status) while continuing as a soft warning when `TEST_MODE=1` to keep offline test harnesses stable.
 - SQLite regression coverage for the bootstrap path is provided by `tldw_Server_API/tests/AuthNZ_SQLite/test_single_user_bootstrap_sqlite.py`, which:
   - Configures `AUTH_MODE=single_user` and a SQLite `DATABASE_URL`, runs bootstrap twice, and asserts:
     - A single admin user row exists with `id = SINGLE_USER_FIXED_ID`, `username='single_user'`, `role='admin'`, and an active/verified status.

@@ -421,8 +421,6 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
             except Exception:
                 pass
             try:
-                # Prefer explicit profile when configured; fall back to mode.
-                settings = get_settings()
                 profile = get_profile()
                 if isinstance(profile, str) and profile.strip():
                     # Keep current behavior: profiles that explicitly signal a
@@ -2362,10 +2360,7 @@ class TenantQuotaResponse(BaseModel):
 
 @router.get("/embeddings/tenant/quotas", summary="Get current tenant quotas (if multi-tenant)")
 async def get_tenant_quotas(current_user: User = Depends(get_request_user)) -> TenantQuotaResponse:
-    # Prefer explicit PROFILE hints when present; keep behavior compatible
-    # with AUTH_MODE/is_single_user_mode defaults.
     try:
-        settings = get_settings()
         profile = get_profile()
         if isinstance(profile, str) and profile.strip():
             lowered = profile.strip().lower()
@@ -2443,7 +2438,6 @@ async def warmup_model(
     payload: ModelActionRequest,
     current_user: User = Depends(get_request_user)
 ):
-    require_admin(current_user)
     provider = guess_provider_for_model(payload.model, payload.provider)
     if not is_model_allowed(provider, payload.model):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Model/provider not allowed")
@@ -2473,7 +2467,6 @@ async def download_model(
     payload: ModelActionRequest,
     current_user: User = Depends(get_request_user)
 ):
-    require_admin(current_user)
     provider = guess_provider_for_model(payload.model, payload.provider)
     if not is_model_allowed(provider, payload.model):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Model/provider not allowed")
@@ -2503,8 +2496,6 @@ async def clear_cache(
     current_user: User = Depends(get_request_user)
 ):
     """Clear the embedding cache - requires admin privileges"""
-
-    require_admin(current_user)
 
     cache_stats = embedding_cache.stats()
     await embedding_cache.clear()

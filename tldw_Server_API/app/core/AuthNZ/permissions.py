@@ -99,9 +99,10 @@ def check_role(user: User, role: str) -> bool:
 
     if isinstance(roles, list):
         # Claims are authoritative when present; if the role is not listed,
-        # treat it as absent without hitting the DB. In single-user mode an
-        # explicit "admin" claim implies both admin- and user-level access.
-        if is_single_user_mode() and "admin" in roles and role in ["admin", "user"]:
+        # treat it as absent without hitting the DB. An explicit "admin"
+        # claim implies both admin- and user-level access regardless of
+        # deployment mode so that RBAC semantics are driven purely by claims.
+        if "admin" in roles and role in ["admin", "user"]:
             return True
         return role in roles
 

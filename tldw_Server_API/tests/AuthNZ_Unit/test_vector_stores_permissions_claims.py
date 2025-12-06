@@ -1,4 +1,4 @@
-"""Unit tests validating vector store admin health endpoint authorization."""
+"""Unit tests validating vector store RBAC behavior."""
 
 from __future__ import annotations
 
@@ -116,3 +116,55 @@ async def test_vector_stores_admin_health_allowed_with_admin_role():
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("ok") == True
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_vector_stores_batches_non_admin_cannot_override_user_id(monkeypatch):
+    """Non-admin principals may list only their own batches; user_id override should be forbidden."""
+    principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
+    app = _build_app_with_overrides(principal)
+
+    # Patch db_list_batches to avoid touching real storage and to capture the user_id used.
+    captured: dict[str, Any] = {}
+
+    def _fake_list_batches(*, user_id: str, status=None, limit: int, offset: int):
+        captured["user_id"] = user_id
+        return [{"id": "b1", "user_id": user_id, "status": status or "completed"}]
+
+    monkeypatch.setattr(vs_mod, "db_list_batches", _fake_list_batches)
+
+    with TestClient(app) as client:
+        # Without override: should succeed and use the current user's id.
+        resp_self = client.get("/vector_stores/batches")
+        assert resp_self.status_code == 200
+        body_self = resp_self.json()
+        assert isinstance(body_self.get("data"), list)
+        assert captured.get("user_id") == "1"
+
+        # Override to a different user_id should be rejected with 403 for non-admins.
+        resp_other = client.get("/vector_stores/batches", params={"user_id": "2"})
+        assert resp_other.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_vector_stores_batches_admin_can_override_user_id(monkeypatch):
+    """Admin principals may override user_id and inspect other users' batches."""
+    principal = _make_principal(roles=["admin"], permissions=["*"], is_admin=True)
+    app = _build_app_with_overrides(principal)
+
+    captured: dict[str, Any] = {}
+
+    def _fake_list_batches(*, user_id: str, status=None, limit: int, offset: int):
+        captured["user_id"] = user_id
+        return [{"id": "b2", "user_id": user_id, "status": status or "completed"}]
+
+    monkeypatch.setattr(vs_mod, "db_list_batches", _fake_list_batches)
+
+    with TestClient(app) as client:
+        resp = client.get("/vector_stores/batches", params={"user_id": "42"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body.get("data"), list)
+        assert captured.get("user_id") == "42"

@@ -66,7 +66,7 @@ The stages are designed to be incremental and backwards-compatible. Each stage s
 
 **Success Criteria**:
 - A shared `AuthPrincipal` model and `AuthContext` type exist (e.g., in `app/core/AuthNZ/principal_model.py`), including:
-  - `kind` (user, api_key, service, anonymous).
+  - `kind` (user, api_key, service, anonymous, single_user).
   - `principal_id` (stable, non-PII identifier).
   - `user_id`/`api_key_id` (when applicable).
   - `roles`, `permissions`, `is_admin`.
@@ -163,7 +163,7 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
 - Auth tests:
   - For `AUTH_MODE=single_user` / `local-single-user`:
     - Auth via `X-API-KEY` and Bearer flows still work and return the same user shape.
-    - `AuthPrincipal.kind` is `api_key` and `is_admin=True` for the bootstrapped admin.
+    - The bootstrapped admin is represented as an `AuthPrincipal` with `kind="single_user"`, `roles=["admin"]`, and `is_admin=True` (with `token_type="api_key"` for compatibility), and tests treat this `single_user` kind as canonical for single-user principals.
 
 **PRDs Touched**:
 - User-Unification:
@@ -183,8 +183,8 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
 - Claim-first semantics for single-user principals are locked in by:
   - `tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py` (e.g., `test_check_permission_single_user_mode_prefers_claims`, `test_check_role_single_user_mode_treats_admin_as_admin_and_user`).
   - `tldw_Server_API/tests/AuthNZ/integration/test_single_user_claims_permissions.py`, which verifies both:
-    - The bootstrapped single-user admin has concrete roles/permissions claims and passes `require_permissions` / `require_roles`.
-    - A non-admin single-user principal (overridden via `get_auth_principal`) is correctly denied on permission- and role-protected endpoints (403).
+    - The bootstrapped single-user admin (`AuthPrincipal.kind="single_user"`) has concrete roles/permissions claims and passes `require_permissions` / `require_roles` under claim-first semantics.
+    - A non-admin single-user principal (`AuthPrincipal.kind="single_user"` overridden via `get_auth_principal`) is correctly denied on permission- and role-protected endpoints (403) under claim-first semantics.
 - The AuthNZ Code Guide documents single-user behavior and explicitly notes that claim-first dependencies respect single-user claims, with these tests referenced as invariants.
 
 ---
@@ -343,7 +343,7 @@ MFA-related SQL has already been migrated behind `AuthnzMfaRepo`; no `hasattr(co
   - `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` (claim-first 401/403/200 matrix via `get_auth_principal`).
   - `tldw_Server_API/tests/Resource_Governance/test_rg_capabilities_endpoint.py` and `test_resource_governor_endpoint.py` (single-user API-key flows and policy admin integration) to confirm no behavior drift in existing RG tests.
 - `llm_budget_guard` derives an `AuthPrincipal` (via `request.state.auth` when available) and now uses that principal when consulting governance for LLM budgets; middleware and dependency paths include embeddings/chat overage regressions with principal metadata.
-- Single-user deployments now share the same claim-first + DB-fallback semantics as multi-user for permission and role checks: `permissions.py` no longer treats `is_single_user_mode()` as an “allow-all” shortcut when claims are missing. This behavior is locked in by additional tests in `tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py` (e.g., `test_check_permission_single_user_mode_prefers_claims`, `test_check_permission_single_user_mode_without_claims_falls_back_to_db`, `test_check_role_single_user_mode_treats_admin_as_admin_and_user`, `test_check_role_single_user_mode_without_roles_falls_back_to_db`).
+- Single-user deployments now share the same claim-first + DB-fallback semantics as multi-user for permission and role checks: `permissions.py` no longer treats `is_single_user_mode()` as an “allow-all” shortcut when claims are missing, and single-user principals are represented consistently as `AuthPrincipal.kind="single_user"`. This behavior is locked in by additional tests in `tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py` (e.g., `test_check_permission_single_user_mode_prefers_claims`, `test_check_permission_single_user_mode_without_claims_falls_back_to_db`, `test_check_role_single_user_mode_treats_admin_as_admin_and_user`, `test_check_role_single_user_mode_without_roles_falls_back_to_db`) and by `tldw_Server_API/tests/AuthNZ/integration/test_single_user_claims_permissions.py`, which exercises claim-first semantics for `kind="single_user"` principals.
 - A focused audit of `is_single_user_mode()` usages confirms that remaining mode checks are either:
   - Coordination/governance decisions (startup banners, WebUI configuration, ChaChaNotes warm-up, backpressure/tenant RPS toggles, embedding quotas), or
   - Profile selection for auth flows (single-user API key vs multi-user JWT/API-key) and diagnostics.

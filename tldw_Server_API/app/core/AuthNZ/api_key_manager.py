@@ -70,6 +70,21 @@ class APIKeyManager:
         except Exception:
             self._hmac_key_fingerprint = ""
 
+    def _db_context_hint(self) -> str:
+        """
+        Return a short, non-sensitive description of the current AuthNZ DB context.
+
+        Used only for error messages to help diagnose misconfigured tests or
+        startup issues without logging full connection strings or secrets.
+        """
+        try:
+            auth_mode = getattr(self.settings, "AUTH_MODE", None)
+            db_url = getattr(self.settings, "DATABASE_URL", None)
+            db_url_set = bool(db_url)
+            return f"(AUTH_MODE={auth_mode}, DATABASE_URL_set={db_url_set})"
+        except Exception:
+            return "(AuthNZ settings unavailable)"
+
     def _get_repo(self) -> "AuthnzApiKeysRepo":
         """
         Lazily construct an AuthnzApiKeysRepo bound to the current db_pool.
@@ -81,7 +96,9 @@ class APIKeyManager:
             DatabaseError: If no database pool has been configured.
         """
         if not self.db_pool:
-            raise DatabaseError("APIKeyManager database pool is not initialized")
+            raise DatabaseError(
+                f"APIKeyManager database pool is not initialized {self._db_context_hint()}"
+            )
         from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
 
         if self._repo is None or getattr(self._repo, "db_pool", None) is not self.db_pool:
@@ -111,7 +128,9 @@ class APIKeyManager:
             logger.debug("API keys tables and indexes created/verified")
         except Exception as e:
             logger.error(f"Failed to create API keys tables: {e}")
-            raise DatabaseError(f"Failed to create API keys tables: {e}")
+            raise DatabaseError(
+                f"Failed to create API keys tables {self._db_context_hint()}: {e}"
+            )
 
     def generate_api_key(self) -> tuple[str, str]:
         """

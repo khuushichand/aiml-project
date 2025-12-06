@@ -9,6 +9,11 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 
 
+def _strip_tzinfo(dt: datetime) -> datetime:
+    """Strip timezone info for PostgreSQL timestamp without timezone columns."""
+    return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
+
+
 @dataclass
 class AuthnzTokenBlacklistRepo:
     """
@@ -38,7 +43,7 @@ class AuthnzTokenBlacklistRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
-                    exp = expires_at.replace(tzinfo=None) if getattr(expires_at, "tzinfo", None) else expires_at
+                    exp = _strip_tzinfo(expires_at)
                     await conn.execute(
                         """
                         INSERT INTO token_blacklist
@@ -75,10 +80,16 @@ class AuthnzTokenBlacklistRepo:
                         try:
                             await conn.commit()
                         except Exception:
-                            # Best-effort commit for SQLite transaction shim
-                            pass
+                            # Transaction shim may auto-commit; log at debug level
+                            logger.debug(
+                                "SQLite commit skipped (likely auto-committed by transaction shim)"
+                            )
                     except Exception as sqlite_err:
                         if "FOREIGN KEY constraint failed" in str(sqlite_err):
+                            logger.warning(
+                                "FK constraint failed for user_id={} in token_blacklist; retrying with NULL user_id",
+                                user_id,
+                            )
                             try:
                                 await conn.execute(
                                     """
@@ -98,8 +109,13 @@ class AuthnzTokenBlacklistRepo:
                                 try:
                                     await conn.commit()
                                 except Exception:
-                                    pass
-                            except Exception:
+                                    logger.debug(
+                                        "SQLite commit skipped (likely auto-committed)"
+                                    )
+                            except Exception as inner_exc:
+                                logger.error(
+                                    "Retry insert with NULL user_id failed: {}", inner_exc
+                                )
                                 raise
                         else:
                             raise
@@ -109,14 +125,16 @@ class AuthnzTokenBlacklistRepo:
             )
             raise
 
-    async def get_active_expiry_for_jti(self, jti: str, now: datetime) -> Optional[Any]:
+    async def get_active_expiry_for_jti(
+        self, jti: str, now: datetime
+    ) -> Optional[datetime]:
         """
         Return the latest non-expired ``expires_at`` for a given JTI, or None.
         """
         try:
             async with self.db_pool.acquire() as conn:
                 if hasattr(conn, "fetchrow"):
-                    now_param = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
+                    now_param = _strip_tzinfo(now)
                     row = await conn.fetchrow(
                         """
                         SELECT expires_at
@@ -155,14 +173,20 @@ class AuthnzTokenBlacklistRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
-                    now_param = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
+                    now_param = _strip_tzinfo(now)
                     result = await conn.execute(
                         "DELETE FROM token_blacklist WHERE expires_at < $1",
                         now_param,
                     )
                     try:
-                        return int(result.split()[-1]) if isinstance(result, str) else 0
-                    except Exception:
+                        # asyncpg returns status like "DELETE N"
+                        if isinstance(result, str) and result.startswith("DELETE"):
+                            return int(result.split()[-1])
+                        return 0
+                    except (ValueError, IndexError) as parse_err:
+                        logger.debug(
+                            "Could not parse DELETE result '{}': {}", result, parse_err
+                        )
                         return 0
 
                 cursor = await conn.execute(
@@ -173,7 +197,9 @@ class AuthnzTokenBlacklistRepo:
                 try:
                     await conn.commit()
                 except Exception:
-                    pass
+                    logger.debug(
+                        "SQLite commit skipped (likely auto-committed by transaction shim)"
+                    )
                 return int(deleted)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
@@ -192,7 +218,7 @@ class AuthnzTokenBlacklistRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                now_param = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
+                now_param = _strip_tzinfo(now)
                 if user_id:
                     if hasattr(conn, "fetchrow"):
                         row = await conn.fetchrow(
@@ -231,8 +257,8 @@ class AuthnzTokenBlacklistRepo:
                             SELECT
                                 COUNT(*) as total,
                                 COUNT(DISTINCT user_id) as unique_users,
-                                COUNT(CASE WHEN token_type = 'access' THEN 1 END) as access_tokens,
-                                COUNT(CASE WHEN token_type = 'refresh' THEN 1 END) as refresh_tokens
+                                SUM(CASE WHEN token_type = 'access' THEN 1 ELSE 0 END) as access_tokens,
+                                SUM(CASE WHEN token_type = 'refresh' THEN 1 ELSE 0 END) as refresh_tokens
                             FROM token_blacklist
                             WHERE expires_at > $1
                             """,

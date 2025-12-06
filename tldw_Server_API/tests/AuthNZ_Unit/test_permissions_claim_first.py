@@ -224,9 +224,7 @@ def test_check_permission_single_user_mode_without_claims_falls_back_to_db(monke
 
 
 @pytest.mark.asyncio
-async def test_check_role_single_user_mode_treats_admin_as_admin_and_user(monkeypatch):
-    monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: True)
-
+async def test_check_role_admin_implies_admin_and_user(monkeypatch):
     def _fake_get_user_database():
         pytest.fail("DB should not be used when role claims are present in single-user mode")
 
@@ -241,9 +239,7 @@ async def test_check_role_single_user_mode_treats_admin_as_admin_and_user(monkey
     assert perms_mod.check_role(user, "viewer") is False
 
 
-def test_check_role_single_user_mode_without_roles_falls_back_to_db(monkeypatch):
-    monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: True)
-
+def test_check_role_without_roles_falls_back_to_db(monkeypatch):
     fake_db = _FakeUserDB()
     fake_db.set_role_result(True)
 
@@ -260,8 +256,6 @@ def test_check_role_single_user_mode_without_roles_falls_back_to_db(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_check_any_permission_uses_claims_even_if_db_unavailable(monkeypatch):
-    monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: False)
-
     def _broken_get_user_database():
         pytest.fail("get_user_database should not be called when permissions claims are present (any)")
 
@@ -276,8 +270,6 @@ async def test_check_any_permission_uses_claims_even_if_db_unavailable(monkeypat
 
 @pytest.mark.asyncio
 async def test_check_all_permissions_uses_claims_even_if_db_unavailable(monkeypatch):
-    monkeypatch.setattr(perms_mod, "is_single_user_mode", lambda: False)
-
     def _broken_get_user_database():
         pytest.fail("get_user_database should not be called when permissions claims are present (all)")
 
