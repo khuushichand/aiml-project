@@ -5,6 +5,7 @@ import importlib
 from fastapi.testclient import TestClient
 
 from pathlib import Path
+import pytest
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
 
@@ -83,3 +84,21 @@ def test_role_effective_permissions_sqlite():
         # all_permissions should contain both categories
         union_set = set(eff2["permissions"]) | set(eff2["tool_permissions"])
         assert set(eff2["all_permissions"]) == union_set
+
+
+def test_role_effective_permissions_sqlite_role_not_found():
+    """Nonexistent role id should return 404 from effective-permissions endpoint."""
+    with _fresh_client() as client:
+        r_roles = client.get("/api/v1/admin/roles")
+        if r_roles.status_code != 200:
+            pytest.skip(f"RBAC not available: {r_roles.text}")
+        roles = r_roles.json()
+        if not roles:
+            pytest.skip("No roles available to derive a missing id from")
+        max_id = max(int(r.get("id", 0)) for r in roles)
+        missing_id = max_id + 1
+
+        r_missing = client.get(f"/api/v1/admin/roles/{missing_id}/permissions/effective")
+        assert r_missing.status_code == 404
+        body = r_missing.json()
+        assert body.get("detail") == "Role not found"

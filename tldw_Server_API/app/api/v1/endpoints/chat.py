@@ -305,7 +305,16 @@ async def _maybe_rg_shadow_chat_decision(
     When RG_SHADOW_CHAT=1 and RG_ENABLED is true, this helper evaluates the same
     request against the governor (policy chat.default) and emits a
     rg_shadow_decision_mismatch_total metric when the allow/deny decisions differ.
-    Control flow always follows the legacy limiter; RG is observability-only.
+
+    Control flow always follows the legacy limiter; RG is observability-only for
+    *enforcement* in this path. The shadow decision uses the same governor
+    instance and issues real reserve/commit calls, which will consume quota units
+    under the configured chat policy. When RG middleware or endpoint-level
+    enforcement is also enabled for chat, enabling RG_SHADOW_CHAT will
+    effectively double-count requests/tokens in the governor. Operators should
+    treat RG_SHADOW_CHAT as an instrumentation/diagnostics flag and avoid using
+    it alongside other chat RG enforcement paths unless this double-counting is
+    acceptable.
     """
     if request is None:
         return

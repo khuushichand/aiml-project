@@ -434,9 +434,14 @@ async def setup_database():
             try:
                 raw_url = get_settings().DATABASE_URL
                 db_url_safe = raw_url.split("@")[-1] if raw_url else "unknown"
-            except Exception:
+            except Exception as settings_err:
                 # Settings resolution failures during bootstrap are non-fatal here; keep "unknown".
-                pass
+                try:
+                    logger.debug(
+                        f"DB URL extraction for diagnostics failed: {settings_err}"
+                    )
+                except Exception:
+                    pass
             try:
                 await ensure_usage_tables_pg(pool)
             except Exception as usage_err:

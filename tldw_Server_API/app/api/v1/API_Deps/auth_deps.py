@@ -369,8 +369,10 @@ async def get_current_user(
                     uid = user_dict.get("id")
                     if uid is not None:
                         request.state.user_id = int(uid)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(
+                        "Fast-path: unable to attach user_id to request.state: {}", exc
+                    )
                 # Scope context should already be set by upstream auth, but be defensive
                 try:
                     _activate_scope_context(
@@ -380,8 +382,10 @@ async def get_current_user(
                         team_ids=getattr(request.state, "team_ids", None),
                         is_admin=bool(getattr(existing_ctx.principal, "is_admin", False)),
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(
+                        "Fast-path: unable to (re)establish content scope context: {}", exc
+                    )
                 return user_dict
     except Exception:
         # Fall through to standard auth behavior if any issue occurs
@@ -953,8 +957,8 @@ async def get_org_policy_from_principal(
         memberships = current_user.get("org_memberships") or []
         if memberships:
             org_id = memberships[0].get("org_id")
-        elif is_single_user_profile_mode():
-            # 3) Single-user profile: synthetic org_id=1 to mirror legacy behaviour.
+        elif is_single_user_mode() or is_single_user_profile_mode():
+            # 3) Single-user environment: synthetic org_id=1 to mirror legacy behaviour.
             org_id = 1
         else:
             raise HTTPException(

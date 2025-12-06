@@ -552,7 +552,9 @@ class CryptoRotateResponse(BaseModel):
 async def rotate_crypto_endpoint(
     request: Request,
     body: CryptoRotateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> CryptoRotateResponse:
+    admin_user = _enforce_domain_scope_unified(principal, body.domain)
     # Require confirmation for destructive changes
     if not body.dry_run:
         hdr = str(request.headers.get("x-confirm", "")).lower()
@@ -560,6 +562,8 @@ async def rotate_crypto_endpoint(
             raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    if backend == "postgres":
+        _set_pg_rls_for_user(admin_user, body.domain)
     jm = JobManager(backend=backend, db_url=db_url)
     try:
         n = jm.rotate_encryption_keys(

@@ -94,6 +94,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DuplicateUserError,
     QuotaExceededError
 )
+from tldw_Server_API.app.core.exceptions import ResourceNotFoundError
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.rbac import get_effective_permissions
@@ -2119,7 +2120,7 @@ async def get_role_effective_permissions(role_id: int) -> RoleEffectivePermissio
             tool_permissions=data.get("tool_permissions", []),
             all_permissions=data.get("all_permissions", []),
         )
-    except KeyError:
+    except ResourceNotFoundError:
         raise HTTPException(status_code=404, detail="Role not found")
     except HTTPException:
         raise

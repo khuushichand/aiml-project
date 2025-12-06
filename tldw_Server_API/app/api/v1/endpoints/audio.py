@@ -846,7 +846,11 @@ async def create_transcription(
         """Best-effort RG job heartbeat loop (no-op when unsupported)."""
         try:
             interval = get_job_heartbeat_interval_seconds()
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "audio.transcriptions: get_job_heartbeat_interval_seconds failed; "
+                f"skipping job heartbeat. user_id={user_id}, error={exc}"
+            )
             return None
         if not interval or interval <= 0:
             return None
@@ -863,7 +867,11 @@ async def create_transcription(
 
         try:
             return asyncio.create_task(_hb_loop())
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "audio.transcriptions: failed to start job heartbeat task; "
+                f"user_id={user_id}, error={exc}"
+            )
             return None
 
     # Resolve per-tier file size limit
@@ -3692,13 +3700,15 @@ async def websocket_tts(
                 route="audio.stream.tts",
                 component_label="audio_tts_ws",
                 error_handler=(
-                    lambda exc: _outer_stream.error(  # type: ignore[union-attr]
-                        "internal_error",
-                        "TTS generation failed",
-                        data={"message": str(exc)},
+                    (  # type: ignore[union-attr]
+                        lambda exc: _outer_stream.error(
+                            "internal_error",
+                            "TTS generation failed",
+                            data={"message": str(exc)},
+                        )
                     )
                     if _outer_stream
-                    else asyncio.sleep(0)
+                    else None
                 ),
             )
         )

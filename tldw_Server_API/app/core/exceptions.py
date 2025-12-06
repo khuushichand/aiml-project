@@ -1,5 +1,6 @@
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
+from typing import Optional
 
 
 class VideoProcessingError(Exception):
@@ -47,6 +48,21 @@ class SecurityAlertEmailError(Exception):
 
 class SecurityAlertFileError(Exception):
     """Raised when writing a security alert to a file sink fails."""
+
+
+class ResourceNotFoundError(Exception):
+    """Generic resource-not-found error for domain-level lookups."""
+
+    def __init__(self, resource: str, identifier: Optional[str] = None, detail: Optional[str] = None):
+        message = f"{resource} not found"
+        if identifier:
+            message = f"{message}: {identifier}"
+        if detail:
+            message = f"{message} ({detail})"
+        super().__init__(message)
+        self.resource = resource
+        self.identifier = identifier
+        self.detail = detail
 
 
 async def video_processing_exception_handler(request: Request, exc: VideoProcessingError):

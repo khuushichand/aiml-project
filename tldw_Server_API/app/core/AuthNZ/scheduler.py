@@ -708,7 +708,6 @@ class AuthNZScheduler:
             results = await repo.list_recent_violations(
                 cutoff=time_window,
                 rate_threshold=rate_threshold,
-                window_minutes=15,
                 limit=20,
             )
 

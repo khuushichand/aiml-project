@@ -108,11 +108,18 @@ class AuthnzMonitoringRepo:
             is_postgres = getattr(self.db_pool, "pool", None) is not None
             if is_postgres:
                 cutoff_param = _strip_tzinfo(cutoff)
+                query = """
+                SELECT
+                    COUNT(CASE WHEN action = 'metric_auth_success' THEN 1 END) as successful_auths,
+                    COUNT(CASE WHEN action = 'metric_auth_failure' THEN 1 END) as failed_auths,
+                    COUNT(CASE WHEN action = 'metric_rate_limit_hit' THEN 1 END) as rate_limit_hits
+                FROM audit_logs
+                WHERE created_at > $1
+                  AND action LIKE 'metric_%'
+                """
             else:
                 cutoff_param = cutoff.isoformat()
-
-            row = await self.db_pool.fetchone(
-                """
+                query = """
                 SELECT
                     COUNT(CASE WHEN action = 'metric_auth_success' THEN 1 END) as successful_auths,
                     COUNT(CASE WHEN action = 'metric_auth_failure' THEN 1 END) as failed_auths,
@@ -120,9 +127,9 @@ class AuthnzMonitoringRepo:
                 FROM audit_logs
                 WHERE created_at > ?
                   AND action LIKE 'metric_%'
-                """,
-                cutoff_param,
-            )
+                """
+
+            row = await self.db_pool.fetchone(query, cutoff_param)
             if not row:
                 return {
                     "successful_auths": 0,

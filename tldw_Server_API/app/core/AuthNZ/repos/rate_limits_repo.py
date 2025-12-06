@@ -272,7 +272,6 @@ class AuthnzRateLimitsRepo:
         *,
         cutoff: datetime,
         rate_threshold: int,
-        window_minutes: int = 15,
         limit: int = 20,
     ) -> Tuple[Dict[str, Any], ...]:
         """

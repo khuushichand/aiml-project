@@ -90,9 +90,8 @@ async def backfill_user_uuids(*, dry_run: bool = False) -> int:
     settings = get_settings()
     pool = await get_db_pool()
     logger.info(
-        "AuthNZ UUID backfill: AUTH_MODE=%s DATABASE_URL=%s (dry_run=%s)",
+        "AuthNZ UUID backfill: AUTH_MODE=%s DATABASE_URL=REDACTED (dry_run=%s)",
         settings.AUTH_MODE,
-        settings.DATABASE_URL,
         dry_run,
     )
 
@@ -136,15 +135,28 @@ async def backfill_user_uuids(*, dry_run: bool = False) -> int:
 
     logger.info("Prepared UUID backfill for %d user(s)", len(updates))
 
-    for user_id, new_uuid in updates.items():
-        if dry_run:
+    if dry_run:
+        for user_id, new_uuid in updates.items():
             logger.info("DRY-RUN: would set users.id=%s uuid=%s", user_id, new_uuid)
-            continue
-        await pool.execute(
-            "UPDATE users SET uuid = ? WHERE id = ?",
-            new_uuid,
-            user_id,
-        )
+    else:
+        # Batch updates in a single transaction per backend for better performance
+        if getattr(pool, "pool", None):
+            # PostgreSQL: use $-style placeholders
+            async with pool.transaction() as conn:
+                for user_id, new_uuid in updates.items():
+                    await conn.execute(
+                        "UPDATE users SET uuid = $1 WHERE id = $2",
+                        new_uuid,
+                        user_id,
+                    )
+        else:
+            # SQLite: use positional ? placeholders
+            async with pool.transaction() as conn:
+                for user_id, new_uuid in updates.items():
+                    await conn.execute(
+                        "UPDATE users SET uuid = ? WHERE id = ?",
+                        (new_uuid, user_id),
+                    )
 
     if not dry_run:
         remaining = await pool.fetchval(

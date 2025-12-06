@@ -124,7 +124,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if hasattr(conn, "fetchval"):
+                if self._is_postgres(conn):
                     encrypted = await conn.fetchval(
                         "SELECT totp_secret FROM users WHERE id = $1",
                         user_id,
@@ -198,7 +198,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if hasattr(conn, "fetchval"):
+                if self._is_postgres(conn):
                     value = await conn.fetchval(
                         "SELECT backup_codes FROM users WHERE id = $1",
                         user_id,

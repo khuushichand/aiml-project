@@ -126,3 +126,46 @@ async def test_mcp_http_requests_use_single_api_key_validation(monkeypatch):
     assert server.last_metadata.get("org_id") == 9
     assert server.last_metadata.get("team_id") == 7
 
+
+@pytest.mark.asyncio
+async def test_modules_health_uses_principal_metadata(monkeypatch):
+    """
+    Ensure /mcp/modules/health uses the principal returned by require_permissions(SYSTEM_LOGS)
+    and forwards its roles/permissions into the MCP metadata.
+    """
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+    from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
+    from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+
+    server = _install_dummy_server(monkeypatch)
+
+    calls: list[AuthPrincipal] = []
+
+    principal = AuthPrincipal(
+        kind="user",
+        user_id=42,
+        roles=["observer", "admin"],
+        permissions=[SYSTEM_LOGS, "other.permission"],
+        is_admin=False,
+    )
+
+    async def _fake_resolve_auth_principal(request) -> AuthPrincipal:  # type: ignore[override]
+        calls.append(principal)
+        return principal
+
+    # Patch the core resolver used by get_auth_principal so that require_permissions
+    # sees our synthetic principal.
+    monkeypatch.setattr(auth_deps, "_resolve_auth_principal", _fake_resolve_auth_principal)
+
+    r = client.get("/api/v1/mcp/modules/health")
+    assert r.status_code == 200, r.text
+
+    # Principal should have been resolved exactly once for this request.
+    assert len(calls) == 1
+
+    assert server.last_metadata is not None
+    # Endpoint should pass through roles/permissions from the principal
+    assert server.last_metadata.get("roles") == principal.roles
+    assert server.last_metadata.get("permissions") == principal.permissions
+    # Admin override flag should be set as documented
+    assert server.last_metadata.get("admin_override") is True

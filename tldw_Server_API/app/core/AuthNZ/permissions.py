@@ -50,7 +50,7 @@ def check_permission(user: User, permission: str) -> bool:
     # exist). This applies in both single-user and multi-user modes.
     perms = getattr(user, "permissions", None)
 
-    if isinstance(perms, list):
+    if isinstance(perms, (list, tuple, set)):
         # Claims are authoritative when present; if the permission is not listed,
         # treat it as absent without hitting the DB.
         return permission in perms
@@ -100,7 +100,7 @@ def check_role(user: User, role: str) -> bool:
     # in both single-user and multi-user modes.
     roles = getattr(user, "roles", None)
 
-    if isinstance(roles, list):
+    if isinstance(roles, (list, tuple, set)):
         # Claims are authoritative when present; if the role is not listed,
         # treat it as absent without hitting the DB. An explicit "admin"
         # claim implies both admin- and user-level access regardless of
