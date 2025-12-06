@@ -3,9 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from fastapi.testclient import TestClient
-
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import AuthnzMonitoringRepo
 
 
@@ -13,15 +10,9 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio
-async def test_authnz_monitoring_repo_postgres_basic(
-    isolated_test_environment: tuple[TestClient, str],
-) -> None:
+async def test_authnz_monitoring_repo_postgres_basic(test_db_pool) -> None:
     """AuthnzMonitoringRepo should aggregate metrics on Postgres."""
-    client, db_name = isolated_test_environment
-    assert client is not None
-    assert db_name
-
-    pool = await get_db_pool()
+    pool = test_db_pool
     repo = AuthnzMonitoringRepo(pool)
 
     now = datetime.now(timezone.utc)
@@ -51,6 +42,8 @@ async def test_authnz_monitoring_repo_postgres_basic(
 
     # Seed sessions and api_keys for count helpers.
     async with pool.acquire() as conn:
+        expires_at = now + timedelta(hours=1)
+        expires_at_naive = expires_at.replace(tzinfo=None)
         await conn.execute(
             """
             INSERT INTO users (username, email, password_hash, role, is_active, is_verified)
@@ -74,7 +67,7 @@ async def test_authnz_monitoring_repo_postgres_basic(
             """,
             int(user_id),
             "session-hash",
-            now + timedelta(hours=1),
+            expires_at_naive,
         )
         await conn.execute(
             """

@@ -179,9 +179,10 @@ class AuthnzUsageRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
+                    cutoff_param = cutoff.replace(tzinfo=None) if getattr(cutoff, "tzinfo", None) else cutoff
                     rows = await conn.fetch(
                         "DELETE FROM llm_usage_log WHERE ts < $1 RETURNING 1",
-                        cutoff,
+                        cutoff_param,
                     )
                     return len(rows)
                 # SQLite path
@@ -208,9 +209,10 @@ class AuthnzUsageRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
+                    cutoff_param = cutoff.replace(tzinfo=None) if getattr(cutoff, "tzinfo", None) else cutoff
                     result = await conn.execute(
                         "DELETE FROM usage_log WHERE ts < $1",
-                        cutoff,
+                        cutoff_param,
                     )
                     try:
                         return int(result.split()[-1]) if isinstance(result, str) else 0

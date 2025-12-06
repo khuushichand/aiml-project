@@ -31,6 +31,7 @@ class AuthnzMonitoringRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
+                    ts = created_at.replace(tzinfo=None) if getattr(created_at, "tzinfo", None) else created_at
                     await conn.execute(
                         """
                         INSERT INTO audit_logs (action, details, created_at)
@@ -38,7 +39,7 @@ class AuthnzMonitoringRepo:
                         """,
                         action,
                         details_json,
-                        created_at,
+                        ts,
                     )
                 else:
                     await conn.execute(
@@ -62,9 +63,10 @@ class AuthnzMonitoringRepo:
             async with self.db_pool.transaction() as conn:
                 deleted = 0
                 if hasattr(conn, "fetchrow"):
+                    cutoff_param = cutoff.replace(tzinfo=None) if getattr(cutoff, "tzinfo", None) else cutoff
                     result = await conn.execute(
                         "DELETE FROM audit_logs WHERE created_at < $1",
-                        cutoff,
+                        cutoff_param,
                     )
                     if isinstance(result, str):
                         try:
@@ -90,7 +92,10 @@ class AuthnzMonitoringRepo:
         """
         try:
             is_postgres = getattr(self.db_pool, "pool", None) is not None
-            cutoff_param = cutoff if is_postgres else cutoff.isoformat()
+            if is_postgres:
+                cutoff_param = cutoff.replace(tzinfo=None) if getattr(cutoff, "tzinfo", None) else cutoff
+            else:
+                cutoff_param = cutoff.isoformat()
 
             row = await self.db_pool.fetchone(
                 """
@@ -136,7 +141,10 @@ class AuthnzMonitoringRepo:
         """
         try:
             is_postgres = getattr(self.db_pool, "pool", None) is not None
-            expires_param = now if is_postgres else now.isoformat()
+            if is_postgres:
+                expires_param = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
+            else:
+                expires_param = now.isoformat()
             revoked_inactive_value = False
 
             row = await self.db_pool.fetchone(

@@ -43,6 +43,12 @@ class AuthnzSessionsRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchval"):
+                    exp = expires_at.replace(tzinfo=None) if getattr(expires_at, "tzinfo", None) else expires_at
+                    ref = (
+                        refresh_expires_at.replace(tzinfo=None)
+                        if refresh_expires_at is not None and getattr(refresh_expires_at, "tzinfo", None)
+                        else refresh_expires_at
+                    )
                     session_id = await conn.fetchval(
                         """
                         INSERT INTO sessions (
@@ -60,8 +66,8 @@ class AuthnzSessionsRepo:
                         refresh_token_hash,
                         encrypted_token,
                         encrypted_refresh,
-                        expires_at,
-                        refresh_expires_at,
+                        exp,
+                        ref,
                         ip_address,
                         user_agent,
                         device_id,
@@ -790,6 +796,12 @@ class AuthnzSessionsRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
+                    exp = expires_at.replace(tzinfo=None) if getattr(expires_at, "tzinfo", None) else expires_at
+                    ref = (
+                        refresh_expires_at.replace(tzinfo=None)
+                        if refresh_expires_at is not None and getattr(refresh_expires_at, "tzinfo", None)
+                        else refresh_expires_at
+                    )
                     await conn.execute(
                         """
                         UPDATE sessions
@@ -807,11 +819,11 @@ class AuthnzSessionsRepo:
                         session_id,
                         new_access_hash,
                         access_jti,
-                        expires_at,
+                        exp,
                         encrypted_access_token,
                         refresh_hash_update,
                         refresh_jti,
-                        refresh_expires_at,
+                        ref,
                         encrypted_refresh_token,
                     )
                 else:

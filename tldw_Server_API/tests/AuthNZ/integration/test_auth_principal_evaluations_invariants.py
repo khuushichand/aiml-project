@@ -175,6 +175,9 @@ def test_evaluations_admin_cleanup_jwt_principal_and_state_alignment(
 
     # Relax heavy-admin gating so require_admin becomes a no-op for this test.
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "false")
+    # Also enable TESTING so evaluations_auth uses the test-tier rate limits
+    # and avoids hitting real per-user policies during invariants.
+    monkeypatch.setenv("TESTING", "true")
 
     # 1. Register and log in via real auth endpoints.
     username = "evals_admin_invariants_user"
@@ -296,6 +299,8 @@ def test_evaluations_admin_cleanup_api_key_principal_and_state_alignment(
     # Relax heavy-admin gating so require_admin becomes a no-op; the admin
     # role/claim behavior is pinned elsewhere in permissions/claims tests.
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "false")
+    # Use TESTING tier for rate limits to avoid exercising real evals policies here.
+    monkeypatch.setenv("TESTING", "true")
 
     # 1. Register a user via the real auth endpoint.
     username = "evals_admin_api_key_invariants_user"

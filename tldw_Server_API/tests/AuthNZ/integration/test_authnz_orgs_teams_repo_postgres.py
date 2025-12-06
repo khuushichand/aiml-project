@@ -20,6 +20,7 @@ async def test_authnz_orgs_teams_repo_membership_postgres(test_db_pool):
     pool = test_db_pool
 
     # Create two users
+    now = datetime.utcnow().replace(microsecond=0)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -32,7 +33,7 @@ async def test_authnz_orgs_teams_repo_membership_postgres(test_db_pool):
             "owner_pg@example.com",
             "x",
             "user",
-            datetime.now(timezone.utc),
+            now,
         )
         await conn.execute(
             """
@@ -45,7 +46,7 @@ async def test_authnz_orgs_teams_repo_membership_postgres(test_db_pool):
             "member_pg@example.com",
             "x",
             "user",
-            datetime.now(timezone.utc),
+            now,
         )
 
     owner_id = await pool.fetchval(
@@ -152,4 +153,3 @@ async def test_authnz_orgs_teams_repo_membership_postgres(test_db_pool):
     remove_owner = await repo.remove_org_member(org_id=org_id, user_id=owner_id)
     assert remove_owner["removed"] is False
     assert remove_owner.get("error") == "owner_required"
-

@@ -17,6 +17,7 @@ async def test_authnz_sessions_repo_validation_and_refresh_postgres(test_db_pool
     pool = test_db_pool
 
     # Seed a user row for FK
+    created_at = datetime.utcnow().replace(microsecond=0)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -39,7 +40,7 @@ async def test_authnz_sessions_repo_validation_and_refresh_postgres(test_db_pool
             "pg_sessions_user@example.com",
             "x",
             "user",
-            datetime.now(timezone.utc),
+            created_at,
         )
 
     user_id = await pool.fetchval(
@@ -134,6 +135,7 @@ async def test_authnz_sessions_repo_bulk_revocation_postgres(test_db_pool):
     pool = test_db_pool
 
     # Seed a user row for FK
+    created_at = datetime.utcnow().replace(microsecond=0)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -156,7 +158,7 @@ async def test_authnz_sessions_repo_bulk_revocation_postgres(test_db_pool):
             "pg_sessions_bulk_user@example.com",
             "x",
             "user",
-            datetime.now(timezone.utc),
+            created_at,
         )
 
     user_id = await pool.fetchval(

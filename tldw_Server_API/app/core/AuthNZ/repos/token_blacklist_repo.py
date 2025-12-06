@@ -38,6 +38,7 @@ class AuthnzTokenBlacklistRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
+                    exp = expires_at.replace(tzinfo=None) if getattr(expires_at, "tzinfo", None) else expires_at
                     await conn.execute(
                         """
                         INSERT INTO token_blacklist
@@ -48,7 +49,7 @@ class AuthnzTokenBlacklistRepo:
                         jti,
                         user_id,
                         token_type,
-                        expires_at,
+                        exp,
                         reason,
                         revoked_by,
                         ip_address,
@@ -115,6 +116,7 @@ class AuthnzTokenBlacklistRepo:
         try:
             async with self.db_pool.acquire() as conn:
                 if hasattr(conn, "fetchrow"):
+                    now_param = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
                     row = await conn.fetchrow(
                         """
                         SELECT expires_at
@@ -124,7 +126,7 @@ class AuthnzTokenBlacklistRepo:
                         LIMIT 1
                         """,
                         jti,
-                        now,
+                        now_param,
                     )
                     return row["expires_at"] if row else None
 
@@ -153,9 +155,10 @@ class AuthnzTokenBlacklistRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
+                    now_param = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
                     result = await conn.execute(
                         "DELETE FROM token_blacklist WHERE expires_at < $1",
-                        now,
+                        now_param,
                     )
                     try:
                         return int(result.split()[-1]) if isinstance(result, str) else 0
@@ -189,6 +192,7 @@ class AuthnzTokenBlacklistRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
+                now_param = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
                 if user_id:
                     if hasattr(conn, "fetchrow"):
                         row = await conn.fetchrow(
@@ -203,7 +207,7 @@ class AuthnzTokenBlacklistRepo:
                             WHERE user_id = $1 AND expires_at > $2
                             """,
                             user_id,
-                            now,
+                            now_param,
                         )
                     else:
                         cursor = await conn.execute(
@@ -232,7 +236,7 @@ class AuthnzTokenBlacklistRepo:
                             FROM token_blacklist
                             WHERE expires_at > $1
                             """,
-                            now,
+                            now_param,
                         )
                     else:
                         cursor = await conn.execute(
@@ -287,4 +291,3 @@ class AuthnzTokenBlacklistRepo:
                 f"AuthnzTokenBlacklistRepo.get_blacklist_stats failed: {exc}"
             )
             raise
-

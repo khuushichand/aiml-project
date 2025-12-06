@@ -15,9 +15,26 @@ async def test_authnz_usage_repo_prune_postgres(test_db_pool):
 
     pool = test_db_pool
 
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow().replace(microsecond=0)
     old_ts = now - timedelta(days=10)
     recent_ts = now - timedelta(days=1)
+
+    # Seed a user to satisfy FKs on usage_daily / llm_usage_daily
+    async with pool.acquire() as conn:
+        user_id = await conn.fetchval(
+            """
+            INSERT INTO users (
+                uuid, username, email, password_hash, role,
+                is_active, is_verified, storage_quota_mb, storage_used_mb
+            )
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, TRUE, TRUE, 5120, 0.0)
+            RETURNING id
+            """,
+            "pg-usage-prune-user",
+            "pg-usage-prune-user@example.com",
+            "hashed",
+            "user",
+        )
 
     # Seed minimal usage rows
     await pool.execute(
@@ -64,7 +81,7 @@ async def test_authnz_usage_repo_prune_postgres(test_db_pool):
         INSERT INTO usage_daily (user_id, day, requests, errors, bytes_total, bytes_in_total, latency_avg_ms)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         """,
-        1,
+        int(user_id),
         (now.date() - timedelta(days=30)),
         10,
         1,
@@ -77,7 +94,7 @@ async def test_authnz_usage_repo_prune_postgres(test_db_pool):
         INSERT INTO usage_daily (user_id, day, requests, errors, bytes_total, bytes_in_total, latency_avg_ms)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         """,
-        1,
+        int(user_id),
         now.date(),
         5,
         0,
@@ -90,24 +107,24 @@ async def test_authnz_usage_repo_prune_postgres(test_db_pool):
         INSERT INTO llm_usage_daily (
             day, user_id, operation, provider, model,
             requests, errors, input_tokens, output_tokens, total_tokens,
-            total_cost_usd, currency
+            total_cost_usd
         )
-        VALUES ($1, $2, 'chat', 'openai', 'gpt', 10, 1, 100, 200, 300, 1.0, 'USD')
+        VALUES ($1, $2, 'chat', 'openai', 'gpt', 10, 1, 100, 200, 300, 1.0)
         """,
         (now.date() - timedelta(days=30)),
-        1,
+        int(user_id),
     )
     await pool.execute(
         """
         INSERT INTO llm_usage_daily (
             day, user_id, operation, provider, model,
             requests, errors, input_tokens, output_tokens, total_tokens,
-            total_cost_usd, currency
+            total_cost_usd
         )
-        VALUES ($1, $2, 'chat', 'openai', 'gpt', 5, 0, 50, 100, 150, 0.5, 'USD')
+        VALUES ($1, $2, 'chat', 'openai', 'gpt', 5, 0, 50, 100, 150, 0.5)
         """,
         now.date(),
-        1,
+        int(user_id),
     )
 
     repo = AuthnzUsageRepo(pool)
@@ -134,4 +151,3 @@ async def test_authnz_usage_repo_prune_postgres(test_db_pool):
     assert remaining_llm == 1
     assert remaining_daily == 1
     assert remaining_llm_daily == 1
-

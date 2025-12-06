@@ -36,6 +36,7 @@ class AuthnzMfaRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
+                    ts = updated_at.replace(tzinfo=None) if getattr(updated_at, "tzinfo", None) else updated_at
                     await conn.execute(
                         """
                         UPDATE users
@@ -47,7 +48,7 @@ class AuthnzMfaRepo:
                         """,
                         encrypted_secret,
                         backup_codes_json,
-                        updated_at,
+                        ts,
                         user_id,
                     )
                 else:
@@ -87,6 +88,7 @@ class AuthnzMfaRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
+                    ts = updated_at.replace(tzinfo=None) if getattr(updated_at, "tzinfo", None) else updated_at
                     await conn.execute(
                         """
                         UPDATE users
@@ -96,7 +98,7 @@ class AuthnzMfaRepo:
                             updated_at = $1
                         WHERE id = $2
                         """,
-                        updated_at,
+                        ts,
                         user_id,
                     )
                 else:
@@ -269,10 +271,11 @@ class AuthnzMfaRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
+                    ts = updated_at.replace(tzinfo=None) if getattr(updated_at, "tzinfo", None) else updated_at
                     await conn.execute(
                         "UPDATE users SET backup_codes = $1, updated_at = $2 WHERE id = $3",
                         backup_codes_json,
-                        updated_at,
+                        ts,
                         user_id,
                     )
                 else:
