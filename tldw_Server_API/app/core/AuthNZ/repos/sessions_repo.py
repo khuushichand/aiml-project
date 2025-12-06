@@ -765,6 +765,8 @@ class AuthnzSessionsRepo:
                                 "id": data["id"],
                                 "user_id": data["user_id"],
                             }
+                    else:
+                        return None
                 else:
                     for candidate in refresh_hash_candidates:
                         cursor = await conn.execute(
@@ -782,7 +784,8 @@ class AuthnzSessionsRepo:
                                 "id": row[0],
                                 "user_id": row[1],
                             }
-            return None
+                    else:
+                        return None
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzSessionsRepo.find_active_session_by_refresh_hash_candidates failed: {exc}"

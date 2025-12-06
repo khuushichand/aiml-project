@@ -292,7 +292,7 @@ async def _decrement_active_request(user_id: str) -> None:
 
 
 async def _maybe_rg_shadow_chat_decision(
-    request: Request,
+    request: Optional[Request],
     limiter_user_id: str,
     limiter_conversation_id: Optional[str],
     estimated_tokens: int,
@@ -307,6 +307,9 @@ async def _maybe_rg_shadow_chat_decision(
     rg_shadow_decision_mismatch_total metric when the allow/deny decisions differ.
     Control flow always follows the legacy limiter; RG is observability-only.
     """
+    if request is None:
+        return
+
     try:
         if str(os.getenv("RG_SHADOW_CHAT", "") or "").strip().lower() not in {"1", "true", "yes", "on"}:
             return
@@ -1172,20 +1175,21 @@ async def create_chat_completion(
                     )
 
                     # Shadow-mode comparison between legacy limiter and ResourceGovernor (observability-only).
-                    try:
-                        await _maybe_rg_shadow_chat_decision(
-                            request=request,
-                            limiter_user_id=str(limiter_user_id),
-                            limiter_conversation_id=limiter_conversation_id,
-                            estimated_tokens=int(estimated_tokens or 0),
-                            legacy_allowed=bool(allowed),
-                        )
-                    except Exception as exc:
-                        # Shadow path must never affect primary rate-limiting behavior.
-                        logger.debug(
-                            "RG shadow helper failed; ignoring and continuing: {}",
-                            exc,
-                        )
+                    if request is not None:
+                        try:
+                            await _maybe_rg_shadow_chat_decision(
+                                request=request,
+                                limiter_user_id=str(limiter_user_id),
+                                limiter_conversation_id=limiter_conversation_id,
+                                estimated_tokens=int(estimated_tokens or 0),
+                                legacy_allowed=bool(allowed),
+                            )
+                        except Exception as exc:
+                            # Shadow path must never affect primary rate-limiting behavior.
+                            logger.debug(
+                                "RG shadow helper failed; ignoring and continuing: {}",
+                                exc,
+                            )
 
                     if not allowed:
                         metrics.track_rate_limit(user_id)
@@ -2127,6 +2131,7 @@ async def get_chat_queue_status():
         queue_status = queue.get_queue_status()
         return {"enabled": True, **queue_status}
     except Exception as e:
+        logger.warning("Chat queue status inspection failed: {}", e)
         return {"enabled": True, "error": str(e)}
 
 
@@ -2159,6 +2164,7 @@ async def get_chat_queue_activity(
         activity = queue.get_recent_activity(limit=limit)
         return {"enabled": True, "limit": limit, "activity": activity}
     except Exception as e:
+        logger.warning("Chat queue activity inspection failed: {}", e)
         return {"enabled": True, "error": str(e)}
 
 def _sanitize_json_for_rate_limit(request_json: str) -> str:

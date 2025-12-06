@@ -52,12 +52,7 @@ class AuthnzRateLimitsRepo:
                     (cutoff.isoformat(),),
                 )
                 deleted = getattr(cursor, "rowcount", 0) or 0
-                try:
-                    await conn.commit()
-                except Exception as exc:
-                    logger.warning(
-                        f"AuthnzRateLimitsRepo SQLite commit failed during cleanup: {exc}"
-                    )
+                await conn.commit()
                 return int(deleted)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzRateLimitsRepo.cleanup_rate_limits_older_than failed: {exc}")
@@ -124,10 +119,7 @@ class AuthnzRateLimitsRepo:
                         (identifier, endpoint, 1, window_start.isoformat()),
                     )
 
-                try:
-                    await conn.commit()
-                except Exception as exc:
-                    logger.debug(f"AuthnzRateLimitsRepo SQLite commit failed during increment: {exc}")
+                await conn.commit()
 
                 return int(current_count)
         except Exception as exc:  # pragma: no cover - surfaced via callers
@@ -244,7 +236,10 @@ class AuthnzRateLimitsRepo:
                             if isinstance(result, str)
                             else 0
                         )
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug(
+                            f"AuthnzRateLimitsRepo asyncpg DELETE result parse failed: result={result!r}, error={exc}"
+                        )
                         deleted = 0
                 else:
                     if endpoint:
@@ -264,12 +259,7 @@ class AuthnzRateLimitsRepo:
                             (identifier,),
                         )
                     deleted = getattr(cursor, "rowcount", 0) or 0
-                    try:
-                        await conn.commit()
-                    except Exception as exc:
-                        logger.debug(
-                            f"AuthnzRateLimitsRepo SQLite commit failed during delete: {exc}"
-                        )
+                    await conn.commit()
             return int(deleted)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
@@ -527,10 +517,7 @@ class AuthnzRateLimitsRepo:
                     "DELETE FROM account_lockouts WHERE identifier = ? AND locked_until <= ?",
                     (identifier, now.isoformat()),
                 )
-                try:
-                    await conn.commit()
-                except Exception as exc:
-                    logger.debug(f"AuthnzRateLimitsRepo SQLite commit failed during lockout cleanup: {exc}")
+                await conn.commit()
                 return None
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzRateLimitsRepo.get_active_lockout failed: {exc}")
@@ -569,6 +556,7 @@ class AuthnzRateLimitsRepo:
                         "DELETE FROM account_lockouts WHERE identifier = ?",
                         (identifier,),
                     )
+                    await conn.commit()
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzRateLimitsRepo.reset_failed_attempts_and_lockout failed: {exc}")
             raise

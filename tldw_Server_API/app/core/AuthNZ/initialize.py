@@ -429,14 +429,28 @@ async def setup_database():
             )
 
             pool = await get_db_pool()
+            # Capture a sanitized view of the DB URL for diagnostics without leaking credentials.
+            db_url_safe = "unknown"
+            try:
+                raw_url = get_settings().DATABASE_URL
+                db_url_safe = raw_url.split("@")[-1] if raw_url else "unknown"
+            except Exception:
+                # Settings resolution failures during bootstrap are non-fatal here; keep "unknown".
+                pass
             try:
                 await ensure_usage_tables_pg(pool)
             except Exception as usage_err:
-                logger.debug(f"AuthNZ initialize: usage tables ensure skipped/failed: {usage_err}")
+                logger.warning(
+                    f"AuthNZ initialize: ensure_usage_tables_pg failed for Postgres backend "
+                    f"(db={db_url_safe}); usage tables may be missing: {usage_err}"
+                )
             try:
                 await ensure_virtual_key_counters_pg(pool)
             except Exception as vk_err:
-                logger.debug(f"AuthNZ initialize: virtual-key counters ensure skipped/failed: {vk_err}")
+                logger.warning(
+                    f"AuthNZ initialize: ensure_virtual_key_counters_pg failed for Postgres backend "
+                    f"(db={db_url_safe}); virtual-key counters tables may be missing: {vk_err}"
+                )
 
             print("✅ Basic schema ensured for Postgres (users, api keys, sessions, registration_codes, RBAC, orgs/teams, usage tables)")
         except Exception as e:

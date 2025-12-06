@@ -7,6 +7,12 @@ from typing import Any, Dict, List
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+from tldw_Server_API.app.core.AuthNZ.exceptions import AuthnzMonitoringError
+
+
+def _strip_tzinfo(dt: datetime) -> datetime:
+    """Strip timezone info for backend-agnostic timestamp storage."""
+    return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
 
 
 @dataclass
@@ -29,9 +35,9 @@ class AuthnzMonitoringRepo:
         audit_log entries with ``action`` = ``metric_*``.
         """
         try:
+            normalized = _strip_tzinfo(created_at)
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
-                    ts = created_at.replace(tzinfo=None) if getattr(created_at, "tzinfo", None) else created_at
                     await conn.execute(
                         """
                         INSERT INTO audit_logs (action, details, created_at)
@@ -39,7 +45,7 @@ class AuthnzMonitoringRepo:
                         """,
                         action,
                         details_json,
-                        ts,
+                        normalized,
                     )
                 else:
                     await conn.execute(
@@ -47,11 +53,15 @@ class AuthnzMonitoringRepo:
                         INSERT INTO audit_logs (action, details, created_at)
                         VALUES (?, ?, ?)
                         """,
-                        (action, details_json, created_at.isoformat()),
+                        (action, details_json, normalized.isoformat()),
                     )
         except Exception as exc:  # pragma: no cover - surfaced through callers
-            logger.error(f"AuthnzMonitoringRepo.insert_metric_audit_log failed: {exc}")
-            raise
+            logger.error(
+                "AuthnzMonitoringRepo.insert_metric_audit_log failed: {}", exc
+            )
+            raise AuthnzMonitoringError(
+                "insert_metric_audit_log", detail=str(exc)
+            ) from exc
 
     async def delete_audit_logs_before(self, cutoff: datetime) -> int:
         """
@@ -63,7 +73,7 @@ class AuthnzMonitoringRepo:
             async with self.db_pool.transaction() as conn:
                 deleted = 0
                 if hasattr(conn, "fetchrow"):
-                    cutoff_param = cutoff.replace(tzinfo=None) if getattr(cutoff, "tzinfo", None) else cutoff
+                    cutoff_param = _strip_tzinfo(cutoff)
                     result = await conn.execute(
                         "DELETE FROM audit_logs WHERE created_at < $1",
                         cutoff_param,
@@ -81,8 +91,12 @@ class AuthnzMonitoringRepo:
                     deleted = getattr(cursor, "rowcount", 0) or 0
                 return int(deleted or 0)
         except Exception as exc:  # pragma: no cover - surfaced through callers
-            logger.error(f"AuthnzMonitoringRepo.delete_audit_logs_before failed: {exc}")
-            raise
+            logger.error(
+                "AuthnzMonitoringRepo.delete_audit_logs_before failed: {}", exc
+            )
+            raise AuthnzMonitoringError(
+                "delete_audit_logs_before", detail=str(exc)
+            ) from exc
 
     async def get_metrics_window_summary(self, cutoff: datetime) -> Dict[str, int]:
         """
@@ -93,7 +107,7 @@ class AuthnzMonitoringRepo:
         try:
             is_postgres = getattr(self.db_pool, "pool", None) is not None
             if is_postgres:
-                cutoff_param = cutoff.replace(tzinfo=None) if getattr(cutoff, "tzinfo", None) else cutoff
+                cutoff_param = _strip_tzinfo(cutoff)
             else:
                 cutoff_param = cutoff.isoformat()
 
@@ -132,8 +146,12 @@ class AuthnzMonitoringRepo:
                     result[key] = 0
             return result
         except Exception as exc:  # pragma: no cover - surfaced through callers
-            logger.error(f"AuthnzMonitoringRepo.get_metrics_window_summary failed: {exc}")
-            raise
+            logger.error(
+                "AuthnzMonitoringRepo.get_metrics_window_summary failed: {}", exc
+            )
+            raise AuthnzMonitoringError(
+                "get_metrics_window_summary", detail=str(exc)
+            ) from exc
 
     async def get_active_sessions_count(self, now: datetime) -> int:
         """
@@ -142,7 +160,7 @@ class AuthnzMonitoringRepo:
         try:
             is_postgres = getattr(self.db_pool, "pool", None) is not None
             if is_postgres:
-                expires_param = now.replace(tzinfo=None) if getattr(now, "tzinfo", None) else now
+                expires_param = _strip_tzinfo(now)
             else:
                 expires_param = now.isoformat()
             revoked_inactive_value = False
@@ -165,8 +183,12 @@ class AuthnzMonitoringRepo:
             except (TypeError, ValueError):
                 return 0
         except Exception as exc:  # pragma: no cover - surfaced through callers
-            logger.error(f"AuthnzMonitoringRepo.get_active_sessions_count failed: {exc}")
-            raise
+            logger.error(
+                "AuthnzMonitoringRepo.get_active_sessions_count failed: {}", exc
+            )
+            raise AuthnzMonitoringError(
+                "get_active_sessions_count", detail=str(exc)
+            ) from exc
 
     async def get_active_api_keys_count(self) -> int:
         """
@@ -188,8 +210,12 @@ class AuthnzMonitoringRepo:
             except (TypeError, ValueError):
                 return 0
         except Exception as exc:  # pragma: no cover - surfaced through callers
-            logger.error(f"AuthnzMonitoringRepo.get_active_api_keys_count failed: {exc}")
-            raise
+            logger.error(
+                "AuthnzMonitoringRepo.get_active_api_keys_count failed: {}", exc
+            )
+            raise AuthnzMonitoringError(
+                "get_active_api_keys_count", detail=str(exc)
+            ) from exc
 
     async def get_recent_security_alerts(self, limit: int = 10) -> List[Dict[str, Any]]:
         """
@@ -208,8 +234,12 @@ class AuthnzMonitoringRepo:
                 """,
                 limit,
             )
-            # fetchall already normalizes rows to dicts for SQLite via DatabasePool
-            return list(rows or [])
+            # Normalize to a list of plain dicts for all backends
+            return [dict(r) for r in (rows or [])]
         except Exception as exc:  # pragma: no cover - surfaced through callers
-            logger.error(f"AuthnzMonitoringRepo.get_recent_security_alerts failed: {exc}")
-            raise
+            logger.error(
+                "AuthnzMonitoringRepo.get_recent_security_alerts failed: {}", exc
+            )
+            raise AuthnzMonitoringError(
+                "get_recent_security_alerts", detail=str(exc)
+            ) from exc

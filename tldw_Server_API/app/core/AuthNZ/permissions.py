@@ -72,7 +72,10 @@ def check_permission(user: User, permission: str) -> bool:
     except Exception as e:
         try:
             redact = get_settings().PII_REDACT_LOGS
-        except Exception:
+        except Exception as settings_err:
+            logger.debug(
+                f"check_permission: failed to read PII_REDACT_LOGS; defaulting to non-redacted logging: {settings_err}"
+            )
             redact = False
         if redact:
             logger.error(f"Error checking permission {permission} for authenticated user (details redacted): {e}")
@@ -123,7 +126,10 @@ def check_role(user: User, role: str) -> bool:
     except Exception as e:
         try:
             redact = get_settings().PII_REDACT_LOGS
-        except Exception:
+        except Exception as settings_err:
+            logger.debug(
+                f"check_role: failed to read PII_REDACT_LOGS; defaulting to non-redacted logging: {settings_err}"
+            )
             redact = False
         if redact:
             logger.error(f"Error checking role {role} for authenticated user (details redacted): {e}")
@@ -203,7 +209,11 @@ class PermissionChecker:
         try:
             current_settings = get_settings()
             redact_logs = current_settings.PII_REDACT_LOGS
-        except Exception:
+        except Exception as settings_err:
+            current_settings = None
+            logger.debug(
+                f"PermissionChecker: failed to load settings; using default logging behavior: {settings_err}"
+            )
             current_settings = None
         if not check_permission(user, self.permission):
             # Soft-enforce option: log and allow if enabled
@@ -218,8 +228,10 @@ class PermissionChecker:
                             f"[RBAC soft-enforce] User {user.username} lacks '{self.permission}' - allowing (soft mode)"
                         )
                     return user
-            except Exception:
-                pass
+            except Exception as soft_err:
+                logger.debug(
+                    f"PermissionChecker: RBAC soft-enforce evaluation failed; enforcing hard deny: {soft_err}"
+                )
             if redact_logs:
                 logger.warning(f"Authenticated user denied access - lacks permission: {self.permission}")
             else:
@@ -265,8 +277,10 @@ class RoleChecker:
         redact_logs = False
         try:
             redact_logs = get_settings().PII_REDACT_LOGS
-        except Exception:
-            pass
+        except Exception as settings_err:
+            logger.debug(
+                f"RoleChecker: failed to load settings; using default logging behavior: {settings_err}"
+            )
         if not check_role(user, self.role):
             if redact_logs:
                 logger.warning(f"Authenticated user denied access - lacks role: {self.role}")
@@ -313,8 +327,10 @@ class AnyPermissionChecker:
         redact_logs = False
         try:
             redact_logs = get_settings().PII_REDACT_LOGS
-        except Exception:
-            pass
+        except Exception as settings_err:
+            logger.debug(
+                f"AnyPermissionChecker: failed to load settings; using default logging behavior: {settings_err}"
+            )
         if not check_any_permission(user, self.permissions):
             if redact_logs:
                 logger.warning(f"Authenticated user denied access - lacks any of: {self.permissions}")
@@ -361,8 +377,10 @@ class AllPermissionsChecker:
         redact_logs = False
         try:
             redact_logs = get_settings().PII_REDACT_LOGS
-        except Exception:
-            pass
+        except Exception as settings_err:
+            logger.debug(
+                f"AllPermissionsChecker: failed to load settings; using default logging behavior: {settings_err}"
+            )
         if not check_all_permissions(user, self.permissions):
             if redact_logs:
                 logger.warning(f"Authenticated user denied access - lacks all of: {self.permissions}")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 from typing import List, TypedDict, Optional
 
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
@@ -25,6 +26,7 @@ class AuthnzRbacRepo:
 
     client_id: str = "rbac_service"
 
+    @cached_property
     def _db(self):
         return get_configured_user_database(client_id=self.client_id)
 

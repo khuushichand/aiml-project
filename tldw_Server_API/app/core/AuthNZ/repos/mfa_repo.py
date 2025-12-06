@@ -73,14 +73,6 @@ class AuthnzMfaRepo:
                             user_id,
                         ),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception as exc:
-                        logger.exception(
-                            "AuthnzMfaRepo.set_mfa_config: commit failed for user_id=%s",
-                            user_id,
-                        )
-                        raise
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzMfaRepo.set_mfa_config failed: {exc}")
             raise
@@ -122,14 +114,6 @@ class AuthnzMfaRepo:
                         """,
                         (updated_at.isoformat(), user_id),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception as exc:
-                        logger.exception(
-                            "AuthnzMfaRepo.clear_mfa_config: commit failed for user_id=%s",
-                            user_id,
-                        )
-                        raise
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzMfaRepo.clear_mfa_config failed: {exc}")
             raise
@@ -258,14 +242,6 @@ class AuthnzMfaRepo:
                         "UPDATE users SET backup_codes = ? WHERE id = ?",
                         (backup_codes_json, user_id),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception as err:
-                        logger.exception(
-                            "AuthnzMfaRepo.update_backup_codes_json: commit failed for user_id=%s",
-                            user_id,
-                        )
-                        raise
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzMfaRepo.update_backup_codes_json failed for user {user_id}: {exc}"
@@ -300,14 +276,6 @@ class AuthnzMfaRepo:
                         "UPDATE users SET backup_codes = ?, updated_at = ? WHERE id = ?",
                         (backup_codes_json, updated_at.isoformat(), user_id),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception as err:
-                        logger.exception(
-                            "AuthnzMfaRepo.set_backup_codes_with_timestamp: commit failed for user_id=%s",
-                            user_id,
-                        )
-                        raise
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzMfaRepo.set_backup_codes_with_timestamp failed for user {user_id}: {exc}"

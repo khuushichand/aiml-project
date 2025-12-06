@@ -7,6 +7,7 @@ Production-ready endpoints for the unified MCP module with enhanced security and
 import ipaddress
 import os
 import secrets
+from dataclasses import dataclass
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, WebSocket, HTTPException, Depends, Query, Header, Security, status, Request
 from pydantic import BaseModel, Field
@@ -100,6 +101,14 @@ def _get_derived_user_id(user: Optional[TokenData]) -> Optional[str]:
     return user.sub if user else None
 
 
+@dataclass
+class McpAuthContext:
+    """Resolved authentication context for MCP HTTP endpoints."""
+    user: Optional[TokenData]
+    api_key_info: Optional[Dict[str, Any]]
+    raw_api_key: Optional[str]
+
+
 # Dependency functions
 
 async def get_current_user(
@@ -182,6 +191,15 @@ async def get_current_user(
             client_ip = request.client.host if request and getattr(request, "client", None) else None
             info = await api_mgr.validate_api_key(x_api_key, ip_address=client_ip)
             if info and info.get("user_id"):
+                # Attach API key metadata to the request state so downstream
+                # handlers can reuse it without re-validating (avoids double
+                # usage/audit updates when get_current_user is used as a
+                # dependency alongside per-endpoint validate_api_key calls).
+                try:
+                    if request is not None:
+                        setattr(request.state, "mcp_api_key_info", info)
+                except Exception as attach_exc:
+                    logger.debug(f"MCP unified: failed to attach API key info to request state: {attach_exc}")
                 return TokenData(
                     sub=str(info["user_id"]),
                     username=None,
@@ -193,6 +211,27 @@ async def get_current_user(
         logger.debug(f"API key check failed: {e}")
 
     return None
+
+
+async def get_mcp_auth_context(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    request: Request = None,
+) -> McpAuthContext:
+    """Resolve MCP auth context (user + API key metadata) for HTTP endpoints.
+
+    Reuses ``get_current_user`` for primary auth and surfaces any API key
+    metadata attached to ``request.state`` by the multi-user API key path.
+    """
+    user = await get_current_user(credentials, x_api_key, request)
+    api_key_info: Optional[Dict[str, Any]] = None
+    try:
+        if request is not None:
+            api_key_info = getattr(request.state, "mcp_api_key_info", None)
+    except Exception as exc:
+        logger.debug(f"MCP unified: failed to read API key info from request state: {exc}")
+        api_key_info = None
+    return McpAuthContext(user=user, api_key_info=api_key_info, raw_api_key=x_api_key)
 
 
 async def require_user(
@@ -278,8 +317,7 @@ async def websocket_endpoint(
 async def mcp_request(
     request: MCPRequest,
     client_id: Optional[str] = Query(None, description="Client identifier"),
-    user: Optional[TokenData] = Depends(get_current_user),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    auth: McpAuthContext = Depends(get_mcp_auth_context),
     mcp_session_id: Optional[str] = Header(None, alias="mcp-session-id"),
     config: Optional[str] = Query(None, description="Base64-encoded JSON safe config for this request"),
     response: Response = None,
@@ -299,23 +337,28 @@ async def mcp_request(
         await server.initialize()
 
     # Process request
-    # Attach org/team metadata when auth via API key
+    # Attach org/team metadata when auth via API key. Prefer any metadata attached
+    # by get_current_user to avoid re-validating the same key and double-counting
+    # usage/audit; fall back to a direct lookup when needed.
     metadata: Dict[str, Any] = {}
-    if x_api_key:
+    api_key_info: Optional[Dict[str, Any]] = None
+    if auth.api_key_info is not None:
+        api_key_info = auth.api_key_info
+    if auth.raw_api_key and api_key_info is None:
         try:
             api_mgr = await get_api_key_manager()
             client_ip = http_request.client.host if http_request and getattr(http_request, "client", None) else None
-            info = await api_mgr.validate_api_key(x_api_key, ip_address=client_ip)
-            if info:
-                if info.get('org_id') is not None:
-                    metadata['org_id'] = info.get('org_id')
-                if info.get('team_id') is not None:
-                    metadata['team_id'] = info.get('team_id')
+            api_key_info = await api_mgr.validate_api_key(auth.raw_api_key, ip_address=client_ip)
         except Exception:
-            pass
+            api_key_info = None
+    if api_key_info:
+        if api_key_info.get("org_id") is not None:
+            metadata["org_id"] = api_key_info.get("org_id")
+        if api_key_info.get("team_id") is not None:
+            metadata["team_id"] = api_key_info.get("team_id")
 
     # Derive user id from the authenticated token user when present.
-    derived_user_id = _get_derived_user_id(user)
+    derived_user_id = _get_derived_user_id(auth.user)
 
     # Parse optional safe config (base64-encoded JSON)
     safe_config: Dict[str, Any] = {}
@@ -339,11 +382,11 @@ async def mcp_request(
     except Exception:
         pass
 
-    if user:
-        if user.roles:
-            metadata.setdefault("roles", user.roles)
-        if user.permissions:
-            metadata.setdefault("permissions", user.permissions)
+    if auth.user:
+        if auth.user.roles:
+            metadata.setdefault("roles", auth.user.roles)
+        if auth.user.permissions:
+            metadata.setdefault("permissions", auth.user.permissions)
 
     if mcp_session_id:
         metadata["session_id"] = mcp_session_id
@@ -378,8 +421,7 @@ async def mcp_request(
 async def mcp_request_batch(
     requests: list[MCPRequest],
     client_id: Optional[str] = Query(None, description="Client identifier"),
-    user: Optional[TokenData] = Depends(get_current_user),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    auth: McpAuthContext = Depends(get_mcp_auth_context),
     mcp_session_id: Optional[str] = Header(None, alias="mcp-session-id"),
     config: Optional[str] = Query(None, description="Base64-encoded JSON safe config for this request"),
     response: Response = None,
@@ -395,23 +437,29 @@ async def mcp_request_batch(
     if not server.initialized:
         await server.initialize()
 
-    # Attach org/team metadata when auth via API key
+    # Attach org/team metadata when auth via API key. Prefer any metadata attached
+    # by get_current_user to avoid re-validating the same key and double-counting
+    # usage/audit; fall back to a direct lookup when needed.
     metadata: Dict[str, Any] = {}
-    if x_api_key:
+    api_key_info: Optional[Dict[str, Any]] = None
+    if auth.api_key_info is not None:
+        api_key_info = auth.api_key_info
+    if auth.raw_api_key and api_key_info is None:
         try:
             api_mgr = await get_api_key_manager()
             client_ip = http_request.client.host if http_request and getattr(http_request, "client", None) else None
-            info = await api_mgr.validate_api_key(x_api_key, ip_address=client_ip)
-            if info:
-                if info.get('org_id') is not None:
-                    metadata['org_id'] = info.get('org_id')
-                if info.get('team_id') is not None:
-                    metadata['team_id'] = info.get('team_id')
+            api_key_info = await api_mgr.validate_api_key(auth.raw_api_key, ip_address=client_ip)
         except Exception as e:
             logger.debug(f"Batch API key metadata attach failed: {e}")
+            api_key_info = None
+    if api_key_info:
+        if api_key_info.get("org_id") is not None:
+            metadata["org_id"] = api_key_info.get("org_id")
+        if api_key_info.get("team_id") is not None:
+            metadata["team_id"] = api_key_info.get("team_id")
 
     # Derive user id from the authenticated token user when present.
-    derived_user_id = _get_derived_user_id(user)
+    derived_user_id = _get_derived_user_id(auth.user)
 
     # Optional safe config
     safe_config: Dict[str, Any] = {}
@@ -426,11 +474,11 @@ async def mcp_request_batch(
             logger.debug(f"Batch failed to parse safe config: {e}")
 
     # Build context and process via protocol directly to leverage batch support
-    if user:
-        if user.roles:
-            metadata.setdefault("roles", user.roles)
-        if user.permissions:
-            metadata.setdefault("permissions", user.permissions)
+    if auth.user:
+        if auth.user.roles:
+            metadata.setdefault("roles", auth.user.roles)
+        if auth.user.permissions:
+            metadata.setdefault("permissions", auth.user.permissions)
 
     ctx = RequestContext(
         request_id="http_batch",
@@ -735,12 +783,9 @@ async def list_modules(
     return response.result
 
 
-@router.get(
-    "/modules/health",
-    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
-)
+@router.get("/modules/health")
 async def get_modules_health(
-    principal: AuthPrincipal = Depends(get_auth_principal),
+    principal: AuthPrincipal = Depends(require_permissions(SYSTEM_LOGS)),
     _guard: None = Depends(enforce_http_security),
 ):
     """

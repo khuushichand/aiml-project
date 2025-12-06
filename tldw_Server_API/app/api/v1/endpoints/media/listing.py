@@ -32,6 +32,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.core.DB_Management.DB_Manager import get_paginated_files
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     DatabaseError,
+    InputError,
     MediaDatabase,
     fetch_keywords_for_media_batch,
 )
@@ -159,8 +160,8 @@ async def list_media_endpoint(
                     db_instance=db,
                 )
                 keywords_available = True
-            except Exception as exc:
-                # Log and degrade gracefully if keyword lookup fails
+            except (TypeError, InputError, DatabaseError) as exc:
+                # Log and degrade gracefully for known keyword lookup failures
                 logger.error(
                     "Error fetching keywords for media list page={} rpp={}: {}",
                     page,
@@ -171,6 +172,18 @@ async def list_media_endpoint(
                 keywords_map = {}
                 # Surface failure via a coarse availability flag so clients can
                 # distinguish "no keywords" from "keyword lookup failed".
+                keywords_available = False
+            except Exception as exc:  # pragma: no cover - unexpected failures
+                # Preserve graceful degradation for unexpected errors while
+                # still logging with full context for observability.
+                logger.error(
+                    "Unexpected error fetching keywords for media list page={} rpp={}: {}",
+                    page,
+                    results_per_page,
+                    exc,
+                    exc_info=True,
+                )
+                keywords_map = {}
                 keywords_available = False
         elif include_keywords:
             # Keywords were requested but there were no media_ids to look up;

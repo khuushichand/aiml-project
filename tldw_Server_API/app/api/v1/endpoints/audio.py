@@ -115,11 +115,131 @@ def _get_chat_history_max_messages() -> int:
     try:
         value = int(raw)
         return value if value > 0 else 40
-    except Exception:
+    except (ValueError, TypeError) as e:
+        logger.debug(f"AUDIO_CHAT_HISTORY_MAX_MESSAGES parse failed: {e}")
         return 40
 
 
 CHAT_HISTORY_MAX_MESSAGES: int = _get_chat_history_max_messages()
+
+
+async def _stream_tts_to_websocket(
+    *,
+    websocket: WebSocket,
+    speech_req: OpenAISpeechRequest,
+    tts_service: Any,
+    provider: Optional[str],
+    outer_stream: Optional[Any],
+    reg: Any,
+    route: str,
+    component_label: str,
+    voice_to_voice_start: Optional[float] = None,
+    error_handler: Optional[Callable[[Exception], Awaitable[None]]] = None,
+) -> None:
+    """
+    Shared helper to stream TTS audio chunks over a WebSocket with backpressure and metrics.
+
+    This consolidates the producer/consumer queue pattern used by both the
+    audio.chat.stream and audio.stream.tts WebSocket handlers.
+    """
+    queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=8)
+    provider_label = (provider or getattr(speech_req, "model", None) or "default").lower()
+    underrun_labels = {"provider": provider_label}
+    error_labels = {"component": component_label, "provider": provider_label}
+
+    async def _producer() -> None:
+        try:
+            generate_kwargs: Dict[str, Any] = {
+                "provider": provider,
+                "fallback": True,
+                "voice_to_voice_route": route,
+            }
+            if voice_to_voice_start is not None:
+                generate_kwargs["voice_to_voice_start"] = voice_to_voice_start
+
+            async for chunk in tts_service.generate_speech(
+                speech_req,
+                **generate_kwargs,
+            ):
+                if not chunk:
+                    continue
+                try:
+                    queue.put_nowait(chunk)
+                except asyncio.QueueFull:
+                    try:
+                        _ = queue.get_nowait()
+                    except Exception as q_err:
+                        logger.debug(f"{route} queue get_nowait failed: error={q_err}")
+                    try:
+                        queue.put_nowait(chunk)
+                        reg.increment("audio_stream_underruns_total", 1, labels=underrun_labels)
+                    except Exception as m_err:
+                        logger.debug(f"{route} underrun metrics update failed: error={m_err}")
+                        reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+        except Exception as exc:
+            try:
+                reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+            except Exception as m_err:
+                logger.debug(f"{route} producer metrics update failed (outer): error={m_err}")
+            if error_handler is not None:
+                try:
+                    await error_handler(exc)
+                except Exception as send_exc:
+                    logger.debug(f"{route} error handler failed: error={send_exc}")
+        finally:
+            try:
+                await queue.put(None)
+            except Exception as q_err:
+                logger.debug(f"{route} queue sentinel enqueue failed: error={q_err}")
+
+    async def _consumer() -> None:
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                try:
+                    await websocket.send_bytes(item)
+                    if outer_stream:
+                        outer_stream.mark_activity()
+                except Exception as exc:
+                    try:
+                        reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+                    except Exception as m_err:
+                        logger.debug(f"{route} consumer metrics update failed: error={m_err}")
+                    try:
+                        await websocket.close(code=1011)
+                    except Exception as close_exc:
+                        logger.debug(f"{route} websocket close in consumer failed: error={close_exc}")
+                    if error_handler is not None:
+                        try:
+                            await error_handler(exc)
+                        except Exception as send_exc:
+                            logger.debug(f"{route} consumer error handler failed: error={send_exc}")
+                    break
+        except Exception:
+            try:
+                reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+            except Exception as m_err:
+                logger.debug(f"{route} consumer metrics update failed (outer): error={m_err}")
+
+    producer_task = asyncio.create_task(_producer())
+    consumer_task = asyncio.create_task(_consumer())
+
+    try:
+        _done, pending = await asyncio.wait(
+            {producer_task, consumer_task},
+            return_when=asyncio.FIRST_EXCEPTION,
+        )
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except Exception as wait_exc:
+                logger.debug(f"{route} wait for pending task failed after cancel: error={wait_exc}")
+    finally:
+        producer_task.cancel()
+        consumer_task.cancel()
 
 # Optional DB/Redis drivers (for precise exception handling without hard dependencies)
 try:  # asyncpg is optional; used when PostgreSQL is configured
@@ -2008,14 +2128,14 @@ async def websocket_transcribe(
             async def start(self) -> None:
                 try:
                     await self.ws.accept()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"_BareStream.start failed: {exc}")
 
             async def send_json(self, payload: Dict[str, Any]) -> None:
                 try:
                     await self.ws.send_json(payload)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"_BareStream.send_json failed: {exc}")
 
             async def error(self, code: str, message: str, *, data: Optional[Dict[str, Any]] = None) -> None:
                 p = {"type": "error", "error_type": code, "message": message}
@@ -2813,10 +2933,10 @@ async def websocket_audio_chat_stream(
                         increment_counter("audio_failopen_cap_exhausted_total", labels={"reason": "db_check"})
                     except Exception:
                         pass
-                    raise QuotaExceeded("daily_minutes")
+                    raise QuotaExceeded("daily_minutes") from None
 
             if not allow:
-                raise QuotaExceeded("daily_minutes")
+                raise QuotaExceeded("daily_minutes") from None
 
             used_minutes += minutes_chunk
             if remaining_minutes_snapshot is not None:
@@ -2845,7 +2965,7 @@ async def websocket_audio_chat_stream(
                             logger.debug(
                                 f"metrics increment failed (audio_chat_failopen_cap_db_record): error={m_err}"
                             )
-                        raise QuotaExceeded("daily_minutes")
+                        raise QuotaExceeded("daily_minutes") from None
 
         async def _on_heartbeat() -> None:
             try:
@@ -3152,11 +3272,6 @@ async def websocket_audio_chat_stream(
                 extra_params=tts_extra_params,
             )
 
-            queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=8)
-            provider_label = (tts_provider or getattr(speech_req, "model", None) or "default").lower()
-            underrun_labels = {"provider": provider_label}
-            error_labels = {"component": "audio_chat_ws", "provider": provider_label}
-
             tts_service = await get_tts_service()
 
             if _outer_stream:
@@ -3172,39 +3287,8 @@ async def websocket_audio_chat_stream(
                 except Exception as send_exc:
                     logger.debug(f"audio.chat.stream tts_start send failed: error={send_exc}")
 
-            async def _producer() -> None:
-                try:
-                    async for chunk in tts_service.generate_speech(
-                        speech_req,
-                        provider=tts_provider,
-                        fallback=True,
-                        voice_to_voice_route="audio.chat.stream",
-                        voice_to_voice_start=voice_to_voice_start,
-                    ):
-                        if not chunk:
-                            continue
-                        try:
-                            queue.put_nowait(chunk)
-                        except asyncio.QueueFull:
-                            try:
-                                _ = queue.get_nowait()
-                            except Exception as q_err:
-                                logger.debug(f"audio.chat.stream queue get_nowait failed: error={q_err}")
-                            try:
-                                queue.put_nowait(chunk)
-                                reg.increment("audio_stream_underruns_total", 1, labels=underrun_labels)
-                            except Exception as m_err:
-                                logger.debug(
-                                    f"audio.chat.stream underrun metrics update failed: error={m_err}"
-                                )
-                                reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                except Exception as exc:
-                    try:
-                        reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                    except Exception as m_err:
-                        logger.debug(
-                            f"audio.chat.stream producer metrics update failed (outer): error={m_err}"
-                        )
+            try:
+                async def _error_handler(exc: Exception) -> None:
                     if _outer_stream:
                         try:
                             await _outer_stream.send_json(
@@ -3219,76 +3303,20 @@ async def websocket_audio_chat_stream(
                             logger.debug(
                                 f"audio.chat.stream producer error frame send failed: error={send_exc}"
                             )
-                finally:
-                    try:
-                        await queue.put(None)
-                    except Exception as q_err:
-                        logger.debug(f"audio.chat.stream queue sentinel enqueue failed: error={q_err}")
 
-            async def _consumer() -> None:
-                try:
-                    while True:
-                        item = await queue.get()
-                        if item is None:
-                            break
-                        try:
-                            await websocket.send_bytes(item)
-                            if _outer_stream:
-                                _outer_stream.mark_activity()
-                        except Exception as exc:
-                            try:
-                                reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                            except Exception as m_err:
-                                logger.debug(
-                                    f"audio.chat.stream consumer metrics update failed: error={m_err}"
-                                )
-                            try:
-                                await websocket.close(code=1011)
-                            except Exception as close_exc:
-                                logger.debug(
-                                    f"audio.chat.stream websocket close in consumer failed: error={close_exc}"
-                                )
-                            if _outer_stream:
-                                try:
-                                    await _outer_stream.send_json(
-                                        {
-                                            "type": "error",
-                                            "error_type": "transport_error",
-                                            "message": str(exc),
-                                        }
-                                    )
-                                except Exception as send_exc:
-                                    logger.debug(
-                                        f"audio.chat.stream consumer error frame send failed: error={send_exc}"
-                                    )
-                            break
-                except Exception:
-                    try:
-                        reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                    except Exception as m_err:
-                        logger.debug(
-                            f"audio.chat.stream consumer metrics update failed (outer): error={m_err}"
-                        )
-
-            producer_task = asyncio.create_task(_producer())
-            consumer_task = asyncio.create_task(_consumer())
-
-            try:
-                _done, pending = await asyncio.wait(
-                    {producer_task, consumer_task},
-                    return_when=asyncio.FIRST_EXCEPTION,
+                await _stream_tts_to_websocket(
+                    websocket=websocket,
+                    speech_req=speech_req,
+                    tts_service=tts_service,
+                    provider=tts_provider,
+                    outer_stream=_outer_stream,
+                    reg=reg,
+                    route="audio.chat.stream",
+                    component_label="audio_chat_ws",
+                    voice_to_voice_start=voice_to_voice_start,
+                    error_handler=_error_handler,
                 )
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except Exception as wait_exc:
-                        logger.debug(
-                            f"audio.chat.stream wait for pending task failed after cancel: error={wait_exc}"
-                        )
             finally:
-                producer_task.cancel()
-                consumer_task.cancel()
                 if _outer_stream:
                     try:
                         await _outer_stream.send_json({"type": "tts_done"})
@@ -3653,116 +3681,31 @@ async def websocket_tts(
         reg = get_metrics_registry()
         tts_service = await get_tts_service()
 
-        queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=8)
-        provider_label = (provider_hint or getattr(speech_req, "model", None) or "default").lower()
-        underrun_labels = {"provider": provider_label}
-        error_labels = {"component": "audio_tts_ws", "provider": provider_label}
-
-        async def _producer() -> None:
-            try:
-                async for chunk in tts_service.generate_speech(
-                    speech_req,
-                    provider=provider_hint,
-                    fallback=True,
-                    voice_to_voice_route="audio.stream.tts",
-                ):
-                    if not chunk:
-                        continue
-                    try:
-                        queue.put_nowait(chunk)
-                    except asyncio.QueueFull:
-                        try:
-                            _ = queue.get_nowait()
-                        except Exception as q_err:
-                            logger.debug(f"audio.stream.tts queue get_nowait failed: error={q_err}")
-                        try:
-                            queue.put_nowait(chunk)
-                            reg.increment("audio_stream_underruns_total", 1, labels=underrun_labels)
-                        except Exception as m_err:
-                            logger.debug(
-                                f"audio.stream.tts underrun metrics update failed: error={m_err}"
-                            )
-                            reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-            except Exception as exc:
-                try:
-                    reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                except Exception as m_err:
-                    logger.debug(
-                        f"audio.stream.tts producer metrics update failed (outer): error={m_err}"
+        producer_task = asyncio.create_task(
+            _stream_tts_to_websocket(
+                websocket=websocket,
+                speech_req=speech_req,
+                tts_service=tts_service,
+                provider=provider_hint,
+                outer_stream=_outer_stream,
+                reg=reg,
+                route="audio.stream.tts",
+                component_label="audio_tts_ws",
+                error_handler=(
+                    lambda exc: _outer_stream.error(  # type: ignore[union-attr]
+                        "internal_error",
+                        "TTS generation failed",
+                        data={"message": str(exc)},
                     )
-                if _outer_stream:
-                    try:
-                        await _outer_stream.error(
-                            "internal_error", "TTS generation failed", data={"message": str(exc)}
-                        )
-                    except Exception as send_exc:
-                        logger.debug(
-                            f"audio.stream.tts producer error frame send failed: error={send_exc}"
-                        )
-            finally:
-                try:
-                    await queue.put(None)
-                except Exception as q_err:
-                    logger.debug(f"audio.stream.tts queue sentinel enqueue failed: error={q_err}")
-
-        async def _consumer() -> None:
-            try:
-                while True:
-                    item = await queue.get()
-                    if item is None:
-                        break
-                    try:
-                        await websocket.send_bytes(item)
-                        if _outer_stream:
-                            _outer_stream.mark_activity()
-                    except Exception as exc:
-                        try:
-                            reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                        except Exception as m_err:
-                            logger.debug(
-                                f"audio.stream.tts consumer metrics update failed: error={m_err}"
-                            )
-                        try:
-                            await websocket.close(code=1011)
-                        except Exception as close_exc:
-                            logger.debug(
-                                f"audio.stream.tts websocket close in consumer failed: error={close_exc}"
-                            )
-                        if _outer_stream:
-                            try:
-                                await _outer_stream.error(
-                                    "transport_error",
-                                    "WebSocket send failed",
-                                    data={"message": str(exc)},
-                                )
-                            except Exception as send_exc:
-                                logger.debug(
-                                    f"audio.stream.tts consumer error frame send failed: error={send_exc}"
-                                )
-                        break
-            except Exception:
-                try:
-                    reg.increment("audio_stream_errors_total", 1, labels=error_labels)
-                except Exception as m_err:
-                    logger.debug(
-                        f"audio.stream.tts consumer metrics update failed (outer): error={m_err}"
-                    )
-
-        producer_task = asyncio.create_task(_producer())
-        consumer_task = asyncio.create_task(_consumer())
-
-        _done, pending = await asyncio.wait(
-            {producer_task, consumer_task},
-            return_when=asyncio.FIRST_EXCEPTION,
+                    if _outer_stream
+                    else asyncio.sleep(0)
+                ),
+            )
         )
-        for task in pending:
-            task.cancel()
-            try:
-                await task
-            except Exception as wait_exc:
-                logger.debug(
-                    f"audio.stream.tts wait for pending task failed after cancel: error={wait_exc}"
-                )
+
+        # Wait for the streaming helper to complete; it already
+        # handles internal producer/consumer lifetime and errors.
+        await producer_task
     finally:
         if acquired_stream:
             try:

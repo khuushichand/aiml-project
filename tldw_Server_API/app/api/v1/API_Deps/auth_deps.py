@@ -431,8 +431,8 @@ async def get_current_user(
                         env_key = _os.getenv("SINGLE_USER_API_KEY")
                         if env_key and x_api_key == env_key:
                             _accept = True
-                except Exception:
-                    pass
+                except Exception as env_exc:
+                    logger.debug(f"Single-user API key env fallback failed; continuing: {env_exc}")
             if _accept:
                 if not _ip_allowed_single_user(client_ip):
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="IP not allowed")
@@ -452,8 +452,8 @@ async def get_current_user(
                     request.state.user_id = settings.SINGLE_USER_FIXED_ID
                     request.state.team_ids = []
                     request.state.org_ids = []
-                except Exception:
-                    pass
+                except Exception as state_exc:
+                    logger.debug(f"Single-user API key path: unable to attach state context: {state_exc}")
                 _activate_scope_context(
                     request,
                     user_id=settings.SINGLE_USER_FIXED_ID,
@@ -484,8 +484,8 @@ async def get_current_user(
                         request.state.user_id = settings.SINGLE_USER_FIXED_ID
                         request.state.team_ids = []
                         request.state.org_ids = []
-                    except Exception:
-                        pass
+                    except Exception as state_exc:
+                        logger.debug(f"Single-user bearer path: unable to attach state context: {state_exc}")
                     _activate_scope_context(
                         request,
                         user_id=settings.SINGLE_USER_FIXED_ID,
@@ -494,9 +494,9 @@ async def get_current_user(
                         is_admin=True,
                     )
                     return user
-    except Exception:
+    except Exception as single_user_exc:
         # Fall through to other mechanisms if any issue arises
-        pass
+        logger.debug(f"Single-user API key path failed; falling back to other auth mechanisms: {single_user_exc}")
 
     # If Authorization is absent but X-API-KEY present, attempt API-key auth (SQLite/Postgres multi-user).
     if not credentials and x_api_key:
@@ -688,12 +688,12 @@ async def get_current_user(
                 org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
                 request.state.team_ids = team_ids
                 request.state.org_ids = org_ids
-            except Exception:
+            except Exception as memberships_exc:
+                logger.debug(f"JWT path: membership lookup failed; defaulting to empty lists: {memberships_exc}")
                 request.state.team_ids = []
                 request.state.org_ids = []
-                pass
-        except Exception:
-            pass
+        except Exception as state_exc:
+            logger.debug(f"JWT path: unable to attach user/team/org state context: {state_exc}")
 
         _activate_scope_context(
             request,

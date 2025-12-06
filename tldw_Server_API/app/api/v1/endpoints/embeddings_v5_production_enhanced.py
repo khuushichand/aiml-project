@@ -432,7 +432,11 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
                         return False
                     return True
                 return not is_single_user_mode()
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "Embeddings quotas: failed to resolve runtime mode, treating as single-user: {}",
+                    exc,
+                )
                 return False
 
         # Read tenant RPS dynamically so tests can monkeypatch env at runtime
@@ -1708,17 +1712,22 @@ async def create_embeddings_batch_async(
 # Authorization Helpers
 # ============================================================================
 
-def require_admin(user: User) -> None:
+def require_admin(user: Optional[User]) -> None:
     """Require admin privileges for endpoint"""
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
     is_admin_flag = bool(
         getattr(user, "is_admin", False)
         or getattr(user, "role", None) == "admin"
         or ("admin" in (getattr(user, "roles", None) or []))
     )
-    if not user or not is_admin_flag:
+    if not is_admin_flag:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required"
+            detail="Admin privileges required",
         )
 
 # ============================================================================
@@ -2366,8 +2375,11 @@ async def get_tenant_quotas(current_user: User = Depends(get_request_user)) -> T
             lowered = profile.strip().lower()
             if lowered in {"single_user", "local-single-user", "desktop"} or TENANT_RPS <= 0:
                 return TenantQuotaResponse(limit_rps=0, remaining=None)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(
+            "Embeddings tenant quotas: failed to read PROFILE; falling back to AUTH_MODE/is_single_user_mode: {}",
+            exc,
+        )
     if is_single_user_mode() or TENANT_RPS <= 0:
         return TenantQuotaResponse(limit_rps=0, remaining=None)
     try:
@@ -2388,7 +2400,11 @@ class PriorityBumpRequest(BaseModel):
     ttl_seconds: Optional[int] = Field(default=600, ge=1, le=86400)
 
 
-@router.post("/embeddings/job/priority/bump", summary="Override/bump job priority for routing into priority queues (best-effort)")
+@router.post(
+    "/embeddings/job/priority/bump",
+    summary="Override/bump job priority for routing into priority queues (best-effort)",
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
+)
 async def bump_job_priority(req: PriorityBumpRequest, current_user: User = Depends(get_request_user)) -> Dict[str, Any]:
     require_admin(current_user)
     pr = (req.priority or "").strip().lower()

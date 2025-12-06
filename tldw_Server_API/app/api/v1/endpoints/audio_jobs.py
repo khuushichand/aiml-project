@@ -19,17 +19,11 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_permissions,
     require_roles,
 )
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_MAINTENANCE
 from tldw_Server_API.app.core.Usage.audio_quota import TIER_LIMITS, get_user_tier, set_user_tier
 
 
-router = APIRouter(
-    dependencies=[
-        Depends(require_roles("admin")),
-        Depends(require_permissions(SYSTEM_MAINTENANCE)),
-    ]
-)
+router = APIRouter()
 
 
 def get_job_manager() -> JobManager:
@@ -177,7 +171,8 @@ async def get_audio_job(
         owner = str(d.get("owner_user_id") or "")
         if not (current_user.is_admin or owner == str(current_user.id)):
             raise HTTPException(status_code=403, detail="Not authorized for this job")
-        return AudioJob(**{k: d.get(k) for k in AudioJob.model_fields.keys()})
+        field_map = getattr(AudioJob, "model_fields", None) or getattr(AudioJob, "__fields__", {})
+        return AudioJob(**{k: d.get(k) for k in field_map.keys()})
     except HTTPException:
         raise
     except Exception as e:
@@ -189,7 +184,12 @@ class ListAudioJobsResponse(BaseModel):
     jobs: List[AudioJob]
 
 
-@router.get("/jobs/admin/list", response_model=ListAudioJobsResponse, summary="List audio jobs (admin)")
+@router.get(
+    "/jobs/admin/list",
+    response_model=ListAudioJobsResponse,
+    summary="List audio jobs (admin)",
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_MAINTENANCE))],
+)
 async def list_audio_jobs_admin(
     status_filter: Optional[str] = Query(None, description="Filter by status: queued|processing|completed|failed|cancelled"),
     owner_user_id: Optional[str] = Query(None, description="Filter by owner user id"),
@@ -206,7 +206,8 @@ async def list_audio_jobs_admin(
             sort_order="desc",
         )
         # Project to model
-        out = [AudioJob(**{k: j.get(k) for k in AudioJob.model_fields.keys()}) for j in jobs]
+        field_map = getattr(AudioJob, "model_fields", None) or getattr(AudioJob, "__fields__", {})
+        out = [AudioJob(**{k: j.get(k) for k in field_map.keys()}) for j in jobs]
         return ListAudioJobsResponse(jobs=out)
     except HTTPException:
         raise
@@ -221,9 +222,20 @@ class AudioJobsSummary(BaseModel):
     owner_user_id: Optional[str] = None
 
 
-@router.get("/jobs/admin/summary", response_model=AudioJobsSummary, summary="Summarize audio jobs by status (admin)")
+@router.get(
+    "/jobs/admin/summary",
+    response_model=AudioJobsSummary,
+    summary="Summarize audio jobs by status (admin)",
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_MAINTENANCE))],
+)
 async def summarize_audio_jobs_admin(
     owner_user_id: Optional[str] = Query(None, description="Optional owner filter"),
+    max_rows: int = Query(
+        1000,
+        ge=1,
+        le=10000,
+        description="Maximum number of jobs to scan for summary counts.",
+    ),
     jm: JobManager = Depends(get_job_manager),
 ):
     try:
@@ -233,8 +245,8 @@ async def summarize_audio_jobs_admin(
         jobs = jm.list_jobs(
             domain="audio",
             owner_user_id=str(owner_user_id) if owner_user_id is not None else None,
-            # Use a generous limit for summaries; callers can adjust if needed.
-            limit=1000,
+            # Use a generous limit for summaries; callers can adjust via max_rows.
+            limit=int(max_rows),
         )
         for job in jobs:
             status_val = str(job.get("status") or "")
@@ -260,12 +272,25 @@ class AudioJobsSummaryByOwner(BaseModel):
     items: List[AudioJobsOwnerSummaryItem]
 
 
-@router.get("/jobs/admin/summary-by-owner", response_model=AudioJobsSummaryByOwner, summary="Summarize audio jobs by owner and status (admin)")
-async def summary_by_owner_admin(jm: JobManager = Depends(get_job_manager)):
+@router.get(
+    "/jobs/admin/summary-by-owner",
+    response_model=AudioJobsSummaryByOwner,
+    summary="Summarize audio jobs by owner and status (admin)",
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_MAINTENANCE))],
+)
+async def summary_by_owner_admin(
+    max_rows: int = Query(
+        1000,
+        ge=1,
+        le=10000,
+        description="Maximum number of jobs to scan for owner/status summary.",
+    ),
+    jm: JobManager = Depends(get_job_manager),
+):
     try:
         items: List[AudioJobsOwnerSummaryItem] = []
         # Aggregate by owner and status using list_jobs to avoid private internals.
-        jobs = jm.list_jobs(domain="audio", limit=1000)
+        jobs = jm.list_jobs(domain="audio", limit=int(max_rows))
         summary: Dict[tuple[Optional[str], str], int] = {}
         for job in jobs:
             owner = job.get("owner_user_id")
@@ -297,9 +322,20 @@ class OwnerProcessingSummary(BaseModel):
     limit: Optional[int]
 
 
-@router.get("/jobs/admin/owner/{owner_user_id}/processing", response_model=OwnerProcessingSummary, summary="Get owner's processing count and limit (admin)")
+@router.get(
+    "/jobs/admin/owner/{owner_user_id}/processing",
+    response_model=OwnerProcessingSummary,
+    summary="Get owner's processing count and limit (admin)",
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_MAINTENANCE))],
+)
 async def owner_processing_summary(
     owner_user_id: str,
+    max_rows: int = Query(
+        1000,
+        ge=1,
+        le=10000,
+        description="Maximum number of jobs to scan when counting processing jobs.",
+    ),
     jm: JobManager = Depends(get_job_manager),
     request: Request = None,
 ):
@@ -309,7 +345,7 @@ async def owner_processing_summary(
             domain="audio",
             status="processing",
             owner_user_id=str(owner_user_id),
-            limit=1000,
+            limit=int(max_rows),
         )
         processing = len(jobs)
         # Limit
@@ -353,7 +389,12 @@ class SetUserTierRequest(BaseModel):
     tier: str = Field(..., description="Tier name (one of: free, standard, premium)")
 
 
-@router.get("/jobs/admin/tiers/{user_id}", response_model=UserTierResponse, summary="Get user's audio tier (admin)")
+@router.get(
+    "/jobs/admin/tiers/{user_id}",
+    response_model=UserTierResponse,
+    summary="Get user's audio tier (admin)",
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_MAINTENANCE))],
+)
 async def get_user_tier_admin(user_id: int):
     try:
         tier = await get_user_tier(int(user_id))
@@ -363,7 +404,12 @@ async def get_user_tier_admin(user_id: int):
         raise HTTPException(status_code=500, detail="Failed to get user tier")
 
 
-@router.put("/jobs/admin/tiers/{user_id}", response_model=UserTierResponse, summary="Set user's audio tier (admin)")
+@router.put(
+    "/jobs/admin/tiers/{user_id}",
+    response_model=UserTierResponse,
+    summary="Set user's audio tier (admin)",
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_MAINTENANCE))],
+)
 async def set_user_tier_admin(user_id: int, req: SetUserTierRequest):
     try:
         tier = req.tier.strip().lower()

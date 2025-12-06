@@ -382,7 +382,6 @@ class RateLimiter:
                 lockout_data = await self.redis_client.get(lockout_key)
                 if lockout_data:
                     data = json.loads(lockout_data)
-                    locked_at = datetime.fromisoformat(data['locked_at'])
                     # Calculate expiry based on TTL
                     ttl = await self.redis_client.ttl(lockout_key)
                     if ttl > 0:
@@ -616,7 +615,6 @@ class RateLimiter:
             # In test mode, fail open to avoid spurious 429s when tables
             # are not provisioned by the test harness.
             try:
-                import os
                 if os.getenv("TEST_MODE") == "true":
                     return True, {
                         "rate_limit_enabled": True,

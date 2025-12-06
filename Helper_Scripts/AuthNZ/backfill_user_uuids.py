@@ -68,11 +68,12 @@ def _normalize_existing_uuids(rows: Iterable[Any]) -> Tuple[Dict[int, str | None
                 parsed = str(UUID(value))
                 seen.add(parsed)
                 by_id[user_id] = parsed
-            except Exception:
+            except Exception as exc:
                 logger.debug(
-                    "Existing UUID value for user_id=%s is not a valid UUID and will be backfilled: value=%r",
+                    "Existing UUID value for user_id=%s is not a valid UUID and will be backfilled: value=%r (error=%r)",
                     user_id,
                     value,
+                    exc,
                 )
                 # Leave as-is; will be backfilled
                 continue

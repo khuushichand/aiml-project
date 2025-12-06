@@ -16,6 +16,8 @@ from loguru import logger
 import tiktoken
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import get_auth_principal
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles, require_permissions, rbac_rate_limit
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
@@ -1412,17 +1414,11 @@ async def list_vector_batches(
         None, description="Admin-only: override user id to view their batches"
     ),
     current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
-    # Default to current user; admin callers may override user_id regardless of
-    # auth mode, while non-admins are restricted to their own batches.
     requested_user_id = str(getattr(current_user, "id", "1"))
     if user_id is not None and user_id != requested_user_id:
-        is_admin_flag = bool(
-            getattr(current_user, "is_admin", False)
-            or getattr(current_user, "role", None) == "admin"
-            or ("admin" in (getattr(current_user, "roles", None) or []))
-        )
-        if not is_admin_flag:
+        if not principal.is_admin:
             raise HTTPException(
                 status_code=http_status.HTTP_403_FORBIDDEN,
                 detail="Admin privileges required",
