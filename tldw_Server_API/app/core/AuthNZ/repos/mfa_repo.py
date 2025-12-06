@@ -21,6 +21,11 @@ class AuthnzMfaRepo:
 
     db_pool: DatabasePool
 
+    @staticmethod
+    def _is_postgres(conn: Any) -> bool:
+        """Return True when the underlying connection is PostgreSQL (asyncpg-style)."""
+        return hasattr(conn, "fetchrow")
+
     async def set_mfa_config(
         self,
         *,
@@ -35,7 +40,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres(conn):
                     ts = updated_at.replace(tzinfo=None) if getattr(updated_at, "tzinfo", None) else updated_at
                     await conn.execute(
                         """
@@ -91,7 +96,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres(conn):
                     ts = updated_at.replace(tzinfo=None) if getattr(updated_at, "tzinfo", None) else updated_at
                     await conn.execute(
                         """
@@ -166,7 +171,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres(conn):
                     row = await conn.fetchrow(
                         """
                         SELECT two_factor_enabled,
@@ -242,7 +247,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres(conn):
                     await conn.execute(
                         "UPDATE users SET backup_codes = $1 WHERE id = $2",
                         backup_codes_json,
@@ -282,7 +287,7 @@ class AuthnzMfaRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres(conn):
                     ts = updated_at.replace(tzinfo=None) if getattr(updated_at, "tzinfo", None) else updated_at
                     await conn.execute(
                         "UPDATE users SET backup_codes = $1, updated_at = $2 WHERE id = $3",
