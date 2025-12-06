@@ -642,6 +642,14 @@ async def reset_db_pool():
         _reset_settings()
     except Exception:
         pass
+    # Also reset the AuthNZ UserDatabase / backend config so helpers that
+    # use AuthDatabaseConfig (e.g. RBAC helpers via UserDatabase_v2) see
+    # the latest DATABASE_URL/AUTH_MODE for each test run.
+    try:
+        from tldw_Server_API.app.core.AuthNZ.db_config import AuthDatabaseConfig as _AuthDatabaseConfig
+        _AuthDatabaseConfig().reset()
+    except Exception:
+        pass
     if _db_pool:
         try:
             await _db_pool.close()

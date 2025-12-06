@@ -224,7 +224,7 @@ def test_rag_search_jwt_principal_and_state_alignment(isolated_test_environment,
     try:
         # 1. Register and log in via real auth endpoints.
         username = "rag_invariants_user"
-        password = "Password123!"
+        password = "Str0ngP@ssw0rd!"
         reg = client.post(
             "/api/v1/auth/register",
             json={"username": username, "email": "rag_invariants_user@example.com", "password": password},
@@ -298,7 +298,7 @@ def test_media_process_videos_api_key_principal_and_state_alignment(isolated_tes
 
     # 1. Register a user via the real auth endpoint.
     username = "media_invariants_user"
-    password = "Password123!"
+    password = "Str0ngP@ssw0rd!"
     reg = client.post(
         "/api/v1/auth/register",
         json={"username": username, "email": "media_invariants_user@example.com", "password": password},

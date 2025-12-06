@@ -124,6 +124,21 @@ async def admin_user_data(isolated_test_environment):
         """, user_uuid, "admin", "admin@example.com", password_hash,
             "admin", True, True, 10240, 0.0)
 
+        # Ensure the RBAC mapping exists so that the admin user is recognized
+        # by require_roles/require_admin, mirroring _ensure_admin in
+        # tests/AuthNZ/integration/test_rbac_admin_endpoints.py.
+        role_row = await conn.fetchrow("SELECT id FROM roles WHERE name = 'admin'")
+        if role_row and "id" in role_row:
+            await conn.execute(
+                """
+                INSERT INTO user_roles (user_id, role_id)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id, role_id) DO NOTHING
+                """,
+                int(user["id"]),
+                int(role_row["id"]),
+            )
+
         return {
             "id": user["id"],
             "uuid": str(user["uuid"]),
@@ -558,7 +573,10 @@ class TestSecurity:
             headers=auth_headers
         )
         assert response.status_code == 403
-        assert "Admin access required" in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert "access denied" in detail.lower()
+        assert "required role" in detail.lower()
+        assert "admin" in detail.lower()
 
     @pytest.mark.skipif(
         get_settings().RATE_LIMIT_ENABLED == False,

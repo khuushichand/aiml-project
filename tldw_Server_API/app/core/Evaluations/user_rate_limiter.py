@@ -5,19 +5,51 @@ Implements tiered rate limiting based on user subscription levels
 with support for burst traffic and cost-based limits.
 """
 
-import time
-import sqlite3
-from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, Optional, Tuple
-from dataclasses import dataclass
-from enum import Enum
-from loguru import logger
 import asyncio
+import os
+import sqlite3
 import threading
+import time
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from enum import Enum
+from typing import Any, Dict, Optional, Tuple
+
+from loguru import logger
 
 # Import configuration management
-from tldw_Server_API.app.core.Evaluations.config_manager import get_rate_limit_config, get_config
+from tldw_Server_API.app.core.Evaluations.config_manager import (
+    get_config,
+    get_rate_limit_config,
+)
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+# Optional Resource Governor integration (gated by RG_ENABLE_EVALUATIONS)
+try:  # pragma: no cover - RG is optional
+    from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
+        MemoryResourceGovernor,
+        RedisResourceGovernor,
+        RGRequest,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.metrics_rg import (  # type: ignore
+        record_shadow_mismatch,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.policy_loader import (  # type: ignore
+        PolicyLoader,
+        PolicyReloadConfig,
+        default_policy_loader,
+    )
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
+except Exception:  # pragma: no cover - safe fallback when RG not installed
+    MemoryResourceGovernor = None  # type: ignore
+    RedisResourceGovernor = None  # type: ignore
+    RGRequest = None  # type: ignore
+    record_shadow_mismatch = None  # type: ignore
+    PolicyLoader = None  # type: ignore
+    PolicyReloadConfig = None  # type: ignore
+    default_policy_loader = None  # type: ignore
+    rg_enabled = None  # type: ignore
+
 # Import connection pool
 # from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection  # unused
 
@@ -222,6 +254,20 @@ class UserRateLimiter:
             - is_allowed: Whether request is allowed
             - metadata: Rate limit information and headers
         """
+        rg_decision = await _maybe_enforce_with_rg_evaluations(
+            user_id=user_id,
+            endpoint=endpoint,
+        )
+        if rg_decision is not None and not rg_decision["allowed"]:
+            # ResourceGovernor denials take precedence over legacy limits.
+            retry_after = rg_decision.get("retry_after") or 1
+            return False, {
+                "error": "Rate limit exceeded (ResourceGovernor)",
+                "policy_id": rg_decision.get("policy_id", "evals.default"),
+                "retry_after": retry_after,
+                "rate_limit_source": "resource_governor",
+            }
+
         # Get user's rate limit configuration
         config = await self._get_user_config(user_id)
 
@@ -240,6 +286,15 @@ class UserRateLimiter:
 
         # Return success with rate limit headers
         metadata = self._generate_rate_limit_headers(user_id, config, minute_check[1], daily_check[1])
+        if rg_decision is not None:
+            # Attach RG policy metadata for observability when available.
+            try:
+                metadata = dict(metadata)
+                metadata.setdefault("policy_id", rg_decision.get("policy_id", "evals.default"))
+                metadata.setdefault("rate_limit_source", "resource_governor+legacy")
+            except Exception:
+                # Best-effort; do not break callers that depend on legacy shape.
+                pass
         return True, metadata
 
     async def _get_user_config(self, user_id: str) -> RateLimitConfig:
@@ -701,3 +756,114 @@ def get_user_rate_limiter_for_user(user_id: int) -> UserRateLimiter:
         inst = UserRateLimiter(db_path=db_path)
         _user_rate_limiter_instances[user_id] = inst
         return inst
+
+
+# --- Resource Governor plumbing (optional) ---------------------------------
+_rg_evals_governor = None
+_rg_evals_loader = None
+_rg_evals_lock = asyncio.Lock()
+
+
+def _rg_evaluations_enabled() -> bool:
+    """Return True when RG should gate Evaluations requests."""
+    flag = os.getenv("RG_ENABLE_EVALUATIONS")
+    if flag is not None:
+        return flag.strip().lower() in {"1", "true", "yes", "on"}
+    if rg_enabled is not None:
+        try:
+            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+        except Exception:
+            return False
+    return False
+
+
+async def _get_evaluations_rg_governor():
+    """Lazily initialize a ResourceGovernor instance for Evaluations."""
+    global _rg_evals_governor, _rg_evals_loader
+    if not _rg_evaluations_enabled():
+        return None
+    if RGRequest is None or PolicyLoader is None:
+        return None
+    if _rg_evals_governor is not None:
+        return _rg_evals_governor
+    async with _rg_evals_lock:
+        if _rg_evals_governor is not None:
+            return _rg_evals_governor
+        try:
+            loader = (
+                default_policy_loader()
+                if default_policy_loader
+                else PolicyLoader(
+                    os.getenv(
+                        "RG_POLICY_PATH",
+                        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+                    ),
+                    PolicyReloadConfig(
+                        enabled=True,
+                        interval_sec=int(
+                            os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10"
+                        ),
+                    ),
+                )
+            )
+            await loader.load_once()
+            _rg_evals_loader = loader
+            backend = os.getenv("RG_BACKEND", "memory").lower()
+            if backend == "redis" and RedisResourceGovernor is not None:
+                gov = RedisResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            else:
+                gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            _rg_evals_governor = gov
+            return gov
+        except Exception as exc:  # pragma: no cover - optional path
+            logger.debug(
+                "Evaluations RG governor init failed; using legacy limiter: {}", exc
+            )
+            return None
+
+
+async def _maybe_enforce_with_rg_evaluations(
+    user_id: str,
+    endpoint: str,
+) -> Optional[Dict[str, object]]:
+    """
+    Optionally enforce Evaluations request limits via ResourceGovernor.
+
+    Returns a decision dict when RG is used, or None when RG is
+    unavailable or disabled.
+    """
+    gov = await _get_evaluations_rg_governor()
+    if gov is None:
+        return None
+    policy_id = os.getenv("RG_EVALUATIONS_POLICY_ID", "evals.default")
+    op_id = f"evals-{user_id}-{time.time_ns()}"
+    try:
+        decision, handle = await gov.reserve(
+            RGRequest(
+                entity=f"user:{user_id}",
+                categories={"requests": {"units": 1}},
+                tags={
+                    "policy_id": policy_id,
+                    "module": "evaluations",
+                    "endpoint": endpoint,
+                },
+            ),
+            op_id=op_id,
+        )
+        if decision.allowed:
+            if handle:
+                try:
+                    await gov.commit(handle, None, op_id=op_id)
+                except Exception:
+                    logger.debug("Evaluations RG commit failed", exc_info=True)
+            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
+        return {
+            "allowed": False,
+            "retry_after": decision.retry_after or 1,
+            "policy_id": policy_id,
+        }
+    except Exception as exc:
+        logger.debug(
+            "Evaluations RG reserve failed; falling back to legacy: {}", exc
+        )
+        return None

@@ -90,7 +90,7 @@ def test_mcp_modules_health_jwt_principal_and_state_alignment(isolated_test_envi
 
     # 1. Register and log in via real auth endpoints.
     username = "mcp_invariants_user"
-    password = "Password123!"
+    password = "Str0ngP@ssw0rd!"
     reg = client.post(
         "/api/v1/auth/register",
         json={"username": username, "email": "mcp_invariants_user@example.com", "password": password},
@@ -187,7 +187,7 @@ def test_monitoring_watchlists_jwt_principal_and_state_alignment(isolated_test_e
 
     # 1. Register and log in via real auth endpoints.
     username = "monitoring_invariants_user"
-    password = "Password123!"
+    password = "Str0ngP@ssw0rd!"
     reg = client.post(
         "/api/v1/auth/register",
         json={
@@ -259,4 +259,3 @@ def test_monitoring_watchlists_jwt_principal_and_state_alignment(isolated_test_e
         assert state["team_ids"] == principal["team_ids"]
     finally:
         _restore_auth_capture(app, original)
-

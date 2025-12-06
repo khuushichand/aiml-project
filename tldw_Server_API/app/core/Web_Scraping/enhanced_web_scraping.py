@@ -1,7 +1,7 @@
 # enhanced_web_scraping.py - Production Web Scraping Pipeline
 """
 Enhanced web scraping pipeline with production features:
-- Concurrent scraping with rate limiting
+- Concurrent scraping with rate limiting (local and optional ResourceGovernor)
 - Job queue management with priority
 - Cookie/session management
 - Progress tracking and resumability
@@ -27,6 +27,7 @@ import pickle
 from collections import deque, defaultdict
 from urllib.parse import urlparse, urljoin
 import random
+import os
 
 from loguru import logger
 import aiohttp
@@ -62,6 +63,28 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import (
     log_histogram,
     log_gauge,
 )
+
+# Optional Resource Governor integration (gated by RG_ENABLE_WEB_SCRAPING)
+try:  # pragma: no cover - RG is optional
+    from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
+        MemoryResourceGovernor,
+        RedisResourceGovernor,
+        RGRequest,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.policy_loader import (  # type: ignore
+        PolicyLoader,
+        PolicyReloadConfig,
+        default_policy_loader,
+    )
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
+except Exception:  # pragma: no cover - safe fallback when RG not installed
+    MemoryResourceGovernor = None  # type: ignore
+    RedisResourceGovernor = None  # type: ignore
+    RGRequest = None  # type: ignore
+    PolicyLoader = None  # type: ignore
+    PolicyReloadConfig = None  # type: ignore
+    default_policy_loader = None  # type: ignore
+    rg_enabled = None  # type: ignore
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -137,6 +160,16 @@ class RateLimiter:
     async def acquire(self):
         """Acquire permission to make a request"""
         async with self._lock:
+            rg_decision = await _maybe_enforce_with_rg_web_scraping()
+            if rg_decision is not None and not rg_decision["allowed"]:
+                retry_after = rg_decision.get("retry_after") or 1
+                logger.info(
+                    "Web scraping request delayed by ResourceGovernor: retry_after={}s",
+                    retry_after,
+                )
+                # For scraping, we model RG denials as backoff rather than hard 429s.
+                await asyncio.sleep(retry_after)
+
             now = time.time()
 
             # Clean old request times
@@ -167,6 +200,109 @@ class RateLimiter:
 
             # Record request time
             self._request_times.append(now)
+
+
+_rg_web_governor = None
+_rg_web_loader = None
+_rg_web_lock = asyncio.Lock()
+
+
+def _rg_web_scraping_enabled() -> bool:
+    """Return True when RG should gate web scraping requests."""
+    flag = os.getenv("RG_ENABLE_WEB_SCRAPING")
+    if flag is not None:
+        return flag.strip().lower() in {"1", "true", "yes", "on"}
+    if rg_enabled is not None:
+        try:
+            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+        except Exception:
+            return False
+    return False
+
+
+async def _get_web_scraping_rg_governor():
+    """Lazily initialize a ResourceGovernor instance for web scraping."""
+    global _rg_web_governor, _rg_web_loader
+    if not _rg_web_scraping_enabled():
+        return None
+    if RGRequest is None or PolicyLoader is None:
+        return None
+    if _rg_web_governor is not None:
+        return _rg_web_governor
+    async with _rg_web_lock:
+        if _rg_web_governor is not None:
+            return _rg_web_governor
+        try:
+            loader = (
+                default_policy_loader()
+                if default_policy_loader
+                else PolicyLoader(
+                    os.getenv(
+                        "RG_POLICY_PATH",
+                        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+                    ),
+                    PolicyReloadConfig(
+                        enabled=True,
+                        interval_sec=int(
+                            os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10"
+                        ),
+                    ),
+                )
+            )
+            await loader.load_once()
+            _rg_web_loader = loader
+            backend = os.getenv("RG_BACKEND", "memory").lower()
+            if backend == "redis" and RedisResourceGovernor is not None:
+                gov = RedisResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            else:
+                gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            _rg_web_governor = gov
+            return gov
+        except Exception as exc:  # pragma: no cover - optional path
+            logger.debug(
+                "Web scraping RG governor init failed; using legacy RateLimiter: {}", exc
+            )
+            return None
+
+
+async def _maybe_enforce_with_rg_web_scraping() -> Optional[Dict[str, object]]:
+    """
+    Optionally enforce web scraping request limits via ResourceGovernor.
+
+    Returns a decision dict when RG is used, or None when RG is
+    unavailable or disabled.
+    """
+    gov = await _get_web_scraping_rg_governor()
+    if gov is None:
+        return None
+    policy_id = os.getenv("RG_WEB_SCRAPING_POLICY_ID", "web_scraping.default")
+    op_id = f"web-scrape-{time.time_ns()}"
+    try:
+        decision, handle = await gov.reserve(
+            RGRequest(
+                entity="service:web_scraping",
+                categories={"requests": {"units": 1}},
+                tags={"policy_id": policy_id, "module": "web_scraping"},
+            ),
+            op_id=op_id,
+        )
+        if decision.allowed:
+            if handle:
+                try:
+                    await gov.commit(handle, None, op_id=op_id)
+                except Exception:
+                    logger.debug("Web scraping RG commit failed", exc_info=True)
+            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
+        return {
+            "allowed": False,
+            "retry_after": decision.retry_after or 1,
+            "policy_id": policy_id,
+        }
+    except Exception as exc:
+        logger.debug(
+            "Web scraping RG reserve failed; falling back to legacy RateLimiter: {}", exc
+        )
+        return None
 
 
 class CookieManager:

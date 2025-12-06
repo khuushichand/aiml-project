@@ -1,13 +1,16 @@
 # character_rate_limiter.py
 """
 Rate limiting for character operations to prevent abuse.
-Supports both Redis (for distributed deployments) and in-memory (for single-instance).
+Supports both Redis (for distributed deployments) and in-memory (for single-instance),
+with optional ResourceGovernor integration.
 """
 
+import asyncio
+import os
 import time
 import uuid
-from typing import Dict, List, Optional, Tuple, Any
 from collections import defaultdict
+from typing import Any, Dict, List, Optional, Tuple
 
 # Optional Redis import: allow running without redis-py installed
 try:  # pragma: no cover - environment-dependent
@@ -15,8 +18,30 @@ try:  # pragma: no cover - environment-dependent
 except Exception:  # ImportError or environment issues
     redis = None  # type: ignore
 
-from loguru import logger
 from fastapi import HTTPException, status
+from loguru import logger
+
+# Optional Resource Governor integration (gated by RG_ENABLE_CHARACTER_CHAT)
+try:  # pragma: no cover - RG is optional
+    from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
+        MemoryResourceGovernor,
+        RedisResourceGovernor,
+        RGRequest,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.policy_loader import (  # type: ignore
+        PolicyLoader,
+        PolicyReloadConfig,
+        default_policy_loader,
+    )
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
+except Exception:  # pragma: no cover - safe fallback when RG not installed
+    MemoryResourceGovernor = None  # type: ignore
+    RedisResourceGovernor = None  # type: ignore
+    RGRequest = None  # type: ignore
+    PolicyLoader = None  # type: ignore
+    PolicyReloadConfig = None  # type: ignore
+    default_policy_loader = None  # type: ignore
+    rg_enabled = None  # type: ignore
 
 
 class CharacterRateLimiter:
@@ -94,6 +119,27 @@ class CharacterRateLimiter:
         """
         if not self.enabled:
             return True, self.max_operations
+
+        rg_decision = await _maybe_enforce_with_rg_character(
+            user_id=user_id,
+            operation=operation,
+        )
+        if rg_decision is not None and not rg_decision["allowed"]:
+            retry_after = rg_decision.get("retry_after") or 60
+            logger.warning(
+                "Character rate limit exceeded by ResourceGovernor for user {}: retry_after={}s",
+                user_id,
+                retry_after,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    "Rate limit exceeded. "
+                    f"Policy {rg_decision.get('policy_id', 'character_chat.default')} denied request."
+                ),
+                headers={"Retry-After": str(retry_after)},
+            )
+
         key = f"rate_limit:character:{user_id}"
 
         if self.redis:
@@ -223,6 +269,118 @@ class CharacterRateLimiter:
                 detail=f"File too large. Maximum size is {self.max_import_size_mb}MB."
             )
         return True
+
+
+# --- Resource Governor plumbing (optional) ---------------------------------
+_rg_char_governor = None
+_rg_char_loader = None
+_rg_char_lock = asyncio.Lock()
+
+
+def _rg_character_enabled() -> bool:
+    """Return True when RG should gate Character Chat operations."""
+    flag = os.getenv("RG_ENABLE_CHARACTER_CHAT")
+    if flag is not None:
+        return flag.strip().lower() in {"1", "true", "yes", "on"}
+    if rg_enabled is not None:
+        try:
+            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+        except Exception:
+            return False
+    return False
+
+
+async def _get_character_rg_governor():
+    """Lazily initialize a ResourceGovernor instance for Character Chat."""
+    global _rg_char_governor, _rg_char_loader
+    if not _rg_character_enabled():
+        return None
+    if RGRequest is None or PolicyLoader is None:
+        return None
+    if _rg_char_governor is not None:
+        return _rg_char_governor
+    async with _rg_char_lock:
+        if _rg_char_governor is not None:
+            return _rg_char_governor
+        try:
+            loader = (
+                default_policy_loader()
+                if default_policy_loader
+                else PolicyLoader(
+                    os.getenv(
+                        "RG_POLICY_PATH",
+                        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+                    ),
+                    PolicyReloadConfig(
+                        enabled=True,
+                        interval_sec=int(
+                            os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10"
+                        ),
+                    ),
+                )
+            )
+            await loader.load_once()
+            _rg_char_loader = loader
+            backend = os.getenv("RG_BACKEND", "memory").lower()
+            if backend == "redis" and RedisResourceGovernor is not None:
+                gov = RedisResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            else:
+                gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            _rg_char_governor = gov
+            return gov
+        except Exception as exc:  # pragma: no cover - optional path
+            logger.debug(
+                "Character Chat RG governor init failed; using legacy limiter: {}", exc
+            )
+            return None
+
+
+async def _maybe_enforce_with_rg_character(
+    *,
+    user_id: int,
+    operation: str,
+) -> Optional[Dict[str, object]]:
+    """
+    Optionally enforce Character Chat operations via ResourceGovernor.
+
+    Returns a decision dict when RG is used, or None when RG is
+    unavailable or disabled.
+    """
+    gov = await _get_character_rg_governor()
+    if gov is None:
+        return None
+    policy_id = os.getenv("RG_CHARACTER_CHAT_POLICY_ID", "character_chat.default")
+    op_id = f"character-{user_id}-{operation}-{time.time_ns()}"
+    try:
+        decision, handle = await gov.reserve(
+            RGRequest(
+                entity=f"user:{user_id}",
+                categories={"requests": {"units": 1}},
+                tags={
+                    "policy_id": policy_id,
+                    "module": "character_chat",
+                    "operation": operation,
+                },
+            ),
+            op_id=op_id,
+        )
+        if decision.allowed:
+            if handle:
+                try:
+                    await gov.commit(handle, None, op_id=op_id)
+                except Exception:
+                    logger.debug("Character Chat RG commit failed", exc_info=True)
+            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
+        return {
+            "allowed": False,
+            "retry_after": decision.retry_after or 1,
+            "policy_id": policy_id,
+        }
+    except Exception as exc:
+        logger.debug(
+            "Character Chat RG reserve failed; falling back to legacy: {}", exc
+        )
+        return None
 
     async def get_usage_stats(self, user_id: int) -> Dict[str, Any]:
         """

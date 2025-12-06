@@ -581,6 +581,19 @@ Notes:
   - `RG_ENABLE_EMBEDDINGS_SERVER`
 - Convention: any unset module flag inherits from `RG_ENABLED`.
 
+| Domain           | Flag                        | Default / Status                         | Notes / Coverage                                                                                                    |
+|------------------|-----------------------------|------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
+| Chat (OpenAI)    | `RG_ENABLE_CHAT`            | Planned, reserved name                   | Chat currently governed via `RGSimpleMiddleware` + route map; future flag will gate any direct per-endpoint RG use. |
+| MCP Unified      | `RG_ENABLE_MCP`             | Off by default                           | When enabled, MCP `RateLimiter.check_rate_limit` enforces via RG (`mcp.*` policies); see `test_rg_cutover_embeddings_mcp.py`. |
+| SlowAPI ingress  | `RG_ENABLE_SLOWAPI`         | Off by default                           | When enabled (or `RG_ENABLE_SIMPLE_MIDDLEWARE=1`), `RGSimpleMiddleware` guards selected ingress paths.              |
+| Audio (TTS/STT)  | `RG_ENABLE_AUDIO`           | Off by default                           | Enables streams/jobs concurrency via RG (`audio.default`), with daily minutes still enforced via legacy ledgers.    |
+| Embeddings       | `RG_ENABLE_EMBEDDINGS`      | Off by default                           | Async embeddings limiter delegates to RG (`embeddings.default`); headers/429 behavior covered by e2e embeddings tests. |
+| Evaluations      | `RG_ENABLE_EVALUATIONS`     | Off by default                           | `UserRateLimiter` consults RG (`evals.default`); see cutover + e2e tests for `/api/v1/evaluations/rate-limits`.     |
+| AuthNZ           | `RG_ENABLE_AUTHNZ`          | Off by default                           | AuthNZ `RateLimiter` consults RG (`authnz.default`) before DB/Redis; see cutover + `/authnz/debug` e2e tests.       |
+| Character Chat   | `RG_ENABLE_CHARACTER_CHAT`  | Off by default                           | Character operations are gated via RG when enabled; see character limiter cutover + `/api/v1/chats/*` e2e tests.    |
+| Web Scraping     | `RG_ENABLE_WEB_SCRAPING`    | Off by default                           | Enhanced web scraping limiter uses RG for backoff; see web scraping cutover test.                                   |
+| Embeddings server| `RG_ENABLE_EMBEDDINGS_SERVER` | Planned, reserved name                 | Reserved for future direct RG integration with the standalone embeddings server implementation.                     |
+
 ### Compat Map (Legacy → RG)
 
 - General rules:
@@ -682,10 +695,22 @@ Notes:
   - The audio WebSocket transcription endpoint consumes `audio_quota` helpers, which in turn use the governor for streams concurrency when `RG_ENABLE_AUDIO=1`; legacy Redis counters are bypassed in this mode.
 - Embeddings:
   - Async embeddings paths (`async_embeddings.py` and `request_batching.py`) consult `AsyncRateLimiter`, which delegates enforcement to the ResourceGovernor when `RG_ENABLE_EMBEDDINGS=1` (using `embeddings.default` policy and `RGRequest(entity="user:{id}", categories={"requests": {"units": 1}})`); the per-user sliding-window `UserRateLimiter` remains as a shadow/fallback compatibility shim when RG is disabled or unavailable.
-  - Route-map entries for `/api/v1/embeddings*` are wired through `RGSimpleMiddleware`, and end-to-end tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_chat_audio_headers.py` exercise success and 429 deny behavior (with `Retry-After` / `X-RateLimit-*` headers) on `/api/v1/embeddings/providers-config`.
+  - Route-map entries for `/api/v1/embeddings*` are wired through `RGSimpleMiddleware`, and end-to-end tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_chat_audio_headers.py` exercise success and 429 deny behavior (with `Retry-After` / `X-RateLimit-*` headers) on `/api/v1/embeddings/providers-config` when RG is enabled.
 - MCP & SlowAPI:
   - MCP unified `RateLimiter.check_rate_limit` now enforces via the ResourceGovernor when `RG_ENABLE_MCP=1`, reserving against `mcp.{category}` policies (`entity="client:{key}"`, `categories={"requests": {"units": 1}}`) and raising `RateLimitExceeded` based on RG decisions; the in-memory/Redis limiter is retained as a shadow/fail-open compatibility path when RG is disabled or errors, with cutover behavior locked in by `tldw_Server_API/tests/Resource_Governance/test_rg_cutover_embeddings_mcp.py`.
   - SlowAPI-decorated routes continue to use the existing limiter by default; `RGSimpleMiddleware` can be enabled as a façade in front of selected ingress paths when `RG_ENABLED` and `RG_ENABLE_SLOWAPI` are set, and end-to-end tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_chat_audio_headers.py` assert RG-style headers on representative chat, MCP, audio, and embeddings routes.
+- Evaluations:
+  - The per-user `UserRateLimiter.check_rate_limit` in `tldw_Server_API/app/core/Evaluations/user_rate_limiter.py` consults the ResourceGovernor when `RG_ENABLE_EVALUATIONS=1` (via `_maybe_enforce_with_rg_evaluations`, using `entity="user:{user_id}"` and the `evals.default` policy); on RG denial, it returns a `(False, meta)` result with `retry_after`, `policy_id`, and `rate_limit_source="resource_governor"`, while the existing per-minute/daily counters remain as a compatibility shim when RG is disabled or unavailable.
+  - End-to-end tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_evals_authnz_character_headers.py` hit `/api/v1/evaluations/rate-limits` under a small `evals.*` policy and assert a first-success / second-429 (or 503 in fail modes) pattern with `Retry-After` and `X-RateLimit-*` headers driven by `RGSimpleMiddleware` and the route-map entry for `/api/v1/evaluations/*`.
+- AuthNZ:
+  - The AuthNZ `RateLimiter.check_rate_limit` in `tldw_Server_API/app/core/AuthNZ/rate_limiter.py` now checks the ResourceGovernor first when `RG_ENABLE_AUTHNZ=1`, reserving against `authnz.default` (or an override via `RG_AUTHNZ_POLICY_ID`) with `RGRequest(entity=identifier, categories={"requests": {"units": 1}})`; on RG denial it returns a `(False, meta)` result with `retry_after`, `policy_id`, and `rate_limit_source="resource_governor"`, and falls back to the legacy DB/Redis limiter only when RG is disabled or unavailable.
+  - Cutover behavior is locked in by `tldw_Server_API/tests/Resource_Governance/test_rg_cutover_evals_authnz_character_web.py::test_authnz_rg_denies`, and HTTP-level behavior (200 vs 429 + headers) is exercised via the lightweight `/api/v1/authnz/debug/api-key-id` endpoint in `test_e2e_evals_authnz_character_headers.py`, which runs under a small `authnz.*` route-map policy when RG is enabled.
+- Character Chat:
+  - The `CharacterRateLimiter.check_rate_limit` in `tldw_Server_API/app/core/Character_Chat/character_rate_limiter.py` optionally gates character operations through the ResourceGovernor when `RG_ENABLE_CHARACTER_CHAT=1`, issuing `RGRequest(entity="user:{user_id}", categories={"requests": {"units": 1}})` against the `character_chat.default` (or overridden) policy; on RG denial it raises HTTP 429 with a `Retry-After` header and a policy-aware error message, while the existing Redis/in-memory limiter remains authoritative when RG is disabled or unavailable.
+  - Unit-level RG decision shape is covered by `test_rg_cutover_evals_authnz_character_web.py::test_character_chat_rg_denies`, and end-to-end deny semantics (200 then 429/503, with `Retry-After`/`X-RateLimit-*` headers on 429) for the legacy `/api/v1/chats/{chat_id}/complete` endpoint are covered by `test_e2e_evals_authnz_character_headers.py::test_e2e_character_chat_deny_headers_retry_after` under a route-map policy for `/api/v1/chats/*`.
+- Web Scraping:
+  - The enhanced web scraping `RateLimiter.acquire` in `tldw_Server_API/app/core/Web_Scraping/enhanced_web_scraping.py` now consults the ResourceGovernor when `RG_ENABLE_WEB_SCRAPING=1`, reserving `RGRequest(entity="service:web_scraping", categories={"requests": {"units": 1}})` against a `web_scraping.default` (or overridden) policy; RG denials are modeled as backoff sleeps (`retry_after` seconds) rather than HTTP 429s, after which the in-memory per-second/minute/hour limits continue to apply.
+  - The RG integration is validated by `test_rg_cutover_evals_authnz_character_web.py::test_web_scraping_rg_denies`, which asserts correct `entity`, `categories`, and tags for RG reservations while leaving the existing HTTP semantics of the research/web scraping endpoints unchanged.
 
 ## Appendix — Mapping table (initial examples)
 

@@ -30,7 +30,11 @@ from tldw_Server_API.app.api.v1.schemas.media_response_models import (
 from tldw_Server_API.app.api.v1.utils.cache import generate_etag, is_not_modified
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.DB_Manager import get_paginated_files
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import DatabaseError, MediaDatabase
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    DatabaseError,
+    MediaDatabase,
+    fetch_keywords_for_media_batch,
+)
 from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
 
 
@@ -65,6 +69,10 @@ async def list_media_endpoint(
     current_user: User = Depends(get_request_user),
     page: int = Query(1, ge=1, description="Page number (1-based)"),
     results_per_page: int = Query(10, ge=1, description="Items per page"),
+    include_keywords: bool = Query(
+        False,
+        description="Include associated keywords for each media item.",
+    ),
     db: MediaDatabase = Depends(get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
 ) -> Dict[str, Any]:
@@ -117,20 +125,60 @@ async def list_media_endpoint(
         except Exception:
             pass
 
-        # Build items without content fields
-        items: List[Dict[str, Any]] = []
+        # Build base items and collect IDs for keyword lookup
+        base_items: List[Dict[str, Any]] = []
+        media_ids: List[int] = []
         for r in rows or []:
-            rid = r["id"] if isinstance(r, dict) else r[0]
+            rid_raw = r["id"] if isinstance(r, dict) else r[0]
             title = r["title"] if isinstance(r, dict) else r[1]
             rtype = r["type"] if isinstance(r, dict) else r[2]
-            items.append(
+            try:
+                rid = int(rid_raw)
+            except (TypeError, ValueError):
+                # Skip rows with invalid IDs rather than failing the entire listing
+                logger.error("Skipping media row with invalid id: {}", rid_raw)
+                continue
+            media_ids.append(rid)
+            base_items.append(
                 {
-                    "id": int(rid),
+                    "id": rid,
                     "title": str(title),
                     "type": str(rtype),
-                    "url": f"/api/v1/media/{int(rid)}",
                 }
             )
+
+        # Optionally fetch keywords for all media items on this page in a single batch
+        keywords_map: Dict[int, List[str]] = {}
+        if include_keywords and media_ids:
+            try:
+                keywords_map = fetch_keywords_for_media_batch(
+                    media_ids=media_ids,
+                    db_instance=db,
+                )
+            except Exception as exc:
+                # Log and degrade gracefully if keyword lookup fails
+                logger.error(
+                    "Error fetching keywords for media list page={} rpp={}: {}",
+                    page,
+                    results_per_page,
+                    exc,
+                    exc_info=True,
+                )
+                keywords_map = {}
+
+        # Build response items, including keywords only when requested
+        items: List[Dict[str, Any]] = []
+        for item in base_items:
+            mid = item["id"]
+            base_payload: Dict[str, Any] = {
+                "id": mid,
+                "title": item["title"],
+                "type": item["type"],
+                "url": f"/api/v1/media/{mid}",
+            }
+            if include_keywords:
+                base_payload["keywords"] = keywords_map.get(mid, [])
+            items.append(base_payload)
 
         payload: Dict[str, Any] = {
             "items": items,

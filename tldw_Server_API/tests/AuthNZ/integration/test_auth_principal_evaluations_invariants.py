@@ -90,7 +90,7 @@ def test_evaluations_list_jwt_principal_and_state_alignment(isolated_test_enviro
 
     # 1. Register and log in via real auth endpoints.
     username = "evals_invariants_user"
-    password = "Password123!"
+    password = "Str0ngP@ssw0rd!"
     reg = client.post(
         "/api/v1/auth/register",
         json={"username": username, "email": "evals_invariants_user@example.com", "password": password},
@@ -178,7 +178,7 @@ def test_evaluations_admin_cleanup_jwt_principal_and_state_alignment(
 
     # 1. Register and log in via real auth endpoints.
     username = "evals_admin_invariants_user"
-    password = "Password123!"
+    password = "Str0ngP@ssw0rd!"
     reg = client.post(
         "/api/v1/auth/register",
         json={
@@ -299,7 +299,7 @@ def test_evaluations_admin_cleanup_api_key_principal_and_state_alignment(
 
     # 1. Register a user via the real auth endpoint.
     username = "evals_admin_api_key_invariants_user"
-    password = "Password123!"
+    password = "Str0ngP@ssw0rd!"
     reg = client.post(
         "/api/v1/auth/register",
         json={

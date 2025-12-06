@@ -86,7 +86,7 @@ def test_tools_execute_api_key_principal_and_state_alignment(isolated_test_envir
 
     # 1. Register a user via the real auth endpoint.
     username = "tools_invariants_user"
-    password = "Password123!"
+    password = "Str0ngP@ssw0rd!"
     reg = client.post(
         "/api/v1/auth/register",
         json={
@@ -149,4 +149,3 @@ def test_tools_execute_api_key_principal_and_state_alignment(isolated_test_envir
         assert str(state_auth_principal["api_key_id"]) == str(state["api_key_id"])
     finally:
         _restore_auth_capture(app, original)
-

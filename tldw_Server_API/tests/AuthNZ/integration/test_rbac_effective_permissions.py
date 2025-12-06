@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
 from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+from tldw_Server_API.app.core.AuthNZ.db_config import AuthDatabaseConfig
 
 
 pytestmark = pytest.mark.integration
@@ -26,6 +27,11 @@ def _fresh_client() -> TestClient:
     # Reset singletons so the app picks up new settings/DB
     # Note: reset functions are async in some modules; we import the sync ones here
     reset_settings()
+    # Ensure the AuthNZ DB config/UserDatabase cache sees the new DATABASE_URL
+    try:
+        AuthDatabaseConfig().reset()
+    except Exception:
+        pass
     # Reset DB pool (async); tests using TestClient will run lifespan and initialize anew
     try:
         import asyncio

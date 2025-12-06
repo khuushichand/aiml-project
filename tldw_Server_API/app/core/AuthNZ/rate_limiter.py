@@ -2,11 +2,12 @@
 # Description: Database-backed rate limiting with token bucket algorithm
 #
 # Imports
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any, Tuple
-import hashlib
 import asyncio
+import hashlib
 import json
+import os
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional, Tuple
 #
 # 3rd-party imports
 from redis import asyncio as redis_async
@@ -19,6 +20,28 @@ from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import RateLimitError
 from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import AuthnzRateLimitsRepo
+
+# Optional Resource Governor integration (gated by RG_ENABLE_AUTHNZ)
+try:  # pragma: no cover - RG is optional
+    from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
+        MemoryResourceGovernor,
+        RedisResourceGovernor,
+        RGRequest,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.policy_loader import (  # type: ignore
+        PolicyLoader,
+        PolicyReloadConfig,
+        default_policy_loader,
+    )
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
+except Exception:  # pragma: no cover - safe fallback if RG not installed
+    MemoryResourceGovernor = None  # type: ignore
+    RedisResourceGovernor = None  # type: ignore
+    RGRequest = None  # type: ignore
+    PolicyLoader = None  # type: ignore
+    PolicyReloadConfig = None  # type: ignore
+    default_policy_loader = None  # type: ignore
+    rg_enabled = None  # type: ignore
 
 #######################################################################################################################
 #
@@ -427,11 +450,30 @@ class RateLimiter:
             - is_allowed: True if request is allowed
             - metadata: Rate limit information (remaining, reset_time, etc.)
         """
-        if not self.enabled:
-            return True, {"rate_limit_enabled": False}
-
         if not self._initialized:
             await self.initialize()
+
+        # Optional ResourceGovernor gating (per-identifier + endpoint). This is
+        # evaluated even when the legacy limiter is disabled so operators can
+        # rely on RG-based policies while keeping the DB/Redis limiter off.
+        rg_decision = await _maybe_enforce_with_rg_authnz(
+            identifier=identifier,
+            endpoint=endpoint,
+            limit=limit if limit is not None else self.default_limit,
+        )
+        if rg_decision is not None and not rg_decision["allowed"]:
+            retry_after = rg_decision.get("retry_after") or 60
+            return False, {
+                "limit": limit if limit is not None else self.default_limit,
+                "remaining": 0,
+                "reset_time": None,
+                "retry_after": retry_after,
+                "policy_id": rg_decision.get("policy_id", "authnz.default"),
+                "rate_limit_source": "resource_governor",
+            }
+
+        if not self.enabled:
+            return True, {"rate_limit_enabled": False}
 
         # Use provided limits or defaults; treat zero values as intentional
         if limit is None:
@@ -816,6 +858,117 @@ async def get_rate_limiter() -> RateLimiter:
         _rate_limiter = RateLimiter()
         await _rate_limiter.initialize()
     return _rate_limiter
+
+
+# --- Resource Governor plumbing (optional) ---------------------------------
+_rg_authnz_governor = None
+_rg_authnz_loader = None
+_rg_authnz_lock = asyncio.Lock()
+
+
+def _rg_authnz_enabled() -> bool:
+    """Return True when RG should gate AuthNZ rate limits."""
+    flag = os.getenv("RG_ENABLE_AUTHNZ")
+    if flag is not None:
+        return flag.strip().lower() in {"1", "true", "yes", "on"}
+    if rg_enabled is not None:
+        try:
+            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+        except Exception:
+            return False
+    return False
+
+
+async def _get_authnz_rg_governor():
+    """Lazily initialize a ResourceGovernor instance for AuthNZ."""
+    global _rg_authnz_governor, _rg_authnz_loader
+    if _rg_authnz_governor is not None:
+        return _rg_authnz_governor
+    if not _rg_authnz_enabled():
+        return None
+    if RGRequest is None or PolicyLoader is None:
+        return None
+    async with _rg_authnz_lock:
+        if _rg_authnz_governor is not None:
+            return _rg_authnz_governor
+        try:
+            loader = (
+                default_policy_loader()
+                if default_policy_loader
+                else PolicyLoader(
+                    os.getenv(
+                        "RG_POLICY_PATH",
+                        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+                    ),
+                    PolicyReloadConfig(
+                        enabled=True,
+                        interval_sec=int(
+                            os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10"
+                        ),
+                    ),
+                )
+            )
+            await loader.load_once()
+            _rg_authnz_loader = loader
+            backend = os.getenv("RG_BACKEND", "memory").lower()
+            if backend == "redis" and RedisResourceGovernor is not None:
+                gov = RedisResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            else:
+                gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            _rg_authnz_governor = gov
+            return gov
+        except Exception as exc:  # pragma: no cover - optional path
+            logger.debug(
+                "AuthNZ RG governor init failed; using legacy rate limiter: {}", exc
+            )
+            return None
+
+
+async def _maybe_enforce_with_rg_authnz(
+    *,
+    identifier: str,
+    endpoint: str,
+    limit: int,
+) -> Optional[Dict[str, object]]:
+    """
+    Optionally enforce AuthNZ request limits via ResourceGovernor.
+
+    Returns a decision dict when RG is used, or None when RG is
+    unavailable or disabled.
+    """
+    gov = await _get_authnz_rg_governor()
+    if gov is None:
+        return None
+    policy_id = os.getenv("RG_AUTHNZ_POLICY_ID", "authnz.default")
+    op_id = f"authnz-{identifier}-{endpoint}-{datetime.now(timezone.utc).timestamp()}"
+    try:
+        decision, handle = await gov.reserve(
+            RGRequest(
+                entity=identifier,
+                categories={"requests": {"units": 1}},
+                tags={
+                    "policy_id": policy_id,
+                    "module": "authnz",
+                    "endpoint": endpoint,
+                },
+            ),
+            op_id=op_id,
+        )
+        if decision.allowed:
+            if handle:
+                try:
+                    await gov.commit(handle, None, op_id=op_id)
+                except Exception:
+                    logger.debug("AuthNZ RG commit failed", exc_info=True)
+            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
+        return {
+            "allowed": False,
+            "retry_after": decision.retry_after or 1,
+            "policy_id": policy_id,
+        }
+    except Exception as exc:
+        logger.debug("AuthNZ RG reserve failed; falling back to legacy: {}", exc)
+        return None
 
 
 async def check_rate_limit(

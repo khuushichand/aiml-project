@@ -133,17 +133,29 @@ class AuthnzApiKeysRepo:
                         )
                         """
                     )
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS is_virtual BOOLEAN DEFAULT 0")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS parent_key_id INTEGER REFERENCES api_keys(id)")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_tokens BIGINT")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_tokens BIGINT")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_usd REAL")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_usd REAL")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_endpoints TEXT")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_providers TEXT")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_models TEXT")
+                    # Extend api_keys with virtual-key and budget fields in an
+                    # idempotent way for SQLite. PRAGMA table_info(...) is
+                    # used instead of dialect-specific "ADD COLUMN IF NOT EXISTS"
+                    # (which SQLite does not support).
+                    cursor = await conn.execute("PRAGMA table_info(api_keys)")
+                    rows = await cursor.fetchall()
+                    existing_cols = {row[1] for row in rows}
+
+                    async def _add_col(name: str, decl: str) -> None:
+                        if name not in existing_cols:
+                            await conn.execute(f"ALTER TABLE api_keys ADD COLUMN {decl}")
+
+                    await _add_col("is_virtual", "is_virtual INTEGER DEFAULT 0")
+                    await _add_col("parent_key_id", "parent_key_id INTEGER REFERENCES api_keys(id)")
+                    await _add_col("org_id", "org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
+                    await _add_col("team_id", "team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
+                    await _add_col("llm_budget_day_tokens", "llm_budget_day_tokens INTEGER")
+                    await _add_col("llm_budget_month_tokens", "llm_budget_month_tokens INTEGER")
+                    await _add_col("llm_budget_day_usd", "llm_budget_day_usd REAL")
+                    await _add_col("llm_budget_month_usd", "llm_budget_month_usd REAL")
+                    await _add_col("llm_allowed_endpoints", "llm_allowed_endpoints TEXT")
+                    await _add_col("llm_allowed_providers", "llm_allowed_providers TEXT")
+                    await _add_col("llm_allowed_models", "llm_allowed_models TEXT")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")

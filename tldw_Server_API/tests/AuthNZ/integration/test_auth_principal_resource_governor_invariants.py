@@ -90,7 +90,7 @@ def test_resource_governor_policy_jwt_principal_and_state_alignment(isolated_tes
 
     # 1. Register and log in via real auth endpoints.
     username = "rg_invariants_user"
-    password = "Password123!"
+    password = "Str0ngP@ssw0rd!"
     reg = client.post(
         "/api/v1/auth/register",
         json={"username": username, "email": "rg_invariants_user@example.com", "password": password},
@@ -148,4 +148,3 @@ def test_resource_governor_policy_jwt_principal_and_state_alignment(isolated_tes
         assert state["team_ids"] == principal["team_ids"]
     finally:
         _restore_auth_capture(app, original)
-

@@ -74,7 +74,10 @@ async def test_get_org_policy_from_principal_single_user_fallback(monkeypatch):
     monkeypatch.setattr(
         auth_deps, "get_default_policy_from_env", lambda org_id: {"org_id": org_id, "source": "default"}
     )
-    monkeypatch.setattr(auth_deps, "is_single_user_mode", lambda: True)
+    # Explicitly simulate single-user profile mode so the helper takes
+    # the synthetic org_id=1 path regardless of global defaults.
+    monkeypatch.setattr(auth_deps, "is_single_user_mode", lambda: True, raising=False)
+    monkeypatch.setattr(auth_deps, "is_single_user_profile_mode", lambda: True, raising=False)
 
     principal = AuthPrincipal(
         kind="single_user",
@@ -98,7 +101,10 @@ async def test_get_org_policy_from_principal_single_user_fallback(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_org_policy_from_principal_raises_when_no_org(monkeypatch):
-    monkeypatch.setattr(auth_deps, "is_single_user_mode", lambda: False)
+    # Force non-single-user profile so the helper raises 400 instead of
+    # taking the synthetic org_id=1 path.
+    monkeypatch.setattr(auth_deps, "is_single_user_mode", lambda: False, raising=False)
+    monkeypatch.setattr(auth_deps, "is_single_user_profile_mode", lambda: False, raising=False)
 
     principal = AuthPrincipal(
         kind="user",
@@ -121,4 +127,3 @@ async def test_get_org_policy_from_principal_raises_when_no_org(monkeypatch):
     err = exc_info.value
     assert err.status_code == 400
     assert "no organization memberships" in err.detail
-
