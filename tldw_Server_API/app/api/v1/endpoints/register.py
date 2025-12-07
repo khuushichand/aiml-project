@@ -26,7 +26,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.services.registration_service import RegistrationService
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, get_profile
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
@@ -174,7 +174,20 @@ async def register_user(
     """
     settings = get_settings()
 
-    # Check if registration is enabled
+    # Check if registration is enabled. In the local-single-user profile,
+    # creating additional users beyond the bootstrapped admin is a hard
+    # constraint: registration is forbidden regardless of ENABLE_REGISTRATION.
+    profile = get_profile()
+    if isinstance(profile, str) and profile.strip().lower() in {"local-single-user", "single_user"}:
+        logger.warning(
+            "Registration attempt rejected in local-single-user profile from IP: {}",
+            request.client.host if request.client else "unknown",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User registration is not allowed in local-single-user profile",
+        )
+
     if not settings.ENABLE_REGISTRATION:
         logger.warning(f"Registration attempt while disabled from IP: {request.client.host}")
         raise HTTPException(

@@ -45,7 +45,7 @@ from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.input_validation import get_input_validator
 from tldw_Server_API.app.services.registration_service import RegistrationService
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings, get_profile
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditEventType,
@@ -892,6 +892,19 @@ async def register(
     start_time = time.perf_counter()
     log_counter("auth_register_attempt")
     try:
+        # Hard constraint for local-single-user profile: do not allow
+        # registration of additional users beyond the bootstrapped admin.
+        profile = get_profile()
+        if isinstance(profile, str) and profile.strip().lower() in {"local-single-user", "single_user"}:
+            logger.warning(
+                "Registration attempt rejected in local-single-user profile for username=%s",
+                request.username,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User registration is not allowed in local-single-user profile",
+            )
+
         # Register the user
         user_info = await registration_service.register_user(
             username=request.username,

@@ -8,11 +8,10 @@
 
 import functools
 from typing import List, Optional, Union, Callable, Any
-from fastapi import HTTPException, status, Depends
 from loguru import logger
 
 # Local imports
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
 
@@ -170,229 +169,6 @@ def check_all_permissions(user: User, permissions: List[str]) -> bool:
     return True
 
 ########################################################################################################################
-# FastAPI Dependency Functions
-########################################################################################################################
-
-class PermissionChecker:
-    """
-    FastAPI dependency for checking permissions.
-
-    Usage:
-        @router.get("/protected")
-        def protected_route(user: User = Depends(PermissionChecker("media.read"))):
-            return {"message": "You have permission!"}
-    """
-
-    def __init__(self, permission: str):
-        """
-        Initialize permission checker.
-
-        Args:
-            permission: Required permission string
-        """
-        self.permission = permission
-
-    def __call__(self, user: User = Depends(get_request_user)) -> User:
-        """
-        Check if user has required permission.
-
-        Args:
-            user: Current user from request
-
-        Returns:
-            User: The authenticated user if permission check passes
-
-        Raises:
-            HTTPException: If user lacks required permission
-        """
-        redact_logs = False
-        try:
-            current_settings = get_settings()
-            redact_logs = current_settings.PII_REDACT_LOGS
-        except Exception as settings_err:
-            current_settings = None
-            logger.debug(
-                f"PermissionChecker: failed to load settings; using default logging behavior: {settings_err}"
-            )
-            current_settings = None
-        if not check_permission(user, self.permission):
-            # Soft-enforce option: log and allow if enabled
-            try:
-                if current_settings and current_settings.RBAC_SOFT_ENFORCE:
-                    if redact_logs:
-                        logger.warning(
-                            f"[RBAC soft-enforce] Authenticated user lacks '{self.permission}' - allowing (soft mode)"
-                        )
-                    else:
-                        logger.warning(
-                            f"[RBAC soft-enforce] User {user.username} lacks '{self.permission}' - allowing (soft mode)"
-                        )
-                    return user
-            except Exception as soft_err:
-                logger.debug(
-                    f"PermissionChecker: RBAC soft-enforce evaluation failed; enforcing hard deny: {soft_err}"
-                )
-            if redact_logs:
-                logger.warning(f"Authenticated user denied access - lacks permission: {self.permission}")
-            else:
-                logger.warning(f"User {user.username} denied access - lacks permission: {self.permission}")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission denied. Required: {self.permission}"
-            )
-        return user
-
-class RoleChecker:
-    """
-    FastAPI dependency for checking roles.
-
-    Usage:
-        @router.get("/admin")
-        def admin_route(user: User = Depends(RoleChecker("admin"))):
-            return {"message": "Welcome admin!"}
-    """
-
-    def __init__(self, role: str):
-        """
-        Initialize role checker.
-
-        Args:
-            role: Required role name
-        """
-        self.role = role
-
-    def __call__(self, user: User = Depends(get_request_user)) -> User:
-        """
-        Check if user has required role.
-
-        Args:
-            user: Current user from request
-
-        Returns:
-            User: The authenticated user if role check passes
-
-        Raises:
-            HTTPException: If user lacks required role
-        """
-        redact_logs = False
-        try:
-            redact_logs = get_settings().PII_REDACT_LOGS
-        except Exception as settings_err:
-            logger.debug(
-                f"RoleChecker: failed to load settings; using default logging behavior: {settings_err}"
-            )
-        if not check_role(user, self.role):
-            if redact_logs:
-                logger.warning(f"Authenticated user denied access - lacks role: {self.role}")
-            else:
-                logger.warning(f"User {user.username} denied access - lacks role: {self.role}")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied. Required role: {self.role}"
-            )
-        return user
-
-class AnyPermissionChecker:
-    """
-    FastAPI dependency for checking if user has any of the specified permissions.
-
-    Usage:
-        @router.get("/content")
-        def content_route(user: User = Depends(AnyPermissionChecker(["media.read", "media.update"]))):
-            return {"message": "You can access content!"}
-    """
-
-    def __init__(self, permissions: List[str]):
-        """
-        Initialize any-permission checker.
-
-        Args:
-            permissions: List of permission strings (user needs at least one)
-        """
-        self.permissions = permissions
-
-    def __call__(self, user: User = Depends(get_request_user)) -> User:
-        """
-        Check if user has any of the required permissions.
-
-        Args:
-            user: Current user from request
-
-        Returns:
-            User: The authenticated user if permission check passes
-
-        Raises:
-            HTTPException: If user lacks all required permissions
-        """
-        redact_logs = False
-        try:
-            redact_logs = get_settings().PII_REDACT_LOGS
-        except Exception as settings_err:
-            logger.debug(
-                f"AnyPermissionChecker: failed to load settings; using default logging behavior: {settings_err}"
-            )
-        if not check_any_permission(user, self.permissions):
-            if redact_logs:
-                logger.warning(f"Authenticated user denied access - lacks any of: {self.permissions}")
-            else:
-                logger.warning(f"User {user.username} denied access - lacks any of: {self.permissions}")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission denied. Requires one of: {', '.join(self.permissions)}"
-            )
-        return user
-
-class AllPermissionsChecker:
-    """
-    FastAPI dependency for checking if user has all specified permissions.
-
-    Usage:
-        @router.delete("/critical")
-        def critical_operation(user: User = Depends(AllPermissionsChecker(["system.configure", "system.maintenance"]))):
-            return {"message": "Critical operation allowed"}
-    """
-
-    def __init__(self, permissions: List[str]):
-        """
-        Initialize all-permissions checker.
-
-        Args:
-            permissions: List of permission strings (user needs all)
-        """
-        self.permissions = permissions
-
-    def __call__(self, user: User = Depends(get_request_user)) -> User:
-        """
-        Check if user has all required permissions.
-
-        Args:
-            user: Current user from request
-
-        Returns:
-            User: The authenticated user if permission check passes
-
-        Raises:
-            HTTPException: If user lacks any required permission
-        """
-        redact_logs = False
-        try:
-            redact_logs = get_settings().PII_REDACT_LOGS
-        except Exception as settings_err:
-            logger.debug(
-                f"AllPermissionsChecker: failed to load settings; using default logging behavior: {settings_err}"
-            )
-        if not check_all_permissions(user, self.permissions):
-            if redact_logs:
-                logger.warning(f"Authenticated user denied access - lacks all of: {self.permissions}")
-            else:
-                logger.warning(f"User {user.username} denied access - lacks all of: {self.permissions}")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission denied. Requires all: {', '.join(self.permissions)}"
-            )
-        return user
-
-########################################################################################################################
 # Decorator Functions (for non-FastAPI use)
 ########################################################################################################################
 
@@ -524,6 +300,9 @@ NOTES_GRAPH_WRITE = "notes.graph.write"
 # Evaluations permissions
 EVALS_MANAGE = "evals.manage"
 EVALS_READ = "evals.read"
+
+# Flashcards permissions
+FLASHCARDS_ADMIN = "flashcards.admin"
 
 # Role names
 ROLE_ADMIN = "admin"

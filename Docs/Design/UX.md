@@ -83,6 +83,16 @@ https://savolai.net/ux/product-and-framework-thinkers-when-developers-and-uxers-
 https://emesstyle.com/usability/
 https://medium.com/@ryan.almeida86/5-design-psychology-secrets-every-ui-ux-designer-should-know-0cb50532ff1c
 https://medium.com/design-bootcamp/the-end-of-the-single-truth-rethinking-ai-user-interfaces-to-combat-mode-collapse-36717074d0e5
+https://medium.com/design-bootcamp/best-practices-for-user-flow-design-using-figma-a3c759055f37
+https://medium.com/design-bootcamp/7-ui-ux-mistakes-that-scream-youre-a-beginner-and-exactly-how-to-fix-each-one-6e407242a3e7
+https://medium.com/@ryan.almeida86/5-micro-interactions-to-make-any-product-feel-premium-68e3b3eae3bf
+https://daleenrabe.substack.com/p/the-product-designers-lens
+https://nurxmedov.medium.com/stop-overthinking-every-design-decision-use-these-7-rules-instead-70be04705392
+https://www.nngroup.com/articles/designing-use-case-prompt-suggestions/
+
+https://uxplanet.org/16-ui-design-tips-ba2e7524d203
+
+
 
 
 

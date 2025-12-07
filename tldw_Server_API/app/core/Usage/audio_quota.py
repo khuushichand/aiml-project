@@ -75,7 +75,7 @@ except Exception:  # pragma: no cover - RG is optional for audio quotas
     rg_backend = None  # type: ignore
 
 try:
-    # Generic daily ledger (optional; used in shadow mode)
+    # Generic daily ledger (canonical store for daily minutes when available)
     from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import (
         ResourceDailyLedger,
         LedgerEntry,
@@ -540,9 +540,12 @@ async def _get_daily_ledger() -> Optional[ResourceDailyLedger]:
     """
     Lazily initialize the shared ResourceDailyLedger for audio minutes.
 
-    This runs in "shadow mode": failures are logged but never affect quota
-    enforcement, which continues to rely on audio_usage_daily as the source
-    of truth until a future cutover.
+    When available, the ledger is the canonical source of truth for daily
+    minutes caps: callers write new usage via ``add_daily_minutes`` and read
+    remaining quota via ``_ledger_remaining_minutes``. The legacy
+    ``audio_usage_daily`` table is consulted only for a one-time backfill on
+    first use (per process) and as a fallback when the ledger cannot be
+    initialized.
     """
     global _daily_ledger
     # If the ledger implementation is not available, skip silently.

@@ -14,8 +14,13 @@ from tldw_Server_API.app.core.Setup import install_manager
 from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
 from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_access
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user, get_db_transaction
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_current_user,
+    get_db_transaction,
+    require_roles,
+    require_permissions,
+)
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 router = APIRouter(prefix="/setup", tags=["setup"], include_in_schema=True)
@@ -161,7 +166,10 @@ async def ask_setup_assistant(
         "enable_first_time_setup=true and setup_completed=false. Requires server restart."
     ),
 )
-async def reset_setup_flags(_admin: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+async def reset_setup_flags(
+    _principal: Any = Depends(require_roles("admin")),
+    _perm: Any = Depends(require_permissions(SYSTEM_CONFIGURE)),
+) -> Dict[str, Any]:
     """Admin-only: reset first-time setup flags for recovery.
 
     Sets `enable_first_time_setup = true` and `setup_completed = false` in config.txt.

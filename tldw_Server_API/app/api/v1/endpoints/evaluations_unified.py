@@ -102,8 +102,10 @@ from .evaluations_auth import (
     check_evaluation_rate_limit,
     _apply_rate_limit_headers,
     require_admin,
+    enforce_heavy_evaluations_admin,
 )
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope, get_auth_principal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
     global _wm_lock
@@ -145,14 +147,15 @@ async def admin_cleanup_idempotency(
     ttl_hours: int = Query(72, ge=1, le=720, description="Delete idempotency keys older than this TTL (hours)"),
     target_user_id: Optional[int] = Query(None, description="If provided, only clean this user's evaluations DB"),
     user_ctx: str = Depends(verify_api_key),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
 ):
     """Admin-only: purge stale idempotency keys in Evaluations DBs on-demand.
 
     Returns a summary of deleted rows per user and total.
     """
-    # Admin gate
-    require_admin(current_user)
+    # Admin gate (claim-first + legacy shim)
+    enforce_heavy_evaluations_admin(principal)
     try:
         from pathlib import Path as _Path
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
@@ -325,19 +328,23 @@ def _verify_api_key_placeholder():
 # Note: verify_api_key is defined once above. Keep a single definition to avoid confusion.
 
 
-@router.post("/admin/idempotency/cleanup")
+@router.post(
+    "/admin/idempotency/cleanup",
+    dependencies=[Depends(require_roles("admin"))],
+)
 async def admin_cleanup_idempotency(
     ttl_hours: int = Query(72, ge=1, le=720, description="Delete idempotency keys older than this TTL (hours)"),
     target_user_id: Optional[int] = Query(None, description="If provided, only clean this user's evaluations DB"),
     user_ctx: str = Depends(verify_api_key),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
 ):
     """Admin-only: purge stale idempotency keys in Evaluations DBs on-demand.
 
     Returns a summary of deleted rows per user and total.
     """
-    # Admin gate
-    require_admin(current_user)
+    # Admin gate (claim-first + legacy shim)
+    enforce_heavy_evaluations_admin(principal)
     try:
         from pathlib import Path as _Path
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
@@ -642,11 +649,12 @@ async def export_embeddings_abtest(
     format: str = Query("json", pattern="^(json|csv)$"),
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
     """Export AB test results (JSON or CSV). Admin-only."""
-    require_admin(current_user)
+    enforce_heavy_evaluations_admin(principal)
     svc = get_unified_evaluation_service_for_user(current_user.id)
     rows, total = svc.db.list_abtest_results(test_id, limit=100000, offset=0)
     if format == 'json':

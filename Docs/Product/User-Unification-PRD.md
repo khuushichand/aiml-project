@@ -242,6 +242,8 @@ To make “mode” an implementation detail of a higher-level deployment profile
    - Initial behavior (v0.1.x):
      - If `PROFILE` is unset, the system behaves exactly as today and infers behavior from `AUTH_MODE` + `DATABASE_URL`.
      - If `PROFILE` is set, helper functions (e.g., `is_single_user_mode`, `is_multi_user_mode`) continue to read `AUTH_MODE` but may log/emit diagnostics when `PROFILE` and `AUTH_MODE` disagree (no hard failures yet).
+    - Status (v0.1.x):
+      - `tldw_Server_API/app/core/AuthNZ/settings.Settings` exposes a `PROFILE` field (env `PROFILE`) and a helper `get_profile()` which returns either the explicit value or a derived profile string based on `AUTH_MODE` + `DATABASE_URL` (for example, `local-single-user`, `multi-user-postgres`, `multi-user-sqlite`). This value is used only for coordination/UX and feature gating (startup hints, tenant-quota behavior); all authentication and authorization decisions remain claim-first and continue to rely on `AUTH_MODE`, `get_auth_principal`, and RBAC claims rather than `PROFILE`.
 
 2. **Add feature flags that clarify UX vs auth semantics**, without changing defaults:
    - Examples:
@@ -518,7 +520,7 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
 ### Mode vs Claims – Coverage Snapshot
 
 - Fully claim-first clusters (authorization decisions driven by claims on `AuthPrincipal` / `User`, not `AUTH_MODE`):
-  - Metrics admin: `POST /api/v1/metrics/reset` → `get_auth_principal` + `require_roles("admin")`, with HTTP tests in `tldw_Server_API/tests/AuthNZ_Unit/test_metrics_permissions_claims.py`.
+  - Metrics admin: `POST /api/v1/metrics/reset` → `require_roles("admin")` (which depends on `get_auth_principal`), with HTTP tests in `tldw_Server_API/tests/AuthNZ_Unit/test_metrics_permissions_claims.py`.
   - Resource-Governor admin/diagnostics: `/api/v1/resource-governor/policy*`, `/api/v1/resource-governor/diag/*` → `get_auth_principal` + `require_roles("admin")`, with tests in `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` and the `Resource_Governance` suite.
   - Embeddings model management, workflows DLQ, connectors admin, tools admin, and notes graph admin all use `require_permissions` / `require_roles` on top of `get_auth_principal`, with HTTP-level claim tests under `tldw_Server_API/tests/AuthNZ_Unit/` and the respective feature suites.
   - Chat slash commands:
@@ -586,4 +588,4 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
 **Tests**:
 - Regression tests for affected modules under both backends (where supported by current test fixtures).
 
-**Status**: Partially complete / Next iteration — initial repo-backed refactors for `virtual_keys`, `orgs_teams`, and AuthNZ rate-limiter storage have landed; remaining backend drift and mode cleanup is deferred and tracked in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`.
+**Status**: Partially complete / Next iteration — initial repo-backed refactors for `virtual_keys`, `orgs_teams`, AuthNZ rate-limiter storage, API-key management, and usage logging have landed; remaining backend drift and inline SQL (notably Postgres bootstrap DDL in `initialize.py` and virtual-key quota counters in `quotas.py`) is deliberately left in place as guarded tech debt for this iteration and tracked in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` under “Remaining inline SQL / backend detection (tech debt)”.

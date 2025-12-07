@@ -24,6 +24,13 @@ See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentati
 - Admin + RBAC mgmt: `tldw_Server_API/app/api/v1/endpoints/admin.py`, `.../users.py`, `.../privileges.py`, `.../register.py`
 - Debug helpers: `tldw_Server_API/app/api/v1/endpoints/authnz_debug.py`
 
+## New endpoints checklist (AuthNZ + RG)
+
+- Always authenticate via `get_auth_principal` and enforce authorization with `require_permissions(...)` / `require_roles(...)` (and `require_service_principal()` for service-only routes). Avoid introducing new usages of `require_admin`, raw `request.state.user_id` checks, or ad-hoc `is_single_user_mode()` branches for access control.
+- For latency/cost-sensitive or user-facing endpoints (chat, audio, embeddings, evaluations, MCP, workflows, tools, media ingestion, etc.), verify whether they should be governed by Resource Governor:
+  - If yes, ensure there is a policy entry (`resource_governor_policies.yaml` or DB-backed `rg_policies`) and a `route_map` entry mapping the endpoint’s path/tag to an appropriate policy id.
+  - Confirm tests exercise the RG-enforced behavior where limits are important (429/Retry-After headers, tokens/streams limits, etc.).
+
 ## Modes, Profiles & Request Flow
 
 ### Modes vs Profiles (AUTH_MODE today, PROFILE tomorrow)
@@ -148,9 +155,14 @@ Notes:
 - `get_current_user` handles single-user mode first, then API key, then JWT.
 - `check_rate_limit` uses a token bucket; see Rate Limiting below.
 
-Also handy DI:
-- `get_optional_current_user` for optional auth
-- `require_admin` and `require_role("role")` for simple role gating
+Legacy compatibility DI (existing endpoints only):
+- `get_optional_current_user` – legacy shim, kept for older optional-auth routes that
+  need to behave differently when a user is present. New endpoints should prefer
+  claim-first patterns (e.g., `AuthPrincipal` + explicit permissions/roles) rather
+  than introducing fresh optional-auth behaviors.
+- `require_role("role")` – legacy shim around `get_current_active_user` user dicts.
+  New routes must use `require_roles(...)` / `require_permissions(...)` together with
+  `get_auth_principal` instead of adding new usages of `require_role`.
 
 Examples (modern, claim-first):
 ```python
@@ -237,16 +249,9 @@ Notes:
     - Depends on `get_auth_principal` for authentication (401 on missing/invalid credentials).
     - Raises **403 Forbidden** with `detail="Service principal required"` when a non-service principal calls a service-only route.
     - Returns the underlying `AuthPrincipal` unchanged when `principal.kind == "service"`.
-- **Legacy shims (compatibility, do not use for new endpoints)**:
-  - `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker` in `permissions.py` are maintained for **existing** routes only and are treated as legacy:
-    - Short-term keepers and migration examples (compatibility shims with claim-first tests in place):
-      - Media add: `/api/v1/media/add` (`tldw_Server_API/app/api/v1/endpoints/media/add.py`) is now gated purely via `require_permissions(MEDIA_CREATE)` (plus `rbac_rate_limit("media.create")`); tests (e.g., `test_media_add_permissions_claims.py`) assert that missing `media.create` on the principal yields 403 even when the `User` object advertises that permission.
-      - Tools execute: `/api/v1/tools/execute` (`tldw_Server_API/app/api/v1/endpoints/tools.py`) is gated by `require_permissions("tools.execute:*")`; tests (e.g., `test_tools_permissions_claims.py`) assert claim-first behavior using `AuthPrincipal` overrides.
-      - Workflows runs/events/artifacts/control/DLQ: endpoints in `tldw_Server_API/app/api/v1/endpoints/workflows.py` (e.g., `GET /api/v1/workflows/runs`, `GET /runs/{run_id}/artifacts`, `GET /artifacts/{artifact_id}/download`, `POST /runs/{run_id}/{action}`, `GET /webhooks/dlq`) are now gated purely via `require_permissions(...)` (and `require_roles("admin")` where applicable). Unit tests such as `test_workflows_runs_permissions_claims.py`, `test_workflows_artifacts_permissions_claims.py`, `test_workflows_webhook_dlq_permissions_claims.py`, and `test_workflows_control_permissions_claims.py` assert that the claim-first dependencies are the true authorization gate and that any remaining `PermissionChecker` shims are compatibility-only.
-    - Already-migrated admin surfaces:
-      - Sandbox admin endpoints (`tldw_Server_API/app/api/v1/endpoints/sandbox.py`) now use `require_roles("admin")` (plus `get_request_user`) and no longer depend on `RoleChecker("admin")`. `test_sandbox_admin_permissions_claims.py` locks in 401/403/200 behavior for these routes.
-    - Medium-term migration targets:
-      - `AnyPermissionChecker` / `AllPermissionsChecker` are kept only for legacy use and examples; new endpoints should prefer explicit `require_permissions(...)` calls (potentially multiple) or custom dependencies composed around `get_auth_principal`.
+- **Removed legacy helpers (historical only)**:
+  - Earlier versions exposed FastAPI dependencies `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, and `AllPermissionsChecker` from `permissions.py`. These have now been removed; endpoints must use `get_auth_principal` together with `require_permissions` / `require_roles` instead.
+  - Existing admin and control surfaces that once used these helpers (media add, tools execute, workflows runs/events/artifacts/control/DLQ, sandbox admin) have been migrated to claim-first dependencies. Tests such as `test_media_add_permissions_claims.py`, `test_tools_permissions_claims.py`, `test_workflows_runs_permissions_claims.py`, `test_workflows_artifacts_permissions_claims.py`, `test_workflows_webhook_dlq_permissions_claims.py`, `test_workflows_control_permissions_claims.py`, and `test_sandbox_admin_permissions_claims.py` lock in the new behavior and ensure the claim-first dependencies are the true authorization gates.
   - `require_admin` in `evaluations_auth.py` remains as an admin-only guard for heavy evaluations flows; new admin surfaces should prefer `require_roles("admin")` / `require_permissions(...)` on top of `get_auth_principal`.
   - A repository layer exists for AuthNZ and MUST be used instead of ad-hoc SQL for core tables:
     - `AuthnzUsersRepo` (`app/core/AuthNZ/repos/users_repo.py`) wraps `UsersDB` for user lookups; exercised against both SQLite and Postgres in AuthNZ tests.
@@ -257,14 +262,10 @@ Notes:
     - `AuthnzRateLimitsRepo` (`app/core/AuthNZ/repos/rate_limits_repo.py`) encapsulates all DB-backed rate-limiter tables (`rate_limits`, `failed_attempts`, `account_lockouts`) and is used by `rate_limiter.RateLimiter` for counters, lockouts, and cleanup.
   - New AuthNZ code should **not** add fresh backend-specific SQL for these tables; prefer adding small, task-focused methods to the appropriate repo and calling them from business logic.
   - New code MUST NOT introduce fresh `is_single_user_mode()` branches in endpoint/business logic. Mode/profile checks are confined to a small number of coordination points (bootstrap, DB selection, and legacy compatibility helpers); authorization should flow through `AuthPrincipal` + claim-first dependencies instead.
-  - New code **must not** introduce new usages of `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, or `AllPermissionsChecker` on endpoints. Treat these as legacy compatibility shims kept only for existing routes and tests; new surfaces should always use `get_auth_principal`, `require_permissions`, and `require_roles`.
-  - AuthNZ-facing documentation (usage examples, API integration guides) should treat this guide as canonical and mirror its claim-first patterns. When decorator-style helpers appear in historical examples, they should be clearly labeled as legacy.
+  - New code **must not** reintroduce FastAPI dependency helpers that bypass `get_auth_principal` or duplicate `require_permissions` / `require_roles`. Authorization for endpoints should always flow through claim-first dependencies.
+  - AuthNZ-facing documentation (usage examples, API integration guides) should treat this guide as canonical and mirror its claim-first patterns. When decorator-style helpers appear in historical examples (including the removed `*Checker` classes), they should be clearly labeled as legacy and not used for new code.
 
 References:
-- `tldw_Server_API/app/core/AuthNZ/permissions.py#PermissionChecker` (legacy shim)
-- `tldw_Server_API/app/core/AuthNZ/permissions.py#RoleChecker` (legacy shim)
-- `tldw_Server_API/app/core/AuthNZ/permissions.py#AnyPermissionChecker` (legacy shim)
-- `tldw_Server_API/app/core/AuthNZ/permissions.py#AllPermissionsChecker` (legacy shim)
 - `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#get_auth_principal`
 - `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#require_permissions`
 - `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#require_roles`
@@ -463,7 +464,6 @@ async def mint_vk(user=Depends(get_current_user)):
 - Add new permissions in `permissions.py` and seed mapping in RBAC migrations/seeders.
 - New admin surfaces belong under `.../endpoints/admin.py` or feature-specific admin routes and should be guarded using claim-first dependencies:
   - Prefer `principal: AuthPrincipal = Depends(get_auth_principal)` together with `dependencies=[Depends(require_roles("admin"))]` (and `require_permissions(...)` where appropriate).
-  - Only existing legacy routes should continue to use `RoleChecker("admin")` / `PermissionChecker(...)`; do not introduce new usages of these decorator helpers.
 - For new guardrails, prefer middleware with settings gating, and expose DI helpers to keep endpoints simple.
 - Keep both SQLite and Postgres code paths working; use `DatabasePool` helpers to normalize placeholders across backends when needed.
 

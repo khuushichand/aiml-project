@@ -12,8 +12,10 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
     verify_api_key,
     check_evaluation_rate_limit,
     require_admin,
+    enforce_heavy_evaluations_admin,
 )
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope, get_auth_principal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
@@ -108,11 +110,12 @@ async def run_embeddings_abtest(
     _: None = Depends(check_evaluation_rate_limit),
     __: None = Depends(require_token_scope("workflows", require_if_present=True, require_schedule_match=False, allow_admin_bypass=True, endpoint_id="evals.embeddings_abtest.run", count_as="run")),
     media_db = Depends(get_media_db_for_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     response: Response = None,
 ):
-    require_admin(current_user)
+    enforce_heavy_evaluations_admin(principal)
     svc = get_unified_evaluation_service_for_user(current_user.id)
     db = svc.db
     if idempotency_key:

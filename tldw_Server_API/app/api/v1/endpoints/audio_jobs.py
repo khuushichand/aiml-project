@@ -23,7 +23,12 @@ from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_MAINTENANCE
 from tldw_Server_API.app.core.Usage.audio_quota import TIER_LIMITS, get_user_tier, set_user_tier
 
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_MAINTENANCE)),
+    ]
+)
 
 
 def get_job_manager() -> JobManager:
@@ -188,7 +193,6 @@ class ListAudioJobsResponse(BaseModel):
     "/jobs/admin/list",
     response_model=ListAudioJobsResponse,
     summary="List audio jobs (admin)",
-    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_MAINTENANCE))],
 )
 async def list_audio_jobs_admin(
     status_filter: Optional[str] = Query(None, description="Filter by status: queued|processing|completed|failed|cancelled"),
@@ -226,33 +230,16 @@ class AudioJobsSummary(BaseModel):
     "/jobs/admin/summary",
     response_model=AudioJobsSummary,
     summary="Summarize audio jobs by status (admin)",
-    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_MAINTENANCE))],
 )
 async def summarize_audio_jobs_admin(
     owner_user_id: Optional[str] = Query(None, description="Optional owner filter"),
-    max_rows: int = Query(
-        1000,
-        ge=1,
-        le=10000,
-        description="Maximum number of jobs to scan for summary counts.",
-    ),
     jm: JobManager = Depends(get_job_manager),
 ):
     try:
-        by_status: Dict[str, int] = {}
-        total = 0
-        # Use list_jobs and aggregate counts in Python to avoid relying on private JobManager internals.
-        jobs = jm.list_jobs(
+        by_status = jm.summarize_by_status(
             domain="audio",
             owner_user_id=str(owner_user_id) if owner_user_id is not None else None,
-            # Use a generous limit for summaries; callers can adjust via max_rows.
-            limit=int(max_rows),
         )
-        for job in jobs:
-            status_val = str(job.get("status") or "")
-            if not status_val:
-                continue
-            by_status[status_val] = by_status.get(status_val, 0) + 1
         total = sum(by_status.values())
         return AudioJobsSummary(counts_by_status=by_status, total=total, owner_user_id=owner_user_id)
     except HTTPException:
@@ -276,36 +263,19 @@ class AudioJobsSummaryByOwner(BaseModel):
     "/jobs/admin/summary-by-owner",
     response_model=AudioJobsSummaryByOwner,
     summary="Summarize audio jobs by owner and status (admin)",
-    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_MAINTENANCE))],
 )
 async def summary_by_owner_admin(
-    max_rows: int = Query(
-        1000,
-        ge=1,
-        le=10000,
-        description="Maximum number of jobs to scan for owner/status summary.",
-    ),
     jm: JobManager = Depends(get_job_manager),
 ):
     try:
         items: List[AudioJobsOwnerSummaryItem] = []
-        # Aggregate by owner and status using list_jobs to avoid private internals.
-        jobs = jm.list_jobs(domain="audio", limit=int(max_rows))
-        summary: Dict[tuple[Optional[str], str], int] = {}
-        for job in jobs:
-            owner = job.get("owner_user_id")
-            owner_str: Optional[str] = str(owner) if owner is not None else None
-            status_val = str(job.get("status") or "")
-            if not status_val:
-                continue
-            key = (owner_str, status_val)
-            summary[key] = summary.get(key, 0) + 1
-        for (owner_str, status_val), count in summary.items():
+        summary = jm.summarize_by_owner_and_status(domain="audio")
+        for entry in summary:
             items.append(
                 AudioJobsOwnerSummaryItem(
-                    owner_user_id=owner_str,
-                    status=status_val,
-                    count=int(count),
+                    owner_user_id=entry.get("owner_user_id"),
+                    status=str(entry.get("status") or ""),
+                    count=int(entry.get("count") or 0),
                 )
             )
         return AudioJobsSummaryByOwner(items=items)
@@ -326,28 +296,19 @@ class OwnerProcessingSummary(BaseModel):
     "/jobs/admin/owner/{owner_user_id}/processing",
     response_model=OwnerProcessingSummary,
     summary="Get owner's processing count and limit (admin)",
-    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_MAINTENANCE))],
 )
 async def owner_processing_summary(
     owner_user_id: str,
-    max_rows: int = Query(
-        1000,
-        ge=1,
-        le=10000,
-        description="Maximum number of jobs to scan when counting processing jobs.",
-    ),
     jm: JobManager = Depends(get_job_manager),
     request: Request = None,
 ):
     try:
         # Count processing jobs for this owner using JobManager APIs.
-        jobs = jm.list_jobs(
+        processing = jm.count_jobs(
             domain="audio",
             status="processing",
             owner_user_id=str(owner_user_id),
-            limit=int(max_rows),
         )
-        processing = len(jobs)
         # Limit
         # Correlate logs with request_id if available
         rid = ensure_request_id(request) if request is not None else None
@@ -393,7 +354,6 @@ class SetUserTierRequest(BaseModel):
     "/jobs/admin/tiers/{user_id}",
     response_model=UserTierResponse,
     summary="Get user's audio tier (admin)",
-    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_MAINTENANCE))],
 )
 async def get_user_tier_admin(user_id: int):
     try:
@@ -408,7 +368,6 @@ async def get_user_tier_admin(user_id: int):
     "/jobs/admin/tiers/{user_id}",
     response_model=UserTierResponse,
     summary="Set user's audio tier (admin)",
-    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_MAINTENANCE))],
 )
 async def set_user_tier_admin(user_id: int, req: SetUserTierRequest):
     try:

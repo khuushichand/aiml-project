@@ -49,8 +49,10 @@ async def _enrich_user_with_rbac(
     if user_id is None:
         return roles, perms, is_admin_flag
 
+    base_perms: set[str] = set()
+
+    # Roles from centralized RBAC repository
     try:
-        # Roles from centralized RBAC repository
         role_rows = _RBAC_ENRICH_REPO.get_user_roles(int(user_id))
         for row in role_rows or []:
             role_name = row.get("name") or row.get("role") or row.get("role_name")
@@ -60,39 +62,64 @@ async def _enrich_user_with_rbac(
                     roles.append(role_str)
         if "admin" in roles:
             is_admin_flag = True
+    except Exception as rb_exc:
+        if pii_redact_logs:
+            logger.debug("RBAC enrichment failed for user roles (details redacted)")
+        else:
+            logger.debug(f"RBAC enrichment failed for user {user_id} roles: {rb_exc}")
 
-        # Effective permissions from RBAC helper (roles + user overrides)
+    # Effective permissions from RBAC helper (roles + user overrides)
+    try:
         base_perms = set(get_effective_permissions(int(user_id)))
+    except Exception as rb_exc:
+        if pii_redact_logs:
+            logger.debug("RBAC enrichment failed for permissions (details redacted)")
+        else:
+            logger.debug(f"RBAC enrichment failed for user {user_id} permissions: {rb_exc}")
 
-        # Fallback: honor legacy role column when user_roles entries are absent
-        if not roles:
-            implicit_role = user_data.get("role")
-            if implicit_role:
+    # Fallback: honor legacy role column when user_roles entries are absent
+    if not roles:
+        implicit_role = user_data.get("role")
+        if implicit_role:
+            try:
+                rname = str(implicit_role)
+                roles.append(rname)
+                if rname == "admin":
+                    is_admin_flag = True
                 try:
-                    rname = str(implicit_role)
-                    roles.append(rname)
-                    if rname == "admin":
-                        is_admin_flag = True
                     role_row_id = _RBAC_ENRICH_REPO.get_role_id_by_name(rname)
-                    if role_row_id is not None:
+                except Exception as rb_exc_lookup:  # pragma: no cover - best-effort lookup
+                    role_row_id = None
+                    if pii_redact_logs:
+                        logger.debug("RBAC fallback (role column) lookup failed [redacted]")
+                    else:
+                        logger.debug(
+                            f"RBAC fallback (role column) lookup failed for role {implicit_role}: {rb_exc_lookup}"
+                        )
+                if role_row_id is not None:
+                    try:
                         rp_rows_fallback = _RBAC_ENRICH_REPO.get_role_effective_permissions(role_row_id)
                         for pname in rp_rows_fallback.get("all_permissions", []):
                             if pname:
                                 base_perms.add(str(pname))
-                except Exception as rb_exc_fallback:  # pragma: no cover - fallback best-effort
-                    if pii_redact_logs:
-                        logger.debug("RBAC fallback (role column) failed [redacted]")
-                    else:
-                        logger.debug(f"RBAC fallback (role column) failed for role {implicit_role}: {rb_exc_fallback}")
+                    except Exception as rb_exc_fallback:  # pragma: no cover - fallback best-effort
+                        if pii_redact_logs:
+                            logger.debug("RBAC fallback (role column) failed [redacted]")
+                        else:
+                            logger.debug(
+                                f"RBAC fallback (role column) failed for role {implicit_role}: {rb_exc_fallback}"
+                            )
+            except Exception as rb_exc_outer:  # pragma: no cover - guard against unexpected shapes
+                if pii_redact_logs:
+                    logger.debug("RBAC fallback (role column) outer failure [redacted]")
+                else:
+                    logger.debug(
+                        f"RBAC fallback (role column) outer failure for role {implicit_role}: {rb_exc_outer}"
+                    )
 
-        perms = sorted(base_perms)
-        if is_admin_flag:
-            perms = sorted(set(perms) | {"system.configure"})
-    except Exception as rb_exc:
-        if pii_redact_logs:
-            logger.debug(f"RBAC enrichment failed for user (details redacted): {rb_exc}")
-        else:
-            logger.debug(f"RBAC enrichment failed for user {user_id}: {rb_exc}")
+    perms = sorted(base_perms)
+    if is_admin_flag:
+        perms = sorted(set(perms) | {"system.configure"})
 
     return roles, perms, is_admin_flag
 

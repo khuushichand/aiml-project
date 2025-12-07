@@ -168,20 +168,23 @@ class AuthnzMonitoringRepo:
             is_postgres = getattr(self.db_pool, "pool", None) is not None
             if is_postgres:
                 expires_param = _strip_tzinfo(now)
+                query = """
+                SELECT COUNT(*) as active_sessions
+                FROM sessions
+                WHERE expires_at > $1
+                  AND (is_revoked = $2 OR is_revoked IS NULL)
+                """
             else:
                 expires_param = now.isoformat()
-            revoked_inactive_value = False
-
-            row = await self.db_pool.fetchone(
-                """
+                query = """
                 SELECT COUNT(*) as active_sessions
                 FROM sessions
                 WHERE expires_at > ?
                   AND (is_revoked = ? OR is_revoked IS NULL)
-                """,
-                expires_param,
-                revoked_inactive_value,
-            )
+                """
+            revoked_inactive_value = False
+
+            row = await self.db_pool.fetchone(query, expires_param, revoked_inactive_value)
             if not row:
                 return 0
             value = row.get("active_sessions") if isinstance(row, dict) else row[0]
@@ -231,16 +234,25 @@ class AuthnzMonitoringRepo:
         Each item includes ``action``, ``details``, and ``created_at``.
         """
         try:
-            rows = await self.db_pool.fetchall(
+            is_postgres = getattr(self.db_pool, "pool", None) is not None
+            if is_postgres:
+                query = """
+                SELECT action, details, created_at
+                FROM audit_logs
+                WHERE action = 'metric_security_alert'
+                ORDER BY created_at DESC
+                LIMIT $1
                 """
+            else:
+                query = """
                 SELECT action, details, created_at
                 FROM audit_logs
                 WHERE action = 'metric_security_alert'
                 ORDER BY created_at DESC
                 LIMIT ?
-                """,
-                limit,
-            )
+                """
+
+            rows = await self.db_pool.fetchall(query, int(limit))
             # Normalize to a list of plain dicts for all backends
             return [dict(r) for r in (rows or [])]
         except Exception as exc:  # pragma: no cover - surfaced through callers

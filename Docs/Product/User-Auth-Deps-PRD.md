@@ -292,7 +292,7 @@ Symptoms:
 - Migrate a set of key endpoints (auth admin, media admin, RAG admin) to use them.
 - Update `UsageLoggingMiddleware` and `llm_budget_guard` to use `AuthPrincipal`.
   - Metrics/admin, Resource-Governor admin, and selected chat/Prompt Studio surfaces are part of this adoption and are now **claim-first, tested**:
-    - `POST /api/v1/metrics/reset` is gated via `require_roles("admin")` + `require_admin` and covered by HTTP-level permissions tests in `tldw_Server_API/tests/AuthNZ_Unit/test_metrics_permissions_claims.py`.
+    - `POST /api/v1/metrics/reset` is gated via `require_roles("admin")` (claim-first) and covered by HTTP-level permissions tests in `tldw_Server_API/tests/AuthNZ_Unit/test_metrics_permissions_claims.py`.
     - Resource-Governor admin and diagnostics endpoints (`/api/v1/resource-governor/policy*`, `/api/v1/resource-governor/diag/*`) are gated via `get_auth_principal` + `require_roles("admin")`, with behavior validated by `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` and the `Resource_Governance` integration suite.
     - Chat slash-command discovery (`GET /api/v1/chat/commands`) now performs RBAC filtering purely via `AuthNZ.rbac.user_has_permission` when `CHAT_COMMANDS_REQUIRE_PERMISSIONS` is enabled, and the async command router enforces per-command permissions without any `is_single_user_mode()` bypass; this is locked in by `tldw_Server_API/tests/Chat_NEW/unit/test_command_router.py` and `tldw_Server_API/tests/Chat_NEW/integration/test_chat_commands_endpoint.py`.
     - Prompt Studio dependencies (`get_prompt_studio_user`) build `user_context.is_admin` and `user_context.permissions` strictly from `User` claims (`roles`, `permissions`, `is_admin`) instead of `AUTH_MODE`; HTTP-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_prompt_studio_user_claims.py` and `tldw_Server_API/tests/prompt_studio/unit/test_prompt_studio_deps_headers.py` cover claim propagation and 401 behavior.
@@ -393,6 +393,23 @@ Symptoms:
 - Additional matrix coverage has been added for the “any” / “all” helpers to ensure they also remain claim-first when claims are attached, even if the RBAC DB is unavailable:
   - `tests/AuthNZ_Unit/test_permissions_claim_first.py::test_check_any_permission_uses_claims_even_if_db_unavailable` and `::test_check_all_permissions_uses_claims_even_if_db_unavailable` validate that `check_any_permission` / `check_all_permissions` never call `get_user_database` when `user.permissions` is a list, and instead rely purely on the claim set.
 
+### Stage 5: Legacy Admin Endpoints – Cleanup Checklist
+
+The following admin/diagnostic endpoints still rely on legacy helpers (for example `require_admin` on user dicts) and are intentionally left as compatibility shims. New work SHOULD NOT extend these patterns; future cleanup can either migrate them fully to `AuthPrincipal` + `require_roles` / `require_permissions` or explicitly codify them as permanent exceptions.
+
+- [x] Evaluations heavy admin helper  
+  - `tldw_Server_API/app/api/v1/endpoints/evaluations_auth.py:require_admin` (gated by `EVALS_HEAVY_ADMIN_ONLY`) remains available as a legacy shim, but heavy evaluations admin endpoints now use the claim-first `enforce_heavy_evaluations_admin(AuthPrincipal)` helper alongside `require_roles("admin")` / `get_auth_principal`.  
+  - `tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py:admin_cleanup_idempotency` and embeddings A/B test admin endpoints are wired through `require_roles("admin")` at the router plus `enforce_heavy_evaluations_admin(principal)` in the handler, with behavior covered by `tldw_Server_API/tests/AuthNZ_Unit/test_evaluations_heavy_admin_claims.py` and `tests/AuthNZ/integration/test_evaluations_permissions_claims.py`.
+- [ ] Embeddings v5 production admin/maintenance endpoints  
+  - `tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py` – local `require_admin(user)` and inline `require_admin(current_user)` calls on internal/admin utilities (for example compactor runs and debug tools).  
+  - Cleanup target: migrate admin-only actions to `AuthPrincipal` + `require_roles("admin")` / fine‑grained permissions, or explicitly mark them as internal-only maintenance.
+- [ ] Flashcards import abuse‑cap overrides  
+  - `tldw_Server_API/app/api/v1/endpoints/flashcards.py::import_flashcards` and the file-based import route now gate override parameters (`max_lines`, `max_line_length`, `max_field_length`, `max_items`) via `AuthPrincipal` claims: callers must have either the `flashcards.admin` permission (`FLASHCARDS_ADMIN`) or admin role/`is_admin` set; base imports without overrides remain available to regular authenticated users.  
+  - Cleanup target: consider marking this as a permanent, documented abuse‑cap exception (with `FLASHCARDS_ADMIN` as the canonical gate) and, if needed, adding dedicated privilege-map entries so flashcards admins are visible in RBAC catalogs.
+- [ ] MCP unified diagnostics helper  
+  - `tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py::require_admin` – a module-local helper used alongside `require_permissions(SYSTEM_LOGS)` on selected diagnostics.  
+  - Cleanup target: collapse down to `get_auth_principal` + `require_permissions` / `require_roles` only, or document this helper as a legacy shim and avoid new usages.
+
 ### Stage 3: Unified Dependencies & Adoption
 **Goal**: Provide and adopt unified auth dependencies across a set of key endpoints and middlewares.
 
@@ -406,7 +423,7 @@ Symptoms:
   - Required permissions/roles are enforced correctly.
   - Usage logging and budget guard see the expected principal data.
 
-**Status**: In Progress
+**Status**: Done (with documented legacy surfaces)
 
 **Notes**:
 - New claim-first FastAPI dependencies (`get_auth_principal`, `require_permissions`, `require_roles`) are implemented in `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py` with unit tests.
@@ -438,17 +455,51 @@ Symptoms:
     - Non-admin principals without scheduler claims receive 403 for `POST /api/v1/scheduler/workflows/admin/rescan`.
     - User and service principals with `is_admin=True` succeed (200) and trigger the fake scheduler’s rescan call, confirming that admin-style claims (via `is_admin`) remain the primary gate while also flowing through the `require_permissions` / `AuthPrincipal` stack for observability and future fine-grained permissions.
 
+- MLX provider lifecycle endpoints are now covered by the same claim-first RBAC conventions:
+  - `tldw_Server_API/app/api/v1/endpoints/mlx.py` gates `POST /api/v1/llm/providers/mlx/load`, `POST /api/v1/llm/providers/mlx/unload`, and `GET /api/v1/llm/providers/mlx/status` via `dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))]`, ensuring:
+    - 401 responses when `get_auth_principal` fails (no/invalid credentials).
+    - 403 responses when an authenticated principal lacks the `admin` role (and is not `principal.is_admin`).
+    - Successful 2xx semantics only once the unified dependencies have admitted an admin principal.
+  - Route-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_mlx_permissions_claims.py` override `get_auth_principal` and the MLX registry to assert:
+    - 401 for unauthenticated requests.
+    - 403 for non-admin principals.
+    - 200 for admin principals, with the underlying registry stub confirming that the load operation was invoked.
+
+- Workflows virtual-key issuance now uses both role- and permission-based guards:
+  - `tldw_Server_API/app/api/v1/endpoints/workflows.py::workflows_virtual_key` is protected by:
+    - `Depends(auth_deps.require_roles("admin"))` to require an admin principal, and
+    - `Depends(auth_deps.require_permissions(WORKFLOWS_ADMIN))` to require the `workflows.admin` permission in addition to admin role.
+  - The handler preserves the documented mode behavior by returning HTTP 400 when `AUTH_MODE != "multi_user"` (`"Virtual keys only apply in multi-user mode"`), even for privileged principals.
+  - Route-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_workflows_virtual_key_permissions_claims.py` validate:
+    - 401 when `get_auth_principal` fails.
+    - 403 when a non-admin/non-`WORKFLOWS_ADMIN` principal attempts to mint a virtual key in multi-user mode.
+    - 400 for privileged principals when `AUTH_MODE=single_user`.
+    - 200 with a stubbed JWT service when an admin principal with `WORKFLOWS_ADMIN` runs in multi-user mode, confirming that the combined role+permission gate is enforced via the unified dependencies.
+
 - Topic monitoring admin endpoints (`/api/v1/monitoring/...`) now also enforce claim-first diagnostics permissions: `tldw_Server_API/app/api/v1/endpoints/monitoring.py` adds `dependencies=[Depends(require_permissions(SYSTEM_LOGS))]` on watchlist/alert/notification routes in addition to `require_admin`. Route-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_monitoring_permissions_claims.py` cover 401 (no principal), 403 (principal without `system.logs`), and 200 (admin principal) cases while stubbing the underlying monitoring service.
 - MCP admin diagnostics are beginning to adopt the same pattern: `tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py::get_modules_health` now depends on `require_permissions(SYSTEM_LOGS)` alongside its module-local admin checks, and route-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_mcp_admin_permissions_claims.py` exercise 401 vs 403 vs 200 behavior by overriding `get_auth_principal` for different principals.
 
+**Remaining legacy/compatibility surfaces (explicit carve-outs)**
+
+- Heavy evaluations admin helpers:
+  - `tldw_Server_API/app/api/v1/endpoints/evaluations_auth.py::require_admin` – a helper guarded by `EVALS_HEAVY_ADMIN_ONLY` for heavy evaluations flows. New evaluations endpoints rely on `require_permissions(EVALS_READ/EVALS_MANAGE)`; this helper is retained as a legacy shim and MUST NOT be used on new routes.
+  - `tldw_Server_API/app/api/v1/endpoints/evaluations_unified.py::admin_cleanup_idempotency` – uses `Depends(require_roles("admin"))` at the router plus `require_admin(current_user)` as a secondary gate to mirror legacy “heavy admin” behavior. This dual gate is treated as intentionally legacy for this admin-only cleanup path.
+- Embeddings v5 production admin utilities:
+  - `tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py`:
+    - Inline `require_admin(current_user)` checks remain on selected administrative endpoints (for example, `/embeddings/compactor/run` and other internal maintenance/debug actions), while the primary public embeddings endpoints are governed via `require_permissions` / `rbac_rate_limit` and the ResourceGovernor.
+    - A local `require_admin(user)` helper is preserved for these maintenance-only routes and should not be extended to new public endpoints; new admin surfaces in embeddings must use `AuthPrincipal` + `require_roles` / `require_permissions`.
+- Flashcards import “abuse caps”:
+  - `tldw_Server_API/app/api/v1/endpoints/flashcards.py::import_flashcards` and `/flashcards/import-file` use `require_admin(current_user)` only when optional query parameters attempt to raise or lower import limits (line count, field length, etc.). These checks are kept as a narrowly-scoped legacy mechanism for tightening/loosening abuse caps and are not a general authorization pattern.
+- MCP unified endpoint:
+  - `tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py` exposes a small, module-local `require_admin(user)` helper for diagnostics in addition to claim-first guards such as `require_permissions(SYSTEM_LOGS)`. New MCP admin/diagnostics routes must use `get_auth_principal` + `require_permissions` / `require_roles`; the local helper is treated as a compatibility shim for existing endpoints only.
+
 ### Remaining Mode-Based Decisions
 
-- A targeted `is_single_user_mode()` audit confirms that mode checks are now limited to:
+- A fresh `is_single_user_mode()` audit confirms that mode checks are limited to:
   - Coordination/governance (startup banners, WebUI API-key injection for local single-user, ChaChaNotes warm-up, backpressure/tenant RPS toggles, embedding quota defaults).
-  - Profile selection for auth flows (single-user API key vs multi-user JWT/API-key) and diagnostics (e.g., MCP single-user API key acceptance), with authorization decisions driven by claims on `AuthPrincipal` / `User`.
-- The only auth-adjacent exception is Jobs admin domain-scoped RBAC:
-  - `_enforce_domain_scope` in `tldw_Server_API/app/api/v1/endpoints/jobs_admin.py` bypasses domain filters in single-user mode unless `JOBS_RBAC_FORCE=true`, treating single-user as implicitly allowed for domain-scoped jobs operations.
-  - For this iteration, this is treated as a deliberate governance exception for single-tenant/local admin deployments; it is documented in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` and may be migrated to claim-first (`get_auth_principal` + `require_roles/require_permissions`) in a future phase if domain-scoped jobs RBAC becomes a primary product surface.
+  - Core auth flows (single-user API key vs multi-user JWT/API-key) and diagnostics (e.g., MCP single-user API key acceptance), with authorization decisions driven by claims on `AuthPrincipal` / `User`.
+  - Rate limiting and backpressure helpers that bypass 429s for the configured single-user API key in local/dev scenarios (`auth_deps.check_rate_limit`, `auth_deps.check_auth_rate_limit`, and `backpressure.guard_backpressure_and_quota`).
+- Jobs admin domain-scoped RBAC no longer branches on `is_single_user_mode()`. `_enforce_domain_scope` / `_enforce_domain_scope_unified` in `tldw_Server_API/app/api/v1/endpoints/jobs_admin.py` are now governed purely by explicit environment toggles (`JOBS_DOMAIN_SCOPED_RBAC`, `JOBS_REQUIRE_DOMAIN_FILTER`, `JOBS_DOMAIN_ALLOWLIST_*`, `JOBS_RBAC_FORCE`) and by `AuthPrincipal`-based admin gates on the router. Earlier “single-user bypass” language for jobs admin should be treated as historical.
 
 ### Stage 4: Cleanup & Documentation
 **Goal**: Remove legacy, overlapping auth dependencies and update documentation.
@@ -460,18 +511,41 @@ Symptoms:
 **Tests**:
 - Documentation lint/checks where applicable, plus smoke tests for routes updated to the new dependencies.
 
-**Status**: In Progress
+**Status**: Done
 
 **Notes**:
 - `Docs/Code_Documentation/Guides/AuthNZ_Code_Guide.md` explicitly documents the split between modern claim-first dependencies and legacy compatibility shims:
   - Modern pattern:
     - `get_auth_principal` → returns `AuthPrincipal` with roles/permissions.
     - `require_permissions` / `require_roles` → enforce claims and return the principal; representative usage is called out for media, RAG, notes graph, evaluations CRUD, scheduler workflows admin, and chat queue diagnostics (`system.logs`).
-  - Legacy shims:
-    - `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker` in `permissions.py` are described as maintained for existing routes but not recommended for new endpoints. A repository-wide audit of `tldw_Server_API/app/api/v1/endpoints` confirms that no FastAPI routes use these helpers as their primary gate; they remain only as legacy shims in `permissions.py` and in historical AuthNZ documentation/examples.
+  - Legacy shims (now removed or explicitly marked):
+    - Earlier iterations exposed FastAPI dependencies `PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, and `AllPermissionsChecker` from `permissions.py`. A repository-wide audit of `tldw_Server_API/app/api/v1/endpoints` confirmed that no FastAPI routes were using these helpers as their primary gate; they have since been removed from the codebase, and historical documentation/examples that mention them should be treated as legacy only.
     - `require_admin` in evaluations auth is documented as an admin-only gate for heavy evaluations flows, while new admin surfaces should prefer `get_auth_principal` plus `require_permissions` / `require_roles`.
+    - `auth_deps.require_role` and `auth_deps.get_optional_current_user` remain available as compatibility shims for existing routes but are now explicitly marked in code and in the AuthNZ Code Guide as **not for new endpoints**. New work MUST use claim-first helpers (`get_auth_principal`, `require_permissions`, `require_roles`) instead of introducing additional usages of these legacy dependencies.
 - The code guide now includes a short “securing a new route” example that shows:
   - Defining a permission constant in `permissions.py`.
   - Applying `Depends(require_permissions("your.permission"))` to an endpoint.
   - Overriding `get_auth_principal` in tests to exercise 401 vs 403 semantics, reusing patterns from `tests/AuthNZ_Unit/test_auth_claim_route_level.py` and `tests/AuthNZ_Unit/test_scheduler_workflows_permissions_claims.py`.
 - Selected RBAC helpers now use `AuthnzRbacRepo`, and the admin `GET /api/v1/admin/roles/{role_id}/permissions/effective` endpoint delegates to `AuthnzRbacRepo.get_role_effective_permissions`, with behavior locked in by SQLite and Postgres-backed admin endpoint tests.
+- Invariant and wrapper suites are treated as living safety nets: when new auth wrappers or admin/control surfaces are introduced, they should be accompanied by updates to `tldw_Server_API/tests/AuthNZ_Unit/test_authnz_invariants.py`, `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_state_consistency.py`, and the relevant domain-specific invariant modules so that claim-first behavior and principal/state alignment remain explicitly tested across JWT, API-key, and single-user flows.
+- As of this PRD snapshot, the `*Checker` helpers have been removed from `permissions.py`; new code MUST continue to rely solely on `get_auth_principal` / `require_permissions` / `require_roles` for authorization, and any new helper should be composed on top of these primitives rather than reintroducing decorator-style gates.
+
+### Remaining adoption checklist (mode-based logic & legacy deps)
+
+- Mode-based coordination vs auth decisions:
+  - `tldw_Server_API/app/main.py`: `is_single_user_mode()` is used only for startup banners, ChaChaNotes warm-up, and WebUI config hints (including API-key injection for local single-user); no authorization decisions depend on this flag here.
+  - `tldw_Server_API/app/core/PrivilegeMaps/service.py::PrivilegeMapService._build_user_dataset`: uses `is_single_user_mode()` only to choose a default role for the synthetic single-user fallback dataset when the AuthNZ DB is empty; this is a reporting/UX concern, not a gate.
+  - `tldw_Server_API/app/core/AuthNZ/User_DB_Handling.py` and `tldw_Server_API/app/core/AuthNZ/auth_principal_resolver.py` branch on `is_single_user_mode()` purely to select between fixed API-key vs JWT flows; in all cases, credentials are still verified and authorization is claim-first on the resulting `User`/`AuthPrincipal`.
+  - `tldw_Server_API/app/api/v1/API_Deps/backpressure.py::_is_single_user_mode_runtime` and embeddings tenant quotas in `tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py` use mode/profile checks only to disable tenant-style RPS quotas in local single-user/dev scenarios; they do not bypass claim-based authorization.
+
+- Legacy admin dependencies (`require_admin`) and callers:
+  - `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py::require_admin`: remains as a compatibility shim; new endpoints must prefer `get_auth_principal` + `require_roles("admin")` / `require_permissions(...)`.
+  - Moderation admin endpoints (`tldw_Server_API/app/api/v1/endpoints/moderation.py::*`) now use claim-first admin gates on the router (`Depends(require_roles("admin"))` + `Depends(require_permissions(SYSTEM_CONFIGURE))`) with no remaining `require_admin` dependency. These share the same 401/403 semantics as other admin/config panels and are covered by moderation guardrail tests.
+  - Metrics and setup: `POST /api/v1/metrics/reset` (`metrics.reset_metrics`) now relies solely on `Depends(require_roles("admin"))`, and `POST /api/v1/setup/reset` (`setup.reset_setup_flags`) is guarded by `require_roles("admin")` + `require_permissions(SYSTEM_CONFIGURE)`. Both endpoints are exercised via `tests/AuthNZ_Unit/test_metrics_permissions_claims.py` and `tests/integration/test_setup_reset.py`, which override `get_auth_principal` to validate 401/403/200 behavior.
+  - Evaluations: `tldw_Server_API/app/api/v1/endpoints/evaluations_auth.py::require_admin` is now wrapped by `enforce_heavy_evaluations_admin(principal)` for heavy-admin flows; any remaining direct `require_admin(user)` callsites in evaluations routes are candidates to migrate to `enforce_heavy_evaluations_admin` + claim-first guards.
+  - Embeddings v5 admin utilities: `tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production_enhanced.py` still exposes a local `require_admin(current_user)` helper for a set of internal/maintenance endpoints (DLQ tools, stage controls, orchestrator debug). Core diagnostics such as `/api/v1/embeddings/metrics` and model warmup already use claim-first gates (`require_roles("admin")` + `require_permissions(SYSTEM_CONFIGURE)`), with HTTP behavior locked in by `tests/AuthNZ_Unit/test_embeddings_admin_claims.py` and `test_embeddings_model_management_permissions_claims.py`. Remaining maintenance-only routes are explicitly treated as legacy shims to be migrated to dedicated permissions (for example, `EMBEDDINGS_ADMIN`, `EMBEDDINGS_TENANT_ADMIN`) in a future iteration.
+  - MCP unified diagnostics: `tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py` exposes a module-local `require_admin` helper for selected diagnostics endpoints in addition to claim-first guards such as `require_permissions(SYSTEM_LOGS)` on `/mcp/modules/health`. No new MCP admin endpoints should be added to this helper, and existing ones remain candidates to migrate fully to `require_roles("admin")` / `require_permissions(SYSTEM_LOGS)` or to be documented as compatibility shims where MCP-specific tokens are required.
+
+- Request-state usage (`request.state.user_id` / `api_key_id`):
+  - Writers of `request.state.user_id` and `request.state.api_key_id` are centralized in AuthNZ (`auth_principal_resolver`, `User_DB_Handling.get_request_user`, `auth_deps.get_current_user`, LLM budget guard/middleware, CSRF protection); each of these derives values from authenticated credentials and `AuthPrincipal`.
+  - Consumers in other modules (for example, `tldw_Server_API/app/core/Resource_Governance/deps.py::derive_entity_key`, usage logging middleware, and selected quota helpers) must continue to treat `request.state.user_id` as a derived context field, not as an authorization decision point. New code MUST NOT introduce fresh authorization checks that gate on `request.state.user_id` or `request.state.api_key_id` directly; it should always rely on `AuthPrincipal` claims via `get_auth_principal`.

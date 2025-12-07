@@ -181,55 +181,9 @@ async def delete_user(
     }
 ```
 
-### Legacy Permission Decorators (Existing Routes Only)
+### Legacy Permission Decorators (Historical Only)
 
-The decorator-style helpers remain available for existing routes, but new code should **not** adopt them. Treat these as legacy compatibility shims; new endpoints should use the claim-first dependency pattern shown above.
-
-```python
-from fastapi import APIRouter, Depends
-from tldw_Server_API.app.core.AuthNZ.permissions import (
-    PermissionChecker,
-    RoleChecker,
-    AnyPermissionChecker,
-    AllPermissionsChecker,
-)
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-
-router = APIRouter()
-
-# Require specific permission
-@router.get("/api/v1/media/{media_id}")
-async def get_media(
-    media_id: int,
-    user: User = Depends(PermissionChecker("media.read")),
-):
-    return {"message": f"User {user.username} can read media {media_id}"}
-
-# Require specific role
-@router.delete("/api/v1/admin/user/{user_id}")
-async def delete_user(
-    user_id: int,
-    user: User = Depends(RoleChecker("admin")),
-):
-    return {"message": f"Admin {user.username} deleting user {user_id}"}
-
-# Require any of multiple permissions
-@router.put("/api/v1/content/{content_id}")
-async def update_content(
-    content_id: int,
-    user: User = Depends(AnyPermissionChecker(["media.update", "media.create"])),
-):
-    return {"message": f"User {user.username} can modify content"}
-
-# Require all permissions
-@router.post("/api/v1/system/backup")
-async def create_backup(
-    user: User = Depends(
-        AllPermissionsChecker(["system.backup", "system.maintenance"])
-    ),
-):
-    return {"message": 'Creating system backup'}
-```
+Earlier versions exposed decorator-style FastAPI helpers (`PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker`) from `permissions.py`. These have been removed in favor of the claim-first dependency pattern shown above; new and existing endpoints should use `get_auth_principal` with `require_permissions` / `require_roles` instead.
 
 ### Using in Non-FastAPI Code
 

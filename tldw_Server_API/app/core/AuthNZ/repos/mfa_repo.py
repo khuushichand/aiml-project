@@ -26,6 +26,11 @@ class AuthnzMfaRepo:
         """Return True when the underlying connection is PostgreSQL (asyncpg-style)."""
         return hasattr(conn, "fetchrow")
 
+    @staticmethod
+    def _normalize_datetime_for_postgres(dt: datetime) -> datetime:
+        """Strip timezone info for PostgreSQL TIMESTAMP columns."""
+        return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
+
     async def set_mfa_config(
         self,
         *,
@@ -41,7 +46,7 @@ class AuthnzMfaRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if self._is_postgres(conn):
-                    ts = updated_at.replace(tzinfo=None) if getattr(updated_at, "tzinfo", None) else updated_at
+                    ts = self._normalize_datetime_for_postgres(updated_at)
                     await conn.execute(
                         """
                         UPDATE users
@@ -89,7 +94,7 @@ class AuthnzMfaRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if self._is_postgres(conn):
-                    ts = updated_at.replace(tzinfo=None) if getattr(updated_at, "tzinfo", None) else updated_at
+                    ts = self._normalize_datetime_for_postgres(updated_at)
                     await conn.execute(
                         """
                         UPDATE users
@@ -264,7 +269,7 @@ class AuthnzMfaRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if self._is_postgres(conn):
-                    ts = updated_at.replace(tzinfo=None) if getattr(updated_at, "tzinfo", None) else updated_at
+                    ts = self._normalize_datetime_for_postgres(updated_at)
                     await conn.execute(
                         "UPDATE users SET backup_codes = $1, updated_at = $2 WHERE id = $3",
                         backup_codes_json,

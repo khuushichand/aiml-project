@@ -77,6 +77,14 @@ route_map:
     "/api/v1/embeddings*": embeddings.default
     "/api/v1/audio/*": audio.default
     "/api/v1/evaluations/*": evals.default
+    # The following high-level domains currently rely on module-specific
+    # limiters and/or LLM budget guards rather than RG ingress and are
+    # intentionally not mapped here in v1.0:
+    #   /api/v1/research/* (websearch + research tools)
+    #   /api/v1/workflows/* and /api/v1/scheduler/workflows/*
+    #   /api/v1/prompt-studio/* (Prompt Studio)
+    #   /api/v1/rag/* (RAG health/unified endpoints)
+    #   /api/v1/media/* (media ingestion/processing)
 
 # Observability note: Do not include entity label in metrics by default.
 # Use RG_METRICS_ENTITY_LABEL=true to enable hashed entity label if necessary.

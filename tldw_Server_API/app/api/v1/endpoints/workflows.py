@@ -40,6 +40,7 @@ from tldw_Server_API.app.core.MCP_unified.auth.rbac import UserRole
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     WORKFLOWS_RUNS_READ,
     WORKFLOWS_RUNS_CONTROL,
+    WORKFLOWS_ADMIN,
 )
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
@@ -603,7 +604,14 @@ class VirtualKeyRequest(BaseModel):
     schedule_id: Optional[str] = None
 
 
-@router.post("/auth/virtual-key", summary="Mint a short-lived JWT for workflows (multi-user)")
+@router.post(
+    "/auth/virtual-key",
+    summary="Mint a short-lived JWT for workflows (multi-user)",
+    dependencies=[
+        Depends(auth_deps.require_roles("admin")),
+        Depends(auth_deps.require_permissions(WORKFLOWS_ADMIN)),
+    ],
+)
 async def workflows_virtual_key(
     body: VirtualKeyRequest,
     current_user: User = Depends(get_request_user),
@@ -613,7 +621,6 @@ async def workflows_virtual_key(
     try:
         if settings.AUTH_MODE != "multi_user":
             raise HTTPException(status_code=400, detail="Virtual keys only apply in multi-user mode")
-        require_admin(current_user)
     except HTTPException:
         raise
     except Exception:

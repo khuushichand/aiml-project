@@ -108,53 +108,9 @@ async def admin_dashboard(
     return {"ok": True, "admin_id": principal.principal_id}
 ```
 
-### Legacy Permission Decorators (FastAPI – Existing Routes)
+### Legacy Permission Decorators (Historical)
 
-The decorator-style helpers remain available for legacy endpoints, but **must not** be used for new routes. They are maintained as compatibility shims only.
-
-```python
-from fastapi import Depends
-from tldw_Server_API.app.core.AuthNZ.permissions import (
-    PermissionChecker,
-    RoleChecker,
-    AnyPermissionChecker,
-    AllPermissionsChecker
-)
-
-# Single permission check
-@router.delete("/media/{id}")
-async def delete_media(
-    media_id: int,
-    user: User = Depends(PermissionChecker("media.delete"))
-):
-    # Only users with media.delete permission can access
-    pass
-
-# Role check
-@router.get("/admin/dashboard")
-async def admin_dashboard(
-    user: User = Depends(RoleChecker("admin"))
-):
-    # Only admin users can access
-    pass
-
-# Any of multiple permissions
-@router.put("/content/{id}")
-async def update_content(
-    content_id: int,
-    user: User = Depends(AnyPermissionChecker(["media.update", "media.create"]))
-):
-    # Users with either permission can access
-    pass
-
-# All permissions required
-@router.post("/system/critical")
-async def critical_operation(
-    user: User = Depends(AllPermissionsChecker(["system.configure", "system.maintenance"]))
-):
-    # User must have both permissions
-    pass
-```
+Earlier versions exposed decorator-style FastAPI helpers (`PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker`) from `permissions.py`. These have been removed in favor of the claim-first dependency pattern; new and existing routes should rely on `get_auth_principal` together with `require_permissions` / `require_roles` instead.
 
 ### Using Permission Functions
 

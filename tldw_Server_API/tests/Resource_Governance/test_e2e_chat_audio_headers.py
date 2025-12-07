@@ -80,6 +80,76 @@ async def test_e2e_chat_headers_tokens_and_requests(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_e2e_chat_deny_headers_retry_after(monkeypatch, tmp_path):
+    """
+    Verify that when RGSimpleMiddleware denies /api/v1/chat/completions
+    via a low-RPM policy, the response includes Retry-After and
+    X-RateLimit-* headers consistent with the policy.
+    """
+
+    # Minimal app mode with RG middleware; enforce a very low request rpm
+    # for the chat completions route so the second request is denied.
+    monkeypatch.setenv("MINIMAL_TEST_APP", "1")
+    monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "1")
+    monkeypatch.setenv("RG_MIDDLEWARE_ENFORCE_TOKENS", "0")
+    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_POLICY_STORE", "file")
+
+    policy = (
+        "version: 1\n"
+        "policies:\n"
+        "  chat.small:\n"
+        "    requests: { rpm: 1 }\n"
+        "route_map:\n"
+        "  by_path:\n"
+        "    /api/v1/chat/completions: chat.small\n"
+    )
+    p = tmp_path / "rg_chat.yaml"
+    p.write_text(policy, encoding="utf-8")
+
+    monkeypatch.setenv("RG_POLICY_PATH", str(p))
+    monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
+    # Single-user auth
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key")
+
+    from tldw_Server_API.app.main import app
+
+    _reset_rg_state(app)
+
+    body = {
+        "model": "openai/gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": False,
+    }
+
+    with TestClient(app) as c:
+        # First request allowed
+        r1 = c.post(
+            "/api/v1/chat/completions",
+            headers={"X-API-KEY": "test-api-key"},
+            data=json.dumps(body),
+        )
+        assert r1.status_code == 200
+
+        # Second request should be rate-limited by RG (429 with headers)
+        r2 = c.post(
+            "/api/v1/chat/completions",
+            headers={"X-API-KEY": "test-api-key"},
+            data=json.dumps(body),
+        )
+        assert r2.status_code == 429
+        assert r2.headers.get("Retry-After") is not None
+        # Limit and remaining derive from the chat.small policy (rpm: 1)
+        assert r2.headers.get("X-RateLimit-Limit") == "1"
+        assert r2.headers.get("X-RateLimit-Remaining") == "0"
+        reset = r2.headers.get("X-RateLimit-Reset")
+        assert reset is not None
+        # Reset should indicate a positive wait window in seconds
+        assert int(reset) >= 1
+
+
+@pytest.mark.asyncio
 async def test_e2e_embeddings_headers_route_map(monkeypatch):
     # Minimal app mode with RG middleware enabled for route_map resolution
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")

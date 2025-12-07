@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 
 security = HTTPBearer(auto_error=False)
@@ -226,7 +227,39 @@ async def _apply_rate_limit_headers(limiter, user_id: str, response: Response, m
         pass
 
 
+def enforce_heavy_evaluations_admin(principal: Optional[AuthPrincipal]) -> None:
+    """
+    Claim-first enforcement for heavy evaluations admin operations.
+
+    When EVALS_HEAVY_ADMIN_ONLY is disabled, this is a no-op. Otherwise,
+    require an admin-style principal (is_admin or role 'admin') for heavy
+    evaluations flows.
+    """
+    if os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in ("true", "1", "yes"):
+        return
+    if principal is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required for heavy evaluations",
+        )
+    is_admin_flag = bool(
+        principal.is_admin
+        or ("admin" in (principal.roles or []))
+    )
+    if not is_admin_flag:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required for heavy evaluations",
+        )
+
+
 def require_admin(user: User) -> None:
+    """
+    Legacy user-dict gate for heavy evaluations.
+
+    New code should prefer enforce_heavy_evaluations_admin(AuthPrincipal)
+    together with claim-first dependencies (require_roles/require_permissions).
+    """
     if os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in ("true", "1", "yes"):
         return
     is_admin_flag = bool(
@@ -245,4 +278,5 @@ __all__ = [
     "check_evaluation_rate_limit",
     "_apply_rate_limit_headers",
     "require_admin",
+    "enforce_heavy_evaluations_admin",
 ]

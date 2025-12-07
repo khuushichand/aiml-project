@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from functools import lru_cache
 from pathlib import Path as PathLib
 import sqlite3  # for DB-specific exception handling in limits endpoints
-from typing import AsyncGenerator, Optional, Dict, Any, List
+from typing import AsyncGenerator, Optional, Dict, Any, List, Callable, Awaitable
 import numpy as np
 import soundfile as sf
 
@@ -1029,6 +1029,13 @@ async def create_transcription(
                 logger.exception(
                     f"Failed to release job slot after quota denial: user_id={current_user.id}, error={e}; request_id={rid}"
                 )
+            # Ensure any heartbeat loop is cancelled on early quota denial
+            if job_heartbeat_task:
+                job_heartbeat_task.cancel()
+                try:
+                    await job_heartbeat_task
+                except asyncio.CancelledError:
+                    pass
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED, detail="Transcription quota exceeded (daily minutes)"
             )
@@ -3480,7 +3487,8 @@ async def websocket_audio_chat_stream(
                     if result:
                         # Drop audio blob if present
                         result.pop("_audio_chunk", None)
-                        await _outer_stream.send_json(result)
+                        if _outer_stream:
+                            await _outer_stream.send_json(result)
                     if auto_commit_triggered:
                         await _finalize_turn(
                             commit_at=getattr(turn_detector, "last_trigger_at", None)

@@ -236,7 +236,7 @@ class AuthnzRateLimitsRepo:
                             if isinstance(result, str)
                             else 0
                         )
-                    except Exception as exc:
+                    except (ValueError, AttributeError, IndexError) as exc:
                         logger.debug(
                             f"AuthnzRateLimitsRepo asyncpg DELETE result parse failed: result={result!r}, error={exc}"
                         )

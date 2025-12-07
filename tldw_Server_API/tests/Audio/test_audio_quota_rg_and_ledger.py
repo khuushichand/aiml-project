@@ -22,6 +22,11 @@ async def test_add_daily_minutes_writes_to_resource_daily_ledger(tmp_path, monke
     from tldw_Server_API.app.core.Usage import audio_quota
     from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import ResourceDailyLedger
 
+    # Ensure per-process ledger globals in audio_quota are reset so this test
+    # uses the fresh temporary AuthNZ DB configured above.
+    audio_quota._daily_ledger = None  # type: ignore[attr-defined]
+    audio_quota._audio_minutes_legacy_backfill_done = False  # type: ignore[attr-defined]
+
     await reset_db_pool()
     pool = await get_db_pool()
     try:

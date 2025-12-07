@@ -253,7 +253,7 @@ The table below summarizes how core AuthNZ tables are covered by repositories as
 | API keys (`api_keys`, `api_key_audit_log`)           | `AuthnzApiKeysRepo`         | Full – runtime via repo; inline SQL only in migrations/bootstrap         | `APIKeyManager` uses `AuthnzApiKeysRepo` for validation, listing, primary-key upsert, creation (regular and virtual keys), rotation/revocation, usage counters, and audit-log inserts. Inline SQL remains only for table creation/backstops and migration helpers. |
 | RBAC (`roles`, `permissions`, `role_permissions`, `user_roles`, `user_permissions`, `rbac_*_rate_limits`) | `AuthnzRbacRepo`           | Full – runtime via repo; inline SQL only in migrations/bootstrap         | RBAC checks and effective-permissions queries use `AuthnzRbacRepo`; schema creation and seed data remain in `initialize.py`/migrations. |
 | Orgs/teams (`organizations`, `org_members`, `teams`, `team_members`) | `AuthnzOrgsTeamsRepo`      | Full – runtime via repo; inline SQL only in migrations/bootstrap         | `orgs_teams.py` is orchestration over `AuthnzOrgsTeamsRepo`; DDL and initial seeds are handled in `initialize.py`/migrations. |
-| Usage / LLM usage (`usage_log`, `usage_daily`, `llm_usage_log`, `llm_usage_daily`) | `AuthnzUsageRepo`         | Full – runtime via repo; inline SQL only in migrations/tests/bootstrap   | Aggregation, pruning, and per-request usage inserts use `AuthnzUsageRepo`; inline SQL remains only in migrations, initialization helpers, and test fixtures. |
+| Usage / LLM usage (`usage_log`, `usage_daily`, `llm_usage_log`, `llm_usage_daily`) | `AuthnzUsageRepo`         | Full – runtime via repo; inline SQL only in migrations/tests/bootstrap   | Aggregation, pruning, and per-request usage inserts use `AuthnzUsageRepo` (including `UsageLoggingMiddleware`); inline SQL remains only in migrations, initialization helpers, and test fixtures. |
 | Rate limits (`rate_limits`)                          | `AuthnzRateLimitsRepo`      | Full – runtime via repo; inline SQL only in migrations/bootstrap         | `rate_limiter.RateLimiter` uses the repo for counters and cleanup; DDL is centralized in migrations. |
 | Lockouts (`failed_attempts`, `account_lockouts`)     | `AuthnzRateLimitsRepo`      | Full – runtime via repo; inline SQL only in migrations/bootstrap         | Login lockout and failed-attempt accounting go through `AuthnzRateLimitsRepo`; only migrations define schema. |
 | Sessions (`sessions`)                                | `AuthnzSessionsRepo`        | Full – runtime via repo; inline SQL only in migrations/bootstrap         | Session create/refresh/validate/list/cleanup are repo-backed; `initialize.py` contains bootstrap DDL and token-blacklist harmonization helpers. |
@@ -261,6 +261,20 @@ The table below summarizes how core AuthNZ tables are covered by repositories as
 | MFA (`users` MFA columns / MFA tables)               | `AuthnzMfaRepo`             | Full – runtime via repo; inline SQL only in migrations/bootstrap         | `mfa_service.py` delegates MFA persistence to `AuthnzMfaRepo`; schema changes are handled by migrations. |
 | Monitoring / AuthNZ metrics (monitoring tables)      | `AuthnzMonitoringRepo`      | Full – runtime via repo; inline SQL only in migrations/bootstrap         | Monitoring/audit metrics and pruning use `AuthnzMonitoringRepo`; table creation is migration-driven. |
 | Registration codes (`registration_codes`)            | `AuthnzRegistrationCodesRepo` | Full – runtime via repo; inline SQL only in migrations/bootstrap       | Scheduler cleanup and registration-code lookups are repo-backed; DDL lives in `initialize.py`/migrations. |
+
+### Remaining inline SQL / backend detection (tech debt)
+
+The following AuthNZ surfaces still contain inline SQL and/or dialect detection (`hasattr(conn, "fetch*")`) by design in this iteration:
+
+- **Postgres bootstrap DDL**:
+  - `tldw_Server_API/app/core/AuthNZ/initialize.py` includes a guarded bootstrap path for non-SQLite `DATABASE_URL`s that creates core AuthNZ tables (`audit_logs`, `sessions`, `registration_codes`, RBAC tables, and organizations/teams) using `CREATE TABLE IF NOT EXISTS` and related DDL behind an asyncpg-style connection check.
+  - These statements are intended as **safety/backstop DDL** for Postgres deployments that have not yet run the canonical migrations. They execute only during initializer runs and are idempotent; the long‑term plan is to rely solely on migrations and move this bootstrap into dedicated migration helpers.
+
+- **Virtual-key quota counters**:
+  - `tldw_Server_API/app/core/AuthNZ/quotas.py` implements `increment_and_check_jwt_quota` / `increment_and_check_api_key_quota` with inline SQL for the `vk_jwt_counters` and `vk_api_key_counters` tables, using a small dialect switch (`hasattr(conn, "fetchval")`) to choose between asyncpg/Postgres and aiosqlite/SQLite syntax.
+  - These helpers are used only for virtual-key quota enforcement and fall back to process-local counters on error. They remain inline in this iteration to avoid overcomplicating the repository surface; a future stage may introduce a dedicated `AuthnzQuotasRepo` to own these tables.
+
+For this phase, we deliberately leave the above paths as guarded inline SQL while treating all high-traffic runtime AuthNZ operations (users, API keys, RBAC, usage, rate limits, sessions, token blacklist, orgs/teams, MFA, monitoring, registration codes) as repository-backed. The remaining inline SQL is tracked here as tech debt and will be revisited once migrations and repo coverage are fully stabilized across SQLite and Postgres.
 
 ### Inline SQL audit (hasattr(conn, 'fetch*') clusters)
 

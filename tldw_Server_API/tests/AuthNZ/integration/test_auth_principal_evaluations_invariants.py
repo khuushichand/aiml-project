@@ -70,7 +70,11 @@ def _restore_auth_capture(app: FastAPI, original_get_auth_principal: Any) -> Non
         auth_deps.get_auth_principal = original_get_auth_principal  # type: ignore[assignment]
 
 
-def test_evaluations_list_jwt_principal_and_state_alignment(isolated_test_environment, monkeypatch):
+def test_evaluations_list_jwt_principal_and_state_alignment(
+    isolated_test_environment,
+    monkeypatch,
+    bypass_api_limits,
+):
     """
     Multi-user JWT happy path for a representative Evaluations route:
 
@@ -87,6 +91,12 @@ def test_evaluations_list_jwt_principal_and_state_alignment(isolated_test_enviro
 
     settings = get_settings()
     assert settings.AUTH_MODE == "multi_user"
+
+    # Disable ResourceGovernor for this invariant; we want to exercise
+    # principal/state alignment without RG-driven 429s on evals/AuthNZ routes.
+    monkeypatch.setenv("RG_ENABLE_EVALUATIONS", "0")
+    monkeypatch.setenv("RG_ENABLE_AUTHNZ", "0")
+    monkeypatch.setenv("RG_ENABLED", "0")
 
     # 1. Register and log in via real auth endpoints.
     username = "evals_invariants_user"
@@ -110,13 +120,33 @@ def test_evaluations_list_jwt_principal_and_state_alignment(isolated_test_enviro
 
     _run_async(_grant_user_permission(db_name, username, "evals.read"))
 
+    # For this invariant, ensure RBAC enrichment exposes evals.read via the
+    # centralized helper, independent of the underlying DB shape. We keep any
+    # existing roles and admin flag intact while forcing the permission.
+    from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as udh_mod
+
+    async def _fake_enrich_user_with_rbac(
+        user_id,
+        user_data,
+        *,
+        pii_redact_logs: bool = False,  # noqa: ARG001
+    ):
+        base_roles = list(user_data.get("roles") or [])
+        is_admin_flag = bool(user_data.get("is_admin"))
+        perms = ["evals.read"]
+        return base_roles, perms, is_admin_flag
+
+    monkeypatch.setattr(udh_mod, "_enrich_user_with_rbac", _fake_enrich_user_with_rbac)
+
     # 3. Install the auth capture wrapper and call /api/v1/evaluations/.
     from tldw_Server_API.app.main import app as fastapi_app
 
     app = fastapi_app
     captured, original = _install_auth_capture(app)
+    ctx = bypass_api_limits(app)
     try:
-        resp = client.get("/api/v1/evaluations/", headers=headers)
+        with ctx:
+            resp = client.get("/api/v1/evaluations/", headers=headers)
         assert resp.status_code == 200, resp.text
 
         principal = captured.get("principal")
@@ -150,7 +180,10 @@ def test_evaluations_list_jwt_principal_and_state_alignment(isolated_test_enviro
 
 
 def test_evaluations_admin_cleanup_jwt_principal_and_state_alignment(
-    isolated_test_environment, monkeypatch, tmp_path
+    isolated_test_environment,
+    monkeypatch,
+    tmp_path,
+    bypass_api_limits,
 ):
     """
     Multi-user JWT happy path for an Evaluations admin endpoint:
@@ -178,6 +211,25 @@ def test_evaluations_admin_cleanup_jwt_principal_and_state_alignment(
     # Also enable TESTING so evaluations_auth uses the test-tier rate limits
     # and avoids hitting real per-user policies during invariants.
     monkeypatch.setenv("TESTING", "true")
+    # Disable ResourceGovernor for this invariant to avoid RG-level 429s.
+    monkeypatch.setenv("RG_ENABLE_EVALUATIONS", "0")
+    monkeypatch.setenv("RG_ENABLE_AUTHNZ", "0")
+    monkeypatch.setenv("RG_ENABLED", "0")
+
+    # Ensure RBAC enrichment exposes an admin-style principal for this test so
+    # that require_roles("admin") and require_admin both see admin claims.
+    from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as udh_mod
+
+    async def _fake_enrich_user_with_rbac(
+        user_id,
+        user_data,
+        *,
+        pii_redact_logs: bool = False,  # noqa: ARG001
+    ):
+        _ = (user_id, user_data)
+        return ["admin"], [], True
+
+    monkeypatch.setattr(udh_mod, "_enrich_user_with_rbac", _fake_enrich_user_with_rbac)
 
     # 1. Register and log in via real auth endpoints.
     username = "evals_admin_invariants_user"
@@ -240,8 +292,10 @@ def test_evaluations_admin_cleanup_jwt_principal_and_state_alignment(
 
     app = fastapi_app
     captured, original = _install_auth_capture(app)
+    ctx = bypass_api_limits(app)
     try:
-        resp = client.post("/api/v1/evaluations/admin/idempotency/cleanup", headers=headers)
+        with ctx:
+            resp = client.post("/api/v1/evaluations/admin/idempotency/cleanup", headers=headers)
         assert resp.status_code == 200, resp.text
 
         principal = captured.get("principal")
@@ -274,7 +328,10 @@ def test_evaluations_admin_cleanup_jwt_principal_and_state_alignment(
 
 
 def test_evaluations_admin_cleanup_api_key_principal_and_state_alignment(
-    isolated_test_environment, monkeypatch, tmp_path
+    isolated_test_environment,
+    monkeypatch,
+    tmp_path,
+    bypass_api_limits,
 ):
     """
     Multi-user API-key happy path for an Evaluations admin endpoint:
@@ -301,6 +358,27 @@ def test_evaluations_admin_cleanup_api_key_principal_and_state_alignment(
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "false")
     # Use TESTING tier for rate limits to avoid exercising real evals policies here.
     monkeypatch.setenv("TESTING", "true")
+    # Disable ResourceGovernor so that RG-backed evals/AuthNZ limits do not interfere
+    # with this principal/state alignment invariant.
+    monkeypatch.setenv("RG_ENABLE_EVALUATIONS", "0")
+    monkeypatch.setenv("RG_ENABLE_AUTHNZ", "0")
+    monkeypatch.setenv("RG_ENABLED", "0")
+
+    # Ensure RBAC enrichment exposes an admin-style principal for this test so
+    # that require_roles("admin") and require_admin both see admin claims for
+    # the API-key-backed principal.
+    from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as udh_mod
+
+    async def _fake_enrich_user_with_rbac(
+        user_id,
+        user_data,
+        *,
+        pii_redact_logs: bool = False,  # noqa: ARG001
+    ):
+        _ = (user_id, user_data)
+        return ["admin"], [], True
+
+    monkeypatch.setattr(udh_mod, "_enrich_user_with_rbac", _fake_enrich_user_with_rbac)
 
     # 1. Register a user via the real auth endpoint.
     username = "evals_admin_api_key_invariants_user"
@@ -370,17 +448,19 @@ def test_evaluations_admin_cleanup_api_key_principal_and_state_alignment(
 
     app = fastapi_app
     captured, original = _install_auth_capture(app)
+    ctx = bypass_api_limits(app)
 
-    async def _fake_verify_api_key(*_args, **_kwargs) -> str:
+    async def _fake_verify_api_key() -> str:
         return "vk-test"
 
     app.dependency_overrides[eval_auth.verify_api_key] = _fake_verify_api_key
 
     try:
-        resp = client.post(
-            "/api/v1/evaluations/admin/idempotency/cleanup",
-            headers={"X-API-KEY": api_key},
-        )
+        with ctx:
+            resp = client.post(
+                "/api/v1/evaluations/admin/idempotency/cleanup",
+                headers={"X-API-KEY": api_key},
+            )
         assert resp.status_code == 200, resp.text
 
         principal = captured.get("principal")

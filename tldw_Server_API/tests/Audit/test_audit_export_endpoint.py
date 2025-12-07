@@ -2,6 +2,57 @@ from contextlib import asynccontextmanager
 
 import httpx
 import pytest
+from fastapi import HTTPException
+from starlette.requests import Request
+
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+
+
+def _make_principal(
+    *,
+    user_id: int = 1,
+    kind: str = "user",
+    is_admin: bool = False,
+    roles: list[str] | None = None,
+    permissions: list[str] | None = None,
+) -> AuthPrincipal:
+    return AuthPrincipal(
+        kind=kind,
+        user_id=user_id,
+        api_key_id=None,
+        subject=None,
+        token_type="access",
+        jti=None,
+        roles=roles or [],
+        permissions=permissions or [],
+        is_admin=is_admin,
+        org_ids=[],
+        team_ids=[],
+    )
+
+
+def _override_principal(app, principal: AuthPrincipal | None, *, fail_with_401: bool = False) -> None:
+    async def _fake_get_auth_principal(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        if fail_with_401:
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        assert principal is not None, "principal must be provided when fail_with_401 is False"
+        ip = request.client.host if getattr(request, "client", None) else None
+        ua = request.headers.get("User-Agent") if getattr(request, "headers", None) else None
+        request_id = request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None
+        request.state.auth = AuthContext(
+            principal=principal,
+            ip=ip,
+            user_agent=ua,
+            request_id=request_id,
+        )
+        return principal
+
+    app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
 
 
 @asynccontextmanager
@@ -21,35 +72,25 @@ async def _get_client(monkeypatch):
 @pytest.mark.asyncio
 async def test_audit_export_requires_admin(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
-        from tldw_Server_API.app.api.v1.API_Deps import auth_deps
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
         app.dependency_overrides[get_request_user] = lambda: User(id=1, username="tester", is_active=True)
 
-        async def _deny():
-            from fastapi import HTTPException, status
-
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
-
-        app.dependency_overrides[auth_deps.require_admin] = _deny
+        principal = _make_principal(is_admin=False, roles=["user"], permissions=[])
+        _override_principal(app, principal)
 
         r = await client.get("/api/v1/audit/export", headers={"X-API-KEY": "test-api-key-12345"})
         assert r.status_code == 403
-        assert "Admin access required" in r.text
 
 
 @pytest.mark.asyncio
 async def test_audit_export_allows_admin_and_returns_payload(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
-        from tldw_Server_API.app.api.v1.API_Deps import auth_deps
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
         app.dependency_overrides[get_request_user] = lambda: User(id=1, username="admin", is_active=True)
-        app.dependency_overrides[auth_deps.require_admin] = lambda: {
-            "role": "admin",
-            "is_active": True,
-            "is_verified": True,
-        }
+        principal = _make_principal(is_admin=True, roles=["admin"], permissions=["system.logs"])
+        _override_principal(app, principal)
 
         from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
 
@@ -85,15 +126,11 @@ async def test_audit_export_allows_admin_and_returns_payload(monkeypatch):
 @pytest.mark.asyncio
 async def test_audit_export_filename_content_disposition(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
-        from tldw_Server_API.app.api.v1.API_Deps import auth_deps
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
         app.dependency_overrides[get_request_user] = lambda: User(id=1, username="admin", is_active=True)
-        app.dependency_overrides[auth_deps.require_admin] = lambda: {
-            "role": "admin",
-            "is_active": True,
-            "is_verified": True,
-        }
+        principal = _make_principal(is_admin=True, roles=["admin"], permissions=["system.logs"])
+        _override_principal(app, principal)
 
         from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
 
@@ -133,15 +170,11 @@ async def test_audit_export_filename_content_disposition(monkeypatch):
 @pytest.mark.asyncio
 async def test_audit_export_parses_Z_timestamps(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
-        from tldw_Server_API.app.api.v1.API_Deps import auth_deps
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
         app.dependency_overrides[get_request_user] = lambda: User(id=1, username="admin", is_active=True)
-        app.dependency_overrides[auth_deps.require_admin] = lambda: {
-            "role": "admin",
-            "is_active": True,
-            "is_verified": True,
-        }
+        principal = _make_principal(is_admin=True, roles=["admin"], permissions=["system.logs"])
+        _override_principal(app, principal)
 
         from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
         captured = {}
@@ -177,15 +210,11 @@ async def test_audit_export_parses_Z_timestamps(monkeypatch):
 @pytest.mark.asyncio
 async def test_audit_export_streaming_json(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
-        from tldw_Server_API.app.api.v1.API_Deps import auth_deps
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
         app.dependency_overrides[get_request_user] = lambda: User(id=1, username="admin", is_active=True)
-        app.dependency_overrides[auth_deps.require_admin] = lambda: {
-            "role": "admin",
-            "is_active": True,
-            "is_verified": True,
-        }
+        principal = _make_principal(is_admin=True, roles=["admin"], permissions=["system.logs"])
+        _override_principal(app, principal)
 
         from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
         captured = {"stream": None}
@@ -227,15 +256,11 @@ async def test_audit_export_streaming_json(monkeypatch):
 @pytest.mark.asyncio
 async def test_audit_export_streaming_csv_supported(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
-        from tldw_Server_API.app.api.v1.API_Deps import auth_deps
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
         app.dependency_overrides[get_request_user] = lambda: User(id=1, username="admin", is_active=True)
-        app.dependency_overrides[auth_deps.require_admin] = lambda: {
-            "role": "admin",
-            "is_active": True,
-            "is_verified": True,
-        }
+        principal = _make_principal(is_admin=True, roles=["admin"], permissions=["system.logs"])
+        _override_principal(app, principal)
 
         from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
         captured = {"stream": None}
@@ -271,15 +296,11 @@ async def test_audit_export_streaming_csv_supported(monkeypatch):
 @pytest.mark.asyncio
 async def test_audit_export_jsonl_streaming(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
-        from tldw_Server_API.app.api.v1.API_Deps import auth_deps
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
         app.dependency_overrides[get_request_user] = lambda: User(id=1, username="admin", is_active=True)
-        app.dependency_overrides[auth_deps.require_admin] = lambda: {
-            "role": "admin",
-            "is_active": True,
-            "is_verified": True,
-        }
+        principal = _make_principal(is_admin=True, roles=["admin"], permissions=["system.logs"])
+        _override_principal(app, principal)
 
         from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
 
@@ -316,15 +337,11 @@ async def test_audit_export_jsonl_streaming(monkeypatch):
 @pytest.mark.asyncio
 async def test_audit_export_auto_streams_for_large_max_rows(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
-        from tldw_Server_API.app.api.v1.API_Deps import auth_deps
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
         app.dependency_overrides[get_request_user] = lambda: User(id=1, username="admin", is_active=True)
-        app.dependency_overrides[auth_deps.require_admin] = lambda: {
-            "role": "admin",
-            "is_active": True,
-            "is_verified": True,
-        }
+        principal = _make_principal(is_admin=True, roles=["admin"], permissions=["system.logs"])
+        _override_principal(app, principal)
 
         from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
         captured = {"stream": None}
@@ -358,15 +375,11 @@ async def test_audit_export_auto_streams_for_large_max_rows(monkeypatch):
 @pytest.mark.asyncio
 async def test_audit_export_filters_and_max_rows(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
-        from tldw_Server_API.app.api.v1.API_Deps import auth_deps
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
         app.dependency_overrides[get_request_user] = lambda: User(id=1, username="admin", is_active=True)
-        app.dependency_overrides[auth_deps.require_admin] = lambda: {
-            "role": "admin",
-            "is_active": True,
-            "is_verified": True,
-        }
+        principal = _make_principal(is_admin=True, roles=["admin"], permissions=["system.logs"])
+        _override_principal(app, principal)
 
         from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
         captured = {}
@@ -404,15 +417,11 @@ async def test_audit_export_filters_and_max_rows(monkeypatch):
 @pytest.mark.asyncio
 async def test_audit_count_endpoint_filters(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
-        from tldw_Server_API.app.api.v1.API_Deps import auth_deps
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
         app.dependency_overrides[get_request_user] = lambda: User(id=1, username="admin", is_active=True)
-        app.dependency_overrides[auth_deps.require_admin] = lambda: {
-            "role": "admin",
-            "is_active": True,
-            "is_verified": True,
-        }
+        principal = _make_principal(is_admin=True, roles=["admin"], permissions=["system.logs"])
+        _override_principal(app, principal)
 
         from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
         captured = {}
@@ -449,16 +458,12 @@ async def test_audit_count_endpoint_filters(monkeypatch):
 @pytest.mark.asyncio
 async def test_audit_count_integration_live(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
-        from tldw_Server_API.app.api.v1.API_Deps import auth_deps
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
         user_id_int = 777
         app.dependency_overrides[get_request_user] = lambda: User(id=user_id_int, username="admin", is_active=True)
-        app.dependency_overrides[auth_deps.require_admin] = lambda: {
-            "role": "admin",
-            "is_active": True,
-            "is_verified": True,
-        }
+        principal = _make_principal(user_id=user_id_int, is_admin=True, roles=["admin"], permissions=["system.logs"])
+        _override_principal(app, principal)
 
         r0 = await client.get(f"/api/v1/audit/count?user_id={user_id_int}", headers={"X-API-KEY": "test-api-key-12345"})
         assert r0.status_code == 200
@@ -494,15 +499,11 @@ async def test_audit_count_integration_live(monkeypatch):
 @pytest.mark.asyncio
 async def test_audit_export_filename_extension_normalization(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
-        from tldw_Server_API.app.api.v1.API_Deps import auth_deps
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
         app.dependency_overrides[get_request_user] = lambda: User(id=1, username="admin", is_active=True)
-        app.dependency_overrides[auth_deps.require_admin] = lambda: {
-            "role": "admin",
-            "is_active": True,
-            "is_verified": True,
-        }
+        principal = _make_principal(is_admin=True, roles=["admin"], permissions=["system.logs"])
+        _override_principal(app, principal)
 
         from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
 

@@ -2801,8 +2801,6 @@ async def get_metrics(
 ):
     """Get detailed service metrics - requires admin privileges"""
 
-    require_admin(current_user)
-
     # Helper to sum counters across all labels
     def _sum_counter(c):
         try:

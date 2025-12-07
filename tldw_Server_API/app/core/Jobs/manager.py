@@ -1467,6 +1467,180 @@ class JobManager:
         finally:
             conn.close()
 
+    def count_jobs(
+        self,
+        *,
+        domain: Optional[str] = None,
+        status: Optional[str] = None,
+        owner_user_id: Optional[str] = None,
+    ) -> int:
+        """
+        Return the number of jobs matching the provided filters.
+        """
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                query = "SELECT COUNT(*) AS c FROM jobs WHERE 1=1"
+                params: List[Any] = []
+                if domain:
+                    query += " AND domain = %s"
+                    params.append(domain)
+                if status:
+                    query += " AND status = %s"
+                    params.append(status)
+                if owner_user_id:
+                    query += " AND owner_user_id = %s"
+                    params.append(owner_user_id)
+                with self._pg_cursor(conn) as cur:
+                    cur.execute(query, params)
+                    row = cur.fetchone()
+                if not row:
+                    return 0
+                try:
+                    return int(row["c"])
+                except Exception:
+                    return 0
+            else:
+                query = "SELECT COUNT(*) FROM jobs WHERE 1=1"
+                params: List[Any] = []
+                if domain:
+                    query += " AND domain = ?"
+                    params.append(domain)
+                if status:
+                    query += " AND status = ?"
+                    params.append(status)
+                if owner_user_id:
+                    query += " AND owner_user_id = ?"
+                    params.append(owner_user_id)
+                row = conn.execute(query, params).fetchone()
+                if not row:
+                    return 0
+                try:
+                    return int(row[0])
+                except Exception:
+                    return 0
+        finally:
+            conn.close()
+
+    def summarize_by_status(
+        self,
+        *,
+        domain: Optional[str] = None,
+        owner_user_id: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """
+        Return a mapping of job status → count for the given filters.
+        """
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                query = "SELECT status, COUNT(*) AS c FROM jobs WHERE 1=1"
+                params: List[Any] = []
+                if domain:
+                    query += " AND domain = %s"
+                    params.append(domain)
+                if owner_user_id:
+                    query += " AND owner_user_id = %s"
+                    params.append(owner_user_id)
+                query += " GROUP BY status"
+                with self._pg_cursor(conn) as cur:
+                    cur.execute(query, params)
+                    rows = cur.fetchall() or []
+                out: Dict[str, int] = {}
+                for r in rows:
+                    try:
+                        status_val = str(r["status"])
+                        count_val = int(r["c"])
+                    except Exception:
+                        continue
+                    if status_val:
+                        out[status_val] = count_val
+                return out
+            else:
+                query = "SELECT status, COUNT(*) FROM jobs WHERE 1=1"
+                params: List[Any] = []
+                if domain:
+                    query += " AND domain = ?"
+                    params.append(domain)
+                if owner_user_id:
+                    query += " AND owner_user_id = ?"
+                    params.append(owner_user_id)
+                query += " GROUP BY status"
+                rows = conn.execute(query, params).fetchall() or []
+                out: Dict[str, int] = {}
+                for r in rows:
+                    try:
+                        status_val = str(r[0])
+                        count_val = int(r[1])
+                    except Exception:
+                        continue
+                    if status_val:
+                        out[status_val] = count_val
+                return out
+        finally:
+            conn.close()
+
+    def summarize_by_owner_and_status(
+        self,
+        *,
+        domain: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Summarize jobs grouped by (owner_user_id, status).
+        """
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                query = "SELECT owner_user_id, status, COUNT(*) AS c FROM jobs WHERE 1=1"
+                params: List[Any] = []
+                if domain:
+                    query += " AND domain = %s"
+                    params.append(domain)
+                query += " GROUP BY owner_user_id, status"
+                with self._pg_cursor(conn) as cur:
+                    cur.execute(query, params)
+                    rows = cur.fetchall() or []
+                out: List[Dict[str, Any]] = []
+                for r in rows:
+                    try:
+                        owner = r["owner_user_id"]
+                        status_val = str(r["status"])
+                        count_val = int(r["c"])
+                    except Exception:
+                        continue
+                    out.append(
+                        {
+                            "owner_user_id": str(owner) if owner is not None else None,
+                            "status": status_val,
+                            "count": count_val,
+                        }
+                    )
+                return out
+            else:
+                query = "SELECT owner_user_id, status, COUNT(*) FROM jobs WHERE 1=1"
+                params: List[Any] = []
+                if domain:
+                    query += " AND domain = ?"
+                    params.append(domain)
+                query += " GROUP BY owner_user_id, status"
+                rows = conn.execute(query, params).fetchall() or []
+                out: List[Dict[str, Any]] = []
+                for row in rows:
+                    try:
+                        owner, status_val, count_val = row
+                        out.append(
+                            {
+                                "owner_user_id": str(owner) if owner is not None else None,
+                                "status": str(status_val),
+                                "count": int(count_val),
+                            }
+                        )
+                    except Exception:
+                        continue
+                return out
+        finally:
+            conn.close()
+
     def acquire_next_job(
         self,
         *,

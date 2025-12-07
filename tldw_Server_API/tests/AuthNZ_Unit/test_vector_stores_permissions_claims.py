@@ -64,6 +64,10 @@ def _build_app_with_overrides(principal: AuthPrincipal) -> FastAPI:
         )
         return principal
 
+    # Override both the endpoint-local and shared auth dependency so that
+    # claim-first gates (require_roles/require_permissions) and any direct
+    # principal dependencies see the same test principal.
+    app.dependency_overrides[vs_mod.get_auth_principal] = _fake_get_auth_principal
     app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
 
     async def _fake_get_request_user():

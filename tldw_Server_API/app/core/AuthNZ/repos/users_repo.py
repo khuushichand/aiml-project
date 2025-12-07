@@ -7,6 +7,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB, UserNotFoundError, DatabaseError
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, get_profile
 
 
 @dataclass
@@ -105,6 +106,48 @@ class AuthnzUsersRepo:
             raise
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(f"AuthnzUsersRepo.get_user_by_username failed: {exc}")
+            raise
+
+    async def create_user(
+        self,
+        *,
+        username: str,
+        email: str,
+        password_hash: str,
+        role: Optional[str] = None,
+        is_active: bool = True,
+        is_verified: bool = False,
+        user_uuid: Optional[str] = None,
+    ) -> int:
+        """
+        Create a new user row, enforcing profile-based invariants.
+
+        In the local-single-user profile, creating additional users beyond the
+        bootstrapped admin (SINGLE_USER_FIXED_ID) is forbidden as a hard
+        constraint. This helper raises DatabaseError in that profile for any
+        attempt to create users.
+        """
+        settings = get_settings()
+        profile = get_profile()
+        if isinstance(profile, str) and profile.strip().lower() in {"local-single-user", "single_user"}:
+            msg = "User creation is forbidden in local-single-user profile"
+            logger.warning(msg)
+            raise DatabaseError(msg)
+
+        db = await self._users_db()
+        try:
+            user_id = await db.create_user(
+                username=username,
+                email=email,
+                password_hash=password_hash,
+                role=role or settings.DEFAULT_USER_ROLE,
+                is_active=is_active,
+                is_verified=is_verified,
+                user_uuid=user_uuid,
+            )
+            return int(user_id)
+        except Exception as exc:
+            logger.error(f"AuthnzUsersRepo.create_user failed: {exc}")
             raise
 
     async def get_user_by_uuid(self, user_uuid: str) -> Optional[Dict[str, Any]]:

@@ -1020,6 +1020,10 @@ async def require_admin(
 
 
 def require_role(role: str):
+    # Legacy shim – do not use in new code.
+    # Prefer claim-first helpers (get_auth_principal, require_roles, require_permissions)
+    # for new endpoints. This dependency is retained only for existing routes that
+    # still rely on get_current_active_user user dicts.
     """
     Create a dependency that requires a specific role
 
@@ -1058,7 +1062,9 @@ async def get_optional_current_user(
     db_pool: DatabasePool = Depends(get_db_pool)
 ) -> Optional[Dict[str, Any]]:
     """
-    Get current user if authenticated, None otherwise
+    Legacy shim – do not use in new code.
+
+    Get current user if authenticated, None otherwise.
 
     This is useful for endpoints that have different behavior
     for authenticated vs unauthenticated users
@@ -1200,7 +1206,7 @@ async def check_auth_rate_limit(
         window_minutes=1,
         rate_limiter=rate_limiter,
     )
-    retry_after = metadata.get("retry_after", 60)
+    retry_after = metadata.get("retry_after", 60) if isinstance(metadata, dict) else 60
 
     if not allowed:
         raise HTTPException(

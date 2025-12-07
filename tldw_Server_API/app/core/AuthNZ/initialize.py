@@ -436,12 +436,9 @@ async def setup_database():
                 db_url_safe = raw_url.split("@")[-1] if raw_url else "unknown"
             except Exception as settings_err:
                 # Settings resolution failures during bootstrap are non-fatal here; keep "unknown".
-                try:
-                    logger.debug(
-                        f"DB URL extraction for diagnostics failed: {settings_err}"
-                    )
-                except Exception:
-                    pass
+                logger.debug(
+                    f"DB URL extraction for diagnostics failed: {settings_err}"
+                )
             try:
                 await ensure_usage_tables_pg(pool)
             except Exception as usage_err:
@@ -895,6 +892,9 @@ async def bootstrap_single_user_profile() -> bool:
             e,
         )
 
+    # The RBAC seed path may reset settings/DB pools; refresh settings to reflect
+    # the current environment before reading SINGLE_USER_* values.
+    settings = get_settings()
     api_key_value = settings.SINGLE_USER_API_KEY or ""
     if not api_key_value or api_key_value == "CHANGE_ME_TO_SECURE_API_KEY":
         print(

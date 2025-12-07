@@ -899,7 +899,23 @@ def get_settings() -> Settings:
                 _settings.RATE_LIMIT_ENABLED = False
         except Exception:
             pass
-        logger.info(f"Settings initialized - Auth mode: {_settings.AUTH_MODE}")
+        # Log a lightweight profile hint for coordination/UX only. AUTH_MODE
+        # remains the canonical behavioral switch; PROFILE (explicit or
+        # inferred) must not be used to bypass or relax auth decisions.
+        try:
+            profile_hint = getattr(_settings, "PROFILE", None)
+            if not (isinstance(profile_hint, str) and profile_hint.strip()):
+                profile_hint = _infer_profile_from_settings(_settings)
+            if isinstance(profile_hint, str) and profile_hint.strip():
+                logger.info(
+                    "Settings initialized - Auth mode: %s, profile=%s",
+                    _settings.AUTH_MODE,
+                    profile_hint.strip(),
+                )
+            else:
+                logger.info("Settings initialized - Auth mode: %s", _settings.AUTH_MODE)
+        except Exception:
+            logger.info("Settings initialized - Auth mode: %s", _settings.AUTH_MODE)
     return _settings
 
 
@@ -943,19 +959,56 @@ def is_single_user_mode() -> bool:
     return get_settings().AUTH_MODE == "single_user"
 
 
-def get_profile() -> Optional[str]:
-    """Return the configured deployment profile, if any.
+def _infer_profile_from_settings(settings: Settings) -> Optional[str]:
+    """Derive a coarse deployment profile from AUTH_MODE + DATABASE_URL.
 
-    When unset, callers should treat this as "derive from AUTH_MODE".
-    New helpers that need profile semantics should read PROFILE first
-    but always choose defaults that preserve current behavior.
+    This helper is used when PROFILE is unset to provide a stable, purely
+    informational hint for coordination and UX. It must not be used for
+    permission or authentication decisions.
     """
     try:
-        value = getattr(get_settings(), "PROFILE", None)
+        mode = settings.AUTH_MODE
+        db_url = str(settings.DATABASE_URL or "")
+    except Exception:
+        return None
+
+    db_lower = db_url.lower()
+
+    if mode == "single_user":
+        # Treat all single-user deployments as a local/desktop profile,
+        # regardless of underlying DB, to preserve existing behavior.
+        return "local-single-user"
+
+    if mode == "multi_user":
+        if db_lower.startswith(("postgres://", "postgresql://")):
+            return "multi-user-postgres"
+        if "sqlite" in db_lower:
+            return "multi-user-sqlite"
+
+    return None
+
+
+def get_profile() -> Optional[str]:
+    """Return the effective deployment profile string, if any.
+
+    Resolution order:
+    1. Explicit PROFILE setting/env (if set and non-empty).
+    2. Derived from AUTH_MODE + DATABASE_URL via `_infer_profile_from_settings`.
+
+    Callers must treat this as a coordination/UX hint only; auth and
+    permission decisions remain driven by claims and AUTH_MODE helpers.
+    """
+    settings = get_settings()
+    try:
+        value = getattr(settings, "PROFILE", None)
     except Exception:
         value = None
     if isinstance(value, str) and value.strip():
         return value.strip()
+
+    inferred = _infer_profile_from_settings(settings)
+    if isinstance(inferred, str) and inferred.strip():
+        return inferred.strip()
     return None
 
 

@@ -7,6 +7,7 @@ from typing import List, TypedDict, Optional
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
+from tldw_Server_API.app.core.DB_Management.UserDatabase_v2 import UserDatabase
 from tldw_Server_API.app.core.exceptions import ResourceNotFoundError
 
 
@@ -30,7 +31,7 @@ class AuthnzRbacRepo:
     client_id: str = "rbac_service"
 
     @cached_property
-    def _db(self):
+    def _db(self) -> UserDatabase:
         return get_configured_user_database(client_id=self.client_id)
 
     def get_effective_permissions(self, user_id: int) -> List[str]:

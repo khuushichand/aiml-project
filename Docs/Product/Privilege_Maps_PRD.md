@@ -201,6 +201,17 @@
 - Enable individual users to self-service an up-to-date capability list to guide workflow discovery.
 - Expose maps through both backend APIs and the WebUI, with export options for audit/compliance snapshots.
 
+### Example Privilege Scope Entries (including flashcards.admin)
+
+The Privilege Metadata Catalog should include entries for all first-class permission scopes, such as:
+
+- `media.create`, `media.read`, `media.update`, `media.delete` – core media ingestion and management.
+- `evals.read`, `evals.manage` – evaluations CRUD and run management.
+- `workflows.admin` – workflows scheduler administration.
+- `flashcards.admin` – flashcards import abuse-cap overrides (TSV/JSON import endpoints that accept higher `max_lines` / `max_items` / `max_field_length` settings for bulk operations).
+
+Each scope entry records sensitivity tier, owning module, and default role bindings so the generated maps can surface flashcards admins alongside other domain-specific administrators.
+
 ## Non-Goals
 - Making changes to the underlying authorization model (e.g., introducing new roles or scopes).
 - Implementing granular rate-limit visualizations or historical analytics beyond last-fetch timestamps.

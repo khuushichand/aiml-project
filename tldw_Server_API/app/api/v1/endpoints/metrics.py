@@ -8,7 +8,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin, require_roles
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
 
 router = APIRouter(tags=["metrics"])
 
@@ -237,7 +237,7 @@ async def get_chat_metrics_endpoint() -> Dict[str, Any]:
     response_model=Dict[str, str],
     dependencies=[Depends(require_roles("admin"))],
 )
-async def reset_metrics(_: Any = Depends(require_admin)) -> Dict[str, str]:
+async def reset_metrics() -> Dict[str, str]:
     """
     Reset all metrics to their initial state.
 
