@@ -361,7 +361,7 @@ def client_with_single_user(monkeypatch):
     # Import the FastAPI app and dependencies lazily to avoid heavy imports during test collection
     from tldw_Server_API.app.main import app as fastapi_app
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin, get_auth_principal
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
     from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
     from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
@@ -402,14 +402,6 @@ def client_with_single_user(monkeypatch):
     fastapi_app.dependency_overrides[get_request_user] = _override_user
     fastapi_app.dependency_overrides[get_usage_event_logger] = _override_logger
     fastapi_app.dependency_overrides[get_auth_principal] = _override_principal
-    # Bypass admin guard in tests by treating the test user as admin
-    fastapi_app.dependency_overrides[require_admin] = lambda: {
-        "id": 1,
-        "username": "tester",
-        "role": "admin",
-        "is_active": True,
-        "is_verified": True,
-    }
 
     with TestClient(fastapi_app) as client:
         yield client, usage_logger
@@ -417,7 +409,6 @@ def client_with_single_user(monkeypatch):
     fastapi_app.dependency_overrides.pop(get_request_user, None)
     fastapi_app.dependency_overrides.pop(get_usage_event_logger, None)
     fastapi_app.dependency_overrides.pop(get_auth_principal, None)
-    fastapi_app.dependency_overrides.pop(require_admin, None)
 
 
 @pytest.fixture()

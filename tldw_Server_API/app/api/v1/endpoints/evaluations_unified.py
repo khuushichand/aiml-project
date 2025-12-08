@@ -101,7 +101,6 @@ from .evaluations_auth import (
     create_error_response,
     check_evaluation_rate_limit,
     _apply_rate_limit_headers,
-    require_admin,
     enforce_heavy_evaluations_admin,
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope, get_auth_principal

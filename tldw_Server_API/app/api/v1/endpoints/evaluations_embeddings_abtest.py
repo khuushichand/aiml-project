@@ -11,7 +11,6 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
     verify_api_key,
     check_evaluation_rate_limit,
-    require_admin,
     enforce_heavy_evaluations_admin,
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope, get_auth_principal

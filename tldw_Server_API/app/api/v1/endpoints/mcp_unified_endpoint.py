@@ -253,15 +253,21 @@ async def require_user(
 
 
 async def require_admin(
-    user: TokenData = Depends(require_user)
-) -> TokenData:
-    """Require admin role"""
-    if UserRole.ADMIN.value not in (user.roles or []):
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> AuthPrincipal:
+    """
+    Claim-first admin gate for MCP endpoints.
+
+    Prefer this together with require_permissions(...) / require_roles(...)
+    for new MCP admin/diagnostics routes so behavior matches the broader
+    AuthNZ claim-first model (User-Auth-Deps PRD).
+    """
+    if not principal.is_admin and "admin" not in (principal.roles or []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role required"
+            detail="Admin role required",
         )
-    return user
+    return principal
 
 
 # WebSocket endpoint
@@ -520,7 +526,7 @@ async def get_server_status(
 
 @router.get("/metrics", response_model=ServerMetricsResponse)
 async def get_server_metrics(
-    _: TokenData = Depends(require_admin),
+    principal: AuthPrincipal = Depends(require_permissions(SYSTEM_LOGS)),
     _guard: None = Depends(enforce_http_security),
 ):
     """
@@ -548,16 +554,21 @@ def _is_prometheus_public() -> bool:
 
 async def require_admin_unless_public(
     public: bool = Depends(_is_prometheus_public),
-    credentials: HTTPAuthorizationCredentials = Security(security),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
-) -> Optional[TokenData]:
+    principal: Optional[AuthPrincipal] = Depends(get_auth_principal),
+) -> Optional[AuthPrincipal]:
     """
-    Enforce admin requirement unless explicitly configured as public.
+    Enforce admin-style requirement unless explicitly configured as public.
+
+    When MCP_PROMETHEUS_PUBLIC is enabled, this returns None and allows unauthenticated
+    scraping (for trusted internal networks only). Otherwise, it enforces an admin-style
+    AuthPrincipal gate for backward compatibility. New admin/diagnostics routes should
+    prefer claim-first dependencies (get_auth_principal + require_permissions /
+    require_roles) instead of this helper.
     """
     if public:
         return None
-    user = await require_user(credentials, x_api_key)
-    return await require_admin(user)
+    # principal is guaranteed here; require_admin will raise 403 on non-admins.
+    return await require_admin(principal)
 
 
 @router.get("/metrics/prometheus")

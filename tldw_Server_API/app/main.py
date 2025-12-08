@@ -3303,8 +3303,16 @@ WEBUI_DIR = BASE_DIR.parent / "WebUI"
 if WEBUI_DIR.exists():
     # First, define a dynamic config endpoint for single user mode (registered conditionally below)
     async def get_webui_config():
-        """Dynamically generate WebUI configuration with API key in single user mode."""
-        from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
+        """Dynamically generate WebUI configuration with API key in single user mode.
+
+        This endpoint also exposes the inferred deployment PROFILE as a UX hint so
+        the WebUI can adjust copy/affordances without affecting auth behavior.
+        """
+        from tldw_Server_API.app.core.AuthNZ.settings import (
+            get_settings,
+            get_profile,
+            is_single_user_mode,
+        )
         from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers_async
         from fastapi.responses import JSONResponse
         from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -3319,6 +3327,16 @@ if WEBUI_DIR.exists():
         import os as _os
 
         _is_prod_env = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
+        profile_hint = None
+        try:
+            profile_hint = get_profile()
+        except Exception:
+            # Coordination-only; failures here must not impact auth
+            profile_hint = None
+
+        if profile_hint:
+            config["profile"] = profile_hint
+
         if is_single_user_mode():
             settings = get_settings()
             config["mode"] = "single-user"

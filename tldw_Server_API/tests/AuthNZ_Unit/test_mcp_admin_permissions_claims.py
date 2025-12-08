@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any, Optional, Dict
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -31,17 +31,6 @@ def _build_app_with_overrides(
 
     app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
 
-    async def _fake_require_admin() -> Any:
-        return mcp_mod.TokenData(
-            sub="1",
-            username="admin",
-            roles=[mcp_mod.UserRole.ADMIN.value],
-            permissions=["*"],
-            token_type="access",
-        )
-
-    app.dependency_overrides[mcp_mod.require_admin] = _fake_require_admin
-
     async def _no_op_guard() -> None:
         return None
 
@@ -60,6 +49,9 @@ def _build_app_with_overrides(
                 result = {"status": "ok"}
 
             return _Resp()
+
+        async def get_metrics(self) -> Dict[str, Any]:
+            return {"connections": {}, "modules": {}}
 
     mcp_mod.get_mcp_server = lambda: _DummyServer()  # type: ignore[assignment]
 
@@ -130,3 +122,47 @@ async def test_mcp_modules_health_200_for_admin_principal():
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("status") == "ok"
+
+
+@pytest.mark.asyncio
+async def test_mcp_metrics_401_when_principal_unavailable():
+    app = _build_app_with_overrides(principal=None, fail_with_401=True)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/metrics")
+
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_mcp_metrics_403_when_missing_system_logs_permission():
+    principal = _make_principal(
+        is_admin=False,
+        roles=["user"],
+        permissions=[],
+    )
+    app = _build_app_with_overrides(principal=principal)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/metrics")
+
+    assert resp.status_code == 403
+    detail = resp.json().get("detail", "")
+    assert SYSTEM_LOGS in detail
+
+
+@pytest.mark.asyncio
+async def test_mcp_metrics_200_for_principal_with_system_logs_permission():
+    principal = _make_principal(
+        is_admin=False,
+        roles=["user"],
+        permissions=[SYSTEM_LOGS],
+    )
+    app = _build_app_with_overrides(principal=principal)
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/mcp/metrics")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body.get("modules"), dict)

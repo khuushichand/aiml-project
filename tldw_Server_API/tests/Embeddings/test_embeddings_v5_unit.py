@@ -111,7 +111,7 @@ class TestCriticalSecurity:
         from unittest.mock import patch
 
         # Test with regular user - should fail
-        async def override_regular_user():
+        def override_regular_user():
             return setup.regular_user
 
         app.dependency_overrides[get_request_user] = override_regular_user
@@ -128,7 +128,7 @@ class TestCriticalSecurity:
             assert response.status_code == 200
 
         # Test with admin user - should succeed
-        async def override_admin_user():
+        def override_admin_user():
             return setup.admin_user
 
         app.dependency_overrides[get_request_user] = override_admin_user

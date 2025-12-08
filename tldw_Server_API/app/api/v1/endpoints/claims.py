@@ -15,13 +15,10 @@ router = APIRouter(prefix="/claims", tags=["claims"])
 
 @router.get("/status")
 def claims_rebuild_status(
-    current_user: User = Depends(get_request_user),
     _principal: AuthPrincipal = Depends(require_roles("admin")),  # admin role enforced via dependency; value unused
 ) -> Dict[str, Any]:
     """Return statistics about the claims rebuild worker. Admin only."""
     try:
-        if not getattr(current_user, 'is_admin', False):
-            raise HTTPException(status_code=403, detail="Admin privileges required")
         svc = get_claims_rebuild_service()
         try:
             stats = svc.get_stats()

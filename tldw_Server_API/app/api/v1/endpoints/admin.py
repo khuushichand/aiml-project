@@ -80,10 +80,10 @@ from tldw_Server_API.app.api.v1.schemas.admin_rbac_schemas import (
     RoleEffectivePermissionsResponse,
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    require_admin,
     require_roles,
     get_db_transaction,
-    get_storage_service_dep
+    get_storage_service_dep,
+    get_auth_principal,
 )
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter as get_authnz_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
@@ -133,6 +133,7 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrganizationWatchlistsSettingsUpdate,
     OrganizationWatchlistsSettingsResponse,
 )
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
 from tldw_Server_API.app.core.Usage.pricing_catalog import reset_pricing_catalog
 from tldw_Server_API.app.core.Chat.chat_service import (
@@ -2459,8 +2460,8 @@ async def upsert_user_rate_limit(user_id: int, payload: RateLimitUpsertRequest, 
 @router.delete("/users/{user_id}")
 async def delete_user(
     user_id: int,
-    current_user: Dict[str, Any] = Depends(require_admin),
-    db=Depends(get_db_transaction)
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
 ) -> Dict[str, str]:
     """
     Delete a user (soft delete by default)
@@ -2473,7 +2474,7 @@ async def delete_user(
     """
     try:
         # Prevent self-deletion
-        if user_id == current_user["id"]:
+        if principal.user_id is not None and user_id == int(principal.user_id):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot delete your own account"
@@ -2516,8 +2517,8 @@ async def delete_user(
 @router.post("/registration-codes", response_model=RegistrationCodeResponse)
 async def create_registration_code(
     request: RegistrationCodeRequest,
-    current_user: Dict[str, Any] = Depends(require_admin),
-    db=Depends(get_db_transaction)
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
 ) -> RegistrationCodeResponse:
     """
     Create a new registration code
@@ -2536,6 +2537,7 @@ async def create_registration_code(
         expires_at = datetime.utcnow() + timedelta(days=request.expiry_days)
 
         is_pg = await is_postgres_backend()
+        creator_id = int(principal.user_id) if principal.user_id is not None else None
         if is_pg:
             # PostgreSQL
             result = await db.fetchrow("""
@@ -2543,7 +2545,7 @@ async def create_registration_code(
                 (code, max_uses, expires_at, created_by, role_to_grant, metadata)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING id, code, max_uses, times_used, expires_at, created_at, role_to_grant
-            """, code, request.max_uses, expires_at, current_user["id"],
+            """, code, request.max_uses, expires_at, creator_id,
                 request.role_to_grant, __import__('json').dumps(request.metadata or {}))
         else:
             # SQLite
@@ -2551,7 +2553,7 @@ async def create_registration_code(
                 INSERT INTO registration_codes
                 (code, max_uses, expires_at, created_by, role_to_grant, metadata)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (code, request.max_uses, expires_at.isoformat(), current_user["id"],
+            """, (code, request.max_uses, expires_at.isoformat(), creator_id,
                   request.role_to_grant, __import__('json').dumps(request.metadata or {})))
 
             code_id = cursor.lastrowid

@@ -32,12 +32,6 @@ def _build_app_with_overrides(
 
     app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
 
-    # Override require_admin as no-op to test endpoint's internal permission checks
-    async def _fake_require_admin() -> None:
-        return None
-
-    app.dependency_overrides[auth_deps.require_admin] = _fake_require_admin
-
     async def _fake_db_transaction():
         class _Dummy:
             pass
@@ -116,7 +110,11 @@ async def test_connectors_admin_policy_403_when_missing_permission(monkeypatch):
 
     assert resp.status_code == 403
     detail = resp.json().get("detail", "")
-    assert SYSTEM_CONFIGURE in detail
+    # Either role or permission guard may fire first; assert one of the expected markers.
+    assert (
+        SYSTEM_CONFIGURE in detail
+        or "Required role(s)" in detail
+    )
 
 
 @pytest.mark.asyncio

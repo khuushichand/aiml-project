@@ -16,10 +16,12 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensu
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
     require_permissions,
     require_roles,
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_MAINTENANCE
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Usage.audio_quota import TIER_LIMITS, get_user_tier, set_user_tier
 
 
@@ -164,6 +166,7 @@ async def get_audio_job(
     job_id: int,
     current_user: User = Depends(get_request_user),
     jm: JobManager = Depends(get_job_manager),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """
     Return a single audio job if it belongs to the caller (or the caller is admin).
@@ -174,7 +177,11 @@ async def get_audio_job(
             raise HTTPException(status_code=404, detail="Job not found")
         # Owner/admin check
         owner = str(d.get("owner_user_id") or "")
-        if not (current_user.is_admin or owner == str(current_user.id)):
+        is_admin = bool(
+            principal.is_admin
+            or ("admin" in (principal.roles or []))
+        )
+        if not (is_admin or owner == str(current_user.id)):
             raise HTTPException(status_code=403, detail="Not authorized for this job")
         field_map = getattr(AudioJob, "model_fields", None) or getattr(AudioJob, "__fields__", {})
         return AudioJob(**{k: d.get(k) for k in field_map.keys()})

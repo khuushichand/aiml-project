@@ -64,12 +64,6 @@ def _build_app_with_overrides(
 
     app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
 
-    async def _fake_require_admin() -> Any:
-        # Jobs admin endpoints expect a user-like object/dict; keep it minimal.
-        return {"id": 1, "username": "admin"}
-
-    app.dependency_overrides[auth_deps.require_admin] = _fake_require_admin
-
     # Stub audit service dependency to avoid hitting real AuthNZ/user flows.
     from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
 

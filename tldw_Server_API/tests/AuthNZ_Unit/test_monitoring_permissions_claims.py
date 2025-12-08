@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Optional
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -30,13 +30,6 @@ def _build_app_with_overrides(
         return principal
 
     app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
-
-    async def _fake_require_admin() -> Any:
-        # Bypass legacy admin dependency so tests focus on SYSTEM_LOGS
-        # permission behavior via AuthPrincipal.
-        return {"id": 1, "username": "admin"}
-
-    app.dependency_overrides[auth_deps.require_admin] = _fake_require_admin
 
     # Stub topic monitoring service to avoid touching real DBs
     class _FakeMonitoringService:
@@ -115,4 +108,3 @@ async def test_monitoring_watchlists_200_for_admin_principal():
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("watchlists") == []
-

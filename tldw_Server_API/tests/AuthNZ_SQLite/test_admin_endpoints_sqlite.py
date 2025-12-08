@@ -38,11 +38,8 @@ async def test_admin_endpoints_basic_sqlite(tmp_path):
 
     # Create TestClient and override admin/principal dependencies to bypass auth
     from tldw_Server_API.app.main import app
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin, get_auth_principal
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
     from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
-
-    async def _pass_admin():
-        return {"id": user_id, "role": "admin", "username": "adminuser"}
 
     async def _principal_override(request=None):  # type: ignore[override]
         principal = AuthPrincipal(
@@ -70,7 +67,6 @@ async def test_admin_endpoints_basic_sqlite(tmp_path):
                 logger.debug(f"Could not set request.state.auth in test override: {e}")
         return principal
 
-    app.dependency_overrides[require_admin] = _pass_admin
     app.dependency_overrides[get_auth_principal] = _principal_override
 
     with TestClient(app) as client:
@@ -120,7 +116,6 @@ async def test_admin_endpoints_basic_sqlite(tmp_path):
 
     # Cleanup overrides
     app.dependency_overrides.pop(get_auth_principal, None)
-    app.dependency_overrides.pop(require_admin, None)
 
 
 @pytest.mark.asyncio
@@ -148,12 +143,36 @@ async def test_org_member_list_pagination_filters_sqlite(tmp_path):
         admin_id = cursor.lastrowid
 
     from tldw_Server_API.app.main import app
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
+    from starlette.requests import Request
 
-    async def _pass_admin():
-        return {"id": admin_id, "role": "admin", "username": "rootadmin"}
+    async def _principal_override(request: Request):  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=admin_id,
+            api_key_id=None,
+            subject="rootadmin",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        try:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=None,
+                user_agent=None,
+                request_id=None,
+            )
+        except Exception as e:
+            logger.debug(f"Could not set request.state.auth in test override: {e}")
+        return principal
 
-    app.dependency_overrides[require_admin] = _pass_admin
+    app.dependency_overrides[get_auth_principal] = _principal_override
 
     # Build a roster of members with varying roles/statuses and deterministic timestamps
     total_members = 120
@@ -246,4 +265,4 @@ async def test_org_member_list_pagination_filters_sqlite(tmp_path):
         assert all(item['role'] == 'lead' and item['status'] == 'invited' for item in combined)
         assert {item['user_id'] for item in combined} == lead_invited_ids
 
-    app.dependency_overrides.pop(require_admin, None)
+    app.dependency_overrides.pop(get_auth_principal, None)

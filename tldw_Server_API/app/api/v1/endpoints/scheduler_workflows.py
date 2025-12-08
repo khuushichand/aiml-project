@@ -12,7 +12,12 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 from tldw_Server_API.app.services.workflows_scheduler import get_workflows_scheduler
 from tldw_Server_API.app.core.Scheduler import Scheduler
 from tldw_Server_API.app.core.Scheduler import get_global_scheduler
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope, require_permissions
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    require_token_scope,
+    require_permissions,
+    get_auth_principal,
+)
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.permissions import WORKFLOWS_ADMIN
 
 
@@ -130,12 +135,17 @@ async def create_schedule(
 )
 async def admin_rescan(
     current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """Force a one-shot rescan of all users’ schedules.
 
     Admin-only: returns number of registered APScheduler jobs after rescan.
     """
-    if not bool(getattr(current_user, "is_admin", False)):
+    is_admin = bool(
+        principal.is_admin
+        or ("admin" in (principal.roles or []))
+    )
+    if not is_admin:
         raise HTTPException(status_code=403, detail="Admin-only endpoint")
     svc = get_workflows_scheduler()
     try:

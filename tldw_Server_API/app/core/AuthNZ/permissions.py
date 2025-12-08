@@ -304,6 +304,9 @@ EVALS_READ = "evals.read"
 # Flashcards permissions
 FLASHCARDS_ADMIN = "flashcards.admin"
 
+# Embeddings permissions
+EMBEDDINGS_ADMIN = "embeddings.admin"
+
 # Role names
 ROLE_ADMIN = "admin"
 ROLE_USER = "user"

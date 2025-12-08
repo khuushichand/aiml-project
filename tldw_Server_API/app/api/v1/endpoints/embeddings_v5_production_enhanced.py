@@ -55,7 +55,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings, get_profile
-from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE, EMBEDDINGS_ADMIN
 
 # Configuration
 from tldw_Server_API.app.core.config import settings
@@ -1044,13 +1044,13 @@ class CompactorRunResponse(BaseModel):
 @router.post(
     "/embeddings/compactor/run",
     response_model=CompactorRunResponse,
-    summary="Run a one-shot vector compaction for a user (admin only)"
+    summary="Run a one-shot vector compaction for a user (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def run_compactor_once(
     req: CompactorRunRequest,
     current_user: User = Depends(get_request_user),
 ):
-    require_admin(current_user)
     try:
         # Lazy import to avoid heavy imports on module import
         from tldw_Server_API.app.core.Embeddings.services.vector_compactor import compact_once as _compact_once  # type: ignore
@@ -1709,26 +1709,10 @@ async def create_embeddings_batch_async(
     return embeddings
 
 # ============================================================================
+#
 # Authorization Helpers
 # ============================================================================
 
-def require_admin(user: Optional[User]) -> None:
-    """Require admin privileges for endpoint"""
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required",
-        )
-    is_admin_flag = bool(
-        getattr(user, "is_admin", False)
-        or getattr(user, "role", None) == "admin"
-        or ("admin" in (getattr(user, "roles", None) or []))
-    )
-    if not is_admin_flag:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required",
-        )
 
 # ============================================================================
 # API Endpoints
@@ -2403,10 +2387,9 @@ class PriorityBumpRequest(BaseModel):
 @router.post(
     "/embeddings/job/priority/bump",
     summary="Override/bump job priority for routing into priority queues (best-effort)",
-    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def bump_job_priority(req: PriorityBumpRequest, current_user: User = Depends(get_request_user)) -> Dict[str, Any]:
-    require_admin(current_user)
     pr = (req.priority or "").strip().lower()
     if pr not in ("high", "normal", "low"):
         raise HTTPException(status_code=400, detail="priority must be one of: high|normal|low")
@@ -2751,8 +2734,6 @@ async def get_circuit_breakers(
 ):
     """Get detailed circuit breaker status - requires admin privileges"""
 
-    require_admin(current_user)
-
     return circuit_breaker_registry.get_all_status()
 
 @router.post(
@@ -2765,8 +2746,6 @@ async def reset_circuit_breaker(
     current_user: User = Depends(get_request_user)
 ):
     """Reset specific circuit breaker - requires admin privileges"""
-
-    require_admin(current_user)
 
     breaker_name = f"embeddings_{provider}"
     breaker = circuit_breaker_registry.get(breaker_name)
@@ -2908,15 +2887,15 @@ def _redact_obj(obj: Any, depth: int = 0) -> Any:
 
 @router.get(
     "/embeddings/dlq",
-    summary="List DLQ items for a stage (admin only)"
+    summary="List DLQ items for a stage (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def list_dlq_items(
     stage: str = Query("embedding", description="Stage: chunking|embedding|storage"),
     count: int = Query(50, ge=1, le=500, description="Max items to return"),
     job_id: Optional[str] = Query(None, description="Optional job_id to filter"),
     current_user: User = Depends(get_request_user)
-):
-    require_admin(current_user)
+    ):
     stream = _dlq_stream_name(stage)
     try:
         client = await _get_redis_client()
@@ -2980,13 +2959,13 @@ class DLQRequeueRequest(BaseModel):
 
 @router.post(
     "/embeddings/dlq/requeue",
-    summary="Requeue a DLQ item to its live stream (admin only)"
+    summary="Requeue a DLQ item to its live stream (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def requeue_dlq_item(
     req: DLQRequeueRequest,
     current_user: User = Depends(get_request_user)
-):
-    require_admin(current_user)
+    ):
     dlq_stream = _dlq_stream_name(req.stage)
     live_stream = _live_stream_name(req.stage)
     client = await _get_redis_client()
@@ -3080,13 +3059,13 @@ class DLQRequeueBulkRequest(BaseModel):
 
 @router.post(
     "/embeddings/dlq/requeue/bulk",
-    summary="Bulk requeue DLQ items to live stream (admin only)"
+    summary="Bulk requeue DLQ items to live stream (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def requeue_dlq_bulk(
     req: DLQRequeueBulkRequest,
     current_user: User = Depends(get_request_user)
-):
-    require_admin(current_user)
+    ):
     dlq_stream = _dlq_stream_name(req.stage)
     live_stream = _live_stream_name(req.stage)
     client = await _get_redis_client()
@@ -3181,12 +3160,12 @@ async def requeue_dlq_bulk(
 
 @router.get(
     "/embeddings/dlq/stats",
-    summary="DLQ and queue depths (admin only)"
+    summary="DLQ and queue depths (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def get_dlq_stats(
     current_user: User = Depends(get_request_user)
 ):
-    require_admin(current_user)
     client = await _get_redis_client()
     try:
         queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
@@ -3258,10 +3237,10 @@ def _dlq_state_key(stream: str, entry_id: str) -> str:
 
 @router.post(
     "/embeddings/dlq/state",
-    summary="Set DLQ quarantine state (admin only)"
+    summary="Set DLQ quarantine state (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def set_dlq_state(req: DLQStateSetRequest, current_user: User = Depends(get_request_user)):
-    require_admin(current_user)
     client = await _get_redis_client()
     try:
         dlq_stream = _dlq_stream_name(req.stage)
@@ -3323,10 +3302,10 @@ def _stage_key(stage: str, suffix: str) -> str:
 
 @router.get(
     "/embeddings/stage/status",
-    summary="Get per-stage pause/drain flags (admin only)"
+    summary="Get per-stage pause/drain flags (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def get_stage_status(current_user: User = Depends(get_request_user)):
-    require_admin(current_user)
     client = await _get_redis_client()
     try:
         out = {}
@@ -3344,10 +3323,10 @@ async def get_stage_status(current_user: User = Depends(get_request_user)):
 
 @router.post(
     "/embeddings/stage/control",
-    summary="Pause/Resume/Drain a stage (admin only)"
+    summary="Pause/Resume/Drain a stage (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def control_stage(req: StageControlRequest, current_user: User = Depends(get_request_user)):
-    require_admin(current_user)
     client = await _get_redis_client()
     try:
         stages = [req.stage] if req.stage != "all" else ["chunking", "embedding", "storage"]
@@ -3402,10 +3381,10 @@ def _skip_key(job_id: str) -> str:
 
 @router.post(
     "/embeddings/job/skip",
-    summary="Mark a job_id as skipped (admin only)"
+    summary="Mark a job_id as skipped (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def mark_job_skipped(req: JobSkipRequest, current_user: User = Depends(get_request_user)):
-    require_admin(current_user)
     client = await _get_redis_client()
     try:
         await client.set(_skip_key(req.job_id), "1", ex=int(req.ttl_seconds))
@@ -3435,10 +3414,10 @@ async def mark_job_skipped(req: JobSkipRequest, current_user: User = Depends(get
 
 @router.get(
     "/embeddings/job/skip/status",
-    summary="Check if a job_id is marked as skipped (admin only)"
+    summary="Check if a job_id is marked as skipped (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def get_job_skip_status(job_id: str = Query(..., description="Job ID to check"), current_user: User = Depends(get_request_user)):
-    require_admin(current_user)
     client = await _get_redis_client()
     try:
         val = await client.get(_skip_key(job_id))
@@ -3462,13 +3441,14 @@ class LedgerEntry(BaseModel):
 
 @router.get(
     "/embeddings/ledger/status",
-    summary="Inspect ledger entries by idempotency_key/dedupe_key (admin only)"
+    summary="Inspect ledger entries by idempotency_key/dedupe_key (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def get_ledger_status(
     idempotency_key: Optional[str] = Query(default=None),
     dedupe_key: Optional[str] = Query(default=None),
     current_user: User = Depends(get_request_user),
-):
+    ):
     """Return current ledger values for provided keys.
 
     Reads:
@@ -3476,7 +3456,6 @@ async def get_ledger_status(
       - embeddings:ledger:dedupe:{dedupe_key}
     Values may be plain strings or JSON objects with {status, ts, job_id}.
     """
-    require_admin(current_user)
     if not idempotency_key and not dedupe_key:
         raise HTTPException(status_code=400, detail="Provide idempotency_key and/or dedupe_key")
     client = await _get_redis_client()
@@ -3547,7 +3526,8 @@ class ReembedScheduleResponse(BaseModel):
 @router.post(
     "/embeddings/reembed/schedule",
     response_model=ReembedScheduleResponse,
-    summary="Schedule a re-embed expansion job (admin only)"
+    summary="Schedule a re-embed expansion job (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def schedule_reembed(
     req: ReembedScheduleRequest,
@@ -3558,7 +3538,6 @@ async def schedule_reembed(
 
     Domain: embeddings, Queue: reembed (configurable via REEMBED_JOB_QUEUE), Job Type: expand_reembed.
     """
-    require_admin(current_user)
     # Build payload
     uid = str(req.user_id or current_user.id)
     payload = {
@@ -3744,10 +3723,11 @@ async def _sse_orchestrator_stream(client: aioredis.Redis):
 
 @router.get(
     "/embeddings/orchestrator/events",
-    summary="SSE: embeddings orchestrator live summary (admin only)"
+    summary="SSE: embeddings orchestrator live summary (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def orchestrator_events(current_user: User = Depends(get_request_user)):
-    require_admin(current_user)
+    # Admin/embeddings-admin gate is enforced via AuthNZ permissions; current_user is used for audit context only.
     client = await _get_redis_client()
 
     # Legacy path (default): keep existing SSE generator behavior
@@ -3831,14 +3811,14 @@ async def orchestrator_events(current_user: User = Depends(get_request_user)):
 
 @router.get(
     "/embeddings/orchestrator/summary",
-    summary="Orchestrator summary for polling (admin only)"
+    summary="Orchestrator summary for polling (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def orchestrator_summary(current_user: User = Depends(get_request_user)):
     """Return a snapshot identical to the SSE payload.
 
     Includes: queues, dlq, ages, stages, flags, ts
     """
-    require_admin(current_user)
     client: Optional[aioredis.Redis] = None
     def _zero_snapshot() -> Dict[str, Any]:
         return {"queues": {}, "dlq": {}, "ages": {}, "stages": {}, "flags": {}, "ts": datetime.utcnow().timestamp()}

@@ -1002,6 +1002,11 @@ async def register(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+    except HTTPException:
+        # Propagate explicit HTTPException responses (for example the
+        # local-single-user profile guard) without wrapping them as 500.
+        _finalize_register_diag(request, response)
+        raise
     except Exception as e:
         # Check if it's a transaction error wrapping a duplicate user error
         error_msg = str(e).lower()

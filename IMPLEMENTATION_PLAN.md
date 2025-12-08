@@ -69,4 +69,15 @@
 - Single-user bootstrap and the initial AuthNZ repository layer (`AuthnzUsersRepo`, `AuthnzApiKeysRepo`, `AuthnzRbacRepo`, etc.) are the default path in AuthNZ, with both SQLite and Postgres tests covering core flows as described in `Docs/Product/User-Unification-PRD.md`.
 **Tests**:
 - Keep `tests/Resource_Governance/*`, `tests/AuthNZ_Unit/test_auth_principal_*`, `tests/AuthNZ_Unit/*permissions*_claims.py`, `tests/AuthNZ/integration/test_single_user_claims_permissions.py`, and the AuthNZ repo tests passing across SQLite/Postgres backends.
-**Status**: In Progress
+**Remaining Work (tracked in PRDs)**:
+- **Resource_Governor_PRD.md**:
+  - Retire documented legacy limiters once RG parity is validated (Chat `ConversationRateLimiter`, Embeddings `UserRateLimiter`, Evaluations/AuthNZ/Character Chat/Web Scraping shims, legacy SlowAPI counters, and non-RG audio concurrency counters).
+  - Decide on RG ingress coverage for currently RG-free routes (for example `/api/v1/research/*`, `/api/v1/workflows/*`, `/api/v1/prompt-studio/*`, `/api/v1/rag/*`, `/api/v1/media/*`) and either wire them through `route_map` policies or document their exclusion as intentional.
+- **User-Auth-Deps-PRD.md**:
+  - Migrate remaining legacy `require_admin` helpers in evaluations, embeddings v5, and MCP endpoints to `get_auth_principal` + `require_roles("admin")` / `require_permissions(...)`, keeping shims only where explicitly documented as compatibility paths.
+  - Audit and gradually remove any new authorization checks that still branch on `is_single_user_mode()` instead of principal claims, in line with the PRD’s “Remaining adoption checklist”.
+- **User-Unification-PRD.md**:
+  - Continue moving inline AuthNZ SQL and backend detection into repositories (remaining DDL in `initialize.py`, quota counters in `quotas.py`, and any residual `hasattr(conn,'fetchval')` paths) while preserving behavior for both SQLite and Postgres.
+  - Keep `PROFILE` and feature-flag usage in sync with `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` and avoid introducing new `AUTH_MODE`-based branches in business logic.
+
+**Status**: Mostly complete — core RG backends, middleware, and admin/diagnostic endpoints match the Resource_Governor PRD; claim-first auth deps and the initial AuthNZ repository layer are the default path, with remaining work limited to the long‑tail items summarized above and the PRDs’ “Remaining adoption checklist” sections.

@@ -6,6 +6,9 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_d
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.api.v1.endpoints import workflows as wf_mod
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
+from starlette.requests import Request
 
 
 def test_dlq_list_and_replay_simulated(monkeypatch):
@@ -16,9 +19,35 @@ def test_dlq_list_and_replay_simulated(monkeypatch):
     db_for_app = WorkflowsDatabase("Databases/test_wf_dlq.db")
     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
+    async def override_principal(request: Request | None = None):  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject="tester",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["workflows.runs.control"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        if request is not None:
+            try:
+                request.state.auth = AuthContext(
+                    principal=principal,
+                    ip=None,
+                    user_agent=None,
+                    request_id=None,
+                )
+            except Exception:
+                pass
+        return principal
     def override_db():
         return db_for_app
     app.dependency_overrides[get_request_user] = override_user
+    app.dependency_overrides[get_auth_principal] = override_principal
     app.dependency_overrides[wf_mod._get_db] = override_db
 
     with TestClient(app) as client:

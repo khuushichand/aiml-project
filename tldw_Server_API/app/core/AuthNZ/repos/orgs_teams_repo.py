@@ -763,6 +763,13 @@ class AuthnzOrgsTeamsRepo:
                         """,
                         (org_id, user_id, role),
                     )
+                    # For SQLite, construct a best-effort result upfront; commit
+                    # verification and fallback SELECT below will refine this when needed.
+                    result = {
+                        "org_id": int(org_id),
+                        "user_id": int(user_id),
+                        "role": role,
+                    }
                 try:
                     await conn.commit()
                 except Exception as exc:

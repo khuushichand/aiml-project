@@ -230,20 +230,20 @@ Internally, both share the same code paths; only bootstrap, DB URL, and enabled 
 
 Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular feature flags (`ENABLE_REGISTRATION`, `ENABLE_MFA`, etc.), but v1 keeps `AUTH_MODE` for compatibility and treats profiles as an interpretation of the existing settings.
 
-### AUTH_MODE → Profiles + Feature Flags (Migration Plan)
+### AUTH_MODE → Profiles + Feature Flags (Migration Plan, v1.0)
 
 To make “mode” an implementation detail of a higher-level deployment profile, we will:
 
-1. **Introduce an explicit profile setting** (backed by code + docs first, no behavior change):
+1. **Introduce an explicit profile setting** (backed by code + docs; wired for UX/feature gating in v1.0, no auth‑path behavior change):
    - New setting/env env var: `PROFILE` with allowed values such as:
      - `local-single-user` (or legacy alias `single_user`).
      - `multi-user-postgres`.
      - `multi-user-sqlite` (optional, for small multi-user dev setups).
-   - Initial behavior (v0.1.x):
+   - Initial behavior (v1.0):
      - If `PROFILE` is unset, the system behaves exactly as today and infers behavior from `AUTH_MODE` + `DATABASE_URL`.
      - If `PROFILE` is set, helper functions (e.g., `is_single_user_mode`, `is_multi_user_mode`) continue to read `AUTH_MODE` but may log/emit diagnostics when `PROFILE` and `AUTH_MODE` disagree (no hard failures yet).
-    - Status (v0.1.x):
-      - `tldw_Server_API/app/core/AuthNZ/settings.Settings` exposes a `PROFILE` field (env `PROFILE`) and a helper `get_profile()` which returns either the explicit value or a derived profile string based on `AUTH_MODE` + `DATABASE_URL` (for example, `local-single-user`, `multi-user-postgres`, `multi-user-sqlite`). This value is used only for coordination/UX and feature gating (startup hints, tenant-quota behavior); all authentication and authorization decisions remain claim-first and continue to rely on `AUTH_MODE`, `get_auth_principal`, and RBAC claims rather than `PROFILE`.
+   - Status (v1.0):
+     - `tldw_Server_API/app/core/AuthNZ/settings.Settings` exposes a `PROFILE` field (env `PROFILE`) and a helper `get_profile()` which returns either the explicit value or a derived profile string based on `AUTH_MODE` + `DATABASE_URL` (for example, `local-single-user`, `multi-user-postgres`, `multi-user-sqlite`). This value is used only for coordination/UX and feature gating (startup logs, WebUI `/webui/config.json` hints, embeddings tenant-quota behavior); all authentication and authorization decisions remain claim-first and continue to rely on `AUTH_MODE`, `get_auth_principal`, and RBAC claims rather than `PROFILE`.
 
 2. **Add feature flags that clarify UX vs auth semantics**, without changing defaults:
    - Examples:
