@@ -1,3 +1,5 @@
+"""AuthNZ monitoring repository over audit_logs, sessions, and api_keys."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,11 +10,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.exceptions import AuthnzMonitoringError
-
-
-def _strip_tzinfo(dt: datetime) -> datetime:
-    """Strip timezone info for backend-agnostic timestamp storage."""
-    return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
+from tldw_Server_API.app.core.AuthNZ.repos.datetime_utils import _strip_tzinfo
 
 
 @dataclass
@@ -84,9 +82,10 @@ class AuthnzMonitoringRepo:
                         except (ValueError, IndexError):
                             deleted = 0
                 else:
+                    cutoff_param = _strip_tzinfo(cutoff).isoformat()
                     cursor = await conn.execute(
                         "DELETE FROM audit_logs WHERE created_at < ?",
-                        (cutoff.isoformat(),),
+                        (cutoff_param,),
                     )
                     deleted = getattr(cursor, "rowcount", 0) or 0
                 return int(deleted or 0)
@@ -118,7 +117,7 @@ class AuthnzMonitoringRepo:
                   AND action LIKE 'metric_%'
                 """
             else:
-                cutoff_param = cutoff.isoformat()
+                cutoff_param = _strip_tzinfo(cutoff).isoformat()
                 query = """
                 SELECT
                     COUNT(CASE WHEN action = 'metric_auth_success' THEN 1 END) as successful_auths,
@@ -175,7 +174,7 @@ class AuthnzMonitoringRepo:
                   AND (is_revoked = $2 OR is_revoked IS NULL)
                 """
             else:
-                expires_param = now.isoformat()
+                expires_param = _strip_tzinfo(now).isoformat()
                 query = """
                 SELECT COUNT(*) as active_sessions
                 FROM sessions

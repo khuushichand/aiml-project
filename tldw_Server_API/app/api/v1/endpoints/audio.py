@@ -1029,6 +1029,8 @@ async def create_transcription(
                 logger.exception(
                     f"Failed to release job slot after quota denial: user_id={current_user.id}, error={e}; request_id={rid}"
                 )
+            # Mark slot as released so the outer finally does not double-release
+            acquired_job_slot = False
             # Ensure any heartbeat loop is cancelled on early quota denial
             if job_heartbeat_task:
                 job_heartbeat_task.cancel()
@@ -1841,7 +1843,7 @@ async def _audio_ws_authenticate(
             from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
             from tldw_Server_API.app.core.AuthNZ.quotas import increment_and_check_jwt_quota
         except Exception as exc:  # pragma: no cover - defensive import
-            logger.debug(f"Failed to import JWT quota helpers: {exc}")
+            logger.warning(f"Failed to import JWT quota helpers: {exc}")
             return False
 
         if str(payload.get("role", "")).lower() != "admin":
@@ -1911,7 +1913,7 @@ async def _audio_ws_authenticate(
             await _stream_error("Invalid or expired token", code=4401)
             return None
         except Exception as exc:  # noqa: BLE001
-            logger.debug(f"JWT authentication failed: {exc}")
+            logger.warning(f"JWT authentication failed: {exc}")
             await _stream_error("Authentication failed", code=4401)
             return None
 
@@ -1923,6 +1925,16 @@ async def _audio_ws_authenticate(
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"Failed to read X-API-KEY header: {exc}")
             x_api_key = None
+        # Query-string token support (multi-user): allow `?token=` as an API key
+        # source when no X-API-KEY header is present.
+        if not x_api_key:
+            try:
+                query_token = websocket.query_params.get("token") if hasattr(websocket, "query_params") else None
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"Failed to read query token for API key auth: {exc}")
+                query_token = None
+            if query_token:
+                x_api_key = query_token
         if x_api_key:
             try:
                 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
@@ -1986,7 +1998,7 @@ async def _audio_ws_authenticate(
                     jwt_user_id = None
                 return True, jwt_user_id
             except Exception as exc:  # noqa: BLE001
-                logger.debug(f"API key authentication failed: {exc}")
+                logger.warning(f"API key authentication failed: {exc}")
                 await _stream_error("API key authentication failed", code=4401)
                 return False, None
 
@@ -1997,6 +2009,15 @@ async def _audio_ws_authenticate(
             parts = auth_header.split()
             if len(parts) == 2 and parts[0].lower() == "bearer":
                 bearer = parts[1]
+        if not bearer:
+            # Fallback: support `?token=` as a JWT bearer source in multi-user mode.
+            try:
+                query_token = websocket.query_params.get("token") if hasattr(websocket, "query_params") else None
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"Failed to read query token for JWT auth: {exc}")
+                query_token = None
+            if query_token:
+                bearer = query_token
         if bearer:
             try:
                 user_id = await _decode_and_validate_jwt_token(bearer)
@@ -2411,32 +2432,6 @@ async def websocket_transcribe(
                 await websocket.send_json({"type": "error", "message": "Invalid authentication message"})
                 await websocket.close(code=4401)
                 return
-                # Accept Bearer token in first message for compatibility
-                try:
-                    from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
-                    from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
-                    from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user_by_id
-
-                    jwt_service = get_jwt_service()
-                    payload = jwt_service.decode_access_token(auth_data.get("token"))
-                    uid = payload.get("user_id") or payload.get("sub")
-                    if isinstance(uid, str):
-                        uid = int(uid)
-                    if not uid:
-                        raise ValueError("missing user id in token")
-                    session_manager = await get_session_manager()
-                    if await session_manager.is_token_blacklisted(auth_data.get("token"), payload.get("jti")):
-                        raise ValueError("token revoked")
-                    user_row = await _get_user_by_id(int(uid))
-                    if not user_row:
-                        raise ValueError("user not found")
-                    jwt_user_id = int(uid)
-                    authenticated = True
-                except Exception as e:
-                    logger.warning(f"WS JWT auth (message) failed: {e}")
-                    await websocket.send_json({"type": "error", "message": "Invalid or expired token"})
-                    await websocket.close(code=4401)
-                    return
     if not is_multi_user_mode():
         # Single-user mode: API key via header, query or auth message, with optional IP allowlist
         expected_key = settings.SINGLE_USER_API_KEY
@@ -2813,6 +2808,11 @@ async def websocket_audio_chat_stream(
       - Partial STT with VAD auto-commit
       - Streaming LLM deltas
       - Streaming TTS audio back (binary frames)
+
+    Authentication:
+      - Multi-user: `X-API-KEY` header, `Authorization: Bearer <JWT>`, `token` query parameter (API key or JWT),
+        or an initial auth message frame (JWT).
+      - Single-user: API key via header, `token` query parameter, or an initial auth message; optional IP allowlist.
     """
     await websocket.accept()
 
@@ -3075,6 +3075,22 @@ async def websocket_audio_chat_stream(
 
         turn_detector: Optional[SileroTurnDetector] = None
         vad_warning_sent = False
+
+        async def _send_vad_warning(message: str, details: Optional[str]) -> None:
+            payload: Dict[str, Any] = {
+                "type": "warning",
+                "warning_type": "vad_unavailable",
+                "message": message,
+                "details": details,
+            }
+            try:
+                if _outer_stream:
+                    await _outer_stream.send_json(payload)
+                else:
+                    await websocket.send_json(payload)
+            except Exception as send_exc:
+                logger.debug(f"audio.chat.stream VAD warning send failed: {send_exc}")
+
         if config.enable_vad:
             try:
                 turn_detector = SileroTurnDetector(
@@ -3087,13 +3103,9 @@ async def websocket_audio_chat_stream(
                 )
                 if not turn_detector.available:
                     vad_warning_sent = True
-                    await _outer_stream.send_json(
-                        {
-                            "type": "warning",
-                            "warning_type": "vad_unavailable",
-                            "message": "Silero VAD unavailable; auto-commit disabled",
-                            "details": turn_detector.unavailable_reason,
-                        }
+                    await _send_vad_warning(
+                        "Silero VAD unavailable; auto-commit disabled",
+                        turn_detector.unavailable_reason,
                     )
                     turn_detector = None
             except Exception as vad_exc:
@@ -3437,13 +3449,9 @@ async def websocket_audio_chat_stream(
                         auto_commit_triggered = turn_detector.observe(audio_bytes)
                         if not turn_detector.available and not vad_warning_sent:
                             vad_warning_sent = True
-                            await _outer_stream.send_json(
-                                {
-                                    "type": "warning",
-                                    "warning_type": "vad_unavailable",
-                                    "message": "Silero VAD disabled; continuing without auto-commit",
-                                    "details": turn_detector.unavailable_reason,
-                                }
+                            await _send_vad_warning(
+                                "Silero VAD disabled; continuing without auto-commit",
+                                turn_detector.unavailable_reason,
                             )
                             turn_detector = None
 
@@ -3549,7 +3557,13 @@ async def websocket_tts(
     websocket: WebSocket,
     token: Optional[str] = Query(None),  # noqa: ARG001 - kept for parity with transcribe endpoint
 ):
-    """WebSocket TTS streaming endpoint: accepts a prompt frame and streams audio bytes."""
+    """
+    WebSocket TTS streaming endpoint: accepts a prompt frame and streams audio bytes.
+
+    Authentication mirrors `_audio_ws_authenticate`:
+    - Multi-user: `X-API-KEY` header, `Authorization: Bearer <JWT>`, or `token` query parameter (API key or JWT).
+    - Single-user: fixed API key via header, `token` query parameter, or initial auth message; optional IP allowlist.
+    """
     await websocket.accept()
 
     try:
@@ -3615,8 +3629,6 @@ async def websocket_tts(
         user_id_for_usage = getattr(_s, "SINGLE_USER_FIXED_ID", 1)
 
     acquired_stream = False
-    producer_task: Optional[asyncio.Task] = None
-    consumer_task: Optional[asyncio.Task] = None
 
     try:
         # Concurrency guard
@@ -3697,33 +3709,29 @@ async def websocket_tts(
         reg = get_metrics_registry()
         tts_service = await get_tts_service()
 
-        producer_task = asyncio.create_task(
-            _stream_tts_to_websocket(
-                websocket=websocket,
-                speech_req=speech_req,
-                tts_service=tts_service,
-                provider=provider_hint,
-                outer_stream=_outer_stream,
-                reg=reg,
-                route="audio.stream.tts",
-                component_label="audio_tts_ws",
-                error_handler=(
-                    (  # type: ignore[union-attr]
-                        lambda exc: _outer_stream.error(
-                            "internal_error",
-                            "TTS generation failed",
-                            data={"message": str(exc)},
-                        )
+        # Delegate to the shared streaming helper; it manages its own
+        # producer/consumer tasks and error handling.
+        await _stream_tts_to_websocket(
+            websocket=websocket,
+            speech_req=speech_req,
+            tts_service=tts_service,
+            provider=provider_hint,
+            outer_stream=_outer_stream,
+            reg=reg,
+            route="audio.stream.tts",
+            component_label="audio_tts_ws",
+            error_handler=(
+                (  # type: ignore[union-attr]
+                    lambda exc: _outer_stream.error(
+                        "internal_error",
+                        "TTS generation failed",
+                        data={"message": str(exc)},
                     )
-                    if _outer_stream
-                    else None
-                ),
-            )
+                )
+                if _outer_stream
+                else None
+            ),
         )
-
-        # Wait for the streaming helper to complete; it already
-        # handles internal producer/consumer lifetime and errors.
-        await producer_task
     finally:
         if acquired_stream:
             try:
@@ -3744,13 +3752,6 @@ async def websocket_tts(
                     f"audio.stream.tts websocket close failed after _outer_stream.done error: "
                     f"outer_error={outer_exc}, close_error={close_exc}"
                 )
-        try:
-            if producer_task is not None:
-                producer_task.cancel()
-            if consumer_task is not None:
-                consumer_task.cancel()
-        except Exception as cancel_exc:
-            logger.debug(f"audio.stream.tts task cancel failed: error={cancel_exc}")
 
 
 @router.get("/stream/status", summary="Check streaming transcription availability")

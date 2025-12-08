@@ -124,7 +124,10 @@ def check_environment():
 
     print("✅ Environment configuration valid")
     print(f"   Mode: {settings.AUTH_MODE}")
-    print(f"   Database: {settings.DATABASE_URL[:30]}...")
+    db_url_raw = settings.DATABASE_URL or ""
+    # Strip credentials if present for diagnostics (avoid logging secrets)
+    db_url_safe = db_url_raw.split("@")[-1] if "@" in db_url_raw else db_url_raw
+    print(f"   Database: {db_url_safe}")
 
     return True
 
@@ -888,7 +891,7 @@ async def bootstrap_single_user_profile() -> bool:
         print(f"⚠️  Single-user RBAC seed failed (continuing): {e}")
         logger.warning(
             "Single-user RBAC seed failed in bootstrap_single_user_profile "
-            "(continuing): %s",
+            "(continuing): {}",
             e,
         )
 
@@ -937,7 +940,7 @@ async def bootstrap_single_user_profile() -> bool:
     except Exception as e:
         print(f"⚠️  Failed to bootstrap single-user primary API key (continuing): {e}")
         logger.warning(
-            "Failed to bootstrap single-user primary API key (continuing): %s",
+            "Failed to bootstrap single-user primary API key (continuing): {}",
             e,
         )
         return False

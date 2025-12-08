@@ -285,10 +285,20 @@ async def login(
         if is_locked:
             logger.warning(f"Login attempt from locked IP: {client_ip}")
             log_counter("auth_login_locked_ip")
+            retry_after_seconds = 900
+            if isinstance(lockout_expires, datetime):
+                try:
+                    from datetime import timezone as _tz
+
+                    now = datetime.now(lockout_expires.tzinfo or _tz.utc)
+                    retry_after_seconds = max(0, int((lockout_expires - now).total_seconds()))
+                except Exception:
+                    # Fallback to default retry_after_seconds
+                    pass
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Too many failed login attempts. Please try again later.",
-                headers={"Retry-After": str(int((lockout_expires - datetime.utcnow()).total_seconds()))}
+                detail="Too many failed login attempts. Please try again later.",
+                headers={"Retry-After": str(retry_after_seconds)}
             )
 
         # Sanitize input (lightweight). For login, avoid strict validation to not block

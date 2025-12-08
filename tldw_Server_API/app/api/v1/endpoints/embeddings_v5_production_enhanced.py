@@ -413,32 +413,6 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
 
     # Per-tenant quotas in multi-user mode
     try:
-        def _is_multi_user_runtime() -> bool:
-            try:
-                am = os.getenv("AUTH_MODE")
-                if am:
-                    return am.strip().lower() == "multi_user"
-            except Exception:
-                pass
-            try:
-                profile = get_profile()
-                if isinstance(profile, str) and profile.strip():
-                    # Keep current behavior: profiles that explicitly signal a
-                    # local/single-user/desktop experience are treated as
-                    # non-multi-user for tenant quotas; everything else
-                    # behaves like multi_user.
-                    lowered = profile.strip().lower()
-                    if lowered in {"single_user", "local-single-user", "desktop"}:
-                        return False
-                    return True
-                return not is_single_user_mode()
-            except Exception as exc:
-                logger.debug(
-                    "Embeddings quotas: failed to resolve runtime mode, treating as single-user: {}",
-                    exc,
-                )
-                return False
-
         # Read tenant RPS dynamically so tests can monkeypatch env at runtime
         def _tenant_rps_runtime() -> int:
             try:
@@ -1708,11 +1682,6 @@ async def create_embeddings_batch_async(
 
     return embeddings
 
-# ============================================================================
-#
-# Authorization Helpers
-# ============================================================================
-
 
 # ============================================================================
 # API Endpoints
@@ -2351,20 +2320,37 @@ class TenantQuotaResponse(BaseModel):
     remaining: Optional[int] = None
 
 
-@router.get("/embeddings/tenant/quotas", summary="Get current tenant quotas (if multi-tenant)")
-async def get_tenant_quotas(current_user: User = Depends(get_request_user)) -> TenantQuotaResponse:
+def _is_single_user_profile() -> bool:
+    """Return True when the active profile indicates a single-user deployment."""
     try:
         profile = get_profile()
         if isinstance(profile, str) and profile.strip():
             lowered = profile.strip().lower()
-            if lowered in {"single_user", "local-single-user", "desktop"} or TENANT_RPS <= 0:
-                return TenantQuotaResponse(limit_rps=0, remaining=None)
+            if lowered in {"single_user", "local-single-user", "desktop"}:
+                return True
+            # Profiles that do not explicitly signal single-user behavior are
+            # treated according to AUTH_MODE / settings.
+            return False
+        return is_single_user_mode()
     except Exception as exc:
-        logger.debug(
-            "Embeddings tenant quotas: failed to read PROFILE; falling back to AUTH_MODE/is_single_user_mode: {}",
-            exc,
-        )
-    if is_single_user_mode() or TENANT_RPS <= 0:
+        logger.debug("Embeddings profile check failed; treating as single-user: {}", exc)
+        return True
+
+
+def _is_multi_user_runtime() -> bool:
+    """Detect whether the current runtime should be treated as multi-user."""
+    try:
+        am = os.getenv("AUTH_MODE")
+        if am:
+            return am.strip().lower() == "multi_user"
+    except Exception:
+        pass
+    return not _is_single_user_profile()
+
+
+@router.get("/embeddings/tenant/quotas", summary="Get current tenant quotas (if multi-tenant)")
+async def get_tenant_quotas(current_user: User = Depends(get_request_user)) -> TenantQuotaResponse:
+    if not _is_multi_user_runtime() or TENANT_RPS <= 0:
         return TenantQuotaResponse(limit_rps=0, remaining=None)
     try:
         client = await _get_redis_client()
@@ -2393,6 +2379,19 @@ async def bump_job_priority(req: PriorityBumpRequest, current_user: User = Depen
     pr = (req.priority or "").strip().lower()
     if pr not in ("high", "normal", "low"):
         raise HTTPException(status_code=400, detail="priority must be one of: high|normal|low")
+
+    try:
+        logger.info(
+            "Embeddings admin priority bump requested",
+            extra={
+                "admin_id": getattr(current_user, "id", None),
+                "job_id": req.job_id,
+                "priority": pr,
+            },
+        )
+    except Exception:
+        # Logging must not interfere with admin operations
+        pass
     try:
         client = await _get_redis_client()
         key = f"embeddings:priority:override:{req.job_id}"
@@ -2894,8 +2893,12 @@ async def list_dlq_items(
     stage: str = Query("embedding", description="Stage: chunking|embedding|storage"),
     count: int = Query(50, ge=1, le=500, description="Max items to return"),
     job_id: Optional[str] = Query(None, description="Optional job_id to filter"),
-    current_user: User = Depends(get_request_user)
-    ):
+    current_user: User = Depends(get_request_user),
+) -> Dict[str, Any]:
+    """List DLQ items for a stage.
+
+    current_user is included to enforce authentication via dependencies.
+    """
     stream = _dlq_stream_name(stage)
     try:
         client = await _get_redis_client()
@@ -3448,8 +3451,10 @@ async def get_ledger_status(
     idempotency_key: Optional[str] = Query(default=None),
     dedupe_key: Optional[str] = Query(default=None),
     current_user: User = Depends(get_request_user),
-    ):
+) -> Dict[str, Optional[LedgerEntry]]:
     """Return current ledger values for provided keys.
+
+    current_user is included to enforce authentication and RBAC via dependencies.
 
     Reads:
       - embeddings:ledger:idemp:{idempotency_key}
@@ -3727,7 +3732,15 @@ async def _sse_orchestrator_stream(client: aioredis.Redis):
     dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def orchestrator_events(current_user: User = Depends(get_request_user)):
-    # Admin/embeddings-admin gate is enforced via AuthNZ permissions; current_user is used for audit context only.
+    # Admin/embeddings-admin gate is enforced via AuthNZ permissions; current_user is used for audit context.
+    try:
+        logger.info(
+            "Embeddings orchestrator SSE connection initiated",
+            extra={"user_id": getattr(current_user, "id", None)},
+        )
+    except Exception:
+        # Audit logging is best-effort and must not break the SSE stream
+        pass
     client = await _get_redis_client()
 
     # Legacy path (default): keep existing SSE generator behavior

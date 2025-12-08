@@ -568,7 +568,7 @@ class TestMockedFlow:
 
 
 class TestLLMBudgetGuardrails:
-    """Tests for LLM budget middleware interactions with embeddings endpoints."""
+    """Tests for LLM budget middleware interactions with core LLM endpoints."""
 
     @pytest.mark.unit
     def test_embeddings_budget_exceeded_returns_402(self, monkeypatch, test_client):
@@ -617,6 +617,64 @@ class TestLLMBudgetGuardrails:
         resp = client.post(
             "/api/v1/embeddings",
             json={"input": "hello", "model": "text-embedding-3-small"},
+        )
+        # Over-budget virtual key should yield a 402 from budget middleware.
+        assert resp.status_code == 402
+        body = resp.json()
+        assert body.get("error") == "budget_exceeded"
+
+    @pytest.mark.unit
+    def test_chat_budget_exceeded_returns_402(self, monkeypatch, test_client):
+        """Simulate an over-budget virtual key and assert 402 for chat completions."""
+        import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as budget_mod
+
+        # Force budget middleware to apply to chat completions
+        monkeypatch.setattr(
+            budget_mod.LLMBudgetMiddleware,
+            "_should_check",
+            lambda self, path: path.startswith("/api/v1/chat/completions"),
+        )
+
+        # Stub key resolution to treat the Authorization header as a valid virtual key
+        async def _fake_resolve_api_key_by_hash(api_key, settings=None):  # type: ignore[override]
+            _ = (api_key, settings)
+            return {"id": 999, "user_id": 77}
+
+        monkeypatch.setattr(budget_mod, "resolve_api_key_by_hash", _fake_resolve_api_key_by_hash)
+
+        # Treat this key as a virtual key so budget enforcement runs
+        async def _fake_get_key_limits(key_id: int):  # type: ignore[override]
+            _ = key_id
+            return {"is_virtual": True}
+
+        monkeypatch.setattr(budget_mod, "get_key_limits", _fake_get_key_limits)
+
+        # Force the auth governor to report the key as over budget
+        class _FakeGov:
+            async def check_llm_budget_for_api_key(self, principal, key_id):  # type: ignore[override]
+                _ = (principal, key_id)
+                return {
+                    "over": True,
+                    "limits": {"llm_budget_day_tokens": 0},
+                    "reasons": ["test_over_budget_chat"],
+                }
+
+        async def _fake_get_auth_governor():  # type: ignore[override]
+            return _FakeGov()
+
+        monkeypatch.setattr(budget_mod, "get_auth_governor", _fake_get_auth_governor)
+
+        client = test_client
+        client.headers["Authorization"] = "Bearer test-virtual-key-chat"
+
+        resp = client.post(
+            "/api/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "user", "content": "Hello"},
+                ],
+            },
         )
         # Over-budget virtual key should yield a 402 from budget middleware.
         assert resp.status_code == 402

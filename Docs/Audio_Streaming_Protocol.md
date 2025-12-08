@@ -205,7 +205,9 @@ WebSocket TTS (PCM)
 
 Endpoint: `/api/v1/audio/stream/tts`
 
-- Auth/quotas: mirrors streaming STT (API key/JWT/single-user key) with per-user concurrent stream guard.
+- Auth/quotas: mirrors streaming STT (API key/JWT/single-user key) with per-user concurrent stream guard. Credentials
+  may be supplied via `X-API-KEY`, `Authorization: Bearer <JWT>`, a `token` query parameter (API key or JWT), or
+  an initial auth message; single-user setups additionally accept the fixed API key via these sources.
 - Client → server frames: one JSON prompt frame
 
 ```json
@@ -227,7 +229,9 @@ WebSocket Voice Chat v2
 
 Endpoint: `/api/v1/audio/chat/stream`
 
-- Auth/quotas: same as `/stream/transcribe` (JWT/X-API-KEY/single-user key), `can_start_stream` concurrency guard, per-chunk minute accounting with bounded fail-open; closes with code 4003 (or 1008 when `AUDIO_WS_QUOTA_CLOSE_1008=1`) on quota failures.
+- Auth/quotas: same as `/stream/transcribe` (JWT/X-API-KEY/single-user key) with support for a `token` query parameter
+  (API key or JWT), `can_start_stream` concurrency guard, per-chunk minute accounting with bounded fail-open; closes
+  with code 4003 (or 1008 when `AUDIO_WS_QUOTA_CLOSE_1008=1`) on quota failures.
 - Client → server frames:
   - `config` (required first): STT knobs (`model|variant|sample_rate|enable_vad|min_silence_ms|turn_stop_secs`), `llm` (`provider|model|temperature|max_tokens|system|extra_params`), `tts` (`voice|model|provider|format|speed|extra_params`), optional `session_id|metadata`.
   - `audio`: base64 float32/PCM chunks (same shape as `/stream/transcribe`).

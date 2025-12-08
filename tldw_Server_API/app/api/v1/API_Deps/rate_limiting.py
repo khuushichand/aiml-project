@@ -5,6 +5,7 @@
 import os
 from slowapi import Limiter
 from slowapi.util import get_remote_address as _original_get_remote_address
+from loguru import logger
 
 
 def get_test_aware_remote_address(request):
@@ -36,10 +37,10 @@ def get_test_aware_remote_address(request):
                         return None
             except Exception:
                 # If RG middleware introspection fails, fall back to legacy behavior.
-                pass
+                logger.debug("RG middleware introspection failed; falling back to legacy rate limiting")
     except Exception:
         # Defensive: key function must never raise; fall back to legacy behavior.
-        pass
+        logger.debug("Rate limiting key function error; falling back to legacy behavior")
 
     return _original_get_remote_address(request)
 

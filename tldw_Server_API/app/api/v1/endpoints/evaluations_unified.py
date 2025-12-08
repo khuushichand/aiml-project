@@ -145,9 +145,9 @@ def get_db_for_user(user_id: int):
 async def admin_cleanup_idempotency(
     ttl_hours: int = Query(72, ge=1, le=720, description="Delete idempotency keys older than this TTL (hours)"),
     target_user_id: Optional[int] = Query(None, description="If provided, only clean this user's evaluations DB"),
-    user_ctx: str = Depends(verify_api_key),
+    _user_ctx: str = Depends(verify_api_key),  # noqa: ARG001 - dependency for side effects
     principal: AuthPrincipal = Depends(get_auth_principal),
-    current_user: User = Depends(get_request_user),
+    _current_user: User = Depends(get_request_user),  # noqa: ARG001 - dependency for side effects
 ):
     """Admin-only: purge stale idempotency keys in Evaluations DBs on-demand.
 
@@ -326,132 +326,6 @@ def _verify_api_key_placeholder():
 
 # Note: verify_api_key is defined once above. Keep a single definition to avoid confusion.
 
-
-@router.post(
-    "/admin/idempotency/cleanup",
-    dependencies=[Depends(require_roles("admin"))],
-)
-async def admin_cleanup_idempotency(
-    ttl_hours: int = Query(72, ge=1, le=720, description="Delete idempotency keys older than this TTL (hours)"),
-    target_user_id: Optional[int] = Query(None, description="If provided, only clean this user's evaluations DB"),
-    user_ctx: str = Depends(verify_api_key),
-    principal: AuthPrincipal = Depends(get_auth_principal),
-    current_user: User = Depends(get_request_user),
-):
-    """Admin-only: purge stale idempotency keys in Evaluations DBs on-demand.
-
-    Returns a summary of deleted rows per user and total.
-    """
-    # Admin gate (claim-first + legacy shim)
-    enforce_heavy_evaluations_admin(principal)
-    try:
-        from pathlib import Path as _Path
-        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
-        from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase as _EDB
-
-        deleted_total = 0
-        details = []
-
-        # Build candidate user ids
-        candidate_ids = set()
-        if target_user_id is not None:
-            candidate_ids.add(int(target_user_id))
-        else:
-            try:
-                candidate_ids.add(int(_DP.get_single_user_id()))
-            except Exception:
-                pass
-            try:
-                base = _Path(_DP.get_user_base_directory(_DP.get_single_user_id())).parent
-                if base.exists():
-                    for entry in base.iterdir():
-                        if entry.is_dir():
-                            try:
-                                candidate_ids.add(int(entry.name))
-                            except Exception:
-                                continue
-            except Exception:
-                pass
-
-        for uid in sorted(candidate_ids):
-            try:
-                db_path = _DP.get_evaluations_db_path(uid)
-                if not db_path.exists():
-                    continue
-                db = _EDB(str(db_path))
-                deleted = db.cleanup_idempotency_keys(ttl_hours=int(ttl_hours))
-                deleted_total += int(deleted)
-                details.append({"user_id": uid, "deleted": int(deleted)})
-            except Exception:
-                continue
-
-        return {"deleted_total": deleted_total, "details": details}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Admin idempotency cleanup failed: {e}")
-        raise HTTPException(status_code=500, detail="Idempotency cleanup failed")
-
-
-def _estimate_tokens_from_texts(*texts: Optional[str], provider: Optional[str] = None, model: Optional[str] = None) -> int:
-    """Estimate tokens with provider/model hints when available.
-
-    Preference order when tiktoken is available:
-    1) encoding_for_model(model) if model provided and recognized
-    2) Heuristic by model name -> o200k_base for 4o/4.1/o1 families
-    3) cl100k_base as a general default
-
-    Falls back to chars/4 if tiktoken or encoding lookup is unavailable.
-    """
-    try:
-        import tiktoken  # type: ignore
-        enc = None
-
-        # Try exact model mapping first (OpenAI models)
-        if isinstance(model, str) and model:
-            try:
-                enc = tiktoken.encoding_for_model(model)
-            except Exception:
-                enc = None
-
-        # Heuristic for modern OpenAI models when model hint exists
-        if enc is None and isinstance(model, str):
-            m = model.lower()
-            try:
-                if ("gpt-4o" in m) or ("gpt-4.1" in m) or m.startswith("o1"):
-                    enc = tiktoken.get_encoding("o200k_base")
-            except Exception:
-                enc = None
-
-        # Provider fallback (OpenAI -> cl100k_base)
-        if enc is None and isinstance(provider, str) and provider.lower() == "openai":
-            try:
-                enc = tiktoken.get_encoding("cl100k_base")
-            except Exception:
-                enc = None
-
-        # Final default
-        if enc is None:
-            try:
-                enc = tiktoken.get_encoding("cl100k_base")
-            except Exception:
-                enc = None
-
-        if enc is not None:
-            total = 0
-            for t in texts:
-                if isinstance(t, str) and t:
-                    total += len(enc.encode(t))
-            return total
-    except Exception:
-        pass
-
-    # Fallback: character-based approximation
-    total_chars = 0
-    for t in texts:
-        if isinstance(t, str):
-            total_chars += len(t)
-    return max(0, total_chars // 4)
 
 
 async def _apply_rate_limit_headers(limiter, user_id: str, response: Response, meta: Optional[Dict[str, Any]] = None) -> None:
@@ -642,7 +516,10 @@ async def delete_embeddings_abtest(
     return {"status": "deleted", "test_id": test_id}
 
 
-@router.get("/embeddings/abtest/{test_id}/export")
+@router.get(
+    "/embeddings/abtest/{test_id}/export",
+    dependencies=[Depends(require_roles("admin"))],
+)
 async def export_embeddings_abtest(
     test_id: str,
     format: str = Query("json", pattern="^(json|csv)$"),

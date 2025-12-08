@@ -139,6 +139,45 @@ class UserCreateRequest(BaseModel):
 
 #######################################################################################################################
 #
+# Shared registration guards
+
+def _get_registration_settings(request: Request):
+    """
+    Return settings after enforcing registration/profile invariants.
+
+    In the local-single-user/single_user profile, creating additional
+    users beyond the bootstrapped admin is a hard constraint: all
+    registration flows are forbidden regardless of ENABLE_REGISTRATION.
+    """
+    settings = get_settings()
+
+    # Profile-based hard block: no self-registration in local-single-user
+    profile = get_profile()
+    if isinstance(profile, str) and profile.strip().lower() in {"local-single-user", "single_user"}:
+        client_ip = request.client.host if request.client else "unknown"
+        logger.warning(
+            "Registration-related endpoint rejected in local-single-user profile from IP: {}",
+            client_ip,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User registration is not allowed in local-single-user profile",
+        )
+
+    # Global registration toggle
+    if not settings.ENABLE_REGISTRATION:
+        client_ip = request.client.host if request.client else "unknown"
+        logger.warning(f"Registration attempt while disabled from IP: {client_ip}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User registration is currently disabled"
+        )
+
+    return settings
+
+
+#######################################################################################################################
+#
 # Registration Endpoint
 
 @router.post(
@@ -172,28 +211,7 @@ async def register_user(
     Raises:
         HTTPException: Various status codes for different error conditions
     """
-    settings = get_settings()
-
-    # Check if registration is enabled. In the local-single-user profile,
-    # creating additional users beyond the bootstrapped admin is a hard
-    # constraint: registration is forbidden regardless of ENABLE_REGISTRATION.
-    profile = get_profile()
-    if isinstance(profile, str) and profile.strip().lower() in {"local-single-user", "single_user"}:
-        logger.warning(
-            "Registration attempt rejected in local-single-user profile from IP: {}",
-            request.client.host if request.client else "unknown",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User registration is not allowed in local-single-user profile",
-        )
-
-    if not settings.ENABLE_REGISTRATION:
-        logger.warning(f"Registration attempt while disabled from IP: {request.client.host}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User registration is currently disabled"
-        )
+    settings = _get_registration_settings(request)
 
     # Initialize registration service
     await registration_service.initialize()
@@ -355,6 +373,7 @@ async def register_user(
     description="Check if a registration code is valid without using it"
 )
 async def validate_registration_code(
+    request: Request,
     code: str,
     registration_service: RegistrationService = Depends(get_registration_service_dep),
     db=Depends(get_db_transaction)
@@ -368,13 +387,7 @@ async def validate_registration_code(
     Returns:
         MessageResponse indicating if code is valid
     """
-    settings = get_settings()
-
-    if not settings.ENABLE_REGISTRATION:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Registration is currently disabled"
-        )
+    settings = _get_registration_settings(request)
 
     if not settings.REQUIRE_REGISTRATION_CODE:
         return MessageResponse(
@@ -415,6 +428,7 @@ async def validate_registration_code(
     summary="Check username/email availability"
 )
 async def check_availability(
+    request: Request,
     username: Optional[str] = None,
     email: Optional[str] = None,
     db=Depends(get_db_transaction)

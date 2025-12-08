@@ -2,13 +2,13 @@
 
 This plan coordinates the implementation of the three AuthNZ PRDs:
 
-- `Docs/Product/Principal-Governance-PRD.md`
-- `Docs/Product/User-Unification-PRD.md`
-- `Docs/Product/User-Auth-Deps-PRD.md`
+- Principal-Governance PRD (`Docs/Product/Principal-Governance-PRD.md`)
+- User-Unification PRD (`Docs/Product/User-Unification-PRD.md`)
+- User-Auth-Deps PRD (`Docs/Product/User-Auth-Deps-PRD.md`)
 
 The stages are designed to be incremental and backwards-compatible. Each stage should result in a compilable, test-passing system with a clear, testable outcome.
 
----
+***
 
 ## Stage 0: Invariants & Guardrails
 
@@ -29,17 +29,17 @@ The stages are designed to be incremental and backwards-compatible. Each stage s
   - Assert on HTTP status codes and key headers (`WWW-Authenticate`, test-only diagnostics headers).
 
 **AuthNZ 401 vs 403 Semantics (Reference)**:
-- `get_auth_principal`:
+- For `get_auth_principal`:
   - Returns `AuthPrincipal` when credentials are valid.
   - Raises **401 Unauthorized** when credentials are missing or invalid, with a stable detail string:
     - Multi-user: `"Not authenticated (provide Bearer token or X-API-KEY)"` for missing credentials.
     - Single-user: `"Could not validate credentials"` when principal resolution fails.
-- `get_current_user`:
+- For `get_current_user`:
   - Returns a user-shaped dict when credentials are valid.
   - Raises **401 Unauthorized** when credentials are missing or invalid, with:
     - Detail containing `"Authentication required"` for missing credentials.
     - `WWW-Authenticate: Bearer` header.
-- `require_permissions` / `require_roles`:
+- For `require_permissions` / `require_roles`:
   - Depend on `get_auth_principal` and therefore propagate its **401** behavior when no principal is present.
   - When a principal is present but lacks required claims, they raise **403 Forbidden**:
     - `require_permissions` uses detail `"Permission denied. Required: <perm-list>"`.
@@ -58,7 +58,7 @@ The stages are designed to be incremental and backwards-compatible. Each stage s
   - `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_media_rag_invariants.py` extends these invariants to representative business endpoints (`/api/v1/rag/search` for JWT, `/api/v1/media/process-videos` for API keys), ensuring `request.state.*` mirrors `AuthPrincipal` in real application routes.
 - The intended 401 vs 403 semantics for `get_auth_principal`, `get_current_user`, `require_permissions`, and `require_roles` are documented in `Docs/Code_Documentation/Guides/AuthNZ_Code_Guide.md` (see “HTTP status semantics (AuthNZ dependencies)”) and are treated as part of the stable compatibility surface.
 
----
+***
 
 ## Stage 1: Principal Skeleton & Compatibility Facades
 
@@ -70,12 +70,12 @@ The stages are designed to be incremental and backwards-compatible. Each stage s
   - `principal_id` (stable, non-PII identifier).
   - `user_id`/`api_key_id` (when applicable).
   - `roles`, `permissions`, `is_admin`.
-- `get_auth_principal(request)`:
+- The `get_auth_principal(request)` dependency:
   - Is implemented once and used as the **single source of truth** for identity + claims.
   - Handles credential detection (Bearer, `X-API-KEY`, single-user key) using existing JWTService, APIKeyManager, SessionManager.
-- `request.state.auth` is populated as an `AuthContext` on authenticated routes, and:
+- The `request.state.auth` context is populated as an `AuthContext` on authenticated routes, and:
   - `request.state.user_id` / `api_key_id` / `org_ids` / `team_ids` are mirrored from `AuthContext.principal` for backwards compatibility.
-- `auth_deps.get_current_user` and `User_DB_Handling.get_request_user`:
+- The `auth_deps.get_current_user` and `User_DB_Handling.get_request_user` dependencies:
   - Are refactored to internally call `get_auth_principal` and then map `AuthPrincipal` to their current return shapes (dict / `User`).
   - Maintain existing 401/403 behavior and external signatures.
 
@@ -98,10 +98,10 @@ The stages are designed to be incremental and backwards-compatible. Each stage s
 **Status**: Done
 
 **Notes**:
-- `AuthPrincipal` / `AuthContext` implemented in `tldw_Server_API/app/core/AuthNZ/principal_model.py` with unit tests.
-- `get_auth_principal(request)` implemented in `tldw_Server_API/app/core/AuthNZ/auth_principal_resolver.py` with unit tests covering single-user, JWT, and API-key flows.
-- `User_DB_Handling.authenticate_api_key_user` centralizes multi-user API key authentication and is reused by both `get_request_user` and `get_auth_principal`.
-- `auth_deps.get_current_user` and `User_DB_Handling.get_request_user` populate `request.state.auth` / `request.state._auth_user` and, in multi-user flows, reuse an existing `AuthContext`/`AuthPrincipal` when present instead of re-running JWT/API-key logic, while preserving existing 401/403 semantics.
+- The `AuthPrincipal` / `AuthContext` models are implemented in `tldw_Server_API/app/core/AuthNZ/principal_model.py` with unit tests.
+- The `get_auth_principal(request)` resolver is implemented in `tldw_Server_API/app/core/AuthNZ/auth_principal_resolver.py` with unit tests covering single-user, JWT, and API-key flows.
+- The `User_DB_Handling.authenticate_api_key_user` helper centralizes multi-user API key authentication and is reused by both `get_request_user` and `get_auth_principal`.
+- The `auth_deps.get_current_user` and `User_DB_Handling.get_request_user` dependencies populate `request.state.auth` / `request.state._auth_user` and, in multi-user flows, reuse an existing `AuthContext`/`AuthPrincipal` when present instead of re-running JWT/API-key logic, while preserving existing 401/403 semantics.
 - Integration coverage added in `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_state_consistency.py` to assert that `request.state.auth.principal` stays aligned with `request.state.user_id` and that 401 behaviors for `get_current_user` vs `get_auth_principal` remain stable.
 - Budget guard/middleware paths now reuse `AuthPrincipal`/`AuthContext` and carry principal metadata in 402 responses; regression coverage lives in `tests/AuthNZ/integration/test_auth_principal_jwt_happy_path.py`, `tests/AuthNZ/integration/test_llm_budget_guard_http.py`, and `tests/AuthNZ_SQLite/test_llm_budget_402_sqlite.py`.
 
@@ -132,7 +132,7 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
    - Refactor `User_DB_Handling.get_request_user` to call `get_auth_principal` and map the result to the existing `User` Pydantic model.
    - Ensure `request.state` fields are set from `AuthContext` and that all existing tests (including Stage 0 invariants) continue to pass.
 
----
+***
 
 ## Stage 2: Single-User Bootstrap & Profiles
 
@@ -148,7 +148,7 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
 - Bootstrap is idempotent:
   - Re-running it does not create duplicate users or keys.
   - Mixed/invalid states (e.g., multiple active admin users or primary keys) are detected and reported clearly.
-- `get_auth_principal`:
+- The `get_auth_principal` helper:
   - Uses the bootstrapped user + API key in `local-single-user` profile.
   - No longer relies on synthetic, hard-coded single-user user objects in its own logic.
 - Existing single-user dependencies (`auth_deps.get_current_user`, `User_DB_Handling.get_request_user`, `verify_single_user_api_key`) behave the same externally but are **internally** mapped to the bootstrapped user and key via `get_auth_principal`.
@@ -177,7 +177,7 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
 **Status**: Done
 
 **Status details & notes**:
-- `bootstrap_single_user_profile` is implemented in `tldw_Server_API/app/core/AuthNZ/initialize.py` and exercised by SQLite/Postgres integration tests:
+- The `bootstrap_single_user_profile` helper is implemented in `tldw_Server_API/app/core/AuthNZ/initialize.py` and exercised by SQLite/Postgres integration tests:
   - `tldw_Server_API/tests/AuthNZ_SQLite/test_single_user_bootstrap_sqlite.py`
   - `tldw_Server_API/tests/AuthNZ_Postgres/test_single_user_bootstrap_postgres.py`
 - Claim-first semantics for single-user principals are locked in by:
@@ -187,7 +187,7 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
     - A non-admin single-user principal (`AuthPrincipal.kind="single_user"` overridden via `get_auth_principal`) is correctly denied on permission- and role-protected endpoints (403) under claim-first semantics.
 - The AuthNZ Code Guide documents single-user behavior and explicitly notes that claim-first dependencies respect single-user claims, with these tests referenced as invariants.
 
----
+***
 
 ## Stage 3: AuthNZ Repositories & Backend Unification
 
@@ -200,9 +200,9 @@ To keep Stage 1 incremental and reviewable, implement it as four focused PRs:
   - `AuthnzRbacRepo` (roles, permissions, user overrides).
   - All use `DatabasePool` and encapsulate SQL/dialect differences.
 - DDL for API-key- and AuthNZ-related tables is centralized in migrations / repository initialization helpers.
-- `APIKeyManager` and relevant user/RBAC helpers:
+- The `APIKeyManager` and relevant user/RBAC helpers:
   - Use repositories for DB access instead of inline SQL.
-- `get_auth_principal`:
+- The `get_auth_principal` helper:
   - Pulls user and RBAC claims via repositories, not ad-hoc SQL.
 - Business logic modules (including `auth_deps` and `User_DB_Handling`) do **not** perform direct Postgres/SQLite branching for these tables.
 
@@ -280,7 +280,7 @@ For this phase, we deliberately leave the above paths as guarded inline SQL whil
 
 An explicit audit of `hasattr(conn, 'fetch*')` usage in `tldw_Server_API/app/core/AuthNZ` shows:
 
-- `api_key_manager.py` – **bootstrap/maintenance inline SQL only**  
+- Module `api_key_manager.py` – **bootstrap/maintenance inline SQL only**  
   - Uses backend-branching (`if hasattr(conn, 'fetchval')` / `fetchrow`) for:
     - `_create_tables` DDL for `api_keys` / `api_key_audit_log` (bootstrap/backstop only).
     - `cleanup_expired_keys`, which performs a periodic maintenance update for expired keys.  
@@ -289,26 +289,26 @@ An explicit audit of `hasattr(conn, 'fetch*')` usage in `tldw_Server_API/app/cor
     - `increment_usage`, `mark_key_expired`, and `insert_audit_log` for usage counters, status transitions, and audit logging.  
   - Remaining inline SQL is explicitly treated as **bootstrap/maintenance guardrails** for v0.1 and may be migrated into migrations or repo helpers in a later iteration once operational requirements are fully captured.
 
-- `rate_limiter.py` – **rate-limiter DDL guardrails + repo-backed runtime**  
+- Module `rate_limiter.py` – **rate-limiter DDL guardrails + repo-backed runtime**  
   - `_ensure_sqlite_schema` / `_ensure_postgres_schema` contain minimal DDL for `rate_limits`, `failed_attempts`, and `account_lockouts` to backstop environments that have not yet applied migrations. These helpers are invoked from `RateLimiter.initialize()` and are treated as bootstrap-only guardrails; canonical schema remains migration-driven (`migration_005_create_rate_limits_table` and related helpers).
   - All runtime reads/writes for `rate_limits`, `failed_attempts`, and `account_lockouts` (including lockout accounting and per-window increments) are delegated to `AuthnzRateLimitsRepo`.
   - The AuthNZ scheduler’s `_monitor_rate_limits` job now uses `AuthnzRateLimitsRepo.list_recent_violations` to surface aggregated rate-limit violations instead of embedding its own SQL, so rate-limit monitoring remains dialect-agnostic and repo-backed.
 
-- `initialize.py` – **bootstrap/DDL inline SQL (bootstrap only, partially consolidated)**  
+- Module `initialize.py` – **bootstrap/DDL inline SQL (bootstrap only, partially consolidated)**  
   - Uses backend-branching DDL to ensure presence of `audit_logs`, `sessions`, `registration_codes`, RBAC tables, and organizations/teams in non-SQLite deployments.  
   - PostgreSQL DDL for usage tables (`usage_log`, `usage_daily`, `llm_usage_log`, `llm_usage_daily`) and virtual-key counters has been moved into `pg_migrations_extra.py` and is exercised via `ensure_usage_tables_pg` / `ensure_virtual_key_counters_pg`, which are called from both `initialize.setup_database` and FastAPI startup when a Postgres pool is present.  
   - Remaining inline SQL in `initialize.py` is explicitly treated as **bootstrap-only** for v0.1; it runs during explicit initialization to ensure core AuthNZ schemas are present but is not used on hot paths. Any new AuthNZ tables must be added via migrations or repo-backed helpers rather than new inline DDL here.
 
 MFA-related SQL has already been migrated behind `AuthnzMfaRepo`; no `hasattr(conn, 'fetch*')` MFA cluster remains in runtime paths.
 
----
+***
 
 ## Stage 4: Claim-First Dependencies & AuthContext Adoption
 
 **Goal**: Make runtime authorization checks claim-first and introduce the new dependency stack (`get_auth_principal`, `get_current_user`, `require_permissions`, `require_roles`) across selected endpoints and middlewares.
 
 **Success Criteria**:
-- `permissions.py`:
+- Module `permissions.py`:
   - Uses claims on `AuthPrincipal`/`User` (`roles`, `permissions`, `is_admin`) for runtime checks.
   - Removes or gates DB fallbacks behind explicit debug/admin paths.
 - New FastAPI dependencies are implemented and documented:
@@ -356,7 +356,7 @@ MFA-related SQL has already been migrated behind `AuthnzMfaRepo`; no `hasattr(co
 - Resource-Governor admin/config endpoints (`/api/v1/resource-governor/policy`, `/policies`, `/policy/{policy_id}`) and diagnostics endpoints (`/diag/peek`, `/diag/query`, `/diag/capabilities`) now use `require_roles("admin")` instead of `RoleChecker("admin")`. Their behavior is locked in by:
   - `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` (claim-first 401/403/200 matrix via `get_auth_principal`).
   - `tldw_Server_API/tests/Resource_Governance/test_rg_capabilities_endpoint.py` and `test_resource_governor_endpoint.py` (single-user API-key flows and policy admin integration) to confirm no behavior drift in existing RG tests.
-- `llm_budget_guard` derives an `AuthPrincipal` (via `request.state.auth` when available) and now uses that principal when consulting governance for LLM budgets; middleware and dependency paths include embeddings/chat overage regressions with principal metadata.
+- The `llm_budget_guard` helper derives an `AuthPrincipal` (via `request.state.auth` when available) and now uses that principal when consulting governance for LLM budgets; middleware and dependency paths include embeddings/chat overage regressions with principal metadata.
 - Single-user deployments now share the same claim-first + DB-fallback semantics as multi-user for permission and role checks: `permissions.py` no longer treats `is_single_user_mode()` as an “allow-all” shortcut when claims are missing, and single-user principals are represented consistently as `AuthPrincipal.kind="single_user"`. This behavior is locked in by additional tests in `tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py` (e.g., `test_check_permission_single_user_mode_prefers_claims`, `test_check_permission_single_user_mode_without_claims_falls_back_to_db`, `test_check_role_single_user_mode_treats_admin_as_admin_and_user`, `test_check_role_single_user_mode_without_roles_falls_back_to_db`) and by `tldw_Server_API/tests/AuthNZ/integration/test_single_user_claims_permissions.py`, which exercises claim-first semantics for `kind="single_user"` principals.
 - A focused audit of `is_single_user_mode()` usages confirms that remaining mode checks are either:
   - Coordination/governance decisions (startup banners, WebUI configuration, ChaChaNotes warm-up, backpressure/tenant RPS toggles, embedding quotas), or
@@ -366,18 +366,18 @@ MFA-related SQL has already been migrated behind `AuthnzMfaRepo`; no `hasattr(co
   - Queue status/control, prune/reschedule/retry-now, events (list/SSE), TTL sweep, integrity sweep, stats, list, stale, batch cancel/reschedule, and batch requeue-quarantined endpoints all consult `_enforce_domain_scope_from_principal` when `JOBS_DOMAIN_RBAC_PRINCIPAL` is enabled and fall back to the legacy user-dict path otherwise.
   Tests in `tldw_Server_API/tests/AuthNZ_Unit/test_jobs_admin_permissions_claims.py` now lock in 401/403/200 and allowlist behavior for these endpoints under both the legacy and principal-driven paths, ensuring that principal-based domain RBAC faithfully mirrors the existing env-driven semantics. The long-term intent is to flip `JOBS_DOMAIN_RBAC_PRINCIPAL` on by default and retire the legacy user-dict/env toggles once existing deployments have validated the principal-based behavior.
 
----
+***
 
 ## Stage 5: Governance & Guardrail Consolidation
 
 **Goal**: Route all AuthNZ guardrails (LLM budgets, login lockouts, AuthNZ-level rate limits) through `AuthGovernor` / `ResourceGovernor` using `AuthPrincipal`, and remove duplicated guardrail logic.
 
 **Success Criteria**:
-- `AuthGovernor` is implemented as an AuthNZ-focused façade over `ResourceGovernor` with support for:
+- The `AuthGovernor` façade is implemented as an AuthNZ-focused façade over `ResourceGovernor` with support for:
   - Rate limits (requests/minute, burst).
   - LLM budgets (tokens/day, tokens/month, USD/day, USD/month).
   - Login lockouts and suspicious-activity metrics.
-- `llm_budget_guard`, login lockouts, and AuthNZ-level rate limiting:
+- Guardrails (`llm_budget_guard`, login lockouts, and AuthNZ-level rate limiting):
   - Use `AuthGovernor.check_and_increment(AuthPrincipal, metric, window, amount)` instead of custom per-module logic.
   - Have clearly documented semantics (atomicity, error behavior, idempotency) as specified in the Principal-Governance PRD.
 - Guardrail storage:
@@ -407,6 +407,6 @@ MFA-related SQL has already been migrated behind `AuthnzMfaRepo`; no `hasattr(co
 
 **Notes**:
 - A minimal `AuthGovernor` facade for LLM budgets is implemented in `tldw_Server_API/app/core/AuthNZ/auth_governor.py`, decorating `is_key_over_budget` with principal metadata and over-budget detail.
-- `llm_budget_guard.enforce_llm_budget` and `LLMBudgetMiddleware` call `AuthGovernor.check_llm_budget_for_api_key` using an `AuthPrincipal` (from `AuthContext` or derived from `request.state`) and preserve 402 semantics while adding structured principal details; coverage now includes chat and embeddings overage regressions.
+- The `llm_budget_guard.enforce_llm_budget` helper and `LLMBudgetMiddleware` call `AuthGovernor.check_llm_budget_for_api_key` using an `AuthPrincipal` (from `AuthContext` or derived from `request.state`) and preserve 402 semantics while adding structured principal details; coverage now includes chat and embeddings overage regressions.
 - Login lockout flows in `/auth/login` route lockout checks and failed-attempt counters through `AuthGovernor.check_lockout` / `record_auth_failure` (wrapping the shared RateLimiter) and return HTTP 429 when a client IP is locked out. Integration tests in `tldw_Server_API/tests/AuthNZ/integration/test_auth_login_lockout_via_auth_governor.py` and `test_auth_login_lockout_real_rate_limiter.py` cover both stubbed and real limiter backends.
 - AuthNZ-level rate limiting for generic endpoints (`check_rate_limit`) and authentication flows (`check_auth_rate_limit`) now delegates to `AuthGovernor.check_rate_limit`, which in turn wraps `RateLimiter.check_rate_limit` and normalizes metadata. When the limiter is unavailable or disabled, `AuthGovernor.check_rate_limit` fails open with `(True, {})`, preserving existing behavior of treating guardrails as best-effort while keeping error semantics (HTTP 429 with `Retry-After` headers) stable where limits are enforced. Unit tests in `tldw_Server_API/tests/AuthNZ_Unit/test_auth_governor_budget.py` exercise the new rate-limit helper, and existing rate-limiter tests (`test_rate_limiter_*`) continue to cover the underlying storage and window logic.

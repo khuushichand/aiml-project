@@ -34,7 +34,7 @@ from tldw_Server_API.app.core.config import settings as app_settings
 _RBAC_ENRICH_REPO = AuthnzRbacRepo(client_id="authnz_user_enrichment")
 
 
-async def _enrich_user_with_rbac(
+def _enrich_user_with_rbac(
     user_id: Optional[int],
     user_data: dict,
     *,
@@ -362,7 +362,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         subject_db_id_int = None
 
     # --- Enrich with roles/permissions from central AuthNZ RBAC tables ---
-    roles, perms, is_admin = await _enrich_user_with_rbac(
+    roles, perms, is_admin = _enrich_user_with_rbac(
         subject_db_id_int, user_data, pii_redact_logs=pii_redact_logs
     )
 
@@ -540,7 +540,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
         if user_data.get("is_superuser"):
             user_data.setdefault("is_admin", True)
 
-        roles, perms, is_admin_flag = await _enrich_user_with_rbac(
+        roles, perms, is_admin_flag = _enrich_user_with_rbac(
             user_id, user_data, pii_redact_logs=getattr(settings, "PII_REDACT_LOGS", False)
         )
 

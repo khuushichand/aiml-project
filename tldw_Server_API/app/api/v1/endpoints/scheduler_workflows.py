@@ -134,19 +134,15 @@ async def create_schedule(
     ],
 )
 async def admin_rescan(
-    current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """Force a one-shot rescan of all users’ schedules.
 
-    Admin-only: returns number of registered APScheduler jobs after rescan.
+    Requires the ``workflows.admin`` permission (via
+    :data:`tldw_Server_API.app.core.AuthNZ.permissions.WORKFLOWS_ADMIN`) or an
+    admin principal. Returns the number of registered APScheduler jobs after
+    rescan.
     """
-    is_admin = bool(
-        principal.is_admin
-        or ("admin" in (principal.roles or []))
-    )
-    if not is_admin:
-        raise HTTPException(status_code=403, detail="Admin-only endpoint")
     svc = get_workflows_scheduler()
     try:
         await svc._rescan_once()  # type: ignore[attr-defined]

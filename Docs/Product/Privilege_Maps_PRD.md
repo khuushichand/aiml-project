@@ -209,7 +209,7 @@ The Privilege Metadata Catalog should include entries for all first-class permis
 - `evals.read`, `evals.manage` – evaluations CRUD and run management.
 - `workflows.admin` – workflows scheduler administration.
 - `flashcards.admin` – flashcards import abuse-cap overrides (TSV/JSON import endpoints that accept higher `max_lines` / `max_items` / `max_field_length` settings for bulk operations).
- - `embeddings.admin` – embeddings v5 admin and maintenance utilities (DLQ tools, stage controls, job-skip registry, ledger inspection, re-embed scheduling, and orchestrator diagnostics).
+- `embeddings.admin` – embeddings v5 admin and maintenance utilities (DLQ tools, stage controls, job-skip registry, ledger inspection, re-embed scheduling, and orchestrator diagnostics).
 
 Each scope entry records sensitivity tier, owning module, and default role bindings so the generated maps can surface flashcards admins alongside other domain-specific administrators.
 

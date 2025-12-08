@@ -589,3 +589,30 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
 - Regression tests for affected modules under both backends (where supported by current test fixtures).
 
 **Status**: Partially complete / Next iteration — initial repo-backed refactors for `virtual_keys`, `orgs_teams`, AuthNZ rate-limiter storage, API-key management, and usage logging have landed; remaining backend drift and inline SQL (notably Postgres bootstrap DDL in `initialize.py` and virtual-key quota counters in `quotas.py`) is deliberately left in place as guarded tech debt for this iteration and tracked in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` under “Remaining inline SQL / backend detection (tech debt)”.
+
+---
+
+## Recommended Next Steps
+
+### 1. Inline DDL & Quota Counters → Repos/Migrations
+
+- **Goal**: Incrementally migrate remaining inline Postgres/SQLite DDL and quota counters into repository helpers or migrations so that backends remain an implementation detail.
+- **AuthNZ bootstrap DDL**:
+  - Add canonical migrations (SQLite + Postgres) for the AuthNZ tables that are still primarily created via bootstrap DDL in `initialize.py` (`audit_logs`, `sessions`, `registration_codes`, RBAC tables, orgs/teams), mirroring the patterns already used for usage tables and virtual-key counters (`pg_migrations_extra.ensure_usage_tables_pg`, `ensure_virtual_key_counters_pg`).
+  - Treat `initialize.py` (and the small DDL helpers in `api_key_manager.py` / `rate_limiter.py`) as guarded backstops only: keep them idempotent for one release while migrations are validated in CI, then gate or retire new inline DDL additions in favor of migrations + repo helpers.
+- **Virtual-key quota counters**:
+  - Introduce a focused repository (for example, `AuthnzQuotasRepo`) that owns `vk_jwt_counters` and `vk_api_key_counters` and centralizes their DDL and `INSERT … ON CONFLICT` logic; migrate `quotas.increment_and_check_jwt_quota` / `increment_and_check_api_key_quota` to delegate to this repo.
+  - Ensure both SQLite and Postgres migrations exist for these tables (with tests for limits, reset/cleanup behavior, and error handling), and keep `_ensure_tables` as a thin compatibility wrapper over the migrations for a deprecation window before removing inline DDL entirely from `quotas.py`.
+
+### 2. `is_single_user_mode()` → Claim-First Alternatives
+
+- **Goal**: For each remaining `is_single_user_mode()` in auth-adjacent code, design a claim-first alternative (using `AuthPrincipal` + profile/feature flags) and back it with tests, so that “mode” becomes configuration/UX only.
+- **Audit and classification**:
+  - Enumerate remaining `is_single_user_mode()` callsites in auth-adjacent modules (`API_Deps/auth_deps.py`, `AuthNZ/auth_principal_resolver.py`, `AuthNZ/User_DB_Handling.py`, `main.py`, embeddings/evaluations endpoints, `PrivilegeMaps/service.py`, MCP/unified endpoints, backpressure and tenant-RPS helpers) and classify each as either coordination/UX (startup banners, WebUI hints, warm-ups) or auth/guardrail (permissions, quotas, embeddings/MCP behavior).
+  - Keep coordination/UX branches mode-aware for now (eventually driven by `PROFILE` + feature flags); focus this iteration on auth/guardrail callsites where mode currently influences permissions or quotas.
+- **Principal-first replacements (Stage 4 alignment)**:
+  - For each auth/guardrail callsite, design a principal-based alternative that takes `AuthPrincipal` and/or `AuthContext` together with profile/feature flags (`PROFILE`, `ENABLE_*` flags, and dedicated toggles such as `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE`, `MCP_SINGLE_USER_COMPAT_SHIM`), as outlined under “Stage 4: Claim-First Dependencies & AuthContext Adoption” in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`.
+  - Wire the new path behind an explicit env flag per surface so tests can exercise both legacy (mode-driven) and principal-first behavior before defaults change; keep single-user deployments participating via bootstrapped principal claims instead of `is_single_user_mode()` shortcuts.
+- **Tests and deprecation**:
+  - Extend the existing claim-first HTTP and unit test matrix (metrics admin, Resource-Governor, RAG/media permissions, jobs admin, Prompt Studio, embeddings model management) to cover each newly migrated callsite, asserting that single-user profile + bootstrap principal yields the same effective permissions and quotas as today, and that multi-user SQLite/Postgres behavior remains unchanged.
+  - Once coverage is in place and principal-first paths are stable, update docs and guardrails to treat `is_single_user_mode()` as a compatibility alias used only in settings/bootstrap and coordination/UX code; add lints or code-review checks to discourage new auth-path logic from branching on `AUTH_MODE` or `is_single_user_mode()` directly.

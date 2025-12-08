@@ -141,7 +141,7 @@ async def get_current_user(
                     token_type="access",
                 )
     except Exception as e:
-        logger.debug(f"AuthNZ JWT check failed: {e}")
+        logger.debug("AuthNZ JWT check failed", exc_info=True)
 
     # MCP JWT fallback
     try:
@@ -149,7 +149,7 @@ async def get_current_user(
             jwt_manager = get_jwt_manager()
             return jwt_manager.verify_token(credentials.credentials)
     except Exception as e:
-        logger.debug(f"MCP token verification failed: {e}")
+        logger.debug("MCP token verification failed", exc_info=True)
 
     # API key fallback
     try:
@@ -197,9 +197,12 @@ async def get_current_user(
                 # dependency alongside per-endpoint validate_api_key calls).
                 try:
                     if request is not None:
-                        setattr(request.state, "mcp_api_key_info", info)
+                        request.state.mcp_api_key_info = info
                 except Exception as attach_exc:
-                    logger.debug(f"MCP unified: failed to attach API key info to request state: {attach_exc}")
+                    logger.debug(
+                        "MCP unified: failed to attach API key info to request state",
+                        exc_info=True,
+                    )
                 return TokenData(
                     sub=str(info["user_id"]),
                     username=None,
@@ -208,7 +211,7 @@ async def get_current_user(
                     token_type="access",
                 )
     except Exception as e:
-        logger.debug(f"API key check failed: {e}")
+        logger.debug("API key check failed", exc_info=True)
 
     return None
 
@@ -229,14 +232,18 @@ async def get_mcp_auth_context(
         if request is not None:
             api_key_info = getattr(request.state, "mcp_api_key_info", None)
     except Exception as exc:
-        logger.debug(f"MCP unified: failed to read API key info from request state: {exc}")
+        logger.debug(
+            "MCP unified: failed to read API key info from request state",
+            exc_info=True,
+        )
         api_key_info = None
     return McpAuthContext(user=user, api_key_info=api_key_info, raw_api_key=x_api_key)
 
 
 async def require_user(
     credentials: HTTPAuthorizationCredentials = Security(security),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    request: Request = None,
 ) -> TokenData:
     """Require authenticated user"""
     if not credentials and not x_api_key:
@@ -245,8 +252,8 @@ async def require_user(
             detail="Authentication required",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    # Reuse get_current_user to resolve any auth form
-    user = await get_current_user(credentials, x_api_key)
+    # Reuse get_current_user to resolve any auth form, including client IP / API-key metadata
+    user = await get_current_user(credentials, x_api_key, request)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
     return user
@@ -526,11 +533,11 @@ async def get_server_status(
 
 @router.get("/metrics", response_model=ServerMetricsResponse)
 async def get_server_metrics(
-    principal: AuthPrincipal = Depends(require_permissions(SYSTEM_LOGS)),
+    _principal: AuthPrincipal = Depends(require_permissions(SYSTEM_LOGS)),
     _guard: None = Depends(enforce_http_security),
 ):
     """
-    Get detailed server metrics (requires admin).
+    Get detailed server metrics (requires `system.logs` permission or admin).
 
     Returns:
     - Connection metrics

@@ -148,7 +148,7 @@ async def export_audit_events(
     stream: bool = Query(False, description="Stream JSON/JSONL/CSV output incrementally"),
     audit_service: UnifiedAuditService = Depends(get_audit_service_for_user),
 ):
-    """Export audit events (JSON, JSONL, CSV). Requires admin.
+    """Export audit events (JSON, JSONL, CSV). Requires SYSTEM_LOGS permission.
 
     Parameters (filters):
     - start_time, end_time: ISO8601; accepts trailing Z (UTC)
@@ -256,7 +256,7 @@ async def count_audit_events(
     method: Optional[str] = Query(None, description="Filter by HTTP method"),
     audit_service: UnifiedAuditService = Depends(get_audit_service_for_user),
 ):
-    """Count audit events for pagination UIs. Requires admin.
+    """Count audit events for pagination UIs. Requires SYSTEM_LOGS permission.
 
     Accepts the same filters as the export endpoint (except format/stream/filename).
     Returns a JSON object: {"count": <int>}.

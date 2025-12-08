@@ -18,9 +18,9 @@ Use these names across domains to keep operations consistent.
   - `GET /api/v1/jobs/events` - outbox polling (`after_id, limit, domain, queue, job_type`)
   - `GET /api/v1/jobs/events/stream` - SSE cursor stream (`after_id`)
   - `GET /api/v1/jobs/queue/status` - `{ paused, drain }` for a queue
-  - `GET /api/v1/jobs/{job_id}/attachments` - list attachments/logs
-  - `GET /api/v1/jobs/sla/policies` - SLA policies (optionally filtered)
-  - `GET /api/v1/jobs/archive/meta` - archive compression metadata for a job (if archived)
+  - `GET /api/v1/jobs/{job_id}/attachments` - list attachments/logs (optionally scoped with `domain` for RBAC/RLS)
+  - `GET /api/v1/jobs/sla/policies` - SLA policies (optionally filtered; respects domain RBAC when enabled)
+  - `GET /api/v1/jobs/archive/meta` - archive compression metadata for a job (if archived; optionally scoped with `domain` for RBAC/RLS)
 
 - Admin writes (require `X-Confirm: true` unless `dry_run: true`)
   - `POST /api/v1/jobs/prune` - delete old terminal jobs (supports `dry_run` and `detail_top_k`)
@@ -29,8 +29,8 @@ Use these names across domains to keep operations consistent.
   - `POST /api/v1/jobs/batch/cancel` - cancel queued/processing (scoped)
   - `POST /api/v1/jobs/batch/reschedule` - delay or set-now queued jobs (scoped)
   - `POST /api/v1/jobs/batch/requeue_quarantined` - move quarantined back to queued (scoped)
-  - `POST /api/v1/jobs/{job_id}/attachments` - add attachment/log
-  - `POST /api/v1/jobs/sla/policy` - upsert per-job_type SLA policy
+  - `POST /api/v1/jobs/{job_id}/attachments` - add attachment/log (optionally scoped with `domain` for RBAC/RLS)
+  - `POST /api/v1/jobs/sla/policy` - upsert per-job_type SLA policy (domain-scoped when domain RBAC is enabled)
   - `POST /api/v1/jobs/queue/control` - `{ action: 'pause'|'resume'|'drain' }`
   - `POST /api/v1/jobs/crypto/rotate` - re-encrypt encrypted fields (supports `dry_run`, requires `X-Confirm` to execute)
 

@@ -15,7 +15,7 @@ router = APIRouter(prefix="/claims", tags=["claims"])
 
 @router.get("/status")
 def claims_rebuild_status(
-    _principal: AuthPrincipal = Depends(require_roles("admin")),  # admin role enforced via dependency; value unused
+    _principal: AuthPrincipal = Depends(require_roles("admin")),  # admin role enforced via dependency; value unused  # noqa: B008
 ) -> Dict[str, Any]:
     """Return statistics about the claims rebuild worker. Admin only."""
     try:
@@ -210,8 +210,8 @@ def rebuild_all_media(
 @router.post("/rebuild_fts")
 def rebuild_claims_fts(
     user_id: Optional[int] = None,
-    current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: MediaDatabase = Depends(get_media_db_for_user),  # noqa: B008
 ) -> Dict[str, Any]:
     """Rebuild claims_fts index from Claims content."""
     try:

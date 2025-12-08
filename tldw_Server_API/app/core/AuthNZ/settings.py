@@ -33,7 +33,11 @@ class Settings(BaseSettings):
         description=(
             "Deployment profile hint (e.g., local-single-user, multi-user-postgres). "
             "AUTH_MODE remains the canonical switch for behavior; PROFILE is "
-            "used for coordination/UX and future drift reduction."
+            "used for coordination/UX, feature gating, and future drift reduction. "
+            "Callers may use PROFILE to apply additional *restrictions* in certain "
+            "flows (for example, disabling self-registration in local-single-user "
+            "deployments), but it must never be used to bypass or relax auth "
+            "decisions relative to AUTH_MODE and claims."
         ),
     )
 
@@ -899,9 +903,12 @@ def get_settings() -> Settings:
                 _settings.RATE_LIMIT_ENABLED = False
         except Exception:
             pass
-        # Log a lightweight profile hint for coordination/UX only. AUTH_MODE
-        # remains the canonical behavioral switch; PROFILE (explicit or
-        # inferred) must not be used to bypass or relax auth decisions.
+        # Log a lightweight profile hint for coordination/UX and optional
+        # hardening. AUTH_MODE remains the canonical behavioral switch; PROFILE
+        # (explicit or inferred) must not be used to bypass or relax auth
+        # decisions. It may be used as an additional tightening signal (e.g.,
+        # disabling self-registration in local-single-user deployments) so long
+        # as AUTH_MODE + claims remain the lower bound for permissions.
         try:
             profile_hint = getattr(_settings, "PROFILE", None)
             if not (isinstance(profile_hint, str) and profile_hint.strip()):
@@ -954,7 +961,11 @@ def is_single_user_mode() -> bool:
     """Return True when the effective runtime mode is single-user.
 
     AUTH_MODE remains the canonical switch; PROFILE is advisory and
-    must not be used to silently relax or tighten auth behavior.
+    must not be used to bypass or relax auth behavior. Profile-aware
+    helpers may use PROFILE as an additional tightening signal for
+    deployment-specific flows (for example, forbidding self-registration
+    in local-single-user) but must never grant privileges beyond those
+    implied by AUTH_MODE and claims.
     """
     return get_settings().AUTH_MODE == "single_user"
 
@@ -962,9 +973,11 @@ def is_single_user_mode() -> bool:
 def _infer_profile_from_settings(settings: Settings) -> Optional[str]:
     """Derive a coarse deployment profile from AUTH_MODE + DATABASE_URL.
 
-    This helper is used when PROFILE is unset to provide a stable, purely
-    informational hint for coordination and UX. It must not be used for
-    permission or authentication decisions.
+    This helper is used when PROFILE is unset to provide a stable hint
+    for coordination/UX and optional hardening that only *restricts*
+    behavior (for example, disabling self-registration in single-user
+    desktop deployments). It must not be used to bypass or relax auth
+    or permission decisions relative to AUTH_MODE and claims.
     """
     try:
         mode = settings.AUTH_MODE
@@ -995,8 +1008,13 @@ def get_profile() -> Optional[str]:
     1. Explicit PROFILE setting/env (if set and non-empty).
     2. Derived from AUTH_MODE + DATABASE_URL via `_infer_profile_from_settings`.
 
-    Callers must treat this as a coordination/UX hint only; auth and
-    permission decisions remain driven by claims and AUTH_MODE helpers.
+    Callers should treat this primarily as a coordination/UX hint; auth
+    and permission decisions remain driven by claims and AUTH_MODE
+    helpers. It is acceptable to use PROFILE as an additional tightening
+    signal for deployment-specific flows (for example, disabling
+    self-registration in local-single-user deployments), but it must
+    never be used to bypass or relax auth decisions or to grant
+    permissions beyond those implied by AUTH_MODE and claims.
     """
     settings = get_settings()
     try:

@@ -73,27 +73,27 @@ For a file-by-file code map of the backend, see `Docs/Code_Documentation/Code_Ma
 
 ### 3.1 Components
 
-**Clients**
+#### Clients
 - `tldw-frontend/` Next.js app (primary WebUI).
 - Legacy WebUI at `/webui` (served from `tldw_Server_API/WebUI/`).
 - Any HTTP client (curl, Postman, other backends) and MCP-aware tools.
 
-**FastAPI app**
+#### FastAPI app
 - Entry point: `tldw_Server_API/app/main.py`.
 - Routers mounted under `/api/v1` from `app/api/v1/endpoints/`.
 - Shared dependencies (auth, DB sessions, rate limiting): `app/api/v1/API_Deps/`.
 - Background services and tasks: `app/services/` (jobs, schedulers, maintenance).
 
-**Core modules (`app/core/`)**
+#### Core modules (`app/core/`)
 - Domain-specific packages: AuthNZ, media ingestion, chunking, embeddings, RAG, chat, audio STT/TTS, MCP, evaluations, metrics, resource governance, etc.
 - Each module is responsible for its own business logic and typically exposes pure-ish Python APIs used by endpoints.
 
-**Storage**
+#### Storage
 - Relational databases (SQLite or PostgreSQL) for auth, jobs, evaluations, chats/notes, and media metadata.
 - Per-user vector stores via ChromaDB (or pgvector when configured).
 - File-based media and temporary assets (e.g., downloads, transcodes, embeddings cache).
 
-**External providers**
+#### External providers
 - Commercial LLMs (OpenAI, Anthropic, Google, Groq, etc.).
 - Local/self-hosted LLMs (Ollama, vLLM, llama.cpp, TabbyAPI, etc.).
 - STT/TTS providers (faster_whisper, NeMo, Qwen2Audio, OpenAI-compatible TTS, local Kokoro ONNX).
@@ -318,11 +318,11 @@ See:
 - Primary web client, talking to the same FastAPI APIs (`/api/v1`).
 - Focused on interactive media ingestion, search, chat, and evaluations.
 
-**Legacy WebUI (`/webui`)**
+#### Legacy WebUI (`/webui`)
 - Served from `tldw_Server_API/WebUI/`.
 - Useful for basic workflows and debugging, but considered legacy compared to `tldw-frontend/`.
 
-**Programmatic clients**
+#### Programmatic clients
 - Any HTTP client can call the OpenAI-compatible Chat, Embeddings, Audio, and RAG endpoints.
 - MCP clients (IDEs, agents) use the MCP Unified APIs at `/api/v1/mcp/*`.
 
@@ -337,16 +337,16 @@ Key documentation:
 
 The project guidelines in `Project_Guidelines.md` and `AGENTS.md` cover philosophy in detail. This section summarizes the most important patterns for contributors.
 
-**Coding patterns**
+#### Coding patterns
 - Prefer **thin endpoints** and **fat core modules**:
   - Endpoint: parse/validate, call core, shape response.
   - Core: domain logic, side effects, DB + provider integration.
-- Use **Pydantic models** for all API inputs/outputs (`app/api/v1/schemas/`).
-- Use **type hints** and keep functions focused on single responsibilities.
-- Use **async/await** for I/O-bound code (HTTP calls, DB, file I/O).
+- Rely on **Pydantic models** for all API inputs/outputs (`app/api/v1/schemas/`).
+- Keep functions focused on single responsibilities and fully type hinted.
+- Prefer **async/await** for I/O-bound code (HTTP calls, DB, file I/O).
 - Centralize DB access via `core/DB_Management/`; avoid raw SQL in endpoints.
 
-**Adding a new feature**
+#### Adding a new feature
 1. **Design first**: Sketch the feature and data flow. For larger features, add a design doc under `Docs/Design/`.
 2. **Core implementation**: Add business logic under `app/core/<Feature>/` or extend an existing module.
 3. **API layer**: Add or update endpoints under `app/api/v1/endpoints/` and Pydantic models under `app/api/v1/schemas/`.
@@ -354,7 +354,7 @@ The project guidelines in `Project_Guidelines.md` and `AGENTS.md` cover philosop
 5. **Tests**: Add tests under `tldw_Server_API/tests/<feature>/` mirroring the app structure.
 6. **Config and docs**: Wire any knobs into `Config_Files/config.txt` and update docs under `Docs/`.
 
-**Testing and local dev**
+#### Testing and local dev
 - Run tests via `python -m pytest -v` from the repo root.
 - Use markers (`unit`, `integration`, `e2e`, `external_api`, `performance`) to scope suites.
 - For DB-intensive features, prefer existing fixtures (e.g., AuthNZ Postgres fixture) over custom setups.

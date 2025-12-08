@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Annotated
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
@@ -38,7 +38,10 @@ def get_job_manager() -> JobManager:
     Dependency helper to construct a JobManager using JOBS_DB_URL.
     """
     db_url = os.getenv("JOBS_DB_URL")
-    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    if not db_url:
+        raise RuntimeError("JOBS_DB_URL is not set; cannot initialize JobManager")
+
+    backend = "postgres" if db_url.startswith("postgres") else None
     return JobManager(backend=backend, db_url=db_url)
 
 
@@ -87,8 +90,8 @@ class SubmitAudioJobResponse(BaseModel):
 @router.post("/jobs/submit", response_model=SubmitAudioJobResponse, summary="Submit an audio processing job")
 async def submit_audio_job(
     req: SubmitAudioJobRequest,
-    current_user: User = Depends(get_request_user),
-    jm: JobManager = Depends(get_job_manager),
+    current_user: Annotated[User, Depends(get_request_user)],
+    jm: Annotated[JobManager, Depends(get_job_manager)],
     request: Request = None,
 ):
     """
@@ -161,12 +164,15 @@ class AudioJob(BaseModel):
     completed_at: Optional[str]
 
 
+_AUDIO_JOB_FIELD_MAP = getattr(AudioJob, "model_fields", None) or getattr(AudioJob, "__fields__", {})
+
+
 @router.get("/jobs/{job_id}", response_model=AudioJob, summary="Get audio job status")
 async def get_audio_job(
     job_id: int,
-    current_user: User = Depends(get_request_user),
-    jm: JobManager = Depends(get_job_manager),
-    principal: AuthPrincipal = Depends(get_auth_principal),
+    current_user: Annotated[User, Depends(get_request_user)],
+    jm: Annotated[JobManager, Depends(get_job_manager)],
+    principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
 ):
     """
     Return a single audio job if it belongs to the caller (or the caller is admin).
@@ -183,12 +189,13 @@ async def get_audio_job(
         )
         if not (is_admin or owner == str(current_user.id)):
             raise HTTPException(status_code=403, detail="Not authorized for this job")
-        field_map = getattr(AudioJob, "model_fields", None) or getattr(AudioJob, "__fields__", {})
-        return AudioJob(**{k: d.get(k) for k in field_map.keys()})
+        return AudioJob(**{k: d.get(k) for k in _AUDIO_JOB_FIELD_MAP.keys()})
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch job: {e}")
+        logger.exception(
+            f"Failed to fetch job: job_id={job_id}, user_id={getattr(current_user, 'id', None)}"
+        )
         raise HTTPException(status_code=500, detail="Failed to fetch job")
 
 
@@ -205,9 +212,15 @@ async def list_audio_jobs_admin(
     status_filter: Optional[str] = Query(None, description="Filter by status: queued|processing|completed|failed|cancelled"),
     owner_user_id: Optional[str] = Query(None, description="Filter by owner user id"),
     limit: int = Query(50, ge=1, le=200),
-    jm: JobManager = Depends(get_job_manager),
+    jm: Annotated[JobManager, Depends(get_job_manager)],
 ):
     try:
+        logger.info(
+            "Admin list audio jobs: status_filter=%s, owner_user_id=%s, limit=%s",
+            status_filter,
+            owner_user_id,
+            limit,
+        )
         jobs = jm.list_jobs(
             domain="audio",
             status=status_filter,
@@ -217,8 +230,7 @@ async def list_audio_jobs_admin(
             sort_order="desc",
         )
         # Project to model
-        field_map = getattr(AudioJob, "model_fields", None) or getattr(AudioJob, "__fields__", {})
-        out = [AudioJob(**{k: j.get(k) for k in field_map.keys()}) for j in jobs]
+        out = [AudioJob(**{k: j.get(k) for k in _AUDIO_JOB_FIELD_MAP.keys()}) for j in jobs]
         return ListAudioJobsResponse(jobs=out)
     except HTTPException:
         raise
@@ -240,9 +252,13 @@ class AudioJobsSummary(BaseModel):
 )
 async def summarize_audio_jobs_admin(
     owner_user_id: Optional[str] = Query(None, description="Optional owner filter"),
-    jm: JobManager = Depends(get_job_manager),
+    jm: Annotated[JobManager, Depends(get_job_manager)],
 ):
     try:
+        logger.info(
+            "Admin summarize audio jobs by status: owner_user_id=%s",
+            owner_user_id,
+        )
         by_status = jm.summarize_by_status(
             domain="audio",
             owner_user_id=str(owner_user_id) if owner_user_id is not None else None,
@@ -272,10 +288,11 @@ class AudioJobsSummaryByOwner(BaseModel):
     summary="Summarize audio jobs by owner and status (admin)",
 )
 async def summary_by_owner_admin(
-    jm: JobManager = Depends(get_job_manager),
+    jm: Annotated[JobManager, Depends(get_job_manager)],
 ):
     try:
         items: List[AudioJobsOwnerSummaryItem] = []
+        logger.info("Admin summarize audio jobs by owner and status")
         summary = jm.summarize_by_owner_and_status(domain="audio")
         for entry in summary:
             items.append(
@@ -305,11 +322,15 @@ class OwnerProcessingSummary(BaseModel):
     summary="Get owner's processing count and limit (admin)",
 )
 async def owner_processing_summary(
-    owner_user_id: str,
-    jm: JobManager = Depends(get_job_manager),
+    owner_user_id: int,
+    jm: Annotated[JobManager, Depends(get_job_manager)],
     request: Request = None,
-):
+    ):
     try:
+        logger.info(
+            "Admin owner processing summary: owner_user_id=%s",
+            owner_user_id,
+        )
         # Count processing jobs for this owner using JobManager APIs.
         processing = jm.count_jobs(
             domain="audio",
@@ -322,7 +343,7 @@ async def owner_processing_summary(
 
         try:
             from tldw_Server_API.app.core.Usage.audio_quota import get_limits_for_user
-            limits = await get_limits_for_user(int(owner_user_id))
+            limits = await get_limits_for_user(owner_user_id)
         except (ImportError, ValueError, KeyError, RuntimeError) as e:
             get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio").warning(
                 "Failed to get limits for owner %s; returning limit=None: %s", owner_user_id, e
@@ -366,6 +387,8 @@ async def get_user_tier_admin(user_id: int):
     try:
         tier = await get_user_tier(int(user_id))
         return UserTierResponse(user_id=int(user_id), tier=tier)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get user tier: {e}")
         raise HTTPException(status_code=500, detail="Failed to get user tier")

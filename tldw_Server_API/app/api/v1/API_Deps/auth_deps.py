@@ -373,14 +373,18 @@ async def get_current_user(
                     logger.debug(
                         "Fast-path: unable to attach user_id to request.state: {}", exc
                     )
-                # Scope context should already be set by upstream auth, but be defensive
+                # Scope context should already be set by upstream auth, but be defensive.
+                # Prefer org/team ids from the existing principal, with request.state as fallback.
                 try:
+                    principal = getattr(existing_ctx, "principal", None)
+                    org_ids = getattr(principal, "org_ids", None) if principal is not None else None
+                    team_ids = getattr(principal, "team_ids", None) if principal is not None else None
                     _activate_scope_context(
                         request,
-                        user_id=getattr(existing_ctx.principal, "user_id", None),
-                        org_ids=getattr(request.state, "org_ids", None),
-                        team_ids=getattr(request.state, "team_ids", None),
-                        is_admin=bool(getattr(existing_ctx.principal, "is_admin", False)),
+                        user_id=getattr(principal, "user_id", None),
+                        org_ids=org_ids if org_ids is not None else getattr(request.state, "org_ids", None),
+                        team_ids=team_ids if team_ids is not None else getattr(request.state, "team_ids", None),
+                        is_admin=bool(getattr(principal, "is_admin", False)),
                     )
                 except Exception as exc:
                     logger.debug(
@@ -918,6 +922,13 @@ async def get_user_org_policy(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Organization membership is missing org_id",
         )
+    return await _load_org_policy(db, org_id)
+
+
+async def _load_org_policy(db: Any, org_id: int) -> Dict[str, Any]:
+    """
+    Internal helper to load an organization policy with consistent error handling.
+    """
     try:
         pol = await get_policy(db, org_id)
         if not pol:
@@ -971,18 +982,7 @@ async def get_org_policy_from_principal(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Organization membership is missing org_id",
         )
-
-    try:
-        pol = await get_policy(db, org_id)
-        if not pol:
-            pol = get_default_policy_from_env(org_id)
-        return pol
-    except Exception as exc:
-        logger.exception(f"Failed to load organization policy for org_id={org_id}: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to load organization policy",
-        ) from exc
+    return await _load_org_policy(db, org_id)
 
 
 async def require_admin(

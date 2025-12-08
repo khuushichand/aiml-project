@@ -125,7 +125,7 @@ def test_evaluations_list_jwt_principal_and_state_alignment(
     # existing roles and admin flag intact while forcing the permission.
     from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as udh_mod
 
-    async def _fake_enrich_user_with_rbac(
+    def _fake_enrich_user_with_rbac(
         user_id,
         user_data,
         *,
@@ -220,7 +220,7 @@ def test_evaluations_admin_cleanup_jwt_principal_and_state_alignment(
     # that require_roles("admin") and require_admin both see admin claims.
     from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as udh_mod
 
-    async def _fake_enrich_user_with_rbac(
+    def _fake_enrich_user_with_rbac(
         user_id,
         user_data,
         *,
@@ -369,7 +369,7 @@ def test_evaluations_admin_cleanup_api_key_principal_and_state_alignment(
     # the API-key-backed principal.
     from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as udh_mod
 
-    async def _fake_enrich_user_with_rbac(
+    def _fake_enrich_user_with_rbac(
         user_id,
         user_data,
         *,

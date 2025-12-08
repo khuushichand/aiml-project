@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -15,11 +15,13 @@ from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
 from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_access
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
     get_current_user,
     get_db_transaction,
-    require_roles,
     require_permissions,
+    require_roles,
 )
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
@@ -27,7 +29,7 @@ router = APIRouter(prefix="/setup", tags=["setup"], include_in_schema=True)
 
 
 class ConfigUpdates(BaseModel):
-    updates: Dict[str, Dict[str, Any]] = Field(
+    updates: dict[str, dict[str, Any]] = Field(
         ..., description="Mapping of section -> key/value pairs to persist in config.txt"
     )
 
@@ -47,14 +49,29 @@ class AssistantQuestion(BaseModel):
     question: str = Field(..., min_length=1, description="Natural language question for the setup assistant")
 
 
+async def require_admin_and_system_configure(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> AuthPrincipal:
+    """
+    Combined dependency that enforces both admin role and SYSTEM_CONFIGURE permission
+    while resolving the AuthPrincipal only once.
+    """
+    role_checker = require_roles("admin")
+    perm_checker = require_permissions(SYSTEM_CONFIGURE)
+
+    principal = await role_checker(principal)
+    principal = await perm_checker(principal)
+    return principal
+
+
 @router.get("/status", openapi_extra={"security": []})
-async def get_setup_status(_guard: None = Depends(require_local_setup_access)) -> Dict[str, Any]:
+async def get_setup_status(_guard: None = Depends(require_local_setup_access)) -> dict[str, Any]:
     """Return setup availability and placeholder diagnostics."""
     return setup_manager.get_status_snapshot()
 
 
 @router.get("/config", openapi_extra={"security": []})
-async def get_setup_config(_guard: None = Depends(require_local_setup_access)) -> Dict[str, Any]:
+async def get_setup_config(_guard: None = Depends(require_local_setup_access)) -> dict[str, Any]:
     """Return the current configuration grouped by section for the setup UI."""
     status_snapshot = setup_manager.get_status_snapshot()
     if not status_snapshot["enabled"]:
@@ -70,7 +87,7 @@ async def get_setup_config(_guard: None = Depends(require_local_setup_access)) -
 
 
 @router.get("/install-status", openapi_extra={"security": []})
-async def get_install_status(_guard: None = Depends(require_local_setup_access)) -> Dict[str, Any]:
+async def get_install_status(_guard: None = Depends(require_local_setup_access)) -> dict[str, Any]:
     """Return the current installation plan progress if available."""
 
     status_snapshot = setup_manager.get_status_snapshot()
@@ -88,7 +105,7 @@ async def get_install_status(_guard: None = Depends(require_local_setup_access))
 async def update_setup_config(
     payload: ConfigUpdates,
     _guard: None = Depends(require_local_setup_access),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Persist configuration updates coming from the setup UI."""
     status_snapshot = setup_manager.get_status_snapshot()
     if not status_snapshot["enabled"]:
@@ -117,7 +134,7 @@ async def mark_setup_complete(
     payload: SetupCompleteRequest,
     background_tasks: BackgroundTasks,
     _guard: None = Depends(require_local_setup_access),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Mark the setup workflow as complete and optionally disable future prompts."""
     status_snapshot = setup_manager.get_status_snapshot()
     if not status_snapshot["enabled"]:
@@ -149,7 +166,7 @@ async def mark_setup_complete(
 async def ask_setup_assistant(
     payload: AssistantQuestion,
     _guard: None = Depends(require_local_setup_access),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Provide contextual help for setup questions using local configuration knowledge."""
     try:
         return setup_manager.answer_setup_question(payload.question)
@@ -167,23 +184,23 @@ async def ask_setup_assistant(
     ),
 )
 async def reset_setup_flags(
-    _principal: Any = Depends(require_roles("admin")),
-    _perm: Any = Depends(require_permissions(SYSTEM_CONFIGURE)),
-) -> Dict[str, Any]:
+    principal: AuthPrincipal = Depends(require_admin_and_system_configure),
+) -> dict[str, Any]:
     """Admin-only: reset first-time setup flags for recovery.
 
     Sets `enable_first_time_setup = true` and `setup_completed = false` in config.txt.
     """
     try:
         setup_manager.reset_setup_flags()
-        return {
-            "success": True,
-            "message": "Setup flags reset. Restart the server and revisit /setup.",
-            "requires_restart": True,
-        }
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to reset setup flags")
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return {
+        "success": True,
+        "message": "Setup flags reset. Restart the server and revisit /setup.",
+        "requires_restart": True,
+    }
 
 
 @router.post(
@@ -197,10 +214,10 @@ async def reset_setup_flags(
     ),
 )
 async def setup_self_verify(
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    current_user: dict[str, Any] = Depends(get_current_user),
     db=Depends(get_db_transaction),
     _guard: None = Depends(require_local_setup_access),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Mark the authenticated account as verified when setup is in progress."""
     status_snapshot = setup_manager.get_status_snapshot()
     if not status_snapshot["needs_setup"]:
@@ -246,7 +263,8 @@ async def setup_self_verify(
                     result2 = commit2()
                     if inspect.isawaitable(result2):
                         await result2
-        return {"success": True, "user_id": user_id, "message": "Account marked as verified."}
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to self-verify during setup")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+    return {"success": True, "user_id": user_id, "message": "Account marked as verified."}

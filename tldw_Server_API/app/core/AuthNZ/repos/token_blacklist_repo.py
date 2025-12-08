@@ -7,11 +7,7 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
-
-
-def _strip_tzinfo(dt: datetime) -> datetime:
-    """Strip timezone info for PostgreSQL timestamp without timezone columns."""
-    return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
+from tldw_Server_API.app.core.AuthNZ.repos.datetime_utils import _strip_tzinfo
 
 
 @dataclass

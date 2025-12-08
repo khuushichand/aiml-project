@@ -428,6 +428,14 @@ require_hard_citations = false
 # Env override: RAG_LOW_CONFIDENCE_BEHAVIOR=continue|ask|decline (default continue)
 low_confidence_behavior = continue
 
+# Agentic cache backend for ephemeral chunks used by the RAG agentic pipeline.
+# Env override: RAG_AGENTIC_CACHE_BACKEND=memory|sqlite (default memory)
+agentic_cache_backend = memory
+
+# TTL (seconds) for agentic cache entries used by RAG.
+# Env override: RAG_AGENTIC_CACHE_TTL_SEC (default 600)
+agentic_cache_ttl_sec = 600
+
 [ResourceGovernor]
 # Global Resource Governor enable flag (env: RG_ENABLED)
 enabled = false
@@ -437,19 +445,13 @@ policy_store = file
 backend = memory
 # Redis failover behavior when RG backend is redis (env: RG_REDIS_FAIL_MODE)
 redis_fail_mode = fallback_memory
-# Default policy path; env RG_POLICY_PATH overrides this when set.
+# Default policy path (relative to the project root unless an absolute path is provided).
+# The RG_POLICY_PATH environment variable overrides this when set; in containerized deployments,
+# ensure the policy file path is mounted into the container (e.g., under /app/tldw_Server_API/Config_Files).
 policy_path = tldw_Server_API/Config_Files/resource_governor_policies.yaml
 # Module feature flags may inherit from RG_ENABLED when unset; explicit entries
 # here override that inheritance. Audio RG integration is opt-in by default.
 enable_audio = false
-
-# Agentic cache backend for ephemeral chunks: memory|sqlite
-# Env override: RAG_AGENTIC_CACHE_BACKEND=memory|sqlite (default memory)
-agentic_cache_backend = memory
-
-# TTL (seconds) for agentic cache entries
-# Env override: RAG_AGENTIC_CACHE_TTL_SEC (default 600)
-agentic_cache_ttl_sec = 600
 
 [Diarization]
 # VAD backend:

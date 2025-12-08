@@ -147,3 +147,21 @@ async def test_scheduler_admin_rescan_allows_service_admin_principal(monkeypatch
     assert resp.status_code == 200
     assert resp.json().get("ok") is True
     assert getattr(app.state._fake_scheduler, "calls", {}).get("rescan") is True
+
+
+@pytest.mark.asyncio
+async def test_scheduler_admin_rescan_allows_non_admin_with_workflows_admin_permission(monkeypatch):
+    principal = _make_principal(
+        roles=["user"],
+        permissions=[WORKFLOWS_ADMIN],
+        is_admin=False,
+    )
+    app = _build_app_with_overrides(principal)
+    fake_scheduler = app.state._fake_scheduler
+    monkeypatch.setattr(sched_mod, "get_workflows_scheduler", lambda: fake_scheduler)
+
+    with TestClient(app) as client:
+        resp = client.post("/api/v1/scheduler/workflows/admin/rescan")
+    assert resp.status_code == 200
+    assert resp.json().get("ok") is True
+    assert getattr(app.state._fake_scheduler, "calls", {}).get("rescan") is True

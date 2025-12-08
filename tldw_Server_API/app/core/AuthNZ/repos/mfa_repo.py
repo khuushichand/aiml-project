@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+from tldw_Server_API.app.core.AuthNZ.exceptions import UserNotFoundError
 
 
 @dataclass
@@ -31,6 +32,37 @@ class AuthnzMfaRepo:
         """Strip timezone info for PostgreSQL TIMESTAMP columns."""
         return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
 
+    @staticmethod
+    def _assert_user_row_updated(result: Any, user_id: int, *, operation: str) -> None:
+        """
+        Ensure an UPDATE affected at least one row; raise if the user is missing.
+
+        For PostgreSQL (asyncpg), ``result`` is a status string like ``\"UPDATE 1\"``.
+        For SQLite (aiosqlite), ``result`` is a cursor with a ``rowcount`` attribute.
+        """
+        try:
+            # asyncpg status string: e.g. "UPDATE 0", "UPDATE 1"
+            if isinstance(result, str):
+                parts = result.split()
+                if parts and parts[-1].isdigit():
+                    if int(parts[-1]) == 0:
+                        msg = f"User {user_id} not found during {operation}"
+                        logger.warning(msg)
+                        raise UserNotFoundError(msg)
+                return
+
+            # aiosqlite cursor-style result
+            rowcount = getattr(result, "rowcount", None)
+            if rowcount == 0:
+                msg = f"User {user_id} not found during {operation}"
+                logger.warning(msg)
+                raise UserNotFoundError(msg)
+        except UserNotFoundError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive
+            # Introspection failures must not hide the underlying DB behavior.
+            logger.debug(f"AuthnzMfaRepo._assert_user_row_updated introspection failed: {exc}")
+
     async def set_mfa_config(
         self,
         *,
@@ -47,7 +79,7 @@ class AuthnzMfaRepo:
             async with self.db_pool.transaction() as conn:
                 if self._is_postgres(conn):
                     ts = self._normalize_datetime_for_postgres(updated_at)
-                    await conn.execute(
+                    result = await conn.execute(
                         """
                         UPDATE users
                         SET totp_secret = $1,
@@ -62,7 +94,7 @@ class AuthnzMfaRepo:
                         user_id,
                     )
                 else:
-                    await conn.execute(
+                    result = await conn.execute(
                         """
                         UPDATE users
                         SET totp_secret = ?,
@@ -78,6 +110,7 @@ class AuthnzMfaRepo:
                             user_id,
                         ),
                     )
+                self._assert_user_row_updated(result, user_id, operation="set_mfa_config")
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzMfaRepo.set_mfa_config failed: {exc}")
             raise
@@ -95,7 +128,7 @@ class AuthnzMfaRepo:
             async with self.db_pool.transaction() as conn:
                 if self._is_postgres(conn):
                     ts = self._normalize_datetime_for_postgres(updated_at)
-                    await conn.execute(
+                    result = await conn.execute(
                         """
                         UPDATE users
                         SET totp_secret = NULL,
@@ -108,7 +141,7 @@ class AuthnzMfaRepo:
                         user_id,
                     )
                 else:
-                    await conn.execute(
+                    result = await conn.execute(
                         """
                         UPDATE users
                         SET totp_secret = NULL,
@@ -119,6 +152,7 @@ class AuthnzMfaRepo:
                         """,
                         (updated_at.isoformat(), user_id),
                     )
+                self._assert_user_row_updated(result, user_id, operation="clear_mfa_config")
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzMfaRepo.clear_mfa_config failed: {exc}")
             raise
@@ -237,16 +271,17 @@ class AuthnzMfaRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if self._is_postgres(conn):
-                    await conn.execute(
+                    result = await conn.execute(
                         "UPDATE users SET backup_codes = $1 WHERE id = $2",
                         backup_codes_json,
                         user_id,
                     )
                 else:
-                    await conn.execute(
+                    result = await conn.execute(
                         "UPDATE users SET backup_codes = ? WHERE id = ?",
                         (backup_codes_json, user_id),
                     )
+                self._assert_user_row_updated(result, user_id, operation="update_backup_codes_json")
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzMfaRepo.update_backup_codes_json failed for user {user_id}: {exc}"
@@ -270,17 +305,18 @@ class AuthnzMfaRepo:
             async with self.db_pool.transaction() as conn:
                 if self._is_postgres(conn):
                     ts = self._normalize_datetime_for_postgres(updated_at)
-                    await conn.execute(
+                    result = await conn.execute(
                         "UPDATE users SET backup_codes = $1, updated_at = $2 WHERE id = $3",
                         backup_codes_json,
                         ts,
                         user_id,
                     )
                 else:
-                    await conn.execute(
+                    result = await conn.execute(
                         "UPDATE users SET backup_codes = ?, updated_at = ? WHERE id = ?",
                         (backup_codes_json, updated_at.isoformat(), user_id),
                     )
+                self._assert_user_row_updated(result, user_id, operation="set_backup_codes_with_timestamp")
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzMfaRepo.set_backup_codes_with_timestamp failed for user {user_id}: {exc}"
