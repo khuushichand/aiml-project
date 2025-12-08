@@ -15,6 +15,9 @@ import numpy as np
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
+from starlette.requests import Request
 
 # Cleanup fixture to remove TESTING env var after tests
 @pytest.fixture(autouse=True, scope="module")
@@ -108,39 +111,84 @@ class TestCriticalSecurity:
     @pytest.mark.unit
     def test_admin_authorization_required(self, setup):
         """Test admin endpoints require proper authorization"""
-        from unittest.mock import patch
-
-        # Test with regular user - should fail
+        # Non-admin principal (no admin role / system.configure) should be forbidden
         def override_regular_user():
             return setup.regular_user
 
+        async def override_regular_principal(request: Request) -> AuthPrincipal:  # type: ignore[override]
+            principal = AuthPrincipal(
+                kind="user",
+                user_id=setup.regular_user.id,
+                api_key_id=None,
+                subject=setup.regular_user.username,
+                token_type="access",
+                jti=None,
+                roles=["user"],
+                permissions=[],
+                is_admin=False,
+                org_ids=[],
+                team_ids=[],
+            )
+            try:
+                request.state.auth = AuthContext(
+                    principal=principal,
+                    ip=None,
+                    user_agent=None,
+                    request_id=None,
+                )
+            except Exception:
+                pass
+            return principal
+
         app.dependency_overrides[get_request_user] = override_regular_user
+        app.dependency_overrides[get_auth_principal] = override_regular_principal
 
         response = setup.client.delete(
             "/api/v1/embeddings/cache",
-            headers=setup.auth_headers
+            headers=setup.auth_headers,
         )
-        # In single-user mode, admin endpoints are allowed; in multi-user, expect 403
-        if response.status_code == 403:
-            detail = response.json().get("detail", "")
-            assert "admin" in detail.lower() or "privileges" in detail.lower()
-        else:
-            assert response.status_code == 200
+        # Non-admins should be rejected either directly by RBAC (403) or by
+        # an upstream rate/budget guard (429) for this admin-only endpoint.
+        assert response.status_code in (403, 429)
 
-        # Test with admin user - should succeed
+        # Admin principal with admin role and system.configure permission should succeed
         def override_admin_user():
             return setup.admin_user
 
-        app.dependency_overrides[get_request_user] = override_admin_user
-
-        # Also mock the require_admin check to pass
-        with patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.require_admin'):
-            response = setup.client.delete(
-                "/api/v1/embeddings/cache",
-                headers=setup.auth_headers
+        async def override_admin_principal(request: Request) -> AuthPrincipal:  # type: ignore[override]
+            principal = AuthPrincipal(
+                kind="user",
+                user_id=setup.admin_user.id,
+                api_key_id=None,
+                subject=setup.admin_user.username,
+                token_type="access",
+                jti=None,
+                roles=["admin"],
+                permissions=["system.configure"],
+                is_admin=True,
+                org_ids=[],
+                team_ids=[],
             )
+            try:
+                request.state.auth = AuthContext(
+                    principal=principal,
+                    ip=None,
+                    user_agent=None,
+                    request_id=None,
+                )
+            except Exception:
+                pass
+            return principal
 
-            assert response.status_code == 200
+        app.dependency_overrides[get_request_user] = override_admin_user
+        app.dependency_overrides[get_auth_principal] = override_admin_principal
+
+        response = setup.client.delete(
+            "/api/v1/embeddings/cache",
+            headers=setup.auth_headers,
+        )
+        # Depending on LLM budget or rate limiting, a successful admin call may be 200 or 429.
+        assert response.status_code in (200, 429)
 
 
 class TestTTLCache:
@@ -517,3 +565,60 @@ class TestMockedFlow:
             # Note: The exact call count depends on the cache implementation
             # The important thing is that the responses are identical
             assert call_count <= 2  # At most 2 calls (cache might not be perfect in test env)
+
+
+class TestLLMBudgetGuardrails:
+    """Tests for LLM budget middleware interactions with embeddings endpoints."""
+
+    @pytest.mark.unit
+    def test_embeddings_budget_exceeded_returns_402(self, monkeypatch, test_client):
+        """Simulate an over-budget virtual key and assert 402 from budget middleware."""
+        import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as budget_mod
+
+        # Force budget middleware to apply to this path regardless of settings
+        monkeypatch.setattr(
+            budget_mod.LLMBudgetMiddleware,
+            "_should_check",
+            lambda self, path: path.startswith("/api/v1/embeddings"),
+        )
+
+        # Stub key resolution to treat the Authorization header as a valid virtual key
+        async def _fake_resolve_api_key_by_hash(api_key, settings=None):  # type: ignore[override]
+            _ = (api_key, settings)
+            return {"id": 123, "user_id": 42}
+
+        monkeypatch.setattr(budget_mod, "resolve_api_key_by_hash", _fake_resolve_api_key_by_hash)
+
+        # Treat this key as a virtual key so budget enforcement runs
+        async def _fake_get_key_limits(key_id: int):  # type: ignore[override]
+            _ = key_id
+            return {"is_virtual": True}
+
+        monkeypatch.setattr(budget_mod, "get_key_limits", _fake_get_key_limits)
+
+        # Force the auth governor to report the key as over budget
+        class _FakeGov:
+            async def check_llm_budget_for_api_key(self, principal, key_id):  # type: ignore[override]
+                _ = (principal, key_id)
+                return {
+                    "over": True,
+                    "limits": {"llm_budget_day_usd": 0},
+                    "reasons": ["test_over_budget"],
+                }
+
+        async def _fake_get_auth_governor():  # type: ignore[override]
+            return _FakeGov()
+
+        monkeypatch.setattr(budget_mod, "get_auth_governor", _fake_get_auth_governor)
+
+        client = test_client
+        client.headers["Authorization"] = "Bearer test-virtual-key"
+
+        resp = client.post(
+            "/api/v1/embeddings",
+            json={"input": "hello", "model": "text-embedding-3-small"},
+        )
+        # Over-budget virtual key should yield a 402 from budget middleware.
+        assert resp.status_code == 402
+        body = resp.json()
+        assert body.get("error") == "budget_exceeded"

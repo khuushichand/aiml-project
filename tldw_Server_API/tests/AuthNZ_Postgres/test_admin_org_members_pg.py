@@ -1,5 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
 
 @pytest.mark.integration
@@ -7,7 +9,7 @@ from fastapi.testclient import TestClient
 async def test_admin_org_members_endpoints_postgres(test_db_pool):
     # App and overrides
     from tldw_Server_API.app.main import app
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 
     # Disable CSRF for test client
     from tldw_Server_API.app.core.config import settings as app_settings
@@ -92,10 +94,34 @@ async def test_admin_org_members_endpoints_postgres(test_db_pool):
     )
     charlie_id = await pool.fetchval("SELECT id FROM users WHERE username = $1", "pgcharlie")
 
-    # Override admin requirement
-    async def _pass_admin():
-        return {"id": admin_id, "role": "admin", "username": "pgadmin2"}
-    app.dependency_overrides[require_admin] = _pass_admin
+    # Override auth principal with an admin user for claim-first RBAC
+    async def _principal_override(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=admin_id,
+            api_key_id=None,
+            subject="pgadmin2",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        try:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=None,
+                user_agent=None,
+                request_id=None,
+            )
+        except Exception:
+            # Best-effort; not all code paths require request.state.auth
+            pass
+        return principal
+
+    app.dependency_overrides[get_auth_principal] = _principal_override
 
     with TestClient(app) as client:
         # Create org
@@ -175,4 +201,4 @@ async def test_admin_org_members_endpoints_postgres(test_db_pool):
         )
         assert remaining == 0
 
-    app.dependency_overrides.pop(require_admin, None)
+    app.dependency_overrides.pop(get_auth_principal, None)

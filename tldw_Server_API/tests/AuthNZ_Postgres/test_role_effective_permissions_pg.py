@@ -3,13 +3,15 @@ import uuid as _uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_role_effective_permissions_postgres(test_db_pool):
     from tldw_Server_API.app.main import app
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 
     # Disable CSRF for test client
     from tldw_Server_API.app.core.config import settings as app_settings
@@ -66,10 +68,34 @@ async def test_role_effective_permissions_postgres(test_db_pool):
     await pool.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", role_id, pid_alpha)
     await pool.execute("INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", role_id, pid_tool)
 
-    # Override admin requirement
-    async def _pass_admin():
-        return {"id": admin_user_id, "role": "admin", "username": "pgadmin2"}
-    app.dependency_overrides[require_admin] = _pass_admin
+    # Override auth principal with an admin user for claim-first RBAC
+    async def _principal_override(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=admin_user_id,
+            api_key_id=None,
+            subject="pgadmin2",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        try:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=None,
+                user_agent=None,
+                request_id=None,
+            )
+        except Exception:
+            # Best-effort; not all code paths require request.state.auth
+            pass
+        return principal
+
+    app.dependency_overrides[get_auth_principal] = _principal_override
 
     try:
         with TestClient(app) as client:
@@ -82,4 +108,4 @@ async def test_role_effective_permissions_postgres(test_db_pool):
             assert "tools.execute:foo" in data["tool_permissions"]
             assert set(data["all_permissions"]) == {"alpha.read", "tools.execute:foo"}
     finally:
-        app.dependency_overrides.pop(require_admin, None)
+        app.dependency_overrides.pop(get_auth_principal, None)

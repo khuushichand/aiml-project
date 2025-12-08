@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 
 pytestmark = pytest.mark.integration
@@ -26,13 +27,37 @@ def _setup_isolated_authnz(monkeypatch, db_path: Path):
 def _admin_app():
     mod = import_module("tldw_Server_API.app.main")
     app = getattr(mod, "app")
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
-    async def _pass_admin():
-        return {"id": 1, "role": "admin", "username": "admin"}
+    async def _principal_override(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject="admin",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        try:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=None,
+                user_agent=None,
+                request_id=None,
+            )
+        except Exception:
+            # Best-effort; not all test paths require request.state.auth
+            pass
+        return principal
 
-    app.dependency_overrides[require_admin] = _pass_admin
-    return app, require_admin
+    app.dependency_overrides[get_auth_principal] = _principal_override
+    return app, get_auth_principal
 
 
 def test_admin_org_slug_conflict_returns_409(monkeypatch, tmp_path):
