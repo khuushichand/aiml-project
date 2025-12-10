@@ -10,8 +10,15 @@ class _FixedDatetime(rate_limiter_module.datetime):
     """Subclass datetime to override utcnow while preserving other behaviour."""
 
     @classmethod
-    def utcnow(cls):
-        return cls(2024, 1, 1, 12, 5, 42)
+    def now(cls, tz=None):
+        dt = cls(2024, 1, 1, 12, 5, 42, tzinfo=None)
+        if tz is not None:
+            try:
+                # Assume tz is a datetime.tzinfo; attach and return
+                return dt.replace(tzinfo=tz)
+            except Exception:
+                return dt
+        return dt
 
 
 class _FakePipeline:
@@ -105,8 +112,14 @@ async def test_redis_window_alignment(monkeypatch):
 
 class _FiveMinuteDatetime(rate_limiter_module.datetime):
     @classmethod
-    def utcnow(cls):
-        return cls(2024, 1, 1, 12, 7, 42)
+    def now(cls, tz=None):
+        dt = cls(2024, 1, 1, 12, 7, 42, tzinfo=None)
+        if tz is not None:
+            try:
+                return dt.replace(tzinfo=tz)
+            except Exception:
+                return dt
+        return dt
 
 
 @pytest.mark.asyncio

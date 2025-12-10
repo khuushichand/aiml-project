@@ -2034,7 +2034,7 @@ async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest,
         if not perm_id:
             raise HTTPException(status_code=400, detail="permission_id or permission_name required")
 
-        granted = 1 if payload.effect == 'allow' else 0
+        granted = True if payload.effect == 'allow' else False
         if _is_pg:
             await db.execute(
                 """

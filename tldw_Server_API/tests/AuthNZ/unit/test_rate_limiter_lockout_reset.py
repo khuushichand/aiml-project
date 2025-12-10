@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -8,11 +8,20 @@ from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 
 
 class _ControlledDatetime(rate_limiter_module.datetime):
-    current = rate_limiter_module.datetime(2024, 1, 1, 0, 0, 0)
+    current = rate_limiter_module.datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 
     @classmethod
     def utcnow(cls):
         return cls.current
+
+    @classmethod
+    def now(cls, tz=None):
+        if tz is None:
+            return cls.current
+        try:
+            return cls.current.astimezone(tz)
+        except Exception:
+            return cls.current
 
 
 class _Cursor:
@@ -149,7 +158,7 @@ async def test_lockout_recovers_after_window(monkeypatch):
 
     assert result["is_locked"] is True
 
-    _ControlledDatetime.current = original_datetime(2024, 1, 1, 0, 6, 0)
+    _ControlledDatetime.current = original_datetime(2024, 1, 1, 0, 6, 0, tzinfo=timezone.utc)
     is_locked, _ = await limiter.check_lockout(identifier)
     assert is_locked is False
 

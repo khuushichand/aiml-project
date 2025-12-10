@@ -32,9 +32,37 @@ def _build_mcp_client():
 def client():
     _setup_env()
     from fastapi import FastAPI
+    from fastapi import Request, HTTPException, status
     from tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint import router as mcp_router
+    from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
     app = FastAPI()
     app.include_router(mcp_router, prefix="/api/v1")
+
+    async def _fake_get_auth_principal(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        # Treat any presented credential as an admin-style principal with system.logs
+        auth = request.headers.get("Authorization")
+        x_api_key = request.headers.get("X-API-KEY")
+        if not auth and not x_api_key:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+            )
+        return AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject=None,
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.logs"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+
+    app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
     with TestClient(app) as c:
         yield c
 
@@ -108,12 +136,10 @@ def test_modules_health_admin_bearer_ok(client: TestClient):
     assert isinstance(data, dict) and "health" in data
 
 
-def test_prometheus_requires_auth_when_not_public(client: TestClient, monkeypatch):
-    # Ensure public flag is off
-    monkeypatch.setenv("MCP_PROMETHEUS_PUBLIC", "0")
-    # No auth → 401
+def test_prometheus_requires_auth(client: TestClient, monkeypatch):
+    # No auth → 401/403 via require_permissions(SYSTEM_LOGS)
     r0 = client.get("/api/v1/mcp/metrics/prometheus")
-    assert r0.status_code == 401
+    assert r0.status_code in (401, 403)
     # With X-API-KEY in single_user mode → 200
     r1 = client.get(
         "/api/v1/mcp/metrics/prometheus",
@@ -121,14 +147,6 @@ def test_prometheus_requires_auth_when_not_public(client: TestClient, monkeypatc
     )
     assert r1.status_code == 200
     assert isinstance(r1.text, str) and len(r1.text) > 0
-
-
-def test_prometheus_public_allows_unauth(client: TestClient, monkeypatch):
-    # Enable public scrape
-    monkeypatch.setenv("MCP_PROMETHEUS_PUBLIC", "1")
-    r = client.get("/api/v1/mcp/metrics/prometheus")
-    assert r.status_code == 200
-    assert isinstance(r.text, str) and len(r.text) > 0
 
 
 def test_demo_auth_requires_secret(monkeypatch):

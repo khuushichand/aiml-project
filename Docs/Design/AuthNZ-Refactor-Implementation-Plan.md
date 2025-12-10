@@ -6,6 +6,10 @@ This plan coordinates the implementation of the three AuthNZ PRDs:
 - User-Unification PRD (`Docs/Product/User-Unification-PRD.md`)
 - User-Auth-Deps PRD (`Docs/Product/User-Auth-Deps-PRD.md`)
 
+For a concise, stage-oriented tracker of the *remaining* work across these three PRDs (including Resource-Governor alignment), see:
+
+- `Docs/Product/AuthNZ-PRDs_IMPLEMENTATION_PLAN.md`
+
 The stages are designed to be incremental and backwards-compatible. Each stage should result in a compilable, test-passing system with a clear, testable outcome.
 
 ***
@@ -270,11 +274,7 @@ The following AuthNZ surfaces still contain inline SQL and/or dialect detection 
   - `tldw_Server_API/app/core/AuthNZ/initialize.py` includes a guarded bootstrap path for non-SQLite `DATABASE_URL`s that creates core AuthNZ tables (`audit_logs`, `sessions`, `registration_codes`, RBAC tables, and organizations/teams) using `CREATE TABLE IF NOT EXISTS` and related DDL behind an asyncpg-style connection check.
   - These statements are intended as **safety/backstop DDL** for Postgres deployments that have not yet run the canonical migrations. They execute only during initializer runs and are idempotent; the long‑term plan is to rely solely on migrations and move this bootstrap into dedicated migration helpers.
 
-- **Virtual-key quota counters**:
-  - `tldw_Server_API/app/core/AuthNZ/quotas.py` implements `increment_and_check_jwt_quota` / `increment_and_check_api_key_quota` with inline SQL for the `vk_jwt_counters` and `vk_api_key_counters` tables, using a small dialect switch (`hasattr(conn, "fetchval")`) to choose between asyncpg/Postgres and aiosqlite/SQLite syntax.
-  - These helpers are used only for virtual-key quota enforcement and fall back to process-local counters on error. They remain inline in this iteration to avoid overcomplicating the repository surface; a future stage may introduce a dedicated `AuthnzQuotasRepo` to own these tables.
-
-For this phase, we deliberately leave the above paths as guarded inline SQL while treating all high-traffic runtime AuthNZ operations (users, API keys, RBAC, usage, rate limits, sessions, token blacklist, orgs/teams, MFA, monitoring, registration codes) as repository-backed. The remaining inline SQL is tracked here as tech debt and will be revisited once migrations and repo coverage are fully stabilized across SQLite and Postgres. For v0.1.x specifically, we accept Postgres bootstrap DDL and the `vk_*_counters` quota helpers as intentional tech debt rather than introducing an `AuthnzQuotasRepo`; a future stage can migrate these once operational requirements are clearer.
+For this phase, we deliberately leave the above bootstrap path as guarded inline SQL while treating all high-traffic runtime AuthNZ operations (users, API keys, RBAC, usage, rate limits, sessions, token blacklist, orgs/teams, MFA, monitoring, registration codes, and virtual-key quota counters) as repository-backed. The remaining inline SQL is tracked here as tech debt and will be revisited once migrations and repo coverage are fully stabilized across SQLite and Postgres. For v0.1.x specifically, we accept Postgres bootstrap DDL as intentional tech debt and expect new tables to be added via migrations or repo-backed helpers rather than new inline DDL.
 
 ### Inline SQL audit (hasattr(conn, 'fetch*') clusters)
 
@@ -364,7 +364,39 @@ MFA-related SQL has already been migrated behind `AuthnzMfaRepo`; no `hasattr(co
   The main auth-adjacent exception is the Jobs admin domain-scoped RBAC helper in `tldw_Server_API/app/api/v1/endpoints/jobs_admin.py`, which enforces domain filters via env-driven settings (`JOBS_DOMAIN_SCOPED_RBAC`, `JOBS_REQUIRE_DOMAIN_FILTER`, `JOBS_DOMAIN_ALLOWLIST_*`). As part of this iteration, all domain-scoped jobs-admin surfaces now have a principal-first domain RBAC path gated by `JOBS_DOMAIN_RBAC_PRINCIPAL`:
   - `_enforce_domain_scope_from_principal(principal: AuthPrincipal, domain: Optional[str])` builds the same “admin user” dict as before and forwards to `_enforce_domain_scope`, but is driven purely from `AuthPrincipal` rather than a user dict produced by `require_admin`.
   - Queue status/control, prune/reschedule/retry-now, events (list/SSE), TTL sweep, integrity sweep, stats, list, stale, batch cancel/reschedule, and batch requeue-quarantined endpoints all consult `_enforce_domain_scope_from_principal` when `JOBS_DOMAIN_RBAC_PRINCIPAL` is enabled and fall back to the legacy user-dict path otherwise.
-  Tests in `tldw_Server_API/tests/AuthNZ_Unit/test_jobs_admin_permissions_claims.py` now lock in 401/403/200 and allowlist behavior for these endpoints under both the legacy and principal-driven paths, ensuring that principal-based domain RBAC faithfully mirrors the existing env-driven semantics. The long-term intent is to flip `JOBS_DOMAIN_RBAC_PRINCIPAL` on by default and retire the legacy user-dict/env toggles once existing deployments have validated the principal-based behavior.
+  - Tests in `tldw_Server_API/tests/AuthNZ_Unit/test_jobs_admin_permissions_claims.py` now lock in 401/403/200 and allowlist behavior for these endpoints under both the legacy and principal-driven paths, ensuring that principal-based domain RBAC faithfully mirrors the existing env-driven semantics. The long-term intent is to flip `JOBS_DOMAIN_RBAC_PRINCIPAL` on by default and retire the legacy user-dict/env toggles once existing deployments have validated the principal-based behavior.
+
+### Stage 4 – Early Principal-First Replacement Design (Org Policy)
+
+As an initial concrete step for Stage 4 (“Claim-First Dependencies & AuthContext Adoption”), the `get_org_policy_from_principal` helper in `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py` is earmarked as the first `is_single_user_mode()` callsite to migrate to a principal-first, flag-backed alternative:
+
+- Current behavior:
+  - Prefers `principal.org_ids` when present.
+  - Falls back to `current_user["org_memberships"]`.
+  - When neither is available, uses a synthetic `org_id=1` **only** when `is_single_user_mode()` or `is_single_user_profile_mode()` is true; otherwise it returns HTTP 400 (“User has no organization memberships”).
+- Planned principal-first alternative (behind an env flag, e.g. `ORG_POLICY_SINGLE_USER_PRINCIPAL`):
+  - When the flag is **disabled** (default), behavior remains exactly as today.
+  - When the flag is **enabled**:
+    - The synthetic `org_id=1` path is driven from `AuthPrincipal` and profile/feature flags instead of `is_single_user_mode()`:
+      - If `principal.kind == "single_user"` or `principal.user_id` matches the configured `SINGLE_USER_FIXED_ID` **and** the active profile is a single-user profile (`PROFILE` in `{local-single-user, single_user, desktop}`), the helper uses `org_id=1` as the final fallback.
+      - Otherwise, the helper returns HTTP 400 when no org membership can be resolved, regardless of `AUTH_MODE`.
+    - This ensures that single-user deployments participate via explicit principal claims and profile configuration, rather than a global “mode” shortcut.
+- Tests (to be added with the implementation):
+  - Unit tests for the helper under both flag states, asserting:
+    - JWT/API-key principals with `org_ids` still resolve org policy identically to today.
+    - For principals without `org_ids` or memberships:
+      - In single-user profile + `ORG_POLICY_SINGLE_USER_PRINCIPAL=1`, single-user principals resolve `org_id=1`.
+      - In multi-user profiles (or when the flag is off), the helper returns HTTP 400.
+  - HTTP-level tests for at least one Resource-Governor or org-scoped admin endpoint using this helper, verifying 200/400 behavior under the different profile/flag/principal combinations.
+
+This pattern (principal-first logic, gated by a dedicated env flag and validated by tests before flipping defaults) will be reused for other auth-adjacent `is_single_user_mode()` callsites (for example, embeddings tenant quotas and MCP compatibility shims) in subsequent Stage 4 iterations. Concretely:
+
+- Embeddings tenant quotas now respect `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE`:
+  - When the flag is disabled/unset, tenant RPS enforcement follows the legacy `AUTH_MODE`-based `_is_multi_user_runtime()` guard.
+  - When enabled, `_should_enforce_tenant_rps` disables quotas for single-user profiles and for explicit `kind="single_user"` principals, and only enforces tenant RPS in genuine multi-tenant contexts; behavior is covered by `tldw_Server_API/tests/AuthNZ_Unit/test_embeddings_tenant_profile_mode.py`.
+- MCP single-user API key handling now respects `MCP_SINGLE_USER_COMPAT_SHIM`:
+  - When the flag is disabled (`0`/`false`/`off`), the MCP HTTP endpoints always validate `X-API-KEY` via the multi-user API key manager (`get_api_key_manager`), even in single-user mode/profile.
+  - When enabled (default), single-user deployments continue to treat `SINGLE_USER_API_KEY` (and, in tests, `SINGLE_USER_TEST_API_KEY`) as a bootstrap admin-style principal, with behavior locked in by `tldw_Server_API/tests/MCP_unified/test_mcp_http_auth_paths.py`.
 
 ***
 

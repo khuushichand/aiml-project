@@ -101,6 +101,26 @@ def _get_derived_user_id(user: Optional[TokenData]) -> Optional[str]:
     return user.sub if user else None
 
 
+def _should_use_single_user_api_key_compat() -> bool:
+    """
+    Decide whether to use the single-user API key compatibility shim.
+
+    Behaviour:
+    - When MCP_SINGLE_USER_COMPAT_SHIM is explicitly disabled (\"0\"/\"false\"/\"off\"),
+      the shim is turned off regardless of AUTH_MODE/PROFILE and API keys are
+      always validated via the multi-user API key manager path.
+    - Otherwise (default), the shim is enabled only when the runtime is in
+      single-user mode/profile, mirroring the existing behaviour.
+    """
+    flag = os.getenv("MCP_SINGLE_USER_COMPAT_SHIM", "").strip().lower()
+    if flag in {"0", "false", "off"}:
+        return False
+    try:
+        return is_single_user_mode() or is_single_user_profile_mode()
+    except Exception:
+        return False
+
+
 @dataclass
 class McpAuthContext:
     """Resolved authentication context for MCP HTTP endpoints."""
@@ -157,7 +177,7 @@ async def get_current_user(
             # Single-user mode: accept the configured SINGLE_USER_API_KEY directly,
             # mirroring the semantics in get_request_user/get_auth_principal.
             try:
-                if is_single_user_mode() or is_single_user_profile_mode():
+                if _should_use_single_user_api_key_compat():
                     settings = get_settings()
                     test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {
                         "1",
@@ -257,24 +277,6 @@ async def require_user(
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
     return user
-
-
-async def require_admin(
-    principal: AuthPrincipal = Depends(get_auth_principal),
-) -> AuthPrincipal:
-    """
-    Claim-first admin gate for MCP endpoints.
-
-    Prefer this together with require_permissions(...) / require_roles(...)
-    for new MCP admin/diagnostics routes so behavior matches the broader
-    AuthNZ claim-first model (User-Auth-Deps PRD).
-    """
-    if not principal.is_admin and "admin" not in (principal.roles or []):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role required",
-        )
-    return principal
 
 
 # WebSocket endpoint
@@ -554,42 +556,18 @@ async def get_server_metrics(
     return ServerMetricsResponse(**metrics)
 
 
-def _is_prometheus_public() -> bool:
-    """Flag indicating whether Prometheus metrics should be exposed without auth."""
-    return os.getenv("MCP_PROMETHEUS_PUBLIC", "").lower() in {"1", "true", "yes"}
-
-
-async def require_admin_unless_public(
-    public: bool = Depends(_is_prometheus_public),
-    principal: Optional[AuthPrincipal] = Depends(get_auth_principal),
-) -> Optional[AuthPrincipal]:
-    """
-    Enforce admin-style requirement unless explicitly configured as public.
-
-    When MCP_PROMETHEUS_PUBLIC is enabled, this returns None and allows unauthenticated
-    scraping (for trusted internal networks only). Otherwise, it enforces an admin-style
-    AuthPrincipal gate for backward compatibility. New admin/diagnostics routes should
-    prefer claim-first dependencies (get_auth_principal + require_permissions /
-    require_roles) instead of this helper.
-    """
-    if public:
-        return None
-    # principal is guaranteed here; require_admin will raise 403 on non-admins.
-    return await require_admin(principal)
-
-
 @router.get("/metrics/prometheus")
 async def get_prometheus_metrics(
-    _admin: Optional[TokenData] = Depends(require_admin_unless_public),
+    _principal: AuthPrincipal = Depends(require_permissions(SYSTEM_LOGS)),
     _guard: None = Depends(enforce_http_security),
 ):
     """
     Prometheus scrape endpoint for MCP metrics.
 
-    Security: By default, requires admin authentication. Set MCP_PROMETHEUS_PUBLIC=1
-    to allow unauthenticated internal-only scraping. When public, ensure it is
-    exposed only on trusted networks or behind an ingress/proxy that enforces
-    authentication in production environments.
+    Security: Requires an authenticated principal with the `system.logs`
+    permission (or admin-style claims via require_permissions). External
+    ingress or Prometheus-side configuration should be used to handle any
+    additional network-level access controls.
     """
     collector = get_metrics_collector()
     content = collector.get_prometheus_metrics()

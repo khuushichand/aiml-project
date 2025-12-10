@@ -219,8 +219,15 @@ class TestAuthEndpointsIntegration:
         app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
-    async def test_register_success(self, mock_db_pool, registration_service):
+    async def test_register_success(self, mock_db_pool, registration_service, monkeypatch):
         """Test successful user registration."""
+        # Ensure registration runs under multi-user profile (local-single-user
+        # profile forbids self-registration at the endpoint layer).
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        monkeypatch.setenv("AUTH_MODE", "multi_user")
+        monkeypatch.delenv("PROFILE", raising=False)
+        reset_settings()
+
         # Mock database to simulate no existing user
         mock_db_pool.fetchrow = AsyncMock(return_value=None)
         mock_db_pool.execute = AsyncMock()
@@ -258,8 +265,13 @@ class TestAuthEndpointsIntegration:
         app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
-    async def test_register_duplicate_user(self, mock_db_pool, registration_service):
+    async def test_register_duplicate_user(self, mock_db_pool, registration_service, monkeypatch):
         """Test registration with duplicate username."""
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        monkeypatch.setenv("AUTH_MODE", "multi_user")
+        monkeypatch.delenv("PROFILE", raising=False)
+        reset_settings()
+
         registration_service.register_user = AsyncMock(
             side_effect=DuplicateUserError("Username already exists")
         )
@@ -286,8 +298,13 @@ class TestAuthEndpointsIntegration:
         app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
-    async def test_register_weak_password(self, registration_service):
+    async def test_register_weak_password(self, registration_service, monkeypatch):
         """Test registration with weak password."""
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        monkeypatch.setenv("AUTH_MODE", "multi_user")
+        monkeypatch.delenv("PROFILE", raising=False)
+        reset_settings()
+
         registration_service.register_user = AsyncMock(
             side_effect=WeakPasswordError("Password must be at least 8 characters")
         )

@@ -434,18 +434,36 @@ class AuthnzSessionsRepo:
                 )
                 return [dict(r) for r in rows]
 
-            # SQLite path
+            # SQLite path – support deployments where ``last_activity`` has not
+            # yet been added by selecting a synthetic last-activity column.
             async with self.db_pool.acquire() as conn:
-                cursor = await conn.execute(
-                    """
-                    SELECT id, ip_address, user_agent, device_id,
-                           created_at, last_activity, expires_at
-                    FROM sessions
-                    WHERE user_id = ? AND is_active = 1
-                    ORDER BY last_activity DESC
-                    """,
-                    (user_id,),
-                )
+                try:
+                    cursor = await conn.execute(
+                        """
+                        SELECT id, ip_address, user_agent, device_id,
+                               created_at, last_activity, expires_at
+                        FROM sessions
+                        WHERE user_id = ? AND is_active = 1
+                        ORDER BY last_activity DESC
+                        """,
+                        (user_id,),
+                    )
+                except Exception as exc:
+                    msg = str(exc).lower()
+                    if "no such column" in msg and "last_activity" in msg:
+                        cursor = await conn.execute(
+                            """
+                            SELECT id, ip_address, user_agent, device_id,
+                                   created_at, created_at AS last_activity, expires_at
+                            FROM sessions
+                            WHERE user_id = ? AND is_active = 1
+                            ORDER BY created_at DESC
+                            """,
+                            (user_id,),
+                        )
+                    else:
+                        raise
+
                 rows = await cursor.fetchall()
                 sessions: List[Dict[str, Any]] = []
                 for row in rows:

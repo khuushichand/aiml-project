@@ -20,9 +20,12 @@ def test_guardrail_tables_used_only_in_core_authnz_modules():
 
     allowed_files = {
         "app/core/AuthNZ/rate_limiter.py",
+        "app/core/AuthNZ/repos/rate_limits_repo.py",
+        "app/core/AuthNZ/repos/quotas_repo.py",
         "app/core/AuthNZ/migrations.py",
         "app/core/AuthNZ/quotas.py",
         "app/core/AuthNZ/initialize.py",
+        "app/core/AuthNZ/pg_migrations_extra.py",
     }
 
     markers = (

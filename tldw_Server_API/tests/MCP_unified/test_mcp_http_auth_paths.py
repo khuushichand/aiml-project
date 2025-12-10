@@ -7,6 +7,9 @@ import pytest
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.api.v1.endpoints import mcp_unified_endpoint as mcp_ep
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.MCP_unified.auth import UserRole
 
 
 # Disable HTTP security guard for these tests (IP allowlist/mTLS) to focus on auth behavior.
@@ -169,3 +172,91 @@ async def test_modules_health_uses_principal_metadata(monkeypatch):
     assert server.last_metadata.get("permissions") == principal.permissions
     # Admin override flag should be set as documented
     assert server.last_metadata.get("admin_override") is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_single_user_api_key_flag_enabled_uses_compat_shim(monkeypatch):
+    """
+    When MCP_SINGLE_USER_COMPAT_SHIM is enabled and the runtime is single-user,
+    X-API-KEY matching SINGLE_USER_API_KEY should be treated as a single-user
+    admin principal without hitting the multi-user API key manager path.
+    """
+    # Enable shim and force single-user runtime.
+    monkeypatch.setenv("MCP_SINGLE_USER_COMPAT_SHIM", "1")
+    monkeypatch.setattr(mcp_ep, "is_single_user_mode", lambda: True)
+    monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: True)
+
+    # Provide minimal settings for the shim.
+    class _Settings:
+        SINGLE_USER_API_KEY = "single-user-admin-key"
+        SINGLE_USER_FIXED_ID = 999
+
+    monkeypatch.setattr(mcp_ep, "get_settings", lambda: _Settings())
+
+    server = _install_dummy_server(monkeypatch)
+
+    # Also ensure HTTP security guard is disabled for this test.
+    try:
+        from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security as _ehs
+
+        app.dependency_overrides[_ehs] = lambda: None
+    except Exception:
+        pass
+
+    headers = {"X-API-KEY": "single-user-admin-key"}
+    body = {"jsonrpc": "2.0", "method": "status", "id": 10}
+
+    r = client.post("/api/v1/mcp/request", headers=headers, json=body)
+    assert r.status_code == 200, r.text
+
+    assert server.last_metadata is not None
+    # TokenData produced by the shim should carry admin-style role.
+    assert "roles" in server.last_metadata
+    assert server.last_metadata["roles"] == [UserRole.ADMIN.value]
+
+
+@pytest.mark.asyncio
+async def test_mcp_single_user_api_key_flag_disabled_uses_api_key_manager(monkeypatch):
+    """
+    When MCP_SINGLE_USER_COMPAT_SHIM is disabled, even in single-user runtime
+    the API key should be validated via the multi-user API key manager path.
+    """
+    monkeypatch.setenv("MCP_SINGLE_USER_COMPAT_SHIM", "0")
+    monkeypatch.setattr(mcp_ep, "is_single_user_mode", lambda: True)
+    monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: True)
+
+    calls: list[dict[str, Any]] = []
+
+    class _DummyApiManager:
+        async def validate_api_key(self, key: str, ip_address: Optional[str] = None) -> Dict[str, Any]:
+            calls.append({"key": key, "ip": ip_address})
+            return {"user_id": "123", "org_id": 9, "team_id": 7}
+
+    async def _fake_get_api_key_manager():
+        return _DummyApiManager()
+
+    monkeypatch.setattr(mcp_ep, "get_api_key_manager", _fake_get_api_key_manager)
+
+    server = _install_dummy_server(monkeypatch)
+
+    try:
+        from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security as _ehs
+
+        app.dependency_overrides[_ehs] = lambda: None
+    except Exception:
+        pass
+
+    headers = {"X-API-KEY": "test-api-key-123"}
+    body = {"jsonrpc": "2.0", "method": "status", "id": 11}
+
+    r = client.post("/api/v1/mcp/request", headers=headers, json=body)
+    assert r.status_code == 200, r.text
+
+    # API key manager should have been used exactly once.
+    assert len(calls) == 1
+    assert calls[0]["key"] == "test-api-key-123"
+
+    assert server.last_metadata is not None
+    # TokenData from manager path should carry api_client role.
+    assert "roles" in server.last_metadata
+    assert server.last_metadata["roles"] == ["api_client"]

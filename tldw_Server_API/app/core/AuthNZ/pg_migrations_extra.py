@@ -87,6 +87,231 @@ _CREATE_PRIVILEGE_SNAPSHOTS = [
 ]
 
 
+_CREATE_AUTHNZ_CORE_TABLES = [
+    # audit_logs
+    (
+        """
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            action VARCHAR(255) NOT NULL,
+            resource_type VARCHAR(128),
+            resource_id INTEGER,
+            ip_address VARCHAR(45),
+            user_agent TEXT,
+            status VARCHAR(32),
+            details TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)", ()),
+    # sessions (core columns + additive columns/indexes)
+    (
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            token_hash VARCHAR(64) NOT NULL,
+            refresh_token_hash VARCHAR(64),
+            encrypted_token TEXT,
+            encrypted_refresh TEXT,
+            expires_at TIMESTAMP NOT NULL,
+            refresh_expires_at TIMESTAMP,
+            ip_address VARCHAR(45),
+            user_agent TEXT,
+            device_id TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            is_revoked BOOLEAN DEFAULT FALSE,
+            revoked_at TIMESTAMP,
+            revoked_by INTEGER,
+            revoke_reason TEXT,
+            access_jti VARCHAR(128),
+            refresh_jti VARCHAR(128),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS refresh_expires_at TIMESTAMP", ()),
+    ("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS is_revoked BOOLEAN DEFAULT FALSE", ()),
+    ("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS access_jti VARCHAR(128)", ()),
+    ("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS refresh_jti VARCHAR(128)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_sessions_access_jti ON sessions(access_jti)", ()),
+    # registration_codes
+    (
+        """
+        CREATE TABLE IF NOT EXISTS registration_codes (
+            id SERIAL PRIMARY KEY,
+            code VARCHAR(128) UNIQUE NOT NULL,
+            role_to_grant VARCHAR(50) DEFAULT 'user',
+            max_uses INTEGER DEFAULT 1,
+            uses INTEGER DEFAULT 0,
+            expires_at TIMESTAMP,
+            created_by INTEGER,
+            metadata JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    # RBAC core tables
+    (
+        """
+        CREATE TABLE IF NOT EXISTS roles (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(64) UNIQUE NOT NULL,
+            description TEXT,
+            is_system BOOLEAN DEFAULT FALSE
+        )
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS permissions (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(128) UNIQUE NOT NULL,
+            description TEXT,
+            category VARCHAR(64)
+        )
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS role_permissions (
+            role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+            permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+            PRIMARY KEY (role_id, permission_id)
+        )
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS user_roles (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+            granted_by INTEGER,
+            expires_at TIMESTAMP,
+            PRIMARY KEY (user_id, role_id)
+        )
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS user_permissions (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+            granted BOOLEAN NOT NULL DEFAULT TRUE,
+            expires_at TIMESTAMP,
+            PRIMARY KEY (user_id, permission_id)
+        )
+        """,
+        (),
+    ),
+    # RBAC rate limits
+    (
+        """
+        CREATE TABLE IF NOT EXISTS rbac_role_rate_limits (
+            role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+            resource VARCHAR(128) NOT NULL,
+            limit_per_min INTEGER,
+            burst INTEGER,
+            PRIMARY KEY (role_id, resource)
+        )
+        """,
+        (),
+    ),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS rbac_user_rate_limits (
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            resource VARCHAR(128) NOT NULL,
+            limit_per_min INTEGER,
+            burst INTEGER,
+            PRIMARY KEY (user_id, resource)
+        )
+        """,
+        (),
+    ),
+    # Organizations and teams hierarchy
+    (
+        """
+        CREATE TABLE IF NOT EXISTS organizations (
+            id SERIAL PRIMARY KEY,
+            uuid VARCHAR(64) UNIQUE,
+            name VARCHAR(255) UNIQUE NOT NULL,
+            slug VARCHAR(255) UNIQUE,
+            owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            metadata JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_orgs_owner ON organizations(owner_user_id)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS org_members (
+            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role VARCHAR(32) DEFAULT 'member',
+            status VARCHAR(32) DEFAULT 'active',
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (org_id, user_id)
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_org_members_user ON org_members(user_id)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS teams (
+            id SERIAL PRIMARY KEY,
+            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            name VARCHAR(255) NOT NULL,
+            slug VARCHAR(255),
+            description TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            metadata JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (org_id, name)
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_teams_org ON teams(org_id)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS team_members (
+            team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role VARCHAR(32) DEFAULT 'member',
+            status VARCHAR(32) DEFAULT 'active',
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (team_id, user_id)
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id)", ()),
+]
+
+
 _CREATE_USAGE_TABLES = [
     # usage_log + usage_daily
     (
@@ -255,6 +480,33 @@ async def ensure_privilege_snapshots_table_pg(pool: Optional[DatabasePool] = Non
         return True
     except Exception as exc:
         logger.warning(f"Failed to ensure PostgreSQL privilege_snapshots table: {exc}")
+        return False
+
+
+async def ensure_authnz_core_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
+    """Ensure core AuthNZ tables exist for PostgreSQL backends.
+
+    This covers audit_logs, sessions, registration_codes, RBAC tables,
+    role/user rate-limits, and the organizations/teams hierarchy. It is
+    intended as a bootstrap guardrail for Postgres deployments that have
+    not yet run dedicated migrations for these tables.
+    """
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        for sql, params in _CREATE_AUTHNZ_CORE_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except Exception as exc:
+                logger.debug(f"PG ensure authnz core tables DDL failed: {exc}")
+        logger.info(
+            "Ensured PostgreSQL AuthNZ core tables "
+            "(audit_logs, sessions, registration_codes, RBAC, orgs/teams)"
+        )
+        return True
+    except Exception as exc:
+        logger.warning(f"Failed to ensure PostgreSQL AuthNZ core tables: {exc}")
         return False
 
 

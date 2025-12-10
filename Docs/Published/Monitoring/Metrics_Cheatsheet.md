@@ -127,7 +127,7 @@ Notes:
 - System: `mcp_memory_usage_bytes`, `mcp_cpu_usage_percent`.
 Notes:
 - JSON metrics: `GET /api/v1/mcp/metrics` (admin-only).
-- Prometheus scrape (unauthenticated, for internal networks): `GET /api/v1/mcp/metrics/prometheus`.
+- Prometheus scrape (requires `system.logs` permission via AuthPrincipal): `GET /api/v1/mcp/metrics/prometheus`.
   - Security: expose only on trusted networks or behind an authing proxy.
   - If Prometheus client is not installed, the endpoint returns a placeholder comment.
 

@@ -377,7 +377,7 @@ async def isolated_test_environment(monkeypatch):
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
-                uuid UUID UNIQUE NOT NULL,
+                uuid UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
                 username VARCHAR(255) UNIQUE NOT NULL,
                 email VARCHAR(255) UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
@@ -607,7 +607,7 @@ async def isolated_test_environment(monkeypatch):
             CREATE TABLE IF NOT EXISTS user_permissions (
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
-                granted INTEGER NOT NULL DEFAULT 1,
+                granted BOOLEAN NOT NULL DEFAULT TRUE,
                 expires_at TIMESTAMP,
                 PRIMARY KEY (user_id, permission_id)
             )
@@ -824,7 +824,7 @@ async def setup_test_database(monkeypatch):
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
-                uuid UUID UNIQUE NOT NULL,
+                uuid UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
                 username VARCHAR(255) UNIQUE NOT NULL,
                 email VARCHAR(255) UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,

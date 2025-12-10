@@ -106,34 +106,34 @@ async def test_single_user_bootstrap_reuses_preseeded_primary_key_postgres(
     key_hash = manager.hash_api_key(key_value)
     key_prefix = (key_value[:10] + "...") if len(key_value) > 10 else key_value
 
-    # Pre-seed a primary key row for SINGLE_USER_API_KEY to simulate an existing deployment
-    async with pool.transaction() as conn:
-        await conn.execute(
-            """
-            INSERT INTO users (id, username, email, password_hash, is_active, is_verified, role)
-            VALUES (?, ?, ?, ?, TRUE, TRUE, 'admin')
-            ON CONFLICT (id) DO NOTHING
-            """,
-            single_user_id,
-            "single_user",
-            "single_user@example.local",
-            "",
-        )
-        await conn.execute(
-            """
-            INSERT INTO api_keys (
-                user_id, key_hash, key_prefix, name, description,
-                scope, status, is_virtual
-            ) VALUES (?, ?, ?, ?, ?, ?, 'active', FALSE)
-            ON CONFLICT (key_hash) DO NOTHING
-            """,
-            single_user_id,
-            key_hash,
-            key_prefix,
-            "legacy primary key",
-            "Pre-seeded primary API key row",
-            "read",
-        )
+    # Pre-seed a primary key row for SINGLE_USER_API_KEY to simulate an existing deployment.
+    # Use DatabasePool helpers so placeholder handling stays backend-agnostic.
+    await pool.execute(
+        """
+        INSERT INTO users (id, username, email, password_hash, is_active, is_verified, role)
+        VALUES (?, ?, ?, ?, TRUE, TRUE, 'admin')
+        ON CONFLICT (id) DO NOTHING
+        """,
+        single_user_id,
+        "single_user",
+        "single_user@example.local",
+        "",
+    )
+    await pool.execute(
+        """
+        INSERT INTO api_keys (
+            user_id, key_hash, key_prefix, name, description,
+            scope, status, is_virtual
+        ) VALUES (?, ?, ?, ?, ?, ?, 'active', FALSE)
+        ON CONFLICT (key_hash) DO NOTHING
+        """,
+        single_user_id,
+        key_hash,
+        key_prefix,
+        "legacy primary key",
+        "Pre-seeded primary API key row",
+        "read",
+    )
 
     before_rows = await pool.fetch(
         "SELECT id, user_id, key_hash, scope, status, is_virtual FROM api_keys WHERE key_hash = ?",

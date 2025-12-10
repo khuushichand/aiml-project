@@ -33,17 +33,21 @@ See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentati
 
 ## Modes, Profiles & Request Flow
 
-### Modes vs Profiles (AUTH_MODE today, PROFILE tomorrow)
+### Modes vs Profiles (AUTH_MODE today, PROFILE + flags going forward)
 
 - `AUTH_MODE` currently distinguishes:
   - `single_user` – fixed API key, synthetic admin user, SQLite-backed by default.
   - `multi_user` – username/password + MFA + JWT, sessions, RBAC, orgs/teams, API keys.
-- In code, helpers `is_single_user_mode()` / `is_multi_user_mode()` read `AUTH_MODE` via `get_settings()`.
-- Over time, this will be complemented by an explicit `PROFILE` setting (see `Docs/Product/User-Unification-PRD.md`), e.g.:
+- In code, helpers `is_single_user_mode()` / `is_multi_user_mode()` read `AUTH_MODE` via `get_settings()`, but their use is now restricted to coordination/UX and a small number of operational knobs (startup banners, WebUI hints, warm-ups, quota toggles). They are **deprecated as authorization primitives**.
+- An explicit `PROFILE` setting (see `Docs/Product/User-Unification-PRD.md`) and a small set of feature/behavior flags now describe deployment behaviour more precisely:
   - `PROFILE=local-single-user` (or legacy alias `single_user`).
   - `PROFILE=multi-user-postgres`.
   - Optional `PROFILE=multi-user-sqlite` for small dev setups.
-- New code should treat mode/profile as **coordination/UX** inputs (bootstrap, banners, WebUI hints, quotas), not as authorization shortcuts. Auth decisions must use `AuthPrincipal` claims via the dependencies below and MUST NOT branch on `is_single_user_mode()` / `is_multi_user_mode()` to grant or bypass permissions.
+  - Auth-adjacent behaviour flags:
+    - `ORG_POLICY_SINGLE_USER_PRINCIPAL` – single-user org-policy fallback driven by `AuthPrincipal` + profile vs legacy mode heuristics.
+    - `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE` – embeddings tenant RPS quotas driven by profile and `principal.kind=="single_user"` vs legacy `AUTH_MODE`.
+    - `MCP_SINGLE_USER_COMPAT_SHIM` – MCP single-user API-key compatibility shim vs always using the multi-user API key manager.
+- New code should treat mode/profile/flags as **coordination and guardrail-tuning inputs** (bootstrap, banners, WebUI hints, quotas), not as authorization shortcuts. Auth decisions must use `AuthPrincipal` claims via the dependencies below and MUST NOT branch on `is_single_user_mode()` / `is_multi_user_mode()` or `AUTH_MODE` to grant or bypass permissions.
 
 Admin role semantics (claims-first):
 - The `admin` role claim is interpreted consistently across profiles: a principal with `roles=["admin", ...]` is treated as having both admin- and user-level access regardless of `AUTH_MODE`/`PROFILE`.
@@ -232,6 +236,12 @@ Notes:
   - `require_permissions("perm")` / `require_roles("role")` → enforce claims and return the principal.
   - `require_service_principal()` → enforces `principal.kind == "service"` for internal-only/service endpoints.
   - Representative usage exists on media, RAG, notes graph, evaluations CRUD endpoints, sandbox admin views, and selected workflows surfaces.
+  - `get_org_policy_from_principal` → resolves an organization policy in a **principal-first** way for org-scoped features (for example, connectors/admin policy and sources):
+    - Preference order:
+      1. First `org_id` in `principal.org_ids` (claim-first).
+      2. First `org_id` from `current_user["org_memberships"]` (legacy user dict).
+      3. Synthetic `org_id=1` for single-user deployments, controlled by `ORG_POLICY_SINGLE_USER_PRINCIPAL` (see below).
+    - This helper is the preferred org-policy dependency for new org-scoped endpoints; avoid reimplementing org selection logic from `request.state` or mode flags.
 - **HTTP status semantics (AuthNZ dependencies)**:
   - `get_auth_principal`:
     - Returns an `AuthPrincipal` when credentials are valid.
@@ -258,6 +268,33 @@ Notes:
     - `AuthnzApiKeysRepo` (`app/core/AuthNZ/repos/api_keys_repo.py`) centralizes `api_keys` read/write paths and is used by `APIKeyManager` and single-user bootstrap.
     - `AuthnzRbacRepo` (`app/core/AuthNZ/repos/rbac_repo.py`) fronts `UserDatabase_v2` for RBAC permission checks; higher-level helpers in `app/core/AuthNZ/rbac.py` delegate to it.
     - `AuthnzOrgsTeamsRepo` (`app/core/AuthNZ/repos/orgs_teams_repo.py`) owns organizations, teams, and membership (including default-team creation/enrollment) so `orgs_teams.py` can remain orchestration-only.
+
+### Single-User Org Policy Flag (`ORG_POLICY_SINGLE_USER_PRINCIPAL`)
+
+Org-policy resolution for single-user deployments uses the same principal model as multi-user, with a small compatibility flag to control when (and how) the synthetic `org_id=1` fallback is allowed:
+
+- `ORG_POLICY_SINGLE_USER_PRINCIPAL` (env var):
+  - **Default (unset / truthy)**:
+    - `get_org_policy_from_principal` uses a **principal/profile-driven** fallback:
+      - It first checks that the active profile is single-user (`is_single_user_profile_mode()`).
+      - It then only uses synthetic `org_id=1` when `principal.kind == "single_user"`.
+      - If those conditions are not met (for example, a non-single-user principal without org memberships), the helper raises `HTTPException(400)` instead of silently assigning `org_id=1`.
+    - This is the recommended behaviour going forward and is the default when the env var is not set.
+  - **Explicit compatibility mode (`"0"`, `"false"`, `"off"`)**:
+    - The helper preserves the **legacy mode/profile-driven** fallback:
+      - When `principal.org_ids` and `current_user.org_memberships` are empty, it treats the environment as single-user if `is_single_user_mode()` or `is_single_user_profile_mode()` is true and uses a synthetic `org_id=1`, regardless of the principal’s kind/user id.
+      - Otherwise, it raises `HTTPException(400)` with `"User has no organization memberships"`.
+    - This compatibility path exists primarily for existing deployments that rely on the older behaviour and should be treated as deprecated for new code.
+
+Tests:
+- Unit tests in `tldw_Server_API/tests/AuthNZ_Unit/test_org_policy_from_principal.py` cover:
+  - Claim-first preference for `principal.org_ids`.
+  - Fallback to `current_user["org_memberships"]`.
+  - Legacy single-user behaviour when the flag is unset.
+  - Principal-driven behaviour when `ORG_POLICY_SINGLE_USER_PRINCIPAL` is enabled (single-user principals vs non-single-user principals).
+- HTTP-level tests in `tldw_Server_API/tests/AuthNZ_Unit/test_connectors_admin_claims.py` exercise the org-policy helper indirectly via connectors admin endpoints:
+  - Single-user principals with the flag enabled and no org memberships successfully resolve `org_id=1`.
+  - Non-single-user principals without org memberships receive HTTP 400 under the same flag/profile conditions.
     - `AuthnzUsageRepo` (`app/core/AuthNZ/repos/usage_repo.py`) provides aggregate and pruning helpers for `usage_log`, `usage_daily`, `llm_usage_log`, and `llm_usage_daily`, and is used by `virtual_keys` and the AuthNZ scheduler.
     - `AuthnzRateLimitsRepo` (`app/core/AuthNZ/repos/rate_limits_repo.py`) encapsulates all DB-backed rate-limiter tables (`rate_limits`, `failed_attempts`, `account_lockouts`) and is used by `rate_limiter.RateLimiter` for counters, lockouts, and cleanup.
   - New AuthNZ code should **not** add fresh backend-specific SQL for these tables; prefer adding small, task-focused methods to the appropriate repo and calling them from business logic.
@@ -269,6 +306,43 @@ References:
 - `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#get_auth_principal`
 - `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#require_permissions`
 - `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py#require_roles`
+
+## How to Secure a New Endpoint (Checklist)
+
+When adding a new FastAPI endpoint that needs AuthNZ and guardrails:
+
+1. **Choose the auth principal dependency**
+   - User/admin routes: depend on `get_auth_principal` (and optionally `get_current_user` when you need legacy user dicts), for example:
+     - `principal: AuthPrincipal = Depends(get_auth_principal)`
+     - `current_user: dict[str, Any] = Depends(get_current_user)` (only when necessary).
+   - Service-only/internal routes: use `require_service_principal()`:
+     - `principal: AuthPrincipal = Depends(require_service_principal)`.
+
+2. **Define and apply permissions/roles**
+   - Add or reuse a permission constant in `tldw_Server_API/app/core/AuthNZ/permissions.py`.
+   - Gate the route with claim-first dependencies on the router or endpoint:
+     - `dependencies=[Depends(require_permissions(MY_PERMISSION))]`
+     - and/or `dependencies=[Depends(require_roles("admin"))]`.
+   - Do **not** introduce new `require_admin`-style helpers or mode-based gates; always build on `get_auth_principal` + `require_permissions` / `require_roles`.
+
+3. **Wire ResourceGovernor / rate limits if needed**
+   - For rate-limited endpoints, reuse shared helpers instead of new per-module limiters:
+     - `Depends(check_rate_limit)` / `Depends(check_auth_rate_limit)` for generic/AuthNZ auth flows.
+     - Existing RG-backed helpers for chat/embeddings/audio/evaluations/MCP when applicable.
+   - If a new RG policy is required, add it to `tldw_Server_API/Config_Files/resource_governor_policies.yaml`, keep `route_map.by_path` in sync, and ensure tests cover the new policy id.
+
+4. **Expose profile/flag behaviour via config, not auth**
+   - If the endpoint is profile- or feature-specific, gate availability in the service/router layer via:
+     - `PROFILE` (`get_profile()`) and
+     - explicit feature flags (`ENABLE_*`, or behavior flags like `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE`).
+   - Do **not** use `AUTH_MODE` / `is_single_user_mode()` in the endpoint to grant or bypass permissions; mode/profile/flags are for coordination and guardrail tuning, not for auth.
+
+5. **Add tests mirroring real principals**
+   - Unit tests:
+     - Override `get_auth_principal` to return principals with different `roles`/`permissions` and assert 401 vs 403 vs 200 semantics (see `tests/AuthNZ_Unit/test_auth_claim_route_level.py` and `tests/AuthNZ_Unit/test_scheduler_workflows_permissions_claims.py` as patterns).
+   - Integration tests:
+     - Use existing fixtures (e.g., `isolated_test_environment`, single-user bootstrap tests) to exercise JWT and API-key flows where relevant.
+     - Validate that guardrails (e.g., 429 + `Retry-After`, RG headers) behave as expected for over-limit scenarios.
 
 ## Rate Limiting & Quotas
 

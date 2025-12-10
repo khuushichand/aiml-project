@@ -91,6 +91,15 @@ https://github.com/waynchi/editbench
 https://github.com/argmaxinc/OpenBench/blob/main/BENCHMARKS.md#real-time-transcription
 https://github.com/FluidInference/FluidAudio/blob/main/Documentation/Benchmarks.md
 https://speechmap.ai/models/
+https://github.com/google-research-datasets/natural-questions
+https://arxiv.org/abs/2408.04675
+https://arxiv.org/abs/2506.20869
+https://github.com/ahnjaewoo/FlashAdventure
+https://arize.com/docs/phoenix/evaluation/running-pre-tested-evals/summarization-eval
+https://archive.is/egrIG
+
+
+
 https://humanebench.ai/whitepaper
 https://github.com/microsoft/SecRL
 https://github.com/semvec/embedstresstest

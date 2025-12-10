@@ -106,10 +106,14 @@ async def test_enforce_llm_budget_happy_path(monkeypatch):
     monkeypatch.setattr(guard, "resolve_api_key_by_hash", fake_resolver)
 
     # Make the key non-virtual to early-return without budget checks
-    async def fake_get_key_limits(_key_id: int):
-        return {"is_virtual": False}
+    class StubAuthGovernor:
+        async def check_llm_budget_for_api_key(self, principal, key_id):
+            return {"limits": {"is_virtual": False}}
 
-    monkeypatch.setattr(guard, "get_key_limits", fake_get_key_limits)
+    async def fake_get_auth_governor():
+        return StubAuthGovernor()
+
+    monkeypatch.setattr(guard, "get_auth_governor", fake_get_auth_governor)
 
     class NormalState:
         pass
@@ -143,29 +147,30 @@ async def test_enforce_llm_budget_virtual_under_budget_ok(monkeypatch):
 
     monkeypatch.setattr(guard, "resolve_api_key_by_hash", fake_resolver)
 
-    # Virtual key with limits, but not over budget
-    async def fake_get_key_limits(_key_id: int):
-        return {"is_virtual": True, "llm_budget_day_tokens": 10000}
-
     called = {"over_budget": False}
 
-    async def fake_is_key_over_budget(_key_id: int):
-        called["over_budget"] = True
-        return {
-            "over": False,
-            "reasons": [],
-            "day": {"tokens": 100, "usd": 0.10},
-            "month": {"tokens": 500, "usd": 0.50},
-            "limits": {
-                "llm_budget_day_tokens": 10000,
-                "llm_budget_day_usd": 5.0,
-                "llm_budget_month_tokens": 300000,
-                "llm_budget_month_usd": 150.0,
-            },
-        }
+    # Virtual key with limits, but not over budget
+    class StubAuthGovernor:
+        async def check_llm_budget_for_api_key(self, principal, key_id):
+            called["over_budget"] = True
+            return {
+                "over": False,
+                "reasons": [],
+                "day": {"tokens": 100, "usd": 0.10},
+                "month": {"tokens": 500, "usd": 0.50},
+                "limits": {
+                    "is_virtual": True,
+                    "llm_budget_day_tokens": 10000,
+                    "llm_budget_day_usd": 5.0,
+                    "llm_budget_month_tokens": 300000,
+                    "llm_budget_month_usd": 150.0,
+                },
+            }
 
-    monkeypatch.setattr(guard, "get_key_limits", fake_get_key_limits)
-    monkeypatch.setattr(guard, "is_key_over_budget", fake_is_key_over_budget)
+    async def fake_get_auth_governor():
+        return StubAuthGovernor()
+
+    monkeypatch.setattr(guard, "get_auth_governor", fake_get_auth_governor)
 
     class NormalState:
         pass
@@ -200,16 +205,13 @@ async def test_enforce_llm_budget_virtual_over_budget_raises(monkeypatch):
 
     monkeypatch.setattr(guard, "resolve_api_key_by_hash", fake_resolver)
 
-    # Virtual key with limits and over budget
-    async def fake_get_key_limits(_key_id: int):
-        return {"is_virtual": True}
-
     expected_result = {
         "over": True,
         "reasons": ["day_tokens"],
         "day": {"tokens": 20000, "usd": 12.34},
         "month": {"tokens": 50000, "usd": 50.00},
         "limits": {
+            "is_virtual": True,
             "llm_budget_day_tokens": 10000,
             "llm_budget_day_usd": 5.0,
             "llm_budget_month_tokens": 300000,
@@ -217,11 +219,15 @@ async def test_enforce_llm_budget_virtual_over_budget_raises(monkeypatch):
         },
     }
 
-    async def fake_is_key_over_budget(_key_id: int):
-        return expected_result
+    # Virtual key with limits and over budget
+    class StubAuthGovernor:
+        async def check_llm_budget_for_api_key(self, principal, key_id):
+            return expected_result
 
-    monkeypatch.setattr(guard, "get_key_limits", fake_get_key_limits)
-    monkeypatch.setattr(guard, "is_key_over_budget", fake_is_key_over_budget)
+    async def fake_get_auth_governor():
+        return StubAuthGovernor()
+
+    monkeypatch.setattr(guard, "get_auth_governor", fake_get_auth_governor)
 
     class NormalState:
         pass

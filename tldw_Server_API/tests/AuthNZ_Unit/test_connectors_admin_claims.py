@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
@@ -38,6 +38,7 @@ def _build_app(
     principal: Optional[AuthPrincipal],
     *,
     fail_with_401: bool = False,
+    org_memberships: Optional[list[dict[str, int]]] = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(connectors_mod.router, prefix="/api/v1")
@@ -56,7 +57,12 @@ def _build_app(
     app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
 
     async def _fake_current_user() -> dict[str, Any]:
-        return {"id": 1, "role": "admin", "org_memberships": [{"org_id": 1}], "is_active": True}
+        return {
+            "id": 1,
+            "role": "admin",
+            "org_memberships": org_memberships if org_memberships is not None else [{"org_id": 1}],
+            "is_active": True,
+        }
 
     app.dependency_overrides[auth_deps.get_current_active_user] = _fake_current_user
 
@@ -69,6 +75,14 @@ def _build_app(
         return _FakeDB()
 
     app.dependency_overrides[auth_deps.get_db_transaction] = _fake_get_db
+
+    @app.get("/api/v1/test/org-policy")
+    async def _test_org_policy_endpoint(
+        org_policy: dict[str, Any] = Depends(auth_deps.get_org_policy_from_principal),
+    ) -> dict[str, Any]:
+        # Echo back the resolved org_id so tests can assert behaviour.
+        return {"org_id": int(org_policy.get("org_id"))}
+
     return app
 
 
@@ -103,3 +117,68 @@ async def test_connectors_admin_policy_200_for_admin_with_perm(monkeypatch: pyte
         resp = client.get("/api/v1/connectors/admin/policy", params={"org_id": 1})
     assert resp.status_code == 200
     assert resp.json().get("org_id") == 1
+
+
+@pytest.mark.asyncio
+async def test_connectors_single_user_org_policy_flag_paths(monkeypatch: pytest.MonkeyPatch):
+    """
+    When ORG_POLICY_SINGLE_USER_PRINCIPAL is enabled, org-policy fallback to org_id=1
+    is driven by principal/profile, not by mode alone.
+    """
+    from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+
+    # Enable principal-driven org policy fallback and ensure single-user profile detection succeeds.
+    monkeypatch.setenv("ORG_POLICY_SINGLE_USER_PRINCIPAL", "1")
+    monkeypatch.setattr(auth_deps, "is_single_user_mode", lambda: True, raising=False)
+    monkeypatch.setattr(auth_deps, "is_single_user_profile_mode", lambda: True, raising=False)
+
+    # Case A: single-user principal with no org memberships → synthetic org_id=1 allowed.
+    single_principal = AuthPrincipal(
+        kind="single_user",
+        user_id=1,
+        api_key_id=None,
+        subject=None,
+        token_type="api_key",
+        jti=None,
+        roles=["admin"],
+        permissions=[SYSTEM_CONFIGURE],
+        is_admin=True,
+        org_ids=[],
+        team_ids=[],
+    )
+    app_a = _build_app(principal=single_principal, org_memberships=[])
+
+    async def _fake_get_policy(db, org_id):
+        return {"org_id": org_id, "source": "test"}
+
+    # For the test org-policy endpoint, patch the helper used by get_org_policy_from_principal.
+    monkeypatch.setattr(auth_deps, "get_policy", _fake_get_policy)
+
+    with TestClient(app_a) as client:
+        resp = client.get("/api/v1/test/org-policy")
+    assert resp.status_code == 200
+    assert resp.json().get("org_id") == 1
+
+    # Case B: non-single-user principal with no org memberships → 400 from org-policy helper.
+    # Important: ensure this principal has **no** org_ids so that
+    # get_org_policy_from_principal cannot resolve an organization from claims
+    # and is forced into the single-user fallback branch, which should then
+    # reject non-``single_user`` principals under the flag-enabled behaviour.
+    non_single_principal = AuthPrincipal(
+        kind="user",
+        user_id=1,
+        api_key_id=None,
+        subject=None,
+        token_type="access",
+        jti=None,
+        roles=["admin"],
+        permissions=[SYSTEM_CONFIGURE],
+        is_admin=True,
+        org_ids=[],
+        team_ids=[],
+    )
+    app_b = _build_app(principal=non_single_principal, org_memberships=[])
+
+    with TestClient(app_b) as client:
+        resp = client.get("/api/v1/test/org-policy")
+    assert resp.status_code == 400

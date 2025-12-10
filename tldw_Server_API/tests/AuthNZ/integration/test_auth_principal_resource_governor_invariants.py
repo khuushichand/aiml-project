@@ -105,12 +105,15 @@ def test_resource_governor_policy_jwt_principal_and_state_alignment(isolated_tes
     # 2. Grant admin-style role so require_roles('admin') passes.
     from tldw_Server_API.tests.AuthNZ.integration.test_auth_principal_media_rag_invariants import (  # type: ignore  # noqa: E501
         _grant_user_permission,
+        _grant_admin_role,
         _run_async,
     )
 
-    # For Resource-Governor, admin role is the primary gate; grant a generic
-    # admin-ish permission so the RBAC stack sees a concrete claim.
+    # For Resource-Governor, admin role is the primary gate; ensure the user
+    # has both an admin-style permission and the 'admin' role so require_roles
+    # checks pass while RBAC still sees a concrete claim.
     _run_async(_grant_user_permission(db_name, username, "system.configure"))
+    _run_async(_grant_admin_role(db_name, username))
 
     # 3. Install the auth capture wrapper and call /api/v1/resource-governor/policy.
     from tldw_Server_API.app.main import app as fastapi_app

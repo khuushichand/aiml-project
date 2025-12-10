@@ -661,7 +661,7 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 - Monitoring docs and setup: `Docs/Deployment/Monitoring/README.md`
 - Grafana dashboards and samples: `Helper_Scripts/Samples/Grafana/README.md`
-- Prometheus scrape endpoints: `GET /metrics` and `GET /api/v1/mcp/metrics/prometheus`
+- Prometheus scrape endpoints: `GET /metrics` and `GET /api/v1/mcp/metrics/prometheus` (both require authenticated principals with appropriate permissions; MCP Prometheus uses `system.logs`)
 
 ### PostgreSQL Content Mode
 

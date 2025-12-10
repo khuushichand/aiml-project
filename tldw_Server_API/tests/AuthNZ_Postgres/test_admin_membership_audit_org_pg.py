@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 @pytest.mark.real_audit
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_org_membership_audit_events_postgres(tmp_path, real_audit_service, test_db_pool):
+async def test_org_membership_audit_events_postgres(tmp_path, real_audit_service, test_db_pool, monkeypatch):
     # Use Postgres pool from fixture
     pool = test_db_pool
 
@@ -47,20 +47,45 @@ async def test_org_membership_audit_events_postgres(tmp_path, real_audit_service
     )
     target_id = await pool.fetchval("SELECT id FROM users WHERE username = $1", "pgvictim_org")
 
-    # Create an API key for the admin user
-    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
-    mgr = APIKeyManager(pool)
-    await mgr.initialize()
-    key_info = await mgr.create_api_key(user_id=admin_id, name="admin-audit-key-org", scope="admin")
-    admin_api_key = key_info['key']
-
-    # Use TestClient and call admin org membership endpoints with X-API-KEY
+    # Override AuthPrincipal to treat this user as admin for claim-first gates
     from tldw_Server_API.app.main import app
-    headers = {"X-API-KEY": admin_api_key}
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
+    from starlette.requests import Request
+
+    async def _principal_override(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=admin_id,
+            api_key_id=None,
+            subject="pgadmin_org_audit",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        if request is not None:
+            try:
+                request.state.auth = AuthContext(
+                    principal=principal,
+                    ip=None,
+                    user_agent=None,
+                    request_id=None,
+                )
+                request.state.user_id = admin_id
+            except Exception:
+                # Best-effort; do not fail tests if state attachment fails
+                pass
+        return principal
+
+    app.dependency_overrides[get_auth_principal] = _principal_override
 
     with TestClient(app) as client:
         # Create org
-        r = client.post("/api/v1/admin/orgs", json={"name": "Audit Org PG Org"}, headers=headers)
+        r = client.post("/api/v1/admin/orgs", json={"name": "Audit Org PG Org"})
         assert r.status_code == 200, r.text
         org = r.json()
 
@@ -68,7 +93,6 @@ async def test_org_membership_audit_events_postgres(tmp_path, real_audit_service
         r = client.post(
             f"/api/v1/admin/orgs/{org['id']}/members",
             json={"user_id": int(target_id), "role": "member"},
-            headers=headers,
         )
         assert r.status_code == 200, r.text
 
@@ -76,16 +100,16 @@ async def test_org_membership_audit_events_postgres(tmp_path, real_audit_service
         r = client.patch(
             f"/api/v1/admin/orgs/{org['id']}/members/{int(target_id)}",
             json={"role": "admin"},
-            headers=headers,
         )
         assert r.status_code == 200, r.text
 
         # Remove org member (org_member.remove)
         r = client.delete(
             f"/api/v1/admin/orgs/{org['id']}/members/{int(target_id)}",
-            headers=headers,
         )
         assert r.status_code == 200, r.text
+
+    app.dependency_overrides.pop(get_auth_principal, None)
 
     # Verify audit events for the acting user in their per-user audit DB
     from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths

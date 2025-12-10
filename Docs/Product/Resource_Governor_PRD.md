@@ -414,9 +414,33 @@ Phase 7 — Cleanup & removal
 
 - Tokens and per-minute headers (when applicable):
   - When a `tokens` policy is active for a route and the middleware/enforcement layer peeks token usage, include:
-    - `X-RateLimit-Tokens-Remaining: <remaining_tokens>`
-    - If policy defines `tokens.per_min`, also include `X-RateLimit-PerMinute-Limit: <per_min>` and `X-RateLimit-PerMinute-Remaining: <remaining_tokens>`.
+  - `X-RateLimit-Tokens-Remaining: <remaining_tokens>`
+  - If policy defines `tokens.per_min`, also include `X-RateLimit-PerMinute-Limit: <per_min>` and `X-RateLimit-PerMinute-Remaining: <remaining_tokens>`.
   - Success-path headers use a precise governor `peek` (strictest scope) to populate Remaining/Reset. Reset is computed as the maximum across governed categories to avoid premature retries.
+
+### Route Governance Matrix (v0.1 snapshot)
+
+The table below summarizes which high-value ingress routes are governed by ResourceGovernor in v0.1 and which rely on legacy per-module limiters only. It mirrors the `route_map.by_path` defaults in `tldw_Server_API/Config_Files/resource_governor_policies.yaml` and the Stage 1 notes in `AuthNZ-PRDs_IMPLEMENTATION_PLAN.md`.
+
+| Route prefix                          | Policy id            | RG-governed? | Notes                                                    |
+|---------------------------------------|----------------------|--------------|----------------------------------------------------------|
+| `/api/v1/chat/*`                      | `chat.default`       | Yes          | Requests/tokens via RG; legacy chat limiter kept as shim |
+| `/api/v1/embeddings*`                 | `embeddings.default` | Yes          | Requests via RG; per-user legacy limiter as shadow       |
+| `/api/v1/audio/*`                     | `audio.default`      | Yes          | Streams/minutes via RG + ledger; Redis as fallback      |
+| `/api/v1/mcp/*`                       | `mcp.ingestion`      | Yes          | MCP HTTP ingress governed; module limiter is façade      |
+| `/api/v1/evaluations/*`               | `evals.default`      | Yes          | Evaluations limiter shims RG; headers tested end-to-end  |
+| `/api/v1/auth/*`                      | (varies)             | Partially    | AuthNZ rate limits via AuthGovernor; RG ingress optional |
+| `/api/v1/research/*`                  | —                    | No (v0.1)    | Uses module-specific limiters/backpressure only          |
+| `/api/v1/rag/*`                       | —                    | No (v0.1)    | Guarded by LLM budgets and module-specific shims         |
+| `/api/v1/media/*`                     | —                    | No (v0.1)    | Ingestion/backpressure via module limiters, not RG       |
+| `/api/v1/workflows/*`                 | —                    | No (v0.1)    | Scheduler/worker limits via existing jobs/scheduler code |
+| `/api/v1/prompt-studio/*`             | —                    | No (v0.1)    | Prompt Studio uses claim-first AuthNZ + LLM budgets      |
+
+Operator guidance:
+- When adding new routes under existing prefixes, keep `route_map.by_path` in sync and reuse the established policy ids.
+- When introducing a new domain (new prefix), decide explicitly whether it should be RG-governed:
+  - If yes, add a policy and route-map entry, and update tests to assert 402/429 + headers.
+  - If no, document the rationale in this matrix and in the module’s PRD, and rely on module-specific limiters or LLM budgets instead.
 
 ### Diagnostics
 

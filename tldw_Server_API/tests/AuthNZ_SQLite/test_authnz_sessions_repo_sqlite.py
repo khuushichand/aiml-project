@@ -9,29 +9,40 @@ pytest_plugins = ("tldw_Server_API.tests.AuthNZ.conftest",)
 
 
 @pytest.mark.asyncio
-async def test_authnz_sessions_repo_basic_crud_sqlite(isolated_test_environment):
-    """AuthnzSessionsRepo should handle basic create/revoke/list/cleanup."""
-    _client, _db_name = isolated_test_environment
-    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+async def test_authnz_sessions_repo_basic_crud_sqlite(tmp_path, monkeypatch):
+    """AuthnzSessionsRepo should handle basic create/revoke/list/cleanup on SQLite."""
+    from pathlib import Path
+
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
     from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB
+
+    db_path = tmp_path / "sessions_repo.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
 
     pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
 
-    # Seed a user row for FK
-    async with pool.transaction() as conn:
-        user_id = await conn.fetchval(
-            """
-            INSERT INTO users (username, email, password_hash, is_active, is_verified, uuid)
-            VALUES ($1, $2, $3, TRUE, TRUE, $4)
-            RETURNING id
-            """,
-            "alice",
-            "alice@example.com",
-            "x",
-            uuid.uuid4(),
-        )
-
-    assert user_id is not None
+    # Seed a user row via UsersDB to satisfy FK constraints.
+    users_db = UsersDB(pool)
+    await users_db.initialize()
+    created_user = await users_db.create_user(
+        username="alice",
+        email="alice@example.com",
+        password_hash="x",
+        role="user",
+        is_active=True,
+        is_superuser=False,
+        storage_quota_mb=5120,
+        uuid_value=uuid.uuid4(),
+    )
+    user_id = int(created_user["id"])
 
     repo = AuthnzSessionsRepo(pool)
 
@@ -118,29 +129,40 @@ async def test_authnz_sessions_repo_basic_crud_sqlite(isolated_test_environment)
 
 
 @pytest.mark.asyncio
-async def test_authnz_sessions_repo_validation_and_refresh_sqlite(
-    isolated_test_environment,
-):
+async def test_authnz_sessions_repo_validation_and_refresh_sqlite(tmp_path, monkeypatch):
     """AuthnzSessionsRepo validation/refresh helpers should behave on SQLite."""
-    _client, _db_name = isolated_test_environment
-    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    from pathlib import Path
+
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
     from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB
+
+    db_path = tmp_path / "sessions_repo_validation.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
 
     pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
 
-    # Seed a user row for FK
-    async with pool.transaction() as conn:
-        user_id = await conn.fetchval(
-            """
-            INSERT INTO users (username, email, password_hash, is_active, is_verified, uuid)
-            VALUES ($1, $2, $3, TRUE, TRUE, $4)
-            RETURNING id
-            """,
-            "bob",
-            "bob@example.com",
-            "x",
-            uuid.uuid4(),
-        )
+    # Seed a user row via UsersDB to satisfy FK constraints.
+    users_db = UsersDB(pool)
+    await users_db.initialize()
+    created_user = await users_db.create_user(
+        username="bob",
+        email="bob@example.com",
+        password_hash="x",
+        role="user",
+        is_active=True,
+        is_superuser=False,
+        storage_quota_mb=5120,
+        uuid_value=uuid.uuid4(),
+    )
+    user_id = int(created_user["id"])
 
     repo = AuthnzSessionsRepo(pool)
 
@@ -223,27 +245,40 @@ async def test_authnz_sessions_repo_validation_and_refresh_sqlite(
 
 
 @pytest.mark.asyncio
-async def test_authnz_sessions_repo_bulk_revocation_sqlite(isolated_test_environment):
+async def test_authnz_sessions_repo_bulk_revocation_sqlite(tmp_path, monkeypatch):
     """AuthnzSessionsRepo bulk revocation helpers should behave on SQLite."""
-    _client, _db_name = isolated_test_environment
-    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    from pathlib import Path
+
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
     from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRepo
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB
+
+    db_path = tmp_path / "sessions_repo_bulk_revocation.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    reset_settings()
+    await reset_db_pool()
 
     pool = await get_db_pool()
+    ensure_authnz_tables(Path(str(db_path)))
 
-    # Seed a user row for FK
-    async with pool.transaction() as conn:
-        user_id = await conn.fetchval(
-            """
-            INSERT INTO users (username, email, password_hash, is_active, is_verified, uuid)
-            VALUES ($1, $2, $3, TRUE, TRUE, $4)
-            RETURNING id
-            """,
-            "carol",
-            "carol@example.com",
-            "x",
-            uuid.uuid4(),
-        )
+    # Seed a user row via UsersDB to satisfy FK constraints.
+    users_db = UsersDB(pool)
+    await users_db.initialize()
+    created_user = await users_db.create_user(
+        username="carol",
+        email="carol@example.com",
+        password_hash="x",
+        role="user",
+        is_active=True,
+        is_superuser=False,
+        storage_quota_mb=5120,
+        uuid_value=uuid.uuid4(),
+    )
+    user_id = int(created_user["id"])
 
     repo = AuthnzSessionsRepo(pool)
 

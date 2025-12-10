@@ -959,6 +959,38 @@ async def get_org_policy_from_principal(
     This helper is the principal-first counterpart to ``get_user_org_policy`` and
     is intended for new code paths that already depend on ``get_auth_principal``.
     """
+    def _should_use_synthetic_single_user_org(p: AuthPrincipal) -> bool:
+        """
+        Decide whether to fall back to a synthetic org_id=1 for single-user.
+
+        Behaviour:
+        - When ORG_POLICY_SINGLE_USER_PRINCIPAL is unset/true:
+          prefer principal/profile-driven behaviour and only treat the
+          environment as single-user for org-policy purposes when:
+            * PROFILE indicates a single-user profile, and
+            * the principal is explicitly single-user (kind or fixed id).
+        - When the flag is explicitly disabled (\"0\"/\"false\"/\"off\"):
+          preserve legacy behaviour using mode/profile helpers
+          (is_single_user_mode or is_single_user_profile_mode).
+        """
+        flag = os.getenv("ORG_POLICY_SINGLE_USER_PRINCIPAL", "").strip().lower()
+        if flag in {"0", "false", "off"}:
+            # Explicit compatibility mode: defer to legacy mode/profile checks.
+            try:
+                return is_single_user_mode() or is_single_user_profile_mode()
+            except Exception:
+                return False
+
+        try:
+            single_profile = is_single_user_profile_mode()
+        except Exception:
+            single_profile = False
+
+        if not single_profile:
+            return False
+        # Principal-first: only explicit single_user principals qualify
+        return getattr(p, "kind", None) == "single_user"
+
     # 1) Claim-first: use principal.org_ids when available.
     org_ids = list(getattr(principal, "org_ids", []) or [])
     if org_ids:
@@ -968,8 +1000,8 @@ async def get_org_policy_from_principal(
         memberships = current_user.get("org_memberships") or []
         if memberships:
             org_id = memberships[0].get("org_id")
-        elif is_single_user_mode() or is_single_user_profile_mode():
-            # 3) Single-user environment: synthetic org_id=1 to mirror legacy behaviour.
+        elif _should_use_synthetic_single_user_org(principal):
+            # Single-user environment: synthetic org_id=1 to mirror legacy behaviour.
             org_id = 1
         else:
             raise HTTPException(
@@ -989,7 +1021,13 @@ async def require_admin(
     current_user: Dict[str, Any] = Depends(get_current_active_user)
 ) -> Dict[str, Any]:
     """
-    Require admin role for access
+    Require admin role for access (legacy shim).
+
+    This dependency is retained for backwards compatibility with older
+    routes and tests that still rely on a user-dict based admin check.
+    New endpoints MUST NOT use this helper and should instead depend on
+    `get_auth_principal` together with `require_roles("admin")` and/or
+    `require_permissions(...)` for claim-first authorization.
 
     Args:
         current_user: Current active user

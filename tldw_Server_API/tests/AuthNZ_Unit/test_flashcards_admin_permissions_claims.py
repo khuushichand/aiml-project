@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from typing import Optional
 
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
@@ -39,7 +39,7 @@ def _build_app_with_flashcards(principal: AuthPrincipal) -> FastAPI:
     app = FastAPI()
     app.include_router(flashcards_mod.router, prefix="/api/v1")
 
-    async def _fake_get_auth_principal(request):
+    async def _fake_get_auth_principal(request: Request):
         ctx = AuthContext(
             principal=principal,
             ip=request.client.host if request.client else None,

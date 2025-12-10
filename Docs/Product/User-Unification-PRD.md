@@ -243,26 +243,30 @@ To make “mode” an implementation detail of a higher-level deployment profile
      - If `PROFILE` is unset, the system behaves exactly as today and infers behavior from `AUTH_MODE` + `DATABASE_URL`.
      - If `PROFILE` is set, helper functions (e.g., `is_single_user_mode`, `is_multi_user_mode`) continue to read `AUTH_MODE` but may log/emit diagnostics when `PROFILE` and `AUTH_MODE` disagree (no hard failures yet).
    - Status (v1.0):
-     - `tldw_Server_API/app/core/AuthNZ/settings.Settings` exposes a `PROFILE` field (env `PROFILE`) and a helper `get_profile()` which returns either the explicit value or a derived profile string based on `AUTH_MODE` + `DATABASE_URL` (for example, `local-single-user`, `multi-user-postgres`, `multi-user-sqlite`). This value is used only for coordination/UX and feature gating (startup logs, WebUI `/webui/config.json` hints, embeddings tenant-quota behavior); all authentication and authorization decisions remain claim-first and continue to rely on `AUTH_MODE`, `get_auth_principal`, and RBAC claims rather than `PROFILE`.
+     - `tldw_Server_API/app/core/AuthNZ/settings.Settings` exposes a `PROFILE` field (env `PROFILE`) and a helper `get_profile()` which returns either the explicit value or a derived profile string based on `AUTH_MODE` + `DATABASE_URL` (for example, `local-single-user`, `multi-user-postgres`, `multi-user-sqlite`). This value is used only for coordination/UX and feature gating (startup logs, WebUI `/webui/config.json` hints, embeddings tenant-quota behavior); all authentication and authorization decisions are **claim-first** and use `AuthPrincipal`-based dependencies (`get_auth_principal`, `require_permissions`, `require_roles`) instead of mode checks.
 
 2. **Add feature flags that clarify UX vs auth semantics**, without changing defaults:
    - Examples:
      - `ENABLE_REGISTRATION` (default: `True` in multi-user, `False` in single-user profile).
      - `ENABLE_MFA` (default: `False` in local-single-user, `True`/recommended in multi-user-postgres).
      - `ENABLE_ORGS_TEAMS`, `ENABLE_VIRTUAL_KEYS`, `ENABLE_JOBS_DOMAIN_SCOPING`, etc. (all default to current behavior).
+     - Auth-adjacent behavior flags that steer profile-aware guardrails without reintroducing mode-based authorization:
+       - `ORG_POLICY_SINGLE_USER_PRINCIPAL` – controls whether the synthetic single-user org (`org_id=1`) fallback in `get_org_policy_from_principal` is driven by `AuthPrincipal` + profile (enabled) or by legacy `is_single_user_mode()` heuristics (disabled).
+       - `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE` – controls whether embeddings tenant RPS quotas are enforced based on profile and `principal.kind=="single_user"` (enabled) or legacy `AUTH_MODE`-based checks (disabled).
+       - `MCP_SINGLE_USER_COMPAT_SHIM` – controls whether MCP HTTP endpoints treat `SINGLE_USER_API_KEY` as a bootstrap admin principal in single-user deployments (enabled) or always validate `X-API-KEY` via the multi-user API key manager (disabled).
    - For `v0.1.x`, these flags gate **UX/feature surface** (show/hide endpoints, admin controls, and WebUI affordances) rather than changing core auth semantics. All flags default to values that exactly match today’s behavior.
 
 3. **Gradually rewrite `is_single_user_mode()` callsites to profile/flags**, guided by tests:
    - Classification:
      - **Coordination/UX**: startup banners, WebUI config hints, background warm-ups, quota hints – these can switch to `PROFILE` + feature flags without impacting auth semantics.
-     - **Auth-adjacent**: shortcuts in auth deps, jobs admin, embeddings quotas, MCP auth compatibility – these must be backed by explicit principal/claims tests before any behavior change.
+     - **Auth-adjacent**: shortcuts in auth deps, jobs admin, embeddings quotas, MCP auth compatibility – these must be backed by explicit principal/claims tests before any behavior change and, where behavior diverges from legacy `is_single_user_mode()` logic, must be gated by dedicated env flags (as in the examples above).
    - Plan:
-     - Keep `is_single_user_mode()` as a thin wrapper over `get_settings().AUTH_MODE == "single_user"` for now, but add tests that assert:
+     - Keep `is_single_user_mode()` as a thin wrapper over `get_settings().AUTH_MODE == "single_user"` for now, but add and maintain tests that assert:
        - Single-user principal claims (roles/permissions) enforce the same constraints as multi-user admin/admin-lite principals.
-       - No auth path bypasses `get_auth_principal` / `require_permissions` / `require_roles` solely due to mode.
+       - No auth path bypasses `get_auth_principal` / `require_permissions` / `require_roles` solely due to mode; any behavior differences are expressed via profile/flag combinations and validated via tests.
      - For each auth-adjacent branch (beyond jobs-admin, which already has a principal-first path), design a claim-first alternative that takes an `AuthPrincipal` and/or `AuthContext` and:
        - Enforces the same behavior via claims (roles, permissions, feature flags).
-       - Is gated by a dedicated env flag (e.g., `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE`, `MCP_SINGLE_USER_COMPAT_SHIM`) so we can test before flipping defaults.
+       - Is gated by a dedicated env flag (e.g., `ORG_POLICY_SINGLE_USER_PRINCIPAL`, `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE`, `MCP_SINGLE_USER_COMPAT_SHIM`) so we can test before flipping defaults and preserve a compatibility path.
 
 4. **Document migration for existing environments (no behavior changes by default)**:
    - Existing deployments can safely upgrade by:
@@ -394,14 +398,14 @@ To make “mode” an implementation detail of a higher-level deployment profile
   - Some RBAC helpers to use `AuthnzRbacRepo`.
 - Move DDL for API key-related tables into migrations or repositories.
 
-- **Status (v0.1)**: In Progress — core repos (`AuthnzUsersRepo`, `AuthnzApiKeysRepo`, `AuthnzRbacRepo`, `AuthnzUsageRepo`, and others) back primary AuthNZ flows with SQLite/Postgres tests; remaining repo migrations are deferred to the next iteration (see `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`).
+- **Status (v0.1)**: Done — core repos (`AuthnzUsersRepo`, `AuthnzApiKeysRepo`, `AuthnzRbacRepo`, `AuthnzUsageRepo`, and others) back primary AuthNZ flows with SQLite/Postgres tests; remaining repo migrations are explicitly deferred to post-v0.1 iterations (see `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` for the tech-debt list).
 
 ### Phase 4: Backend Drift Reduction
 
 - Identify and refactor 2–3 high-impact modules (e.g., `virtual_keys`, `orgs_teams`, parts of `rate_limiter` that are AuthNZ-specific) to use repositories.
 - Remove duplicated Postgres/SQLite branches that are now redundant.
 
-- **Status (v0.1)**: Partially complete / Next iteration — key modules such as `virtual_keys`, `orgs_teams`, and AuthNZ rate-limiter storage now use repos; remaining drift and mode cleanup is tracked as deferred follow-up in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`.
+- **Status (v0.1)**: Done (with tech debt) — key modules such as `virtual_keys`, `orgs_teams`, and AuthNZ rate-limiter storage now use repos; remaining backend drift and mode cleanup is tracked as post-v0.1 tech debt in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` and is not in scope for this release.
 
 ### Repo Coverage vs Inline SQL (AuthNZ v0.1)
 
@@ -588,7 +592,7 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
 **Tests**:
 - Regression tests for affected modules under both backends (where supported by current test fixtures).
 
-**Status**: Partially complete / Next iteration — initial repo-backed refactors for `virtual_keys`, `orgs_teams`, AuthNZ rate-limiter storage, API-key management, and usage logging have landed; remaining backend drift and inline SQL (notably Postgres bootstrap DDL in `initialize.py` and virtual-key quota counters in `quotas.py`) is deliberately left in place as guarded tech debt for this iteration and tracked in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` under “Remaining inline SQL / backend detection (tech debt)”.
+**Status**: Done (v0.1) — initial repo-backed refactors for `virtual_keys`, `orgs_teams`, AuthNZ rate-limiter storage, API-key management, usage logging, and virtual-key quota counters (via `AuthnzQuotasRepo`) have landed; remaining backend drift and inline SQL is now limited primarily to Postgres bootstrap DDL in `initialize.py`, with further consolidation tracked as deferred follow-up in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` under “Remaining inline SQL / backend detection (tech debt)”.
 
 ---
 
@@ -599,10 +603,10 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
 - **Goal**: Incrementally migrate remaining inline Postgres/SQLite DDL and quota counters into repository helpers or migrations so that backends remain an implementation detail.
 - **AuthNZ bootstrap DDL**:
   - Add canonical migrations (SQLite + Postgres) for the AuthNZ tables that are still primarily created via bootstrap DDL in `initialize.py` (`audit_logs`, `sessions`, `registration_codes`, RBAC tables, orgs/teams), mirroring the patterns already used for usage tables and virtual-key counters (`pg_migrations_extra.ensure_usage_tables_pg`, `ensure_virtual_key_counters_pg`).
-  - Treat `initialize.py` (and the small DDL helpers in `api_key_manager.py` / `rate_limiter.py`) as guarded backstops only: keep them idempotent for one release while migrations are validated in CI, then gate or retire new inline DDL additions in favor of migrations + repo helpers.
-- **Virtual-key quota counters**:
-  - Introduce a focused repository (for example, `AuthnzQuotasRepo`) that owns `vk_jwt_counters` and `vk_api_key_counters` and centralizes their DDL and `INSERT … ON CONFLICT` logic; migrate `quotas.increment_and_check_jwt_quota` / `increment_and_check_api_key_quota` to delegate to this repo.
-  - Ensure both SQLite and Postgres migrations exist for these tables (with tests for limits, reset/cleanup behavior, and error handling), and keep `_ensure_tables` as a thin compatibility wrapper over the migrations for a deprecation window before removing inline DDL entirely from `quotas.py`.
+  - Treat `initialize.py` (and the small DDL helpers in `api_key_manager.py` / `rate_limiter.py`) as guarded backstops only: keep them idempotent for one release while migrations are validated in CI, then gate or retire new inline DDL additions in favor of migrations + repo helpers. In v0.1, Postgres bootstrap for these core AuthNZ tables is already centralized in `AuthNZ.pg_migrations_extra.ensure_authnz_core_tables_pg`, and `initialize.setup_database` now delegates to this helper instead of embedding raw DDL.
+- **Virtual-key quota counters** (Status: Done in v0.1):
+  - `AuthnzQuotasRepo` (`tldw_Server_API/app/core/AuthNZ/repos/quotas_repo.py`) now owns `vk_jwt_counters` and `vk_api_key_counters`, centralizing dialect-specific DDL/upsert logic for SQLite and Postgres via existing migrations/backstops (`migration_023_create_virtual_key_counters`, `ensure_virtual_key_counters_pg`).
+  - `tldw_Server_API/app/core/AuthNZ/quotas.py::increment_and_check_jwt_quota` and `increment_and_check_api_key_quota` delegate to the repo, and new code no longer introduces inline DDL or `hasattr(conn, "fetch*")` branches for these tables; legacy helpers such as `_ensure_tables` have been retired from runtime paths.
 
 ### 2. `is_single_user_mode()` → Claim-First Alternatives
 

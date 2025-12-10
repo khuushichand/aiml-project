@@ -126,12 +126,63 @@ async def _grant_user_permission(db_name: str, username: str, permission: str) -
         await conn.execute(
             """
             INSERT INTO user_permissions (user_id, permission_id, granted)
-            VALUES ($1, $2, 1)
+            VALUES ($1, $2, TRUE)
             ON CONFLICT (user_id, permission_id) DO UPDATE SET granted=EXCLUDED.granted
             """,
             user_id,
             perm_id,
         )
+        return int(user_id)
+    finally:
+        await conn.close()
+
+
+async def _grant_admin_role(db_name: str, username: str) -> int:
+    """Ensure the given user has the 'admin' role in Postgres-backed RBAC tables."""
+    import asyncpg
+
+    from tldw_Server_API.tests.helpers.pg_env import get_pg_env
+
+    env = get_pg_env()
+    conn = await asyncpg.connect(
+        host=env.host,
+        port=env.port,
+        user=env.user,
+        password=env.password,
+        database=db_name,
+    )
+    try:
+        user_id = await conn.fetchval("SELECT id FROM users WHERE username=$1", username)
+        if user_id is None:
+            raise RuntimeError(f"User {username} not found")
+
+        # Ensure admin role exists
+        await conn.execute(
+            """
+            INSERT INTO roles (name, description, is_system)
+            VALUES ('admin', 'Administrator', TRUE)
+            ON CONFLICT (name) DO NOTHING
+            """
+        )
+        role_id = await conn.fetchval("SELECT id FROM roles WHERE name = 'admin'")
+        if role_id is None:
+            raise RuntimeError("admin role not found after insert")
+
+        # Attach admin role to user and update legacy role column for fallback paths
+        await conn.execute(
+            """
+            INSERT INTO user_roles (user_id, role_id)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id, role_id) DO NOTHING
+            """,
+            user_id,
+            role_id,
+        )
+        await conn.execute(
+            "UPDATE users SET role = 'admin' WHERE id = $1",
+            user_id,
+        )
+
         return int(user_id)
     finally:
         await conn.close()

@@ -476,7 +476,7 @@ Scrape MCP metrics at `GET /api/v1/mcp/metrics/prometheus` (text exposition form
    - `mcp_idempotency_hits_total{module,tool}` - protocol-level idempotency cache hits
    - `mcp_idempotency_misses_total{module,tool}` - protocol-level idempotency cache misses
 
-Security: The Prometheus endpoint is gated by default (admin required). Only set `MCP_PROMETHEUS_PUBLIC=1` behind an internal network or ingress with auth.
+Security: The Prometheus endpoint is gated by `require_permissions(SYSTEM_LOGS)` on `AuthPrincipal` (admin-style principals also pass). Unauthenticated scraping is not supported; use credentials or an auth proxy for Prometheus.
 
 ### Health Checks
 - `/api/v1/mcp/health` - Overall health

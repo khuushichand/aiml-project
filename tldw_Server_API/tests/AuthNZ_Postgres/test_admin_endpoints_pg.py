@@ -104,7 +104,7 @@ async def test_admin_endpoints_pg(test_db_pool):
     user_id = await pool.fetchval("SELECT id FROM users WHERE username = $1", "pgadmin")
 
     # Override AuthPrincipal to treat this user as admin for claim-first gates
-    async def _principal_override(request: Request | None = None):  # type: ignore[override]
+    async def _principal_override(request: Request):  # type: ignore[override]
         principal = AuthPrincipal(
             kind="user",
             user_id=user_id,

@@ -771,46 +771,6 @@ class AuthnzOrgsTeamsRepo:
                         "role": role,
                     }
                 try:
-                    await conn.commit()
-                except Exception as exc:
-                    logger.debug(f"AuthnzOrgsTeamsRepo SQLite commit failed during org_member role update: {exc}")
-                    cur = await conn.execute(
-                        """
-                        SELECT org_id, user_id, role
-                        FROM org_members
-                        WHERE org_id = ? AND user_id = ?
-                        """,
-                        (org_id, user_id),
-                    )
-                    row = await cur.fetchone()
-                    if row:
-                        try:
-                            result = {
-                                "org_id": row[0],
-                                "user_id": row[1],
-                                "role": row[2],
-                            }
-                        except Exception as exc:
-                            logger.debug(f"Could not unpack org member row; falling back to dict: {exc}")
-                            try:
-                                result = dict(row)
-                            except Exception as inner_exc:
-                                logger.debug(
-                                    f"dict() fallback failed for org member row; using defaults: {inner_exc}"
-                                )
-                                result = {
-                                    "org_id": int(org_id),
-                                    "user_id": int(user_id),
-                                    "role": role,
-                                }
-                    else:
-                        result = {
-                            "org_id": int(org_id),
-                            "user_id": int(user_id),
-                            "role": role,
-                        }
-
-                try:
                     await self._ensure_user_in_default_team(conn, org_id, user_id)
                 except Exception as exc:
                     logger.warning(

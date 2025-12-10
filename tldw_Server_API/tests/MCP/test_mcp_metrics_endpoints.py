@@ -25,24 +25,16 @@ def test_mcp_metrics_json_admin_only():
     assert "connections" in data and "modules" in data
 
 
-def test_mcp_metrics_prometheus_gated_then_public(monkeypatch):
-    # Default: gated; without auth -> 401
+def test_mcp_metrics_prometheus_requires_auth(monkeypatch):
+    # Default: gated; without auth -> 401/403 via require_permissions(SYSTEM_LOGS)
     r0 = client.get("/api/v1/mcp/metrics/prometheus")
-    assert r0.status_code == 401
+    assert r0.status_code in (401, 403)
 
-    # With admin (single-user) -> 200 and text/plain
+    # With single-user API key (admin-style principal) -> 200 and text/plain
     r1 = client.get("/api/v1/mcp/metrics/prometheus", headers={"X-API-KEY": _api_key()})
     assert r1.status_code == 200
     assert r1.headers.get("content-type", "").startswith("text/plain")
     assert isinstance(r1.content, (bytes, bytearray))
-
-    # Public mode: unauthenticated allowed
-    monkeypatch.setenv("MCP_PROMETHEUS_PUBLIC", "1")
-    r2 = client.get("/api/v1/mcp/metrics/prometheus")
-    assert r2.status_code == 200
-    assert r2.headers.get("content-type", "").startswith("text/plain")
-    # restore
-    monkeypatch.delenv("MCP_PROMETHEUS_PUBLIC", raising=False)
 
 
 _RUN_MCP = os.getenv("RUN_MCP_TESTS", "").lower() in ("1", "true", "yes")

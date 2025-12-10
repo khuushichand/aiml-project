@@ -255,10 +255,13 @@ def enforce_heavy_evaluations_admin(principal: Optional[AuthPrincipal]) -> None:
 
 def require_admin(user: User) -> None:
     """
-    Legacy user-dict gate for heavy evaluations.
+    Legacy user-dict gate for heavy evaluations (compatibility shim).
 
-    New code should prefer enforce_heavy_evaluations_admin(AuthPrincipal)
-    together with claim-first dependencies (require_roles/require_permissions).
+    New code and HTTP routes should prefer the claim-first
+    `enforce_heavy_evaluations_admin(AuthPrincipal)` helper together with
+    `require_roles` / `require_permissions`. This function is kept only
+    for tests and for any remaining legacy callsites that have not yet
+    been migrated.
     """
     if os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in ("true", "1", "yes"):
         return

@@ -58,6 +58,7 @@ https://github.com/marhensa/vibevoice-realtime-openai-api
 https://github.com/OpenBMB/VoxCPM
 https://huggingface.co/jordand/echo-tts-base
 https://github.com/jordandare/echo-tts
+https://github.com/KevinAHM/echo-tts-api
 https://github.com/nari-labs/dia2
 https://huggingface.co/nvidia/audio-flamingo-3-chat
 https://deepgram.com/

@@ -30,8 +30,15 @@ class AuthnzRbacRepo:
 
     client_id: str = "rbac_service"
 
-    @cached_property
+    @property
     def _db(self) -> UserDatabase:
+        """
+        Always resolve the UserDatabase via the central configuration helper.
+
+        This avoids holding onto a stale UserDatabase instance across tests
+        when AUTH_MODE or DATABASE_URL change, ensuring RBAC queries use the
+        current per-test backend.
+        """
         return get_configured_user_database(client_id=self.client_id)
 
     def get_effective_permissions(self, user_id: int) -> List[str]:

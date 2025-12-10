@@ -194,6 +194,23 @@ class AuthDatabaseConfig:
 
     def reset(self):
         """Reset configuration and database instance (mainly for testing)."""
+        # Close any existing UserDatabase backend connections so tests do not
+        # reuse pools pointing at dropped per-test databases.
+        try:
+            if self._user_db is not None:
+                backend = getattr(self._user_db, "backend", None)
+                if backend is not None:
+                    try:
+                        pool = getattr(backend, "get_pool", None)
+                        if callable(pool):
+                            p = pool()
+                            close_all = getattr(p, "close_all", None)
+                            if callable(close_all):
+                                close_all()
+                    except Exception as pool_exc:
+                        logger.debug(f"AuthDatabaseConfig.reset: backend pool close skipped: {pool_exc}")
+        except Exception as exc:
+            logger.debug(f"AuthDatabaseConfig.reset: ignoring backend cleanup error: {exc}")
         self._user_db = None
         # Ensure backend detection reflects updated environment/settings
         self.settings = get_settings()

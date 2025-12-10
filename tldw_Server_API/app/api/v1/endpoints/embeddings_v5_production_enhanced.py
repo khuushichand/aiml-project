@@ -56,6 +56,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings, get_profile
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE, EMBEDDINGS_ADMIN
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 
 # Configuration
 from tldw_Server_API.app.core.config import settings
@@ -386,6 +387,54 @@ async def _orchestrator_depth_and_age(client: aioredis.Redis) -> tuple[int, floa
             ages.append(0.0)
     return (max(depths) if depths else 0, max(ages) if ages else 0.0)
 
+
+def _should_enforce_tenant_rps(request: Request) -> bool:
+    """
+    Decide whether to enforce per-tenant RPS quotas for this request.
+
+    Behaviour:
+    - When EMBEDDINGS_TENANT_RPS_PROFILE_AWARE is unset/false (\"0\"/\"false\"/\"off\"):
+      fall back to the legacy mode/profile guard via ``_is_multi_user_runtime()``,
+      preserving existing behaviour.
+    - When the flag is enabled (any other truthy value):
+      * Disable tenant quotas for single-user profiles (PROFILE indicating
+        local single-user/desktop), regardless of AUTH_MODE.
+      * Disable tenant quotas when the authenticated principal is explicitly
+        a single-user principal (kind == \"single_user\").
+      * Otherwise, treat the runtime as multi-tenant and enforce quotas when
+        a positive RPS limit is configured.
+    """
+    flag = os.getenv("EMBEDDINGS_TENANT_RPS_PROFILE_AWARE", "").strip().lower()
+    if flag in {"", "0", "false", "off"}:
+        # Compatibility path: preserve legacy AUTH_MODE/profile heuristics.
+        return _is_multi_user_runtime()
+
+    principal: Optional[AuthPrincipal] = None
+    try:
+        ctx = getattr(request.state, "auth", None)
+        if isinstance(ctx, AuthContext):
+            principal = ctx.principal
+    except Exception:
+        principal = None
+
+    try:
+        single_profile = _is_single_user_profile()
+    except Exception:
+        single_profile = False
+
+    if single_profile:
+        # Local single-user/desktop profiles should not see tenant-style
+        # RPS quotas even when AUTH_MODE is misconfigured.
+        return False
+
+    # Principal-first: if we can see an explicit single-user principal, do not
+    # enforce tenant quotas even under multi-user profiles.
+    if principal is not None and getattr(principal, "kind", None) == "single_user":
+        return False
+
+    # Multi-tenant runtime: enforce quotas when a positive RPS is configured.
+    return True
+
 async def _check_backpressure_and_quotas(request: Request, user: User) -> Optional[HTTPException]:
     """Return HTTPException(429) if backpressure or tenant quota exceeded; else None."""
     # Orchestrator-based backpressure
@@ -433,7 +482,7 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
 
         tenant_rps = _tenant_rps_runtime()
 
-        if _is_multi_user_runtime() and tenant_rps > 0:
+        if _should_enforce_tenant_rps(request) and tenant_rps > 0:
             client2 = await _get_redis_client()
             try:
                 # Use a single rolling key with 1-second TTL to avoid flakiness across second boundaries
@@ -2349,8 +2398,11 @@ def _is_multi_user_runtime() -> bool:
 
 
 @router.get("/embeddings/tenant/quotas", summary="Get current tenant quotas (if multi-tenant)")
-async def get_tenant_quotas(current_user: User = Depends(get_request_user)) -> TenantQuotaResponse:
-    if not _is_multi_user_runtime() or TENANT_RPS <= 0:
+async def get_tenant_quotas(
+    request: Request,
+    current_user: User = Depends(get_request_user),
+) -> TenantQuotaResponse:
+    if not _should_enforce_tenant_rps(request) or TENANT_RPS <= 0:
         return TenantQuotaResponse(limit_rps=0, remaining=None)
     try:
         client = await _get_redis_client()

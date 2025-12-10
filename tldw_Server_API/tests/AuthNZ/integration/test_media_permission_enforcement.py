@@ -31,12 +31,14 @@ def test_media_add_requires_media_create(isolated_test_environment):
         connect_timeout = float(os.getenv("TLDW_TEST_PG_CONNECT_TIMEOUT", "10"))
         conn = await asyncpg.connect(dsn, timeout=connect_timeout)
         try:
-            # Create user without any roles
+            # Create a user whose legacy 'role' column does not map to any RBAC
+            # role row, so permissions are driven purely by user_permissions
+            # overrides (no fallback grants from the role column).
             user_uuid = str(uuid.uuid4())
             row = await conn.fetchrow(
                 """
                 INSERT INTO users (uuid, username, email, password_hash, role, is_active, is_verified)
-                VALUES ($1, $2, $3, $4, 'user', true, true)
+                VALUES ($1, $2, $3, $4, 'no_media', true, true)
                 RETURNING id
                 """,
                 user_uuid,

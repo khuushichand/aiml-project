@@ -80,4 +80,6 @@
   - Continue moving inline AuthNZ SQL and backend detection into repositories (remaining DDL in `initialize.py`, quota counters in `quotas.py`, and any residual `hasattr(conn,'fetchval')` paths) while preserving behavior for both SQLite and Postgres.
   - Keep `PROFILE` and feature-flag usage in sync with `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` and avoid introducing new `AUTH_MODE`-based branches in business logic.
 
+For a focused breakdown of the remaining work across these three AuthNZ PRDs (including RG alignment), see `Docs/Product/AuthNZ-PRDs_IMPLEMENTATION_PLAN.md`.
+
 **Status**: Mostly complete — core RG backends, middleware, and admin/diagnostic endpoints match the Resource_Governor PRD; claim-first auth deps and the initial AuthNZ repository layer are the default path, with remaining work limited to the long‑tail items summarized above and the PRDs’ “Remaining adoption checklist” sections.

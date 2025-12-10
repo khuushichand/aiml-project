@@ -102,13 +102,19 @@ def test_mcp_modules_health_jwt_principal_and_state_alignment(isolated_test_envi
     token = login.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
-    # 2. Grant system.logs permission so the route passes require_permissions(SYSTEM_LOGS).
-    from tldw_Server_API.tests.AuthNZ.integration.test_auth_principal_media_rag_invariants import (  # type: ignore  # noqa: E501
-        _grant_user_permission,
-        _run_async,
-    )
+    # 2. Ensure system.logs permission is present via RBAC helper override so
+    # the route passes require_permissions(SYSTEM_LOGS) regardless of backend.
+    from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as user_db_handling
 
-    _run_async(_grant_user_permission(db_name, username, "system.logs"))
+    _orig_get_effective_permissions = user_db_handling.get_effective_permissions
+
+    def _patched_get_effective_permissions(user_id: int):
+        perms = _orig_get_effective_permissions(user_id)
+        if "system.logs" not in perms:
+            perms = list(perms) + ["system.logs"]
+        return perms
+
+    monkeypatch.setattr(user_db_handling, "get_effective_permissions", _patched_get_effective_permissions)
 
     # 3. Stub MCP server to avoid heavy initialization and to ensure a simple, deterministic response.
     from tldw_Server_API.app.api.v1.endpoints import mcp_unified_endpoint as mcp_mod
@@ -203,13 +209,18 @@ def test_monitoring_watchlists_jwt_principal_and_state_alignment(isolated_test_e
     token = login.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
-    # 2. Grant system.logs permission so the route passes require_permissions(SYSTEM_LOGS).
-    from tldw_Server_API.tests.AuthNZ.integration.test_auth_principal_media_rag_invariants import (  # type: ignore  # noqa: E501
-        _grant_user_permission,
-        _run_async,
-    )
+    # 2. Ensure system.logs permission is present via RBAC helper override.
+    from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as user_db_handling
 
-    _run_async(_grant_user_permission(db_name, username, "system.logs"))
+    _orig_get_effective_permissions = user_db_handling.get_effective_permissions
+
+    def _patched_get_effective_permissions(user_id: int):
+        perms = _orig_get_effective_permissions(user_id)
+        if "system.logs" not in perms:
+            perms = list(perms) + ["system.logs"]
+        return perms
+
+    monkeypatch.setattr(user_db_handling, "get_effective_permissions", _patched_get_effective_permissions)
 
     # 3. Stub monitoring service to avoid real DBs and keep the response simple.
     from tldw_Server_API.app.api.v1.endpoints import monitoring as monitoring_mod
@@ -223,10 +234,16 @@ def test_monitoring_watchlists_jwt_principal_and_state_alignment(isolated_test_e
 
     monitoring_mod.get_topic_monitoring_service = _fake_get_topic_monitoring_service  # type: ignore[assignment]
 
-    # 4. Install the auth capture wrapper and call /api/v1/monitoring/watchlists.
+    # 4. Ensure monitoring routes are mounted (route gating may disable them in some profiles).
     from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.main import API_V1_PREFIX
 
     app = fastapi_app
+    monitoring_path = f"{API_V1_PREFIX}/monitoring/watchlists"
+    if not any(getattr(r, "path", None) == monitoring_path for r in app.routes):
+        app.include_router(monitoring_mod.router, prefix=f"{API_V1_PREFIX}")
+
+    # 5. Install the auth capture wrapper and call /api/v1/monitoring/watchlists.
     captured, original = _install_auth_capture(app)
     try:
         resp = client.get("/api/v1/monitoring/watchlists", headers=headers)
