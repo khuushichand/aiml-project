@@ -420,7 +420,6 @@ class APIKeyManager:
 
             if stored_hash and stored_hash != primary_hash:
                 try:
-                    repo = self._get_repo()
                     await repo.update_key_hash(key_info["id"], primary_hash)
                     key_info["key_hash"] = primary_hash
                 except Exception as normalize_exc:

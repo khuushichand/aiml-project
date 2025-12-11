@@ -115,11 +115,13 @@ def _build_app_with_overrides(
 
 
 def _make_admin_user_from_principal(principal: AuthPrincipal) -> dict[str, Any]:
-    """Thin wrapper to mirror jobs_admin helper for tests."""
-    return {
-        "id": principal.user_id,
-        "username": "admin",
-    }
+    """Thin wrapper to mirror jobs_admin helper for tests.
+
+    Delegates to the production helper so tests exercise the same
+    principal→admin_user mapping (including username labels) used by
+    jobs_admin endpoints.
+    """
+    return jobs_mod._make_admin_user_from_principal(principal)
 
 
 @pytest.mark.asyncio

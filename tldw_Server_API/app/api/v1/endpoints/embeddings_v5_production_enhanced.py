@@ -2388,7 +2388,7 @@ def _is_single_user_profile() -> bool:
         return is_single_user_profile_mode()
     except Exception as exc:
         logger.debug("Failed to resolve profile for runtime mode: {}", exc)
-        return True
+        return False
 
 
 def _is_multi_user_runtime() -> bool:

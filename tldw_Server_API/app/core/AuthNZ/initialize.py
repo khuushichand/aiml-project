@@ -43,6 +43,14 @@ from tldw_Server_API.app.core.AuthNZ.monitoring import get_authnz_monitor
 # Initialization Functions
 #
 
+
+def _sanitize_db_url(url: Optional[str]) -> str:
+    """Strip credentials from DB URL for safe diagnostics."""
+    if not url:
+        return "unknown"
+    return url.split("@")[-1] if "@" in url else url
+
+
 def print_banner():
     """Print initialization banner"""
     print("\n" + "=" * 60)
@@ -124,9 +132,7 @@ def check_environment():
 
     print("✅ Environment configuration valid")
     print(f"   Mode: {settings.AUTH_MODE}")
-    db_url_raw = settings.DATABASE_URL or ""
-    # Strip credentials if present for diagnostics (avoid logging secrets)
-    db_url_safe = db_url_raw.split("@")[-1] if "@" in db_url_raw else db_url_raw
+    db_url_safe = _sanitize_db_url(settings.DATABASE_URL)
     print(f"   Database: {db_url_safe}")
 
     return True
@@ -283,7 +289,7 @@ async def setup_database():
             db_url_safe = "unknown"
             try:
                 raw_url = get_settings().DATABASE_URL
-                db_url_safe = raw_url.split("@")[-1] if raw_url else "unknown"
+                db_url_safe = _sanitize_db_url(raw_url)
             except Exception as settings_err:
                 # Settings resolution failures during bootstrap are non-fatal here; keep "unknown".
                 logger.debug(
@@ -571,8 +577,11 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                         PRIMARY KEY (role_id, permission_id)
                     )
                 """)
-            except Exception:
-                pass
+            except Exception as table_err:
+                logger.debug(
+                    "SQLite RBAC table creation skipped (tables may already exist): {}",
+                    table_err,
+                )
 
             single_user_id = settings.SINGLE_USER_FIXED_ID
             await conn.execute(
@@ -634,7 +643,7 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                     if test_api_key:
                         from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
 
-                        api_manager = APIKeyManager()
+                        api_manager = APIKeyManager(db_pool=conn)
                         key_hash = api_manager.hash_api_key(test_api_key)
                         key_prefix = (test_api_key[:10] + "...") if len(test_api_key) > 10 else test_api_key
                         await conn.execute(
@@ -651,8 +660,11 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
             # Commit if adapter requires it
             try:
                 await conn.commit()  # type: ignore[attr-defined]
-            except Exception:
+            except AttributeError:
+                # Adapter doesn't expose commit; nothing to do.
                 pass
+            except Exception as commit_err:
+                logger.debug("Commit skipped or failed: {}", commit_err)
     except Exception as e:
         # Non-fatal but important for observability: surface failures at warning level
         logger.opt(exception=True).warning(

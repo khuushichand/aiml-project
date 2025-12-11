@@ -62,10 +62,17 @@ async def persona_stream(
     token: Optional[str] = Query(default=None),
     api_key: Optional[str] = Query(default=None),
 ):
-    """Bi-directional placeholder stream.
+    """
+    Bi-directional placeholder stream.
 
     Standardized with WebSocketStream lifecycle/metrics; domain payloads unchanged.
     Accepts JSON text frames and echoes minimal notices.
+
+    Security model:
+    - Feature-gated via PERSONA_ENABLED.
+    - API keys are optional and used only to associate a best-effort user_id with the
+      session; invalid or missing keys fall back to anonymous persona sessions rather
+      than closing the connection.
     """
     # Wrap socket for lifecycle and metrics; keep domain payloads unchanged
     stream = WebSocketStream(
@@ -88,7 +95,10 @@ async def persona_stream(
         await stream.send_json({"event": "notice", "message": "persona stream connected (scaffold)"})
         # Resolve user_id from api_key via AuthNZ API key manager.
         # On known AuthNZ/database errors, log at debug level and continue
-        # without a resolved user_id rather than failing the stream.
+        # without a resolved user_id rather than failing the stream. Persona is
+        # currently designed as an optional personalization layer for single-user
+        # style deployments, so invalid/missing API keys are treated as anonymous
+        # sessions rather than hard auth failures.
         user_id: Optional[str] = None
         if api_key:
             try:

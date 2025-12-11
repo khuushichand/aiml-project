@@ -61,8 +61,11 @@ async def upsert_watchlist(payload: Watchlist) -> WatchlistUpsertResponse:
         wl = svc.upsert_watchlist(payload)
         return WatchlistUpsertResponse(watchlist=wl, status="ok")
     except Exception as e:
-        logger.error(f"Failed to upsert watchlist: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+        logger.exception("Failed to upsert watchlist")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to upsert watchlist",
+        ) from e
 
 
 @router.delete(
@@ -200,9 +203,65 @@ async def send_test_notification(payload: NotificationTestRequest) -> dict[str, 
     try:
         notifier.notify(alert)
     except Exception as e:
-        logger.error(f"monitoring: failed to send test notification: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+        logger.exception("monitoring: failed to send test notification")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send test notification",
+        ) from e
     return {"status": "ok"}
+
+
+def _tail_jsonl_file(path: str, limit: int) -> list[str]:
+    """
+    Return the last ``limit`` lines from a JSONL file without scanning the entire file.
+
+    Reads from the end of the file in fixed-size blocks until enough newline-delimited
+    records have been collected.
+    """
+    if limit <= 0:
+        return []
+
+    block_size = 4096
+    lines: list[bytes] = []
+    buffer = b""
+
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        file_size = f.tell()
+        remaining = file_size
+
+        while remaining > 0 and len(lines) < limit:
+            read_size = block_size if remaining >= block_size else remaining
+            remaining -= read_size
+            f.seek(remaining)
+            chunk = f.read(read_size)
+            if not chunk:
+                break
+
+            buffer = chunk + buffer
+
+            while True:
+                newline_pos = buffer.rfind(b"\n")
+                if newline_pos == -1:
+                    break
+                line = buffer[newline_pos + 1 :]
+                buffer = buffer[:newline_pos]
+                if line or buffer:
+                    lines.append(line)
+                if len(lines) >= limit:
+                    break
+
+        if buffer and len(lines) < limit:
+            lines.append(buffer)
+
+    # lines are collected from the end; reverse to restore chronological order
+    decoded: list[str] = []
+    for raw in reversed(lines[:limit]):
+        try:
+            decoded.append(raw.decode("utf-8", errors="replace").rstrip("\n"))
+        except Exception:
+            decoded.append("")
+    return decoded
 
 
 @router.get(
@@ -222,11 +281,7 @@ async def get_recent_notifications(
     if not path or not os.path.exists(path):
         return {"items": []}
     try:
-        # Simple bounded tail: read last N lines without loading entire file into memory
-        from collections import deque
-
-        with open(path, encoding='utf-8') as f:
-            lines = deque(f, maxlen=limit)
+        lines = _tail_jsonl_file(path, limit)
         for ln in lines:
             ln = ln.strip()
             if not ln:

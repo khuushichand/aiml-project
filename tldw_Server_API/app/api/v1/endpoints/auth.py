@@ -922,7 +922,7 @@ async def register(
                 logger.warning("Registration attempt rejected in local-single-user profile [redacted]")
             else:
                 logger.warning(
-                    "Registration attempt rejected in local-single-user profile for username=%s",
+                    "Registration attempt rejected in local-single-user profile for username={}",
                     request.username,
                 )
             raise HTTPException(

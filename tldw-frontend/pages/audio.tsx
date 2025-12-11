@@ -240,14 +240,14 @@ function StreamingSTTSection() {
           else if (msg.type === 'error') { show({ title: 'STT error', description: msg.message || 'Error', variant: 'danger' }); addDebug(`Error: ${msg.message}`); }
         } catch { addDebug(`RX: ${String(ev.data).slice(0,100)}`); }
       };
-	      ws.onerror = (e) => { addDebug('WebSocket error'); };
-	      ws.onclose = () => {
-          cleanupAudio();
-          recordingRef.current = false;
-          setConnected(false);
-          setRecording(false);
-          addDebug('WebSocket closed');
-        };
+      ws.onerror = (e) => { addDebug('WebSocket error'); };
+      ws.onclose = () => {
+        cleanupAudio();
+        recordingRef.current = false;
+        setConnected(false);
+        setRecording(false);
+        addDebug('WebSocket closed');
+      };
     } catch (e: any) {
       show({ title: 'Connect failed', description: e?.message || 'Failed', variant: 'danger' });
     }
@@ -296,8 +296,8 @@ function StreamingSTTSection() {
       bufferRef.current = [];
       startTimeRef.current = Date.now();
       const targetSamples = sampleRate * (model === 'whisper' ? 5 : 2);
-	      proc.onaudioprocess = (ev: AudioProcessingEvent) => {
-	        if (!recordingRef.current) return;
+      proc.onaudioprocess = (ev: AudioProcessingEvent) => {
+        if (!recordingRef.current) return;
         const input = ev.inputBuffer.getChannelData(0);
         // Resample if needed (naive interpolation)
         let data = input;
@@ -314,7 +314,9 @@ function StreamingSTTSection() {
           }
           data = out;
         }
-        bufferRef.current.push(...data);
+        for (let i = 0; i < data.length; i++) {
+          bufferRef.current.push(data[i]);
+        }
         if (bufferRef.current.length >= targetSamples) {
           const chunk = new Float32Array(bufferRef.current.slice(0, targetSamples));
           const overlap = Math.floor(targetSamples*0.1);
@@ -325,29 +327,29 @@ function StreamingSTTSection() {
             let sum = 0; for (let i=0;i<chunk.length;i++){ const v = chunk[i]; sum += v*v; }
             const rms = Math.sqrt(sum / chunk.length);
             const now = Date.now();
-          if (rms < vadThreshold) {
-            // silence chunk
-	            if (autoCommit && lastActiveRef.current && (now - lastActiveRef.current) > silenceMs) {
-	              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            if (rms < vadThreshold) {
+              // silence chunk
+              if (autoCommit && lastActiveRef.current && (now - lastActiveRef.current) > silenceMs) {
+                if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                   wsRef.current.send(JSON.stringify({ type: 'commit' }));
                 }
-              addDebug(`Auto-commit after ${silenceMs}ms silence`);
-              lastActiveRef.current = now; // prevent repeated commits
+                addDebug(`Auto-commit after ${silenceMs}ms silence`);
+                lastActiveRef.current = now; // prevent repeated commits
+              }
+              if (autoStop && !autoStoppedRef.current && lastActiveRef.current && (now - lastActiveRef.current) > silenceMs * 2) {
+                autoStoppedRef.current = true;
+                addDebug(`Auto-stop after ${(silenceMs*2)}ms silence`);
+                stop();
+              }
+              addDebug(`VAD: skip chunk rms=${rms.toFixed(4)}`);
+              return;
             }
-            if (autoStop && !autoStoppedRef.current && lastActiveRef.current && (now - lastActiveRef.current) > silenceMs * 2) {
-              autoStoppedRef.current = true;
-              addDebug(`Auto-stop after ${(silenceMs*2)}ms silence`);
-              stop();
-            }
-            addDebug(`VAD: skip chunk rms=${rms.toFixed(4)}`);
-            return;
+            // voice detected
+            lastActiveRef.current = now;
           }
-          // voice detected
-	          lastActiveRef.current = now;
-	          }
-	          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-              wsRef.current.send(JSON.stringify({ type: 'audio', data: b64 }));
-            }
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'audio', data: b64 }));
+          }
         }
       };
       recordingRef.current = true;
@@ -475,7 +477,8 @@ function VoiceChatStreamSection() {
   const wsRef = useRef<WebSocket|null>(null);
   const ctxRef = useRef<AudioContext|null>(null);
   const bufferRef = useRef<number[]>([]);
-  const ttsChunksRef = useRef<BlobPart[]>([]);
+  // Accumulates raw TTS audio chunks (ArrayBuffers) from the server.
+  const ttsChunksRef = useRef<ArrayBuffer[]>([]);
   const audioUrlRef = useRef<string|null>(null);
   const audioRef = useRef<HTMLAudioElement|null>(null);
   const recordingRef = useRef(false);
@@ -518,10 +521,71 @@ function VoiceChatStreamSection() {
     ttsChunksRef.current = [];
   };
 
+  // For TTS format "pcm", the server streams raw 16‑bit mono PCM
+  // (audio/L16; rate=24000; channels=1). Browsers cannot play raw
+  // PCM directly via <audio>, so wrap it in a minimal RIFF/WAVE
+  // header client‑side before creating the Blob.
+  const wrapPcmChunksAsWav = (chunks: ArrayBuffer[], sampleRate: number, channels: number, bitsPerSample: number): ArrayBuffer => {
+    const bytesPerSample = bitsPerSample / 8;
+    const totalBytes = chunks.reduce((acc, buf) => acc + buf.byteLength, 0);
+    const headerSize = 44;
+    const buffer = new ArrayBuffer(headerSize + totalBytes);
+    const view = new DataView(buffer);
+    let offset = 0;
+
+    const writeString = (s: string) => {
+      for (let i = 0; i < s.length; i += 1) {
+        view.setUint8(offset, s.charCodeAt(i));
+        offset += 1;
+      }
+    };
+    const writeUint32LE = (value: number) => {
+      view.setUint32(offset, value, true);
+      offset += 4;
+    };
+    const writeUint16LE = (value: number) => {
+      view.setUint16(offset, value, true);
+      offset += 2;
+    };
+
+    const blockAlign = channels * bytesPerSample;
+    const byteRate = sampleRate * blockAlign;
+
+    writeString('RIFF');
+    writeUint32LE(36 + totalBytes);
+    writeString('WAVE');
+    writeString('fmt ');
+    writeUint32LE(16); // PCM subchunk size
+    writeUint16LE(1); // audio format = PCM
+    writeUint16LE(channels);
+    writeUint32LE(sampleRate);
+    writeUint32LE(byteRate);
+    writeUint16LE(blockAlign);
+    writeUint16LE(bitsPerSample);
+    writeString('data');
+    writeUint32LE(totalBytes);
+
+    const out = new Uint8Array(buffer);
+    let dataOffset = headerSize;
+    for (const buf of chunks) {
+      out.set(new Uint8Array(buf), dataOffset);
+      dataOffset += buf.byteLength;
+    }
+
+    return buffer;
+  };
+
   const playTts = () => {
     if (!ttsChunksRef.current.length) return;
-    const mime = ttsFormat === 'mp3' ? 'audio/mpeg' : ttsFormat === 'opus' ? 'audio/opus' : 'audio/wav';
-    const blob = new Blob(ttsChunksRef.current, { type: mime });
+    let blob: Blob;
+    if (ttsFormat === 'pcm') {
+      // Server sends raw PCM (audio/L16; rate=24000; channels=1); wrap as WAV for browser playback.
+      const wavBuffer = wrapPcmChunksAsWav(ttsChunksRef.current, 24000, 1, 16);
+      blob = new Blob([wavBuffer], { type: 'audio/wav' });
+    } else {
+      const mime = ttsFormat === 'mp3' ? 'audio/mpeg' : ttsFormat === 'opus' ? 'audio/opus' : 'audio/wav';
+      blob = new Blob(ttsChunksRef.current, { type: mime });
+    }
     audioUrlRef.current = URL.createObjectURL(blob);
     if (audioRef.current) {
       audioRef.current.src = audioUrlRef.current;
@@ -664,7 +728,9 @@ function VoiceChatStreamSection() {
           }
           data = out;
         }
-        bufferRef.current.push(...data);
+        for (let i = 0; i < data.length; i++) {
+          bufferRef.current.push(data[i]);
+        }
         const target = sampleRate * 2;
         if (bufferRef.current.length >= target) {
           const chunk = new Float32Array(bufferRef.current.slice(0, target));
@@ -696,7 +762,11 @@ function VoiceChatStreamSection() {
 
   const disconnect = () => {
     stop();
-    try { wsRef.current?.send(JSON.stringify({ type: 'stop' })); } catch {}
+    try {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'stop' }));
+      }
+    } catch {}
     try { wsRef.current?.close(); } catch {}
     wsRef.current = null;
     setConnected(false);

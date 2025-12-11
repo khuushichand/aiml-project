@@ -1,7 +1,7 @@
 # auth_deps.py
 # Description: FastAPI dependency injection for authentication services
 #
-# Imports
+from datetime import datetime
 from typing import Optional, Dict, Any, List, Callable, Awaitable
 from collections.abc import Mapping
 import asyncio
@@ -212,14 +212,12 @@ async def get_jwt_service_dep() -> JWTService:
 
 async def get_session_manager_dep() -> SessionManager:
     """Get session manager dependency"""
-        # In pytest/TEST_MODE contexts, return a lightweight stub to avoid heavy init
+    # In pytest/TEST_MODE contexts, return a lightweight stub to avoid heavy init
     try:
         import os as _os, sys as _sys
 
         force_real = _os.getenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", "").lower() in ("1", "true", "yes")
         if not force_real and (_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes") or "pytest" in _sys.modules):
-            from datetime import datetime  # local import for stub
-
             class _StubSessionManager:
                 enabled = True
 
@@ -802,7 +800,7 @@ async def get_current_active_user(
 
 
 async def get_user_org_policy(
-    db=Depends(get_db_transaction),
+    db: Any = Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
     """
@@ -851,7 +849,7 @@ async def _load_org_policy(db: Any, org_id: int) -> Dict[str, Any]:
 
 
 async def get_org_policy_from_principal(
-    db=Depends(get_db_transaction),
+    db: Any = Depends(get_db_transaction),
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ) -> Dict[str, Any]:

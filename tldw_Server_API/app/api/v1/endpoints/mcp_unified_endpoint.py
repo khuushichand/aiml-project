@@ -692,7 +692,6 @@ async def list_tools(
     catalog: Optional[str] = Query(None, description="Filter by tool catalog name"),
     catalog_id: Optional[int] = Query(None, description="Filter by tool catalog id"),
     user: Optional[TokenData] = Depends(get_current_user),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     _guard: None = Depends(enforce_http_security),
 ):
     """

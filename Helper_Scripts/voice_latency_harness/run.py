@@ -50,7 +50,19 @@ _PROMETHEUS_CLIENT_MISSING_MSG = (
 
 
 def _make_silence(duration_sec: float = 0.2, sr: int = 16000) -> bytes:
-    """Generate a silent WAV clip for quick end-to-end harness checks."""
+    """
+    Generate a silent WAV clip for quick end-to-end harness checks.
+
+    Args:
+        duration_sec: Duration of silence in seconds. Defaults to 0.2.
+        sr: Sample rate in Hz. Defaults to 16000.
+
+    Returns:
+        WAV-encoded audio bytes containing silence.
+
+    Raises:
+        RuntimeError: If the soundfile package is not installed.
+    """
     buf = io.BytesIO()
     data = np.zeros(int(sr * duration_sec), dtype=np.float32)
     try:
@@ -68,7 +80,16 @@ def _b64_audio(audio_bytes: bytes) -> str:
 
 @dataclass
 class HarnessResult:
-    """Aggregated latency percentiles plus raw metrics payload from the server."""
+    """
+    Aggregated latency percentiles plus raw metrics payload from the server.
+
+    Attributes:
+        stt_final_latency_seconds: Percentile map (e.g., p50, p90) for STT final latency.
+        tts_ttfb_seconds: Percentile map for TTS time-to-first-byte.
+        voice_to_voice_seconds: Percentile map for end-to-end voice-to-voice latency.
+        audio_chat_latency_seconds: Percentile map for audio chat endpoint latency.
+        raw_metrics: Unprocessed metrics dictionary from the server.
+    """
 
     stt_final_latency_seconds: Dict[str, float]
     tts_ttfb_seconds: Dict[str, float]
@@ -91,7 +112,21 @@ class HarnessResult:
 
 
 def _fetch_metrics(base_url: str, api_key: Optional[str]) -> Dict[str, Any]:
-    """Fetch metrics from /metrics, preferring JSON and falling back to Prometheus text parsing."""
+    """
+    Fetch metrics from /metrics endpoint, supporting both JSON and Prometheus formats.
+
+    Args:
+        base_url: Base URL of the server (e.g., "http://127.0.0.1:8000").
+        api_key: Optional API key for authentication via X-API-KEY header.
+
+    Returns:
+        Dictionary of metrics. For JSON responses, extracts the "metrics" key if present.
+        For Prometheus text format, parses histogram metrics into structured dicts.
+
+    Raises:
+        requests.HTTPError: If the request fails.
+        RuntimeError: If Prometheus parsing is needed but prometheus_client is not installed.
+    """
     headers = {}
     if api_key:
         headers["X-API-KEY"] = api_key
@@ -196,7 +231,21 @@ def _histogram_percentiles_from_buckets(hist: Dict[str, Any], pcts: Sequence[int
 
 
 def _parse_prometheus_histograms(prom_text: str, target_names: Optional[Iterable[str]] = None) -> Dict[str, Any]:
-    """Parse Prometheus text exposition into histogram bucket dictionaries."""
+    """
+    Parse Prometheus text exposition format into histogram bucket dictionaries.
+
+    Args:
+        prom_text: Raw Prometheus exposition format text.
+        target_names: Optional set of histogram metric names to extract.
+            If None, extracts all histogram metrics.
+
+    Returns:
+        Dictionary mapping histogram metric names to their structured representations.
+        Each histogram contains "buckets" (le -> cumulative count), "count", and "sum".
+
+    Raises:
+        RuntimeError: If the prometheus_client package is not installed.
+    """
     try:
         from prometheus_client.parser import text_string_to_metric_families
     except ImportError as exc:  # pragma: no cover - optional dependency
@@ -265,7 +314,18 @@ def _extract_histogram_percentiles(metrics: Dict[str, Any], name: str) -> Dict[s
 
 
 def run_short_mode(base_url: str, api_key: Optional[str]) -> HarnessResult:
-    """Scrape /metrics and derive latency percentiles without issuing new requests."""
+    """
+    Scrape /metrics endpoint and derive latency percentiles without issuing new requests.
+
+    This mode is lightweight and suitable for quick checks using existing metrics.
+
+    Args:
+        base_url: Base URL of the server (e.g., "http://127.0.0.1:8000").
+        api_key: Optional API key for authentication.
+
+    Returns:
+        HarnessResult containing percentile maps for all latency metrics.
+    """
     metrics = _fetch_metrics(base_url, api_key)
     return HarnessResult(
         stt_final_latency_seconds=_extract_histogram_percentiles(metrics, "stt_final_latency_seconds"),
@@ -282,7 +342,21 @@ def run_full_turn(
     model: str = "gpt-4o-mini",
     provider: str = "openai",
 ) -> HarnessResult:
-    """Post a short silent clip, then scrape metrics to derive latency percentiles."""
+    """
+    Post a short silent clip to /api/v1/audio/chat, then scrape metrics to derive latency percentiles.
+
+    This mode exercises the full audio chat pipeline and collects actual latency measurements.
+
+    Args:
+        base_url: Base URL of the server (e.g., "http://127.0.0.1:8000").
+        api_key: Optional API key for authentication.
+        model: LLM model name for the audio chat request. Defaults to "gpt-4o-mini".
+        provider: API provider name for the LLM. Defaults to "openai".
+
+    Returns:
+        HarnessResult containing percentile maps for all latency metrics,
+        with measured latency as fallback for audio_chat_latency_seconds if histogram unavailable.
+    """
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["X-API-KEY"] = api_key

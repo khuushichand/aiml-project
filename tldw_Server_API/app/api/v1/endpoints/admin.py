@@ -68,6 +68,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_rbac_schemas import (
     PermissionCreateRequest,
     PermissionResponse,
     UserRoleListResponse,
+    OverrideEffect,
     UserOverrideUpsertRequest,
     UserOverridesResponse,
     UserOverrideEntry,
@@ -1932,7 +1933,8 @@ async def revoke_permission_from_role(role_id: int, permission_id: int, db=Depen
 async def get_user_roles_admin(user_id: int) -> UserRoleListResponse:
     try:
         repo = _get_rbac_repo()
-        rows = repo.get_user_roles(user_id=int(user_id))
+        loop = asyncio.get_event_loop()
+        rows = await loop.run_in_executor(None, repo.get_user_roles, int(user_id))
         roles = [
             RoleResponse(
                 id=int(r.get("id")),
@@ -2045,7 +2047,7 @@ async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest,
         if not perm_id:
             raise HTTPException(status_code=400, detail="permission_id or permission_name required")
 
-        granted = payload.effect == "allow"
+        granted = payload.effect == OverrideEffect.allow
         if _is_pg:
             await db.execute(
                 """
@@ -2099,7 +2101,7 @@ async def delete_user_override(user_id: int, permission_id: int, db=Depends(get_
 
 
 @router.get("/users/{user_id}/effective-permissions", response_model=EffectivePermissionsResponse)
-async def get_effective_permissions_admin(user_id: int, db=Depends(get_db_transaction)) -> EffectivePermissionsResponse:
+async def get_effective_permissions_admin(user_id: int) -> EffectivePermissionsResponse:
     """Compute effective permissions for a user.
 
     Delegates to the central RBAC helper, which in turn uses the AuthNZ
@@ -2107,7 +2109,8 @@ async def get_effective_permissions_admin(user_id: int, db=Depends(get_db_transa
     SQLite and Postgres backends share the same logic.
     """
     try:
-        perms = get_effective_permissions(user_id)
+        loop = asyncio.get_event_loop()
+        perms = await loop.run_in_executor(None, get_effective_permissions, user_id)
         return EffectivePermissionsResponse(user_id=user_id, permissions=sorted(perms))
     except Exception as e:
         logger.error(f"Failed to compute effective permissions for user {user_id}: {e}")
@@ -2124,7 +2127,8 @@ async def get_role_effective_permissions(role_id: int) -> RoleEffectivePermissio
     """
     try:
         repo = _get_rbac_repo()
-        data = repo.get_role_effective_permissions(role_id=int(role_id))
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, repo.get_role_effective_permissions, int(role_id))
         return RoleEffectivePermissionsResponse(
             role_id=role_id,
             role_name=data.get("role_name", ""),
@@ -2485,7 +2489,7 @@ async def delete_user(
     """
     try:
         # Prevent self-deletion
-        if principal.user_id is not None and user_id == int(principal.user_id):
+        if principal.user_id is not None and str(user_id) == str(principal.user_id):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot delete your own account"
