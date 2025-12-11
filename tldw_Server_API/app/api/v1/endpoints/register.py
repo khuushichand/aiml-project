@@ -443,6 +443,9 @@ async def check_availability(
     Returns:
         MessageResponse indicating availability
     """
+    # Enforce profile/registration invariants for availability checks as well.
+    _get_registration_settings(request)
+
     if not username and not email:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

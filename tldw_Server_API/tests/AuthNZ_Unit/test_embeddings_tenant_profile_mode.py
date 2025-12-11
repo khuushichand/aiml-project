@@ -154,10 +154,10 @@ async def test_tenant_quota_helper_flag_enabled_single_user_principal(monkeypatc
     request = Request(scope)
 
     principal = AuthPrincipal(
-        kind="single_user",
+        kind="user",
         user_id=1,
         api_key_id=None,
-        subject=None,
+        subject="single_user",
         token_type="api_key",
         jti=None,
         roles=["admin"],
@@ -233,10 +233,10 @@ async def test_tenant_quotas_flag_enabled_single_user_principal_http(monkeypatch
 
     async def _fake_get_request_user(request: Request) -> User:
         principal = AuthPrincipal(
-            kind="single_user",
+            kind="user",
             user_id=1,
             api_key_id=None,
-            subject=None,
+            subject="single_user",
             token_type="api_key",
             jti=None,
             roles=["admin"],

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, Optional
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ConfigDict
@@ -38,15 +38,17 @@ def _make_admin_user_from_principal(principal: AuthPrincipal) -> dict[str, Any]:
     existing domain allowlist and RLS semantics continue to apply. For
     non-user principals (e.g., service or API-key callers) where user_id may
     be None, id is left as None and username falls back to subject or
-    principal_id for audit/diagnostics.
+    principal_id (or kind) for audit/diagnostics. Downstream RBAC and RLS
+    enforcement must rely only on the id field; username is informational.
     """
     user_id = principal.user_id
     if user_id is not None:
-        username = getattr(principal, "username", f"user:{user_id}")
+        # Prefer a stable, human-readable label when available.
+        username = principal.subject or principal.principal_id or f"user:{user_id}"
     else:
         # Preserve RLS/allowlist behavior by not fabricating a synthetic id.
-        # Use subject/principal_id for human-readable/audit labels instead.
-        username = principal.subject or principal.principal_id or principal.kind
+        # Use subject/principal_id/kind for human-readable/audit labels instead.
+        username = principal.subject or principal.principal_id or principal.kind or "service"
     return {
         "id": user_id,
         "username": str(username),
@@ -93,10 +95,11 @@ def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
 
 def _enforce_domain_scope_from_principal(principal: AuthPrincipal, domain: Optional[str]) -> None:
     """
-    Domain-scoped RBAC enforcement using AuthPrincipal.
+    Domain-scoped RBAC enforcement using AuthPrincipal (feature-flagged path).
 
-    When JOBS_DOMAIN_RBAC_PRINCIPAL=1, jobs admin endpoints may call this
-    helper instead of passing a user dict directly to _enforce_domain_scope.
+    When JOBS_DOMAIN_RBAC_PRINCIPAL=1, jobs admin endpoints call this helper
+    instead of passing a user dict directly to _enforce_domain_scope as part
+    of the principal-driven RBAC migration.
     The underlying semantics (JOBS_DOMAIN_SCOPED_RBAC, JOBS_REQUIRE_DOMAIN_FILTER,
     JOBS_DOMAIN_ALLOWLIST_*, JOBS_RBAC_FORCE) remain unchanged.
     """
@@ -113,8 +116,10 @@ def _enforce_domain_scope_unified(
     """
     Unified domain-scoped RBAC enforcement for jobs admin endpoints.
 
-    Always derives the admin_user from the AuthPrincipal so callers can reuse
-    the same user mapping for downstream operations (e.g., Postgres RLS). When
+    All jobs-admin endpoints in this module use this helper alongside the
+    router-level require_roles(\"admin\") guard. It always derives the
+    admin_user from the AuthPrincipal so callers can reuse the same user
+    mapping for downstream operations (e.g., Postgres RLS). When
     JOBS_DOMAIN_RBAC_PRINCIPAL is enabled, enforcement is driven from the
     AuthPrincipal; otherwise the legacy user-dict path is used.
     """
@@ -140,7 +145,7 @@ def _set_pg_rls_for_user(user: dict, domain: Optional[str]) -> None:
 
 
 class PruneRequest(BaseModel):
-    statuses: List[str] = Field(default_factory=lambda: ["completed", "failed", "cancelled"], description="Statuses to prune")
+    statuses: list[str] = Field(default_factory=lambda: ["completed", "failed", "cancelled"], description="Statuses to prune")
     older_than_days: int = Field(ge=1, le=3650, default=30, description="Delete jobs older than N days")
     # Optional scope filters
     domain: Optional[str] = Field(default=None, description="Limit prune to a specific domain")
@@ -496,11 +501,11 @@ async def upsert_sla_policy_endpoint(
     admin_user = _enforce_domain_scope_unified(principal, req.domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
-    jm = JobManager(backend=backend, db_url=db_url)
     # When Postgres RLS is enabled, scope SLA policy mutations to the same domain
     # context as jobs to keep admin behavior consistent across tables.
     if backend == "postgres":
         _set_pg_rls_for_user(admin_user, req.domain)
+    jm = JobManager(backend=backend, db_url=db_url)
     jm.upsert_sla_policy(
         domain=req.domain,
         queue=req.queue,
@@ -639,7 +644,7 @@ class JobEvent(BaseModel):
     created_at: str
 
 
-@router.get("/jobs/events", response_model=List[JobEvent])
+@router.get("/jobs/events", response_model=list[JobEvent])
 async def list_job_events(
     after_id: int = 0,
     limit: int = 200,
@@ -647,7 +652,7 @@ async def list_job_events(
     queue: Optional[str] = None,
     job_type: Optional[str] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
-):
+) -> list[JobEvent]:
     """Return job events from the append-only outbox with a cursor (after_id).
 
     Intended for reliable polling by dashboards or external sinks.
@@ -734,7 +739,7 @@ async def stream_job_events(
     queue: Optional[str] = None,
     job_type: Optional[str] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
-):
+) -> StreamingResponse:
     """Server-Sent Events stream of job events from the outbox.
 
     This is a simple tailer that polls the outbox and emits events without loss.
@@ -979,12 +984,15 @@ async def ttl_sweep_endpoint(
         # Confirm header for destructive action (check before model validation for consistent 400s)
         hdr = str(request.headers.get("x-confirm", "")).lower()
         if hdr not in {"1", "true", "yes", "y", "on"}:
-            # Special-case: when domain-scoped RBAC is enforced and request is scoped,
-            # allow a no-op (affected=0) response without destructive changes. This
-            # preserves the guardrail while enabling RBAC-focused checks.
+            # Special-case: when domain-scoped RBAC is enforced and request is scoped
+            # in TEST_MODE, allow a no-op (affected=0) response without destructive
+            # changes. This preserves the guardrail while enabling RBAC-focused checks
+            # in tests and non-production environments while keeping production
+            # behavior (400 without X-Confirm) unchanged.
             domain_scoped = _is_truthy(os.getenv("JOBS_DOMAIN_SCOPED_RBAC"))
             forced = _is_truthy(os.getenv("JOBS_RBAC_FORCE"))
-            if domain_scoped and forced and (raw or {}).get("domain"):
+            is_test = _is_truthy(os.getenv("TEST_MODE"))
+            if is_test and domain_scoped and forced and (raw or {}).get("domain"):
                 return TTLSweepResponse(affected=0)
             raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
         db_url = os.getenv("JOBS_DB_URL")

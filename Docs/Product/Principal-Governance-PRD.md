@@ -15,9 +15,10 @@ This file acts as a compact index for “governed surfaces” and their coverage
 ## Core Model
 
 - `AuthPrincipal` (`tldw_Server_API/app/core/AuthNZ/principal_model.py`):
-  - Fields: `kind` (`"user" | "api_key" | "service" | "anonymous" | "single_user"`),
+  - Fields: `kind` (`"user" | "api_key" | "service" | "anonymous"`),
     `user_id`, `api_key_id`, `roles`, `permissions`, `is_admin`, `org_ids`, `team_ids`.
   - Derived `principal_id` is a stable, pseudonymous identifier used for logs/metrics.
+  - Single-user principals are represented as `kind="user"` tagged with `subject="single_user"` (and compatible legacy contexts), rather than a separate `kind="single_user"`.
 - `AuthContext`:
   - Wraps `AuthPrincipal` plus request metadata (`ip`, `user_agent`, `request_id`).
   - Attached at `request.state.auth` by `get_current_user` / `get_auth_principal`.
@@ -50,7 +51,7 @@ are explicitly tested. For each, tests assert alignment between:
 | Monitoring – watchlists (`/api/v1/monitoring/watchlists`) | Bearer JWT   | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_mcp_monitoring_invariants.py::test_monitoring_watchlists_jwt_principal_and_state_alignment` |
 | Resource-Governor admin (`/api/v1/resource-governor/policy`) | Bearer JWT | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_resource_governor_invariants.py::test_resource_governor_policy_jwt_principal_and_state_alignment` |
 | Prompt Studio projects (`/api/v1/prompt-studio/projects/`) | Bearer JWT   | `user`            | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_prompt_studio_invariants.py::test_prompt_studio_projects_jwt_principal_and_state_alignment` |
-| Single-user profile (bootstrapped admin)       | X-API-KEY (single_user) | `single_user`   | `tldw_Server_API/tests/AuthNZ/integration/test_single_user_claims_permissions.py`                        |
+| Single-user profile (bootstrapped admin)       | X-API-KEY (single_user) | `user` (subject="single_user") | `tldw_Server_API/tests/AuthNZ/integration/test_single_user_claims_permissions.py`                        |
 | Evaluations – admin cleanup (idempotency, API key) | AuthNZ API key  | `api_key`         | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_evaluations_invariants.py::test_evaluations_admin_cleanup_api_key_principal_and_state_alignment` |
 | LLM budget guard (chat overage)                | AuthNZ API key        | `api_key`         | `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_llm_budget_invariants.py::test_llm_budget_guard_overage_preserves_principal_state_alignment` |
 

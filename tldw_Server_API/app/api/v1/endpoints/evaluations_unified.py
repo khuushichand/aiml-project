@@ -145,9 +145,9 @@ def get_db_for_user(user_id: int):
 async def admin_cleanup_idempotency(
     ttl_hours: int = Query(72, ge=1, le=720, description="Delete idempotency keys older than this TTL (hours)"),
     target_user_id: Optional[int] = Query(None, description="If provided, only clean this user's evaluations DB"),
-    _user_ctx: str = Depends(verify_api_key),  # noqa: ARG001 - dependency for side effects
-    principal: AuthPrincipal = Depends(get_auth_principal),
-    _current_user: User = Depends(get_request_user),  # noqa: ARG001 - dependency for side effects
+    _user_ctx: str = Depends(verify_api_key),  # dependency for side effects
+    principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
+    _current_user: User = Depends(get_request_user),  # dependency for side effects
 ):
     """Admin-only: purge stale idempotency keys in Evaluations DBs on-demand.
 
@@ -263,128 +263,6 @@ def _estimate_tokens_from_texts(*texts: Optional[str], provider: Optional[str] =
         if isinstance(t, str):
             total_chars += len(t)
     return max(0, total_chars // 4)
-
-
-async def _apply_rate_limit_headers(limiter, user_id: str, response: Response, meta: Optional[Dict[str, Any]] = None) -> None:
-    """Fetch usage summary and set standard X-RateLimit-* headers."""
-    try:
-        summary = await limiter.get_usage_summary(user_id)
-        limits = summary.get("limits", {})
-        usage = summary.get("usage", {})
-        remaining = summary.get("remaining", {})
-        # Tier
-        response.headers["X-RateLimit-Tier"] = str(summary.get("tier", "free"))
-        # Per-minute (evaluations)
-        pm = limits.get("per_minute", {})
-        per_min_limit = int(pm.get("evaluations", 0) or 0)
-        response.headers["X-RateLimit-PerMinute-Limit"] = str(per_min_limit)
-        # Per-minute remaining: prefer value from prior check; otherwise default to 0
-        try:
-            remaining_requests = None
-            if meta and isinstance(meta, dict):
-                remaining_requests = meta.get("requests_remaining")
-            if remaining_requests is None:
-                # If not provided by limiter, include header with a safe default
-                remaining_requests = 0
-            response.headers["X-RateLimit-PerMinute-Remaining"] = str(int(remaining_requests or 0))
-        except Exception:
-            response.headers["X-RateLimit-PerMinute-Remaining"] = "0"
-        # Daily quotas
-        daily = limits.get("daily", {})
-        response.headers["X-RateLimit-Daily-Limit"] = str(daily.get("evaluations", 0))
-        response.headers["X-RateLimit-Daily-Remaining"] = str(remaining.get("daily_evaluations", 0))
-        response.headers["X-RateLimit-Tokens-Remaining"] = str(remaining.get("daily_tokens", 0))
-        # Cost quotas (optional)
-        response.headers["X-RateLimit-Daily-Cost-Remaining"] = f"{remaining.get('daily_cost', 0):.2f}"
-        response.headers["X-RateLimit-Monthly-Cost-Remaining"] = f"{remaining.get('monthly_cost', 0):.2f}"
-        # Baseline RateLimit-* headers (simple minute window approximation)
-        try:
-            response.headers["RateLimit-Limit"] = str(per_min_limit)
-            if meta and isinstance(meta, dict) and "requests_remaining" in meta:
-                response.headers["RateLimit-Remaining"] = str(int(meta.get("requests_remaining") or 0))
-            reset_val = 60
-            if meta and isinstance(meta, dict) and "reset_seconds" in meta:
-                reset_val = int(meta.get("reset_seconds") or 60)
-            response.headers["RateLimit-Reset"] = str(reset_val)
-            # X- header parity for reset seconds
-            response.headers["X-RateLimit-Reset"] = str(reset_val)
-        except Exception:
-            pass
-    except Exception:
-        # Non-fatal
-        pass
-
-
-# ============= Authentication =============
-
-# (definition moved earlier to satisfy Depends references)
-def _verify_api_key_placeholder():
-    """
-    Placeholder to maintain file structure; actual verify_api_key is defined above.
-    """
-
-
-# Note: verify_api_key is defined once above. Keep a single definition to avoid confusion.
-
-
-
-async def _apply_rate_limit_headers(limiter, user_id: str, response: Response, meta: Optional[Dict[str, Any]] = None) -> None:
-    """Fetch usage summary and set standard X-RateLimit-* headers."""
-    try:
-        summary = await limiter.get_usage_summary(user_id)
-        limits = summary.get("limits", {})
-        usage = summary.get("usage", {})
-        remaining = summary.get("remaining", {})
-        # Tier
-        response.headers["X-RateLimit-Tier"] = str(summary.get("tier", "free"))
-        # Per-minute (evaluations)
-        pm = limits.get("per_minute", {})
-        per_min_limit = int(pm.get("evaluations", 0) or 0)
-        response.headers["X-RateLimit-PerMinute-Limit"] = str(per_min_limit)
-        # Per-minute remaining: prefer value from prior check; otherwise default to 0
-        try:
-            remaining_requests = None
-            if meta and isinstance(meta, dict):
-                remaining_requests = meta.get("requests_remaining")
-            if remaining_requests is None:
-                # If not provided by limiter, include header with a safe default
-                remaining_requests = 0
-            response.headers["X-RateLimit-PerMinute-Remaining"] = str(int(remaining_requests or 0))
-        except Exception:
-            response.headers["X-RateLimit-PerMinute-Remaining"] = "0"
-        # Daily quotas
-        daily = limits.get("daily", {})
-        response.headers["X-RateLimit-Daily-Limit"] = str(daily.get("evaluations", 0))
-        response.headers["X-RateLimit-Daily-Remaining"] = str(remaining.get("daily_evaluations", 0))
-        response.headers["X-RateLimit-Tokens-Remaining"] = str(remaining.get("daily_tokens", 0))
-        # Cost quotas (optional)
-        response.headers["X-RateLimit-Daily-Cost-Remaining"] = f"{remaining.get('daily_cost', 0):.2f}"
-        response.headers["X-RateLimit-Monthly-Cost-Remaining"] = f"{remaining.get('monthly_cost', 0):.2f}"
-        # Baseline RateLimit-* headers (simple minute window approximation)
-        try:
-            response.headers["RateLimit-Limit"] = str(per_min_limit)
-            if meta and isinstance(meta, dict) and "requests_remaining" in meta:
-                response.headers["RateLimit-Remaining"] = str(int(meta.get("requests_remaining") or 0))
-            reset_val = 60
-            if meta and isinstance(meta, dict) and "reset_seconds" in meta:
-                reset_val = int(meta.get("reset_seconds") or 60)
-            response.headers["RateLimit-Reset"] = str(reset_val)
-            # X- header parity for reset seconds
-            response.headers["X-RateLimit-Reset"] = str(reset_val)
-        except Exception:
-            pass
-    except Exception:
-        # Non-fatal
-        pass
-
-
-# ============= Authentication =============
-
-# (definition moved earlier to satisfy Depends references)
-def _verify_api_key_placeholder():
-    """
-    Placeholder to maintain file structure; actual verify_api_key is defined above.
-    """
 
 
 # ============= Rate Limiting =============
@@ -525,7 +403,7 @@ async def export_embeddings_abtest(
     format: str = Query("json", pattern="^(json|csv)$"),
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
-    principal: AuthPrincipal = Depends(get_auth_principal),
+    principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
     current_user: User = Depends(get_request_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):

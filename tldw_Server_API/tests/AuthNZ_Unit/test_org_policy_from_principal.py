@@ -83,10 +83,10 @@ async def test_get_org_policy_from_principal_single_user_fallback(monkeypatch):
     monkeypatch.delenv("ORG_POLICY_SINGLE_USER_PRINCIPAL", raising=False)
 
     principal = AuthPrincipal(
-        kind="single_user",
+        kind="user",
         user_id=1,
         api_key_id=None,
-        subject=None,
+        subject="single_user",
         token_type="api_key",
         jti=None,
         roles=["admin"],
@@ -152,10 +152,10 @@ async def test_get_org_policy_from_principal_flag_enabled_principal_controls_fal
 
     # Principal that clearly represents the single-user bootstrap admin.
     principal = AuthPrincipal(
-        kind="single_user",
+        kind="user",
         user_id=1,
         api_key_id=None,
-        subject=None,
+        subject="single_user",
         token_type="api_key",
         jti=None,
         roles=["admin"],

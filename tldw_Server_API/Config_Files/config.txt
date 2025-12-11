@@ -433,7 +433,12 @@ low_confidence_behavior = continue
 agentic_cache_backend = memory
 
 # TTL (seconds) for agentic cache entries used by RAG.
-# Env override: RAG_AGENTIC_CACHE_TTL_SEC (default 600)
+# Env override: RAG_AGENTIC_CACHE_TTL_SEC=<seconds> (default 600)
+# 600 seconds (10 minutes) is chosen as a pragmatic default that roughly matches a
+# typical focused user interaction window for agentic RAG flows: long enough to
+# reuse expensive planning/results across follow-up questions in the same session,
+# but short enough to avoid unbounded growth in ephemeral cache state for idle tabs
+# and background jobs.
 agentic_cache_ttl_sec = 600
 
 [ResourceGovernor]

@@ -9,7 +9,6 @@ import re
 import os
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.permissions import FLASHCARDS_ADMIN
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -36,6 +35,17 @@ import json
 from tldw_Server_API.app.core.Flashcards.apkg_exporter import export_apkg_from_rows
 
 router = APIRouter(prefix="/flashcards", tags=["flashcards"])
+
+
+def _require_flashcards_admin(principal: AuthPrincipal) -> None:
+    """Raise 403 if the principal lacks flashcards admin permission."""
+    perms = set(principal.permissions or [])
+    roles = set(principal.roles or [])
+    if FLASHCARDS_ADMIN not in perms and "admin" not in roles and not principal.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin flashcards permission required for override",
+        )
 
 
 @router.post("/decks", response_model=Deck)
@@ -308,7 +318,6 @@ def import_flashcards(
     max_lines: Optional[int] = Query(None, ge=1, description="Admin override: max lines to import (cannot exceed env cap)"),
     max_line_length: Optional[int] = Query(None, ge=1, description="Admin override: max line length in bytes (cannot exceed env cap)"),
     max_field_length: Optional[int] = Query(None, ge=1, description="Admin override: max field length in bytes (cannot exceed env cap)"),
-    current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     try:
@@ -330,13 +339,7 @@ def import_flashcards(
         ENV_MAX_FIELD_LENGTH = _int_env('FLASHCARDS_IMPORT_MAX_FIELD_LENGTH', 8192)
         # Effective caps: query param can only lower the env caps, and requires admin to use
         if any(p is not None for p in (max_lines, max_line_length, max_field_length)):
-            perms = set(principal.permissions or [])
-            roles = set(principal.roles or [])
-            if FLASHCARDS_ADMIN not in perms and "admin" not in roles and not principal.is_admin:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Admin flashcards permission required for override",
-                )
+            _require_flashcards_admin(principal)
         MAX_LINES = min(ENV_MAX_LINES, max_lines) if max_lines else ENV_MAX_LINES
         MAX_LINE_LENGTH = min(ENV_MAX_LINE_LENGTH, max_line_length) if max_line_length else ENV_MAX_LINE_LENGTH
         MAX_FIELD_LENGTH = min(ENV_MAX_FIELD_LENGTH, max_field_length) if max_field_length else ENV_MAX_FIELD_LENGTH
@@ -518,7 +521,6 @@ async def import_flashcards_json(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     max_items: Optional[int] = Query(None, ge=1, description="Admin override: max JSON items to import (cannot exceed env cap)"),
     max_field_length: Optional[int] = Query(None, ge=1, description="Admin override: max field length in bytes (cannot exceed env cap)"),
-    current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     try:
@@ -532,13 +534,7 @@ async def import_flashcards_json(
         ENV_MAX_ITEMS = _int_env('FLASHCARDS_IMPORT_MAX_LINES', 10000)
         ENV_MAX_FIELD_LENGTH = _int_env('FLASHCARDS_IMPORT_MAX_FIELD_LENGTH', 8192)
         if any(p is not None for p in (max_items, max_field_length)):
-            perms = set(principal.permissions or [])
-            roles = set(principal.roles or [])
-            if FLASHCARDS_ADMIN not in perms and "admin" not in roles and not principal.is_admin:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Admin flashcards permission required for override",
-                )
+            _require_flashcards_admin(principal)
         MAX_ITEMS = min(ENV_MAX_ITEMS, max_items) if max_items else ENV_MAX_ITEMS
         MAX_FIELD_LENGTH = min(ENV_MAX_FIELD_LENGTH, max_field_length) if max_field_length else ENV_MAX_FIELD_LENGTH
 

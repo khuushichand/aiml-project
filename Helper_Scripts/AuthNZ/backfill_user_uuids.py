@@ -180,7 +180,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     try:
-        updated = asyncio.run(backfill_user_uuids(dry_run=bool(args.dry_run)))
+        updated = asyncio.run(backfill_user_uuids(dry_run=args.dry_run))
     except KeyboardInterrupt:
         logger.warning("UUID backfill interrupted by user.")
         return 1

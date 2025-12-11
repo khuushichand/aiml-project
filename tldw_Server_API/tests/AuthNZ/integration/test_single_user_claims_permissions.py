@@ -36,10 +36,10 @@ router = APIRouter()
 def _create_limited_principal_override(settings, request_id: str):
     async def _override(request: Request):
         principal = AuthPrincipal(
-            kind="single_user",
+            kind="user",
             user_id=settings.SINGLE_USER_FIXED_ID,
             api_key_id=None,
-            subject=None,
+            subject="single_user",
             token_type="api_key",
             jti=None,
             roles=["user"],
@@ -155,7 +155,7 @@ async def test_single_user_bootstrapped_admin_uses_claims_for_permissions(
     )
     assert resp_perm.status_code == 200
     perm_payload = resp_perm.json()
-    assert perm_payload["kind"] == "single_user"
+    assert perm_payload["kind"] == "user"
     assert perm_payload["is_admin"] is True
     assert "media.read" in perm_payload["permissions"]
 
@@ -165,7 +165,7 @@ async def test_single_user_bootstrapped_admin_uses_claims_for_permissions(
     )
     assert resp_role.status_code == 200
     role_payload = resp_role.json()
-    assert role_payload["kind"] == "single_user"
+    assert role_payload["kind"] == "user"
     assert role_payload["is_admin"] is True
     assert "admin" in role_payload["roles"]
 

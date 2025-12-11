@@ -718,6 +718,31 @@ class TestMediaListDetailEndpoints:
             assert "content" not in item # Content should not be in list view
             assert "versions" not in item # Version details usually excluded
 
+    def test_get_all_media_with_keywords(self):
+        """Test listing media items with keywords included."""
+        response = self.client.get("/api/v1/media?include_keywords=true")
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert "keywords_available" in data
+        assert data["keywords_available"] is True
+        assert isinstance(data["items"], list)
+        # Each returned item should include a keywords list when requested
+        for item in data["items"]:
+            assert "keywords" in item
+            assert isinstance(item["keywords"], list)
+
+    def test_get_all_media_keywords_no_items(self):
+        """Test keywords flag when no media items are returned."""
+        response = self.client.get("/api/v1/media?page=1000&include_keywords=true")
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert isinstance(data["items"], list)
+        assert data["items"] == []
+        # Keywords were requested but there were no IDs to look up;
+        # the availability flag still reports success.
+        assert "keywords_available" in data
+        assert data["keywords_available"] is True
+
     # --------------------- DETAIL (/media/{id}) TESTS ---------------------
 
     def test_get_media_item_document(self):

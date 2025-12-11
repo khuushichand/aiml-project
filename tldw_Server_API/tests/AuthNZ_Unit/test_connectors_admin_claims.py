@@ -134,10 +134,10 @@ async def test_connectors_single_user_org_policy_flag_paths(monkeypatch: pytest.
 
     # Case A: single-user principal with no org memberships → synthetic org_id=1 allowed.
     single_principal = AuthPrincipal(
-        kind="single_user",
+        kind="user",
         user_id=1,
         api_key_id=None,
-        subject=None,
+        subject="single_user",
         token_type="api_key",
         jti=None,
         roles=["admin"],

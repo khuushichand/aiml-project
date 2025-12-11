@@ -13,7 +13,12 @@ from loguru import logger
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+# Once-per-process flags for observability when falling back to DB-based
+# permission/role checks instead of claim-first paths.
+_PERMISSION_DB_FALLBACK_LOGGED: bool = False
+_ROLE_DB_FALLBACK_LOGGED: bool = False
 
 ########################################################################################################################
 # Database Instance Management
@@ -65,13 +70,24 @@ def check_permission(user: User, permission: str) -> bool:
         )
         return False
 
+    # Legacy/compatibility path: no permission claims were attached to the
+    # request user, so fall back to the UserDatabase. Log once per process so
+    # operators can identify and migrate legacy call sites to claim-first flows.
+    global _PERMISSION_DB_FALLBACK_LOGGED
+    if not _PERMISSION_DB_FALLBACK_LOGGED:
+        _PERMISSION_DB_FALLBACK_LOGGED = True
+        logger.debug(
+            "check_permission: falling back to UserDatabase for permission checks; "
+            "prefer claim-first AuthPrincipal-based callers where possible"
+        )
+
     try:
         user_db = get_user_database()
         return user_db.has_permission(user.id, permission)
     except Exception as e:
         try:
             redact = get_settings().PII_REDACT_LOGS
-        except Exception as settings_err:
+        except Exception as settings_err:  # noqa: BLE001  # best-effort PII redaction
             logger.debug(
                 f"check_permission: failed to read PII_REDACT_LOGS; defaulting to non-redacted logging: {settings_err}"
             )
@@ -119,13 +135,24 @@ def check_role(user: User, role: str) -> bool:
         )
         return False
 
+    # Legacy/compatibility path: no role claims were attached to the request
+    # user, so fall back to the UserDatabase. Log once per process so legacy
+    # role-based callers can be identified and migrated.
+    global _ROLE_DB_FALLBACK_LOGGED
+    if not _ROLE_DB_FALLBACK_LOGGED:
+        _ROLE_DB_FALLBACK_LOGGED = True
+        logger.debug(
+            "check_role: falling back to UserDatabase for role checks; "
+            "prefer claim-first AuthPrincipal-based callers where possible"
+        )
+
     try:
         user_db = get_user_database()
         return user_db.has_role(user.id, role)
     except Exception as e:
         try:
             redact = get_settings().PII_REDACT_LOGS
-        except Exception as settings_err:
+        except Exception as settings_err:  # noqa: BLE001  # best-effort PII redaction
             logger.debug(
                 f"check_role: failed to read PII_REDACT_LOGS; defaulting to non-redacted logging: {settings_err}"
             )

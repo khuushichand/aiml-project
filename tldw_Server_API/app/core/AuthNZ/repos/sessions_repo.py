@@ -121,15 +121,6 @@ class AuthnzSessionsRepo:
                     ),
                 )
                 session_id = getattr(cursor, "lastrowid", None)
-                try:
-                    await conn.commit()
-                except Exception as e:
-                    logger.debug(
-                        "AuthnzSessionsRepo.create_session_record: commit failed for user_id=%s",
-                        user_id,
-                        exc_info=e,
-                    )
-
                 if session_id is None:
                     raise RuntimeError("Failed to obtain session id for new session row")
                 return int(session_id)
@@ -210,10 +201,6 @@ class AuthnzSessionsRepo:
                         """,
                         (revoked_by, reason, session_id),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
 
                 return session_details
         except Exception as exc:  # pragma: no cover - surfaced via callers
@@ -287,10 +274,6 @@ class AuthnzSessionsRepo:
                             """,
                             (user_id,),
                         )
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
                     affected = getattr(cursor, "rowcount", 0) or 0
 
                 return int(affected)
@@ -354,6 +337,92 @@ class AuthnzSessionsRepo:
             )
             raise
 
+    async def has_revoked_session_for_token_hash_candidates(
+        self,
+        token_hash_candidates: List[str],
+    ) -> bool:
+        """
+        Return True if any revoked session exists for the provided token hashes.
+
+        Mirrors the blacklist check previously embedded in
+        ``SessionManager.is_token_blacklisted`` while keeping the SQL
+        backend-agnostic and centralized.
+        """
+        try:
+            async with self.db_pool.acquire() as conn:
+                if hasattr(conn, "fetchval"):
+                    primary_query = """
+                        SELECT COUNT(*)
+                        FROM sessions
+                        WHERE is_revoked = TRUE
+                          AND (token_hash = $1 OR refresh_token_hash = $1)
+                    """
+                    legacy_query = """
+                        SELECT COUNT(*)
+                        FROM sessions
+                        WHERE token_hash = $1 AND is_revoked = TRUE
+                    """
+                    try:
+                        for candidate in token_hash_candidates:
+                            result = await conn.fetchval(primary_query, candidate)
+                            if result:
+                                return True
+                    except Exception as exc:
+                        logger.debug(
+                            "has_revoked_session_for_token_hash_candidates: "
+                            "falling back to legacy token_hash-only query (PostgreSQL): {}",
+                            exc,
+                        )
+                        for candidate in token_hash_candidates:
+                            result = await conn.fetchval(legacy_query, candidate)
+                            if result:
+                                return True
+                    return False
+
+                primary_query = """
+                    SELECT COUNT(*)
+                    FROM sessions
+                    WHERE is_revoked = 1
+                      AND (token_hash = ? OR refresh_token_hash = ?)
+                """
+                legacy_query = """
+                    SELECT COUNT(*)
+                    FROM sessions
+                    WHERE token_hash = ? AND is_revoked = 1
+                """
+                try:
+                    for candidate in token_hash_candidates:
+                        cursor = await conn.execute(
+                            primary_query,
+                            (candidate, candidate),
+                        )
+                        row = await cursor.fetchone()
+                        count = row[0] if row else 0
+                        if count:
+                            return True
+                except Exception as exc:
+                    logger.debug(
+                        "has_revoked_session_for_token_hash_candidates: "
+                        "falling back to legacy token_hash-only query (SQLite): {}",
+                        exc,
+                    )
+                    for candidate in token_hash_candidates:
+                        cursor = await conn.execute(
+                            legacy_query,
+                            (candidate,),
+                        )
+                        row = await cursor.fetchone()
+                        count = row[0] if row else 0
+                        if count:
+                            return True
+
+                return False
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(
+                f"AuthnzSessionsRepo.has_revoked_session_for_token_hash_candidates failed: {exc}"
+            )
+            raise
+
     async def mark_sessions_revoked_for_user_with_audit(
         self,
         *,
@@ -403,10 +472,6 @@ class AuthnzSessionsRepo:
                         """,
                         (revoked_by, reason, user_id),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
                     affected = getattr(cursor, "rowcount", 0) or 0
 
                 return int(affected)
@@ -537,10 +602,6 @@ class AuthnzSessionsRepo:
                         """
                     )
                     deleted = getattr(cursor, "rowcount", 0) or 0
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
 
                 return int(deleted or 0)
         except Exception as exc:  # pragma: no cover - surfaced via callers
@@ -565,10 +626,6 @@ class AuthnzSessionsRepo:
                         "UPDATE sessions SET last_activity = datetime('now') WHERE id = ?",
                         (session_id,),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
         except Exception:
             # Do not fail callers on activity update errors
             return
@@ -744,13 +801,111 @@ class AuthnzSessionsRepo:
                         "UPDATE sessions SET token_hash = ? WHERE id = ?",
                         (new_token_hash, session_id),
                     )
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzSessionsRepo.normalize_session_token_hash failed: {exc}"
+            )
+            raise
+
+    async def update_session_tokens_after_creation(
+        self,
+        *,
+        session_id: int,
+        access_token_hash: str,
+        refresh_token_hash: str,
+        access_jti: Optional[str],
+        refresh_jti: Optional[str],
+        access_expires_at: Optional[datetime],
+        refresh_expires_at: Optional[datetime],
+        encrypted_access_token: str,
+        encrypted_refresh_token: str,
+    ) -> Optional[int]:
+        """
+        Update a newly created session with finalized token hashes and encrypted tokens.
+
+        This mirrors the behavior previously embedded in
+        ``SessionManager.update_session_tokens`` and returns the associated user_id
+        when available.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                session_row: Optional[Any] = None
+
+                if hasattr(conn, "fetchrow"):
+                    await conn.execute(
+                        """
+                        UPDATE sessions
+                        SET token_hash = $2,
+                            refresh_token_hash = $3,
+                            access_jti = COALESCE($4, access_jti),
+                            refresh_jti = COALESCE($5, refresh_jti),
+                            expires_at = COALESCE($6, expires_at),
+                            refresh_expires_at = COALESCE($7, refresh_expires_at),
+                            encrypted_token = $8,
+                            encrypted_refresh = $9
+                        WHERE id = $1
+                        """,
+                        session_id,
+                        access_token_hash,
+                        refresh_token_hash,
+                        access_jti,
+                        refresh_jti,
+                        access_expires_at,
+                        refresh_expires_at,
+                        encrypted_access_token,
+                        encrypted_refresh_token,
+                    )
+                    session_row = await conn.fetchrow(
+                        "SELECT user_id FROM sessions WHERE id = $1",
+                        session_id,
+                    )
+                else:
+                    await conn.execute(
+                        """
+                        UPDATE sessions
+                        SET token_hash = ?,
+                            refresh_token_hash = ?,
+                            access_jti = COALESCE(?, access_jti),
+                            refresh_jti = COALESCE(?, refresh_jti),
+                            expires_at = COALESCE(?, expires_at),
+                            refresh_expires_at = COALESCE(?, refresh_expires_at),
+                            encrypted_token = ?,
+                            encrypted_refresh = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            access_token_hash,
+                            refresh_token_hash,
+                            access_jti,
+                            refresh_jti,
+                            access_expires_at.isoformat()
+                            if access_expires_at
+                            else None,
+                            refresh_expires_at.isoformat()
+                            if refresh_expires_at
+                            else None,
+                            encrypted_access_token,
+                            encrypted_refresh_token,
+                            session_id,
+                        ),
+                    )
+                    cursor = await conn.execute(
+                        "SELECT user_id FROM sessions WHERE id = ?",
+                        (session_id,),
+                    )
+                    session_row = await cursor.fetchone()
+
+                if not session_row:
+                    return None
+
+                if isinstance(session_row, dict):
+                    return session_row.get("user_id")
+                if hasattr(session_row, "get"):
+                    return session_row.get("user_id")
+                return session_row[0]
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(
+                f"AuthnzSessionsRepo.update_session_tokens_after_creation failed: {exc}"
             )
             raise
 
@@ -924,10 +1079,6 @@ class AuthnzSessionsRepo:
                             )
                         else:
                             raise
-                    try:
-                        await conn.commit()
-                    except Exception:
-                        pass
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzSessionsRepo.update_session_tokens_for_refresh failed: {exc}"

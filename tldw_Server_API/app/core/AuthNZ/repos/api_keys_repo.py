@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+import json
 
 from loguru import logger
 
@@ -467,8 +468,6 @@ class AuthnzApiKeysRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchval"):
-                    import json
-
                     key_id = await conn.fetchval(
                         """
                         INSERT INTO api_keys (
@@ -490,8 +489,6 @@ class AuthnzApiKeysRepo:
                         json.dumps(metadata) if metadata else None,
                     )
                 else:
-                    import json
-
                     cursor = await conn.execute(
                         """
                         INSERT INTO api_keys (
@@ -551,39 +548,39 @@ class AuthnzApiKeysRepo:
         while centralizing dialect-specific SQL in the repository layer.
         """
         try:
+            meta_dict: Dict[str, Any] = {}
+            if allowed_methods:
+                meta_dict["allowed_methods"] = [
+                    str(x).upper() for x in allowed_methods
+                ]
+            if allowed_paths:
+                meta_dict["allowed_paths"] = [str(x) for x in allowed_paths]
+            if max_calls is not None:
+                meta_dict["max_calls"] = int(max_calls)
+            if max_runs is not None:
+                meta_dict["max_runs"] = int(max_runs)
+
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchval"):
-                    import json as _json
-
                     _endpoints = (
-                        _json.dumps(allowed_endpoints)
+                        json.dumps(allowed_endpoints)
                         if allowed_endpoints is not None
                         else None
                     )
                     _providers = (
-                        _json.dumps(allowed_providers)
+                        json.dumps(allowed_providers)
                         if allowed_providers is not None
                         else None
                     )
                     _models = (
-                        _json.dumps(allowed_models)
+                        json.dumps(allowed_models)
                         if allowed_models is not None
                         else None
                     )
-                    _meta_dict: Dict[str, Any] = {}
-                    if allowed_methods:
-                        _meta_dict["allowed_methods"] = [
-                            str(x).upper() for x in allowed_methods
-                        ]
-                    if allowed_paths:
-                        _meta_dict["allowed_paths"] = [str(x) for x in allowed_paths]
-                    if max_calls is not None:
-                        _meta_dict["max_calls"] = int(max_calls)
-                    if max_runs is not None:
-                        _meta_dict["max_runs"] = int(max_runs)
-                    _metadata = _json.dumps(_meta_dict) if _meta_dict else None
+                    _metadata = json.dumps(meta_dict) if meta_dict else None
 
-                    # Detect column types to choose JSONB cast or plain text insert
+                    # Detect column types to choose JSONB cast or plain text insert.
+                    # Use narrow exception handling so unexpected driver errors surface.
                     try:
                         col_type = await conn.fetchval(
                             """
@@ -591,13 +588,11 @@ class AuthnzApiKeysRepo:
                             WHERE table_name = 'api_keys' AND column_name = 'llm_allowed_endpoints'
                             """
                         )
-                    except Exception as exc:
-                        logger.error(
-                            (
-                                "AuthnzApiKeysRepo.create_virtual_key_row: schema "
-                                "introspection failed for api_keys.llm_allowed_endpoints "
-                                "via information_schema.columns SELECT data_type: {}"
-                            ),
+                    except (AttributeError, LookupError) as exc:
+                        logger.debug(
+                            "AuthnzApiKeysRepo.create_virtual_key_row: column type "
+                            "detection for api_keys.llm_allowed_endpoints failed; "
+                            "treating as non-JSONB: {}",
                             exc,
                         )
                         col_type = None
@@ -676,20 +671,7 @@ class AuthnzApiKeysRepo:
                             _metadata,
                         )
                 else:
-                    import json
-
-                    _meta_dict: Dict[str, Any] = {}
-                    if allowed_methods:
-                        _meta_dict["allowed_methods"] = [
-                            str(x).upper() for x in allowed_methods
-                        ]
-                    if allowed_paths:
-                        _meta_dict["allowed_paths"] = [str(x) for x in allowed_paths]
-                    if max_calls is not None:
-                        _meta_dict["max_calls"] = int(max_calls)
-                    if max_runs is not None:
-                        _meta_dict["max_runs"] = int(max_runs)
-                    _metadata = json.dumps(_meta_dict) if _meta_dict else None
+                    _metadata = json.dumps(meta_dict) if meta_dict else None
 
                     cursor = await conn.execute(
                         """
@@ -834,7 +816,8 @@ class AuthnzApiKeysRepo:
                         active_status,
                     )
                     # asyncpg returns a status string like "UPDATE <n>"
-                    return str(result).strip().upper() != "UPDATE 0"
+                    normalized = str(result).strip().upper()
+                    return normalized != "UPDATE 0"
                 cursor = await conn.execute(
                     """
                     UPDATE api_keys
@@ -932,10 +915,23 @@ class AuthnzApiKeysRepo:
                     )
                     # asyncpg returns a status string like "UPDATE <n>"; surface
                     # unexpected formats via the outer exception handler.
-                    parts = str(result).split()
-                    if not parts:
-                        return 0
-                    return int(parts[-1])
+                    try:
+                        parts = str(result).split()
+                        if not parts:
+                            logger.error(
+                                "AuthnzApiKeysRepo.expire_keys_before: empty status string from driver: %r",
+                                result,
+                            )
+                            raise ValueError("Empty status string from driver")
+                        affected = int(parts[-1])
+                    except (ValueError, IndexError) as parse_exc:
+                        logger.error(
+                            "AuthnzApiKeysRepo.expire_keys_before: failed to parse driver status %r: %r",
+                            result,
+                            parse_exc,
+                        )
+                        raise
+                    return affected
                 cursor = await conn.execute(
                     """
                     UPDATE api_keys
@@ -993,9 +989,7 @@ class AuthnzApiKeysRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
-                    import json as _json
-
-                    _details = _json.dumps(details) if details is not None else None
+                    _details = json.dumps(details) if details is not None else None
                     await conn.execute(
                         """
                         INSERT INTO api_key_audit_log (api_key_id, action, user_id, details)
@@ -1007,8 +1001,6 @@ class AuthnzApiKeysRepo:
                         _details,
                     )
                 else:
-                    import json
-
                     await conn.execute(
                         """
                         INSERT INTO api_key_audit_log (api_key_id, action, user_id, details)

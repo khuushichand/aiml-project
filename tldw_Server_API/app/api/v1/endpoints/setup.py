@@ -53,8 +53,14 @@ async def require_admin_and_system_configure(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> AuthPrincipal:
     """
-    Combined dependency that enforces both admin role and SYSTEM_CONFIGURE permission
-    while resolving the AuthPrincipal only once.
+    Combined dependency that enforces an admin-style principal and reuses the
+    SYSTEM_CONFIGURE permission gate while resolving the AuthPrincipal once.
+
+    Semantics:
+    - Principals with ``is_admin=True`` are allowed regardless of an explicit
+      SYSTEM_CONFIGURE grant (matching other admin surfaces).
+    - Other principals must hold the ``admin`` role and the SYSTEM_CONFIGURE
+      permission to pass.
     """
     role_checker = require_roles("admin")
     perm_checker = require_permissions(SYSTEM_CONFIGURE)
@@ -184,7 +190,7 @@ async def ask_setup_assistant(
     ),
 )
 async def reset_setup_flags(
-    principal: AuthPrincipal = Depends(require_admin_and_system_configure),
+    _principal: AuthPrincipal = Depends(require_admin_and_system_configure),  # noqa: B008
 ) -> dict[str, Any]:
     """Admin-only: reset first-time setup flags for recovery.
 
@@ -226,8 +232,12 @@ async def setup_self_verify(
             detail="Self-verify is only available while initial setup is in progress.",
         )
 
-    user_id = int(current_user.get("id"))
-    if not user_id:
+    raw_id = current_user.get("id")
+    try:
+        user_id = int(raw_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid user context")
+    if user_id <= 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid user context")
 
     raw_conn = getattr(db, "_conn", db)
@@ -265,6 +275,10 @@ async def setup_self_verify(
                         await result2
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to self-verify during setup")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        # Avoid leaking raw DB/driver errors to clients; keep detail generic.
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to mark account as verified; please try again.",
+        ) from exc
 
     return {"success": True, "user_id": user_id, "message": "Account marked as verified."}

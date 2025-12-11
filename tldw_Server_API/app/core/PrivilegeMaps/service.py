@@ -18,7 +18,7 @@ from tldw_Server_API.app.core.PrivilegeMaps.introspection import (
     RouteMetadata,
     collect_privilege_route_registry,
 )
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode
 from tldw_Server_API.app.core.PrivilegeMaps.trends import PrivilegeTrendStore, get_privilege_trend_store
 
 
@@ -533,9 +533,13 @@ class PrivilegeMapService:
         except Exception as exc:
             logger.debug("Falling back to single-user privilege dataset: %s", exc)
 
-        # Fallback: single-user mode or empty DB
+        # Fallback: single-user-style profile or empty DB
         single_user = get_single_user_instance()
-        default_role = "admin" if is_single_user_mode() else (single_user.roles[0] if single_user.roles else "admin")
+        default_role = (
+            "admin"
+            if is_single_user_profile_mode()
+            else (single_user.roles[0] if single_user.roles else "admin")
+        )
         feature_flags = self._feature_flags_for_user([default_role], set())
         allowed_scopes = self._resolve_scopes_for_user([default_role], [])
         if not allowed_scopes:

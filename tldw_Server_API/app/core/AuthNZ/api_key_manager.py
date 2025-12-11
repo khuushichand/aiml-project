@@ -261,7 +261,9 @@ class APIKeyManager:
             }
         except Exception as e:
             logger.error(f"Failed to create API key: {e}")
-            raise DatabaseError(f"Failed to create API key: {e}")
+            raise DatabaseError(
+                f"Failed to create API key {self._db_context_hint()}: {e}"
+            )
 
     async def create_virtual_key(
         self,
@@ -344,7 +346,9 @@ class APIKeyManager:
 
         except Exception as e:
             logger.error(f"Failed to create virtual API key: {e}")
-            raise DatabaseError(f"Failed to create virtual API key: {e}")
+            raise DatabaseError(
+                f"Failed to create virtual API key {self._db_context_hint()}: {e}"
+            )
 
     async def validate_api_key(
         self,
@@ -517,7 +521,9 @@ class APIKeyManager:
 
         except Exception as e:
             logger.error(f"Failed to rotate API key: {e}")
-            raise DatabaseError(f"Failed to rotate API key: {e}")
+            raise DatabaseError(
+                f"Failed to rotate API key {self._db_context_hint()}: {e}"
+            )
 
     async def revoke_api_key(
         self,
@@ -558,7 +564,9 @@ class APIKeyManager:
 
         except Exception as e:
             logger.error(f"Failed to revoke API key: {e}")
-            raise DatabaseError(f"Failed to revoke API key: {e}")
+            raise DatabaseError(
+                f"Failed to revoke API key {self._db_context_hint()}: {e}"
+            )
 
     async def list_user_keys(
         self,
@@ -593,7 +601,9 @@ class APIKeyManager:
 
         except Exception as e:
             logger.error(f"Failed to list user keys: {e}")
-            raise DatabaseError(f"Failed to list user keys: {e}")
+            raise DatabaseError(
+                f"Failed to list user keys {self._db_context_hint()}: {e}"
+            )
 
     async def cleanup_expired_keys(self):
         """Mark expired keys as expired"""

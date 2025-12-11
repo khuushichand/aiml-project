@@ -11,12 +11,12 @@ referenced from multiple AuthNZ components without creating import cycles.
 from __future__ import annotations
 
 import hashlib
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
-PrincipalKind = Literal["user", "api_key", "service", "anonymous", "single_user"]
+PrincipalKind = Literal["user", "api_key", "service", "anonymous"]
 
 
 def compute_principal_id(kind: str, subject_key: str) -> str:
@@ -43,7 +43,7 @@ class AuthPrincipal(BaseModel):
 
     kind: PrincipalKind = Field(
         ...,
-        description="High-level principal kind (user, api_key, service, anonymous, single_user).",
+        description="High-level principal kind (user, api_key, service, anonymous).",
     )
     # Identity fields (only some will be populated depending on kind)
     user_id: Optional[int] = Field(
@@ -94,6 +94,22 @@ class AuthPrincipal(BaseModel):
 
     model_config = ConfigDict(frozen=False)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_kind(cls, data: Any) -> Any:
+        """
+        Normalize legacy kinds to the documented set.
+
+        Older code paths may emit kind="single_user"; normalize this to
+        the canonical "user" kind so downstream comparisons remain stable.
+        """
+        if isinstance(data, dict):
+            legacy_kind = data.get("kind")
+            if legacy_kind == "single_user":
+                data = dict(data)
+                data["kind"] = "user"
+        return data
+
     @computed_field  # type: ignore[misc]
     @property
     def principal_id(self) -> str:
@@ -142,3 +158,30 @@ class AuthContext(BaseModel):
 
     model_config = ConfigDict(frozen=False)
 
+
+def is_single_user_principal(principal: AuthPrincipal | None) -> bool:
+    """
+    Determine whether a principal represents the bootstrapped single-user profile.
+
+    Detection prefers an explicit subject marker but also tolerates legacy contexts
+    that relied on AUTH_MODE, token_type, and fixed user id.
+    """
+    if not isinstance(principal, AuthPrincipal):
+        return False
+
+    if getattr(principal, "subject", None) == "single_user":
+        return True
+
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+    except Exception:
+        return False
+
+    try:
+        settings = get_settings()
+        fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", None)
+        if fixed_id is None:
+            return False
+        return principal.user_id == int(fixed_id)
+    except Exception:
+        return False

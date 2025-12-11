@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import cached_property
-from typing import List, TypedDict, Optional
+from typing import Optional, TypedDict
 
 from loguru import logger
 
@@ -13,9 +13,9 @@ from tldw_Server_API.app.core.exceptions import ResourceNotFoundError
 
 class RolePermissionsResult(TypedDict):
     role_name: str
-    permissions: List[str]
-    tool_permissions: List[str]
-    all_permissions: List[str]
+    permissions: list[str]
+    tool_permissions: list[str]
+    all_permissions: list[str]
 
 
 @dataclass
@@ -30,18 +30,19 @@ class AuthnzRbacRepo:
 
     client_id: str = "rbac_service"
 
-    @property
+    @cached_property
     def _db(self) -> UserDatabase:
         """
-        Always resolve the UserDatabase via the central configuration helper.
+        Resolve and cache the UserDatabase via the central configuration helper.
 
-        This avoids holding onto a stale UserDatabase instance across tests
-        when AUTH_MODE or DATABASE_URL change, ensuring RBAC queries use the
-        current per-test backend.
+        RBAC lookups are frequent, so caching the database handle per-repo
+        instance avoids repeated construction overhead. Tests that need to
+        exercise different AUTH_MODE or DATABASE_URL configurations should
+        construct a fresh AuthnzRbacRepo instance to obtain a new backend.
         """
         return get_configured_user_database(client_id=self.client_id)
 
-    def get_effective_permissions(self, user_id: int) -> List[str]:
+    def get_effective_permissions(self, user_id: int) -> list[str]:
         """
         Return the effective permission codes for the given user.
 

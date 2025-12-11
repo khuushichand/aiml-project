@@ -1,5 +1,14 @@
 # User Auth Dependencies PRD (v0.1)
 
+> Status: **Implemented / Historical**
+>
+> This PRD describes the design and rollout plan for the unified AuthNZ dependency stack that shipped in v0.1.0. The core changes (claim-first dependencies, `AuthPrincipal`, `require_permissions` / `require_roles`, and the removal of decorator-style helpers) are now implemented and covered by tests referenced below.
+>
+> For up-to-date usage and examples, see:
+> - `Docs/AuthNZ/AUTHNZ_USAGE_EXAMPLES.md` – current recommended patterns for endpoint protection and claim-first authorization.
+> - `Docs/AuthNZ/AUTHNZ_PERMISSION_MATRIX.md` – current role/permission mappings.
+> - `Docs/AuthNZ/AUTHNZ_DATABASE_CONFIG.md` – current AuthNZ DB configuration details.
+
 ## Summary
 
 AuthNZ currently has overlapping mechanisms for:
@@ -261,7 +270,7 @@ Symptoms:
   - A user’s permissions match DB configuration at login time.
   - `user.permissions` and `user.roles` are present and correct for JWT and API-key paths.
   - In the `local-single-user` profile, the bootstrapped admin user (`SINGLE_USER_FIXED_ID`) is represented as an `AuthPrincipal` with admin role and full claims, and no special-case `AUTH_MODE` logic is required in dependencies.
-  - `AuthPrincipal.kind` is correctly set for different credential types (`user`, `api_key`, `service`, `anonymous`, `single_user`), and user-centric fields are only present when appropriate (e.g., single-user principals use `kind="single_user"` while still flowing through API-key-style paths via `token_type="api_key"`).
+  - `AuthPrincipal.kind` is correctly set for different credential types (`user`, `api_key`, `service`, `anonymous`), and user-centric fields are only present when appropriate (e.g., single-user principals use `kind="user"` with `subject="single_user"` while still flowing through API-key-style paths via `token_type="api_key"`).
 
 - **Status (v0.1)**: Done — validated by:
   - `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_state_consistency.py`
@@ -282,7 +291,7 @@ Symptoms:
   - Multiple roles and overlapping permissions.
   - User-specific allow/deny overrides.
   - Admin implied permissions.
-  - Single-user principals (`AuthPrincipal.kind="single_user"`) with insufficient claims receiving 403 from `require_permissions` / `require_roles`, matching multi-user semantics.
+  - Single-user principals (`AuthPrincipal.kind="user"` with `subject="single_user"`) with insufficient claims receiving 403 from `require_permissions` / `require_roles`, matching multi-user semantics.
 
 - **Status (v0.1)**: Done — covered by `tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py` and `tldw_Server_API/tests/AuthNZ/integration/test_rbac_admin_endpoints.py`.
 

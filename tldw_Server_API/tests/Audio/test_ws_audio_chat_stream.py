@@ -1,3 +1,5 @@
+"""Tests for the audio chat WebSocket streaming endpoint."""
+
 import asyncio
 import base64
 import json
@@ -34,7 +36,7 @@ class DummyWebSocket:
     async def receive_text(self) -> str:
         """Return the next queued text frame, or raise when exhausted."""
         if not self._messages:
-            raise RuntimeError("No more messages")
+            raise RuntimeError("No more messages")  # noqa: TRY003
         return self._messages.pop(0)
 
     async def send_bytes(self, data: bytes) -> None:
@@ -115,6 +117,7 @@ class _DummyTTSService:
     """TTS service stub that yields a fixed sequence of chunks."""
 
     def __init__(self, chunks: Iterable[bytes]) -> None:
+        """Initialize the stub with a fixed sequence of chunks."""
         self._chunks = list(chunks)
 
     async def generate_speech(self, *args: Any, **kwargs: Any) -> AsyncIterator[bytes]:  # noqa: ARG002
@@ -135,7 +138,7 @@ async def _llm_stub(**kwargs: Any) -> AsyncIterator[str]:  # noqa: ARG002
 
 
 @pytest.fixture(autouse=True)
-def mock_audio_ws_dependencies(monkeypatch: pytest.MonkeyPatch) -> "_DummyRegistry":
+def mock_audio_ws_dependencies(monkeypatch: pytest.MonkeyPatch) -> _DummyRegistry:
     """Fixture that sets up common mocks for audio streaming WebSocket tests."""
 
     async def _auth(*_args: Any, **_kwargs: Any) -> tuple[bool, int]:

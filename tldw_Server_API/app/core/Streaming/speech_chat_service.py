@@ -148,9 +148,7 @@ def _validate_audio_constraints(
             max_bytes = int(_raw_max_bytes)
         except (ValueError, TypeError) as exc:
             logger.debug(
-                "AUDIO_CHAT_MAX_BYTES parse failed (%r); using default 20MB: %s",
-                _raw_max_bytes,
-                exc,
+                f"AUDIO_CHAT_MAX_BYTES parse failed ({_raw_max_bytes!r}); using default 20MB: {exc}"
             )
             max_bytes = 20 * 1024 * 1024
     else:
@@ -168,9 +166,7 @@ def _validate_audio_constraints(
             max_duration = float(_raw_max_duration)
         except (ValueError, TypeError) as exc:
             logger.debug(
-                "AUDIO_CHAT_MAX_DURATION_SEC parse failed (%r); using default 120s: %s",
-                _raw_max_duration,
-                exc,
+                f"AUDIO_CHAT_MAX_DURATION_SEC parse failed ({_raw_max_duration!r}); using default 120s: {exc}"
             )
             max_duration = 120.0
     else:
@@ -660,8 +656,8 @@ async def run_speech_chat_turn(
                 "tts_provider": (tts_config.provider if tts_config and tts_config.provider else "default"),
             },
         )
-    except Exception as exc:  # noqa: BLE001
-        logger.debug(f"Failed to record audio_chat_latency_seconds: {exc}")
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"Failed to record audio_chat_latency_seconds metric: {e}")
 
     return SpeechChatResponse(
         session_id=conversation_id,

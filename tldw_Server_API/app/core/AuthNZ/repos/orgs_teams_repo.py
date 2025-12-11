@@ -30,6 +30,17 @@ class AuthnzOrgsTeamsRepo:
 
     db_pool: DatabasePool
 
+    def _is_postgres(self, conn: Optional[Any] = None) -> bool:
+        """
+        Detect whether the current backend/connection is Postgres.
+
+        When a connection object is available, prefer checking for asyncpg-style
+        methods; otherwise, fall back to the pool attribute on DatabasePool.
+        """
+        if conn is not None:
+            return hasattr(conn, "fetchrow")
+        return getattr(self.db_pool, "pool", None) is not None
+
     async def create_organization(
         self,
         *,
@@ -48,7 +59,7 @@ class AuthnzOrgsTeamsRepo:
 
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres(conn):
                     # PostgreSQL path
                     if slug is not None and slug != "":
                         exists_slug = await conn.fetchrow(
@@ -150,7 +161,7 @@ class AuthnzOrgsTeamsRepo:
 
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres(conn):
                     exists = await conn.fetchrow(
                         "SELECT 1 FROM teams WHERE org_id = $1 AND LOWER(name) = LOWER($2)",
                         org_id,
@@ -237,7 +248,7 @@ class AuthnzOrgsTeamsRepo:
         Returns (rows, total).
         """
         try:
-            if self.db_pool.pool:
+            if self._is_postgres():
                 # Postgres path
                 if q:
                     like = f"%{str(q).lower()}%"
@@ -423,10 +434,6 @@ class AuthnzOrgsTeamsRepo:
                     """,
                     (team_id, user_id, role),
                 )
-                try:
-                    await conn.commit()
-                except Exception as exc:
-                    logger.debug(f"AuthnzOrgsTeamsRepo SQLite commit failed during add_team_member: {exc}")
                 cur = await conn.execute(
                     """
                     SELECT tm.team_id, tm.user_id, tm.role, t.org_id
@@ -454,7 +461,7 @@ class AuthnzOrgsTeamsRepo:
         List members of a team ordered by ``added_at`` descending.
         """
         try:
-            if self.db_pool.pool:
+            if self._is_postgres():
                 rows = await self.db_pool.fetchall(
                     """
                     SELECT user_id, role, status, added_at
@@ -498,7 +505,7 @@ class AuthnzOrgsTeamsRepo:
         Returns dicts with ``team_id``, ``user_id``, ``role``, ``org_id``.
         """
         try:
-            if self.db_pool.pool:
+            if self._is_postgres():
                 rows = await self.db_pool.fetchall(
                     """
                     SELECT tm.team_id, tm.user_id, tm.role, t.org_id
@@ -763,13 +770,27 @@ class AuthnzOrgsTeamsRepo:
                         """,
                         (org_id, user_id, role),
                     )
-                    # For SQLite, construct a best-effort result upfront; commit
-                    # verification and fallback SELECT below will refine this when needed.
-                    result = {
-                        "org_id": int(org_id),
-                        "user_id": int(user_id),
-                        "role": role,
-                    }
+                    cur = await conn.execute(
+                        """
+                        SELECT org_id, user_id, role
+                        FROM org_members
+                        WHERE org_id = ? AND user_id = ?
+                        """,
+                        (org_id, user_id),
+                    )
+                    row = await cur.fetchone()
+                    if row:
+                        result = {
+                            "org_id": row[0],
+                            "user_id": row[1],
+                            "role": row[2],
+                        }
+                    else:
+                        result = {
+                            "org_id": int(org_id),
+                            "user_id": int(user_id),
+                            "role": role,
+                        }
                 try:
                     await self._ensure_user_in_default_team(conn, org_id, user_id)
                 except Exception as exc:
@@ -797,7 +818,7 @@ class AuthnzOrgsTeamsRepo:
         List members of an organization with pagination and optional filters.
         """
         try:
-            if self.db_pool.pool:
+            if self._is_postgres():
                 conditions = ["org_id = $1"]
                 params: List[Any] = [org_id]
                 p = 1
@@ -942,12 +963,9 @@ class AuthnzOrgsTeamsRepo:
                         (org_id, user_id),
                     )
                     try:
-                        await conn.commit()
-                    except Exception:
-                        pass
-                    try:
                         removed = (cur.rowcount or 0) > 0
-                    except Exception:
+                    except AttributeError:
+                        # aiosqlite cursor may not expose rowcount reliably
                         removed = True
                     if removed:
                         try:
@@ -1058,10 +1076,6 @@ class AuthnzOrgsTeamsRepo:
                     """,
                     (role, org_id, user_id),
                 )
-                try:
-                    await conn.commit()
-                except Exception as exc:
-                    logger.debug(f"AuthnzOrgsTeamsRepo SQLite commit failed during org member insert: {exc}")
                 cur2 = await conn.execute(
                     """
                     SELECT org_id, user_id, role
@@ -1072,25 +1086,11 @@ class AuthnzOrgsTeamsRepo:
                 )
                 row2 = await cur2.fetchone()
                 if row2:
-                    try:
-                        return {
-                            "org_id": row2[0],
-                            "user_id": row2[1],
-                            "role": row2[2],
-                        }
-                    except Exception as exc:
-                        logger.debug(f"Could not unpack updated org member row; falling back to dict: {exc}")
-                        try:
-                            return dict(row2)
-                        except Exception as inner_exc:
-                            logger.debug(
-                                f"dict() fallback failed for updated org member row; using defaults: {inner_exc}"
-                            )
-                            return {
-                                "org_id": int(org_id),
-                                "user_id": int(user_id),
-                                "role": role,
-                            }
+                    return {
+                        "org_id": row2[0],
+                        "user_id": row2[1],
+                        "role": row2[2],
+                    }
                 return None
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(

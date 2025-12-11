@@ -1037,7 +1037,7 @@ def is_single_user_profile_mode() -> bool:
         lowered = profile.strip().lower()
         if lowered in {"single_user", "local-single-user", "desktop"}:
             return True
-    return is_single_user_mode()
+    return False
 
 
 def get_database_url() -> str:

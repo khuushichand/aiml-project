@@ -808,6 +808,12 @@ class RateLimiter:
             identifier: Identifier to check
             endpoint: API endpoint
             window_minutes: Size of the rate-limit window (minutes)
+            limit: Effective request limit to compare against. When omitted,
+                defaults to the limiter's standard per-minute setting. Callers
+                that apply role- or account-specific limits (e.g. service
+                accounts, admins) should pass the same effective limit used
+                for enforcement so that usage/remaining align with runtime
+                behaviour.
 
         Returns:
             Current usage statistics
@@ -874,7 +880,9 @@ def _rg_authnz_enabled() -> bool:
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(False))  # type: ignore[func-returns-value]
-        except Exception:
+        except Exception:  # noqa: BLE001
+            # Broad catch is intentional: RG enablement hooks are optional and
+            # any failure here should simply disable RG for AuthNZ.
             return False
     return False
 
@@ -917,8 +925,8 @@ async def _get_authnz_rg_governor():
                 gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
             _rg_authnz_governor = gov
             return gov
-        except Exception as exc:  # pragma: no cover - optional path
-            # Broad catch is intentional here: ResourceGovernor integration is
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover - optional path
+            # Broad catch is intentional: ResourceGovernor integration is
             # strictly optional and failures must never block AuthNZ traffic.
             logger.debug(
                 "AuthNZ RG governor init failed; using legacy rate limiter: {}", exc
@@ -971,7 +979,7 @@ async def _maybe_enforce_with_rg_authnz(
             "retry_after": decision.retry_after or 1,
             "policy_id": policy_id,
         }
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # Broad catch is intentional: RG is a best-effort gating layer and any
         # failure should fall back to the legacy rate limiter rather than
         # impacting request handling.

@@ -27,7 +27,7 @@ from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, is_single_user_profile_mode, get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode, get_settings
 from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_permissions,
@@ -109,14 +109,14 @@ def _should_use_single_user_api_key_compat() -> bool:
     - When MCP_SINGLE_USER_COMPAT_SHIM is explicitly disabled (\"0\"/\"false\"/\"off\"),
       the shim is turned off regardless of AUTH_MODE/PROFILE and API keys are
       always validated via the multi-user API key manager path.
-    - Otherwise (default), the shim is enabled only when the runtime is in
-      single-user mode/profile, mirroring the existing behaviour.
+    - Otherwise (default), the shim is enabled only when the runtime profile
+      indicates a single-user-style deployment, mirroring the existing behaviour.
     """
     flag = os.getenv("MCP_SINGLE_USER_COMPAT_SHIM", "").strip().lower()
     if flag in {"0", "false", "off"}:
         return False
     try:
-        return is_single_user_mode() or is_single_user_profile_mode()
+        return is_single_user_profile_mode()
     except Exception:
         return False
 
@@ -160,7 +160,7 @@ async def get_current_user(
                     permissions=payload.get("permissions", []),
                     token_type="access",
                 )
-    except Exception as e:
+    except Exception:
         logger.debug("AuthNZ JWT check failed", exc_info=True)
 
     # MCP JWT fallback
@@ -168,7 +168,7 @@ async def get_current_user(
         if credentials and credentials.credentials:
             jwt_manager = get_jwt_manager()
             return jwt_manager.verify_token(credentials.credentials)
-    except Exception as e:
+    except Exception:
         logger.debug("MCP token verification failed", exc_info=True)
 
     # API key fallback
@@ -218,7 +218,7 @@ async def get_current_user(
                 try:
                     if request is not None:
                         request.state.mcp_api_key_info = info
-                except Exception as attach_exc:
+                except Exception:
                     logger.debug(
                         "MCP unified: failed to attach API key info to request state",
                         exc_info=True,
@@ -230,7 +230,7 @@ async def get_current_user(
                     permissions=[],
                     token_type="access",
                 )
-    except Exception as e:
+    except Exception:
         logger.debug("API key check failed", exc_info=True)
 
     return None
@@ -251,13 +251,58 @@ async def get_mcp_auth_context(
     try:
         if request is not None:
             api_key_info = getattr(request.state, "mcp_api_key_info", None)
-    except Exception as exc:
+    except Exception:
         logger.debug(
             "MCP unified: failed to read API key info from request state",
             exc_info=True,
         )
         api_key_info = None
     return McpAuthContext(user=user, api_key_info=api_key_info, raw_api_key=x_api_key)
+
+
+async def _attach_api_key_metadata(
+    auth: McpAuthContext,
+    http_request: Optional[Request],
+    *,
+    log_on_error: bool = False,
+    log_prefix: str = "HTTP",
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    """Attach API-key-derived metadata (org/team) for MCP HTTP endpoints.
+
+    Prefers any API key info already attached to the auth context and falls back
+    to validating the raw API key when needed.
+    """
+    metadata: Dict[str, Any] = {}
+    api_key_info: Optional[Dict[str, Any]] = None
+
+    if auth.api_key_info is not None:
+        api_key_info = auth.api_key_info
+
+    if auth.raw_api_key and api_key_info is None:
+        try:
+            api_mgr = await get_api_key_manager()
+            client_ip = (
+                http_request.client.host
+                if http_request and getattr(http_request, "client", None)
+                else None
+            )
+            api_key_info = await api_mgr.validate_api_key(auth.raw_api_key, ip_address=client_ip)
+        except Exception:
+            if log_on_error:
+                logger.debug(
+                    "MCP unified {} API key metadata attach failed",
+                    log_prefix,
+                    exc_info=True,
+                )
+            api_key_info = None
+
+    if api_key_info:
+        if api_key_info.get("org_id") is not None:
+            metadata["org_id"] = api_key_info.get("org_id")
+        if api_key_info.get("team_id") is not None:
+            metadata["team_id"] = api_key_info.get("team_id")
+
+    return metadata, api_key_info
 
 
 async def require_user(
@@ -355,22 +400,7 @@ async def mcp_request(
     # Attach org/team metadata when auth via API key. Prefer any metadata attached
     # by get_current_user to avoid re-validating the same key and double-counting
     # usage/audit; fall back to a direct lookup when needed.
-    metadata: Dict[str, Any] = {}
-    api_key_info: Optional[Dict[str, Any]] = None
-    if auth.api_key_info is not None:
-        api_key_info = auth.api_key_info
-    if auth.raw_api_key and api_key_info is None:
-        try:
-            api_mgr = await get_api_key_manager()
-            client_ip = http_request.client.host if http_request and getattr(http_request, "client", None) else None
-            api_key_info = await api_mgr.validate_api_key(auth.raw_api_key, ip_address=client_ip)
-        except Exception:
-            api_key_info = None
-    if api_key_info:
-        if api_key_info.get("org_id") is not None:
-            metadata["org_id"] = api_key_info.get("org_id")
-        if api_key_info.get("team_id") is not None:
-            metadata["team_id"] = api_key_info.get("team_id")
+    metadata, _ = await _attach_api_key_metadata(auth, http_request)
 
     # Derive user id from the authenticated token user when present.
     derived_user_id = _get_derived_user_id(auth.user)
@@ -455,23 +485,12 @@ async def mcp_request_batch(
     # Attach org/team metadata when auth via API key. Prefer any metadata attached
     # by get_current_user to avoid re-validating the same key and double-counting
     # usage/audit; fall back to a direct lookup when needed.
-    metadata: Dict[str, Any] = {}
-    api_key_info: Optional[Dict[str, Any]] = None
-    if auth.api_key_info is not None:
-        api_key_info = auth.api_key_info
-    if auth.raw_api_key and api_key_info is None:
-        try:
-            api_mgr = await get_api_key_manager()
-            client_ip = http_request.client.host if http_request and getattr(http_request, "client", None) else None
-            api_key_info = await api_mgr.validate_api_key(auth.raw_api_key, ip_address=client_ip)
-        except Exception as e:
-            logger.debug(f"Batch API key metadata attach failed: {e}")
-            api_key_info = None
-    if api_key_info:
-        if api_key_info.get("org_id") is not None:
-            metadata["org_id"] = api_key_info.get("org_id")
-        if api_key_info.get("team_id") is not None:
-            metadata["team_id"] = api_key_info.get("team_id")
+    metadata, _ = await _attach_api_key_metadata(
+        auth,
+        http_request,
+        log_on_error=True,
+        log_prefix="batch",
+    )
 
     # Derive user id from the authenticated token user when present.
     derived_user_id = _get_derived_user_id(auth.user)
@@ -680,9 +699,11 @@ async def execute_tool(
     if user.permissions:
         metadata["permissions"] = user.permissions
 
+    derived_user_id = _get_derived_user_id(user)
+
     response = await server.handle_http_request(
         mcp_request,
-        user_id=user.sub,
+        user_id=derived_user_id,
         metadata=metadata or None
     )
 

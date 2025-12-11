@@ -146,10 +146,12 @@ class AuthnzMonitoringRepo:
 
             result: Dict[str, int] = {}
             for key in ("successful_auths", "failed_auths", "rate_limit_hits"):
+                raw_value = data.get(key, 0) or 0
                 try:
-                    result[key] = int(data.get(key, 0) or 0)
+                    value = int(raw_value)
                 except (TypeError, ValueError):
-                    result[key] = 0
+                    value = 0
+                result[key] = value
             return result
         except Exception as exc:  # pragma: no cover - surfaced through callers
             logger.error(

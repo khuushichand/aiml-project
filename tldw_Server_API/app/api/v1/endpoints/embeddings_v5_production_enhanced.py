@@ -54,9 +54,9 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_permissions,
 )
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings, get_profile
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE, EMBEDDINGS_ADMIN
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal, is_single_user_principal
 
 # Configuration
 from tldw_Server_API.app.core.config import settings
@@ -87,6 +87,7 @@ from tldw_Server_API.app.core.Infrastructure.redis_factory import (
 )
 from tldw_Server_API.app.core.LLM_Calls.embeddings_adapter_registry import get_embeddings_registry
 from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_present
+from tldw_Server_API.app.core.Embeddings.messages import validate_schema
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
 from fnmatch import fnmatch
@@ -363,6 +364,29 @@ TENANT_RPS = int(_cfg_int("EMBEDDINGS_TENANT_RPS", 0))  # 0 disables
 # Orchestrator snapshot scan cap (prevent unbounded SCAN work per build)
 ORCH_SCAN_MAX_KEYS = int(_cfg_int("EMB_ORCH_MAX_SCAN_KEYS", 500))
 
+
+def _tenant_rps_runtime() -> int:
+    """Resolve the effective tenant RPS limit at runtime.
+
+    Prefers the environment variable (handy for tests/overrides), then the
+    loaded settings value, and finally the module-level default.
+    """
+    try:
+        env_val = os.getenv("EMBEDDINGS_TENANT_RPS")
+        if env_val is not None and str(env_val).strip() != "":
+            return int(env_val)
+    except Exception:
+        pass
+    try:
+        v = settings.get("EMBEDDINGS_TENANT_RPS", 0)
+        if isinstance(v, (int, float)):
+            return int(v)
+    except Exception:
+        pass
+    return TENANT_RPS
+
+
+
 async def _orchestrator_depth_and_age(client: aioredis.Redis) -> tuple[int, float]:
     """Return (max_queue_depth, max_queue_age_seconds) for core embeddings queues."""
     queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
@@ -400,7 +424,7 @@ def _should_enforce_tenant_rps(request: Request) -> bool:
       * Disable tenant quotas for single-user profiles (PROFILE indicating
         local single-user/desktop), regardless of AUTH_MODE.
       * Disable tenant quotas when the authenticated principal is explicitly
-        a single-user principal (kind == \"single_user\").
+        tagged as the single-user profile (helper-detected).
       * Otherwise, treat the runtime as multi-tenant and enforce quotas when
         a positive RPS limit is configured.
     """
@@ -429,7 +453,7 @@ def _should_enforce_tenant_rps(request: Request) -> bool:
 
     # Principal-first: if we can see an explicit single-user principal, do not
     # enforce tenant quotas even under multi-user profiles.
-    if principal is not None and getattr(principal, "kind", None) == "single_user":
+    if principal is not None and is_single_user_principal(principal):
         return False
 
     # Multi-tenant runtime: enforce quotas when a positive RPS is configured.
@@ -463,23 +487,6 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
     # Per-tenant quotas in multi-user mode
     try:
         # Read tenant RPS dynamically so tests can monkeypatch env at runtime
-        def _tenant_rps_runtime() -> int:
-            try:
-                # Prefer env var when set during tests; fall back to settings
-                env_val = os.getenv("EMBEDDINGS_TENANT_RPS")
-                if env_val is not None and str(env_val).strip() != "":
-                    return int(env_val)
-            except Exception:
-                pass
-            try:
-                v = settings.get("EMBEDDINGS_TENANT_RPS", 0)
-                if isinstance(v, (int, float)):
-                    return int(v)
-            except Exception:
-                pass
-            # Fallback to module default
-            return TENANT_RPS
-
         tenant_rps = _tenant_rps_runtime()
 
         if _should_enforce_tenant_rps(request) and tenant_rps > 0:
@@ -2370,31 +2377,20 @@ class TenantQuotaResponse(BaseModel):
 
 
 def _is_single_user_profile() -> bool:
-    """Return True when the active profile indicates a single-user deployment."""
+    """Check if profile indicates single-user deployment."""
     try:
-        profile = get_profile()
-        if isinstance(profile, str) and profile.strip():
-            lowered = profile.strip().lower()
-            if lowered in {"single_user", "local-single-user", "desktop"}:
-                return True
-            # Profiles that do not explicitly signal single-user behavior are
-            # treated according to AUTH_MODE / settings.
-            return False
-        return is_single_user_mode()
+        return is_single_user_profile_mode()
     except Exception as exc:
-        logger.debug("Embeddings profile check failed; treating as single-user: {}", exc)
+        logger.debug("Failed to resolve profile for runtime mode: {}", exc)
         return True
 
 
 def _is_multi_user_runtime() -> bool:
     """Detect whether the current runtime should be treated as multi-user."""
     try:
-        am = os.getenv("AUTH_MODE")
-        if am:
-            return am.strip().lower() == "multi_user"
+        return not _is_single_user_profile()
     except Exception:
-        pass
-    return not _is_single_user_profile()
+        return True
 
 
 @router.get("/embeddings/tenant/quotas", summary="Get current tenant quotas (if multi-tenant)")
@@ -2402,18 +2398,24 @@ async def get_tenant_quotas(
     request: Request,
     current_user: User = Depends(get_request_user),
 ) -> TenantQuotaResponse:
-    if not _should_enforce_tenant_rps(request) or TENANT_RPS <= 0:
+    tenant_rps = _tenant_rps_runtime()
+    if not _should_enforce_tenant_rps(request) or tenant_rps <= 0:
         return TenantQuotaResponse(limit_rps=0, remaining=None)
+    client = None
     try:
         client = await _get_redis_client()
-        ts = int(time.time())
-        key = f"embeddings:tenant:rps:{getattr(current_user, 'id', 'anon')}:{ts}"
+        key = f"embeddings:tenant:rps:{getattr(current_user, 'id', 'anon')}"
         val = await client.get(key)
-        await ensure_async_client_closed(client)
         used = int(val or 0)
-        return TenantQuotaResponse(limit_rps=TENANT_RPS, remaining=max(0, TENANT_RPS - used))
+        return TenantQuotaResponse(limit_rps=tenant_rps, remaining=max(0, tenant_rps - used))
     except Exception:
-        return TenantQuotaResponse(limit_rps=TENANT_RPS, remaining=None)
+        return TenantQuotaResponse(limit_rps=tenant_rps, remaining=None)
+    finally:
+        try:
+            if client is not None:
+                await ensure_async_client_closed(client)
+        except Exception:
+            pass
 
 
 class PriorityBumpRequest(BaseModel):
@@ -2425,9 +2427,15 @@ class PriorityBumpRequest(BaseModel):
 @router.post(
     "/embeddings/job/priority/bump",
     summary="Override/bump job priority for routing into priority queues (best-effort)",
-    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(EMBEDDINGS_ADMIN)),
+    ],
 )
-async def bump_job_priority(req: PriorityBumpRequest, current_user: User = Depends(get_request_user)) -> Dict[str, Any]:
+async def bump_job_priority(
+    req: PriorityBumpRequest,
+    current_user: User = Depends(get_request_user),
+) -> Dict[str, Any]:
     pr = (req.priority or "").strip().lower()
     if pr not in ("high", "normal", "low"):
         raise HTTPException(status_code=400, detail="priority must be one of: high|normal|low")
@@ -2781,7 +2789,7 @@ async def health_check():
     dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def get_circuit_breakers(
-    current_user: User = Depends(get_request_user)
+    _current_user: User = Depends(get_request_user)
 ):
     """Get detailed circuit breaker status - requires admin privileges"""
 
@@ -2945,11 +2953,11 @@ async def list_dlq_items(
     stage: str = Query("embedding", description="Stage: chunking|embedding|storage"),
     count: int = Query(50, ge=1, le=500, description="Max items to return"),
     job_id: Optional[str] = Query(None, description="Optional job_id to filter"),
-    current_user: User = Depends(get_request_user),
+    _current_user: User = Depends(get_request_user),
 ) -> Dict[str, Any]:
     """List DLQ items for a stage.
 
-    current_user is included to enforce authentication via dependencies.
+    _current_user is included to enforce authentication via dependencies.
     """
     stream = _dlq_stream_name(stage)
     try:
@@ -3128,6 +3136,7 @@ async def requeue_dlq_bulk(
     try:
         for eid in req.entry_ids:
             status = "success"
+            warning = None
             try:
                 entries = await client.xrange(dlq_stream, min=eid, max=eid, count=1)
                 if not entries:
@@ -3144,7 +3153,6 @@ async def requeue_dlq_bulk(
                         results.append({"entry_id": eid, "status": status})
                         continue
                     requeue_fields = dict(fields)
-                    warning = None
                     # Validate original payload JSON (if present) and surface warnings
                     try:
                         raw = fields.get("payload")
@@ -3177,7 +3185,7 @@ async def requeue_dlq_bulk(
             else:
                 dlq_requeued_total.labels(queue_name=dlq_stream, status=status).inc()
             res = {"entry_id": eid, "status": status}
-            if 'warning' in locals() and warning:
+            if warning:
                 res["warning"] = warning
             results.append(res)
         # Audit: DLQ bulk requeue summary
@@ -3502,11 +3510,11 @@ class LedgerEntry(BaseModel):
 async def get_ledger_status(
     idempotency_key: Optional[str] = Query(default=None),
     dedupe_key: Optional[str] = Query(default=None),
-    current_user: User = Depends(get_request_user),
+    _current_user: User = Depends(get_request_user),
 ) -> Dict[str, Optional[LedgerEntry]]:
     """Return current ledger values for provided keys.
 
-    current_user is included to enforce authentication and RBAC via dependencies.
+    _current_user is included to enforce authentication and RBAC via dependencies.
 
     Reads:
       - embeddings:ledger:idemp:{idempotency_key}
@@ -3783,12 +3791,12 @@ async def _sse_orchestrator_stream(client: aioredis.Redis):
     summary="SSE: embeddings orchestrator live summary (admin only)",
     dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
-async def orchestrator_events(current_user: User = Depends(get_request_user)):
-    # Admin/embeddings-admin gate is enforced via AuthNZ permissions; current_user is used for audit context.
+async def orchestrator_events(_current_user: User = Depends(get_request_user)):
+    # Admin/embeddings-admin gate is enforced via AuthNZ permissions; _current_user is used for audit context.
     try:
         logger.info(
             "Embeddings orchestrator SSE connection initiated",
-            extra={"user_id": getattr(current_user, "id", None)},
+            extra={"user_id": getattr(_current_user, "id", None)},
         )
     except Exception:
         # Audit logging is best-effort and must not break the SSE stream

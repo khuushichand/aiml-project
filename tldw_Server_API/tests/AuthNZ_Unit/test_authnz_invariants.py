@@ -9,7 +9,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_current_user,
     get_current_active_user,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
 
 def _make_request(headers: dict[str, str] | None = None, path: str = "/") -> Request:
@@ -26,10 +26,6 @@ def _make_request(headers: dict[str, str] | None = None, path: str = "/") -> Req
 @pytest.mark.asyncio
 async def test_get_current_user_missing_credentials_returns_401(monkeypatch):
     # Ensure we are not in single-user mode for this invariant
-    from tldw_Server_API.app.api.v1.API_Deps import auth_deps as deps
-
-    monkeypatch.setattr(deps, "is_single_user_mode", lambda: False)
-
     # Dummy session manager and db pool (unreachable in this path)
     fake_session = SimpleNamespace(is_token_blacklisted=lambda *_args, **_kwargs: False)
     fake_db_pool = SimpleNamespace(pool=None)
@@ -56,9 +52,6 @@ async def test_get_current_user_missing_credentials_returns_401(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_request_user_multi_user_missing_credentials_returns_401(monkeypatch):
     from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as udh
-
-    # Force multi-user mode
-    monkeypatch.setattr(udh, "is_single_user_mode", lambda: False)
 
     fake_settings = SimpleNamespace(
         AUTH_MODE="multi_user",
@@ -87,24 +80,16 @@ async def test_get_request_user_multi_user_missing_credentials_returns_401(monke
 async def test_get_request_user_single_user_valid_api_key_sets_user_id(monkeypatch):
     from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as udh
 
-    # Force single-user mode
-    monkeypatch.setattr(udh, "is_single_user_mode", lambda: True)
+    fake_user = User(id=99, username="single_user", is_active=True)
 
-    fake_settings = SimpleNamespace(
-        AUTH_MODE="single_user",
-        SINGLE_USER_API_KEY="test-api-key",
-        SINGLE_USER_FIXED_ID=99,
-        PII_REDACT_LOGS=False,
-    )
-    monkeypatch.setattr(udh, "get_settings", lambda: fake_settings)
+    async def _fake_authenticate_api_key_user(request, api_key: str) -> User:
+        assert api_key == "test-api-key"
+        request.state.user_id = fake_user.id
+        request.state.org_ids = []
+        request.state.team_ids = []
+        return fake_user
 
-    # Ensure app_settings fallback (if used) matches the same key
-    monkeypatch.setattr(
-        udh,
-        "app_settings",
-        {"SINGLE_USER_API_KEY": "test-api-key"},
-        raising=False,
-    )
+    monkeypatch.setattr(udh, "authenticate_api_key_user", _fake_authenticate_api_key_user)
 
     request = _make_request(headers={"X-API-KEY": "test-api-key"})
 
@@ -115,8 +100,8 @@ async def test_get_request_user_single_user_valid_api_key_sets_user_id(monkeypat
         legacy_token_header=None,
     )
 
-    assert int(user.id) == fake_settings.SINGLE_USER_FIXED_ID
-    assert getattr(request.state, "user_id", None) == fake_settings.SINGLE_USER_FIXED_ID
+    assert int(user.id) == fake_user.id
+    assert getattr(request.state, "user_id", None) == fake_user.id
 
 
 @pytest.mark.asyncio

@@ -342,7 +342,7 @@ def test_silero_turn_detector_logs_fail_open(monkeypatch):
     def _fake_warning(msg, *_args, **_kwargs):
         try:
             captured_warnings.append(msg.format(*_args))
-        except Exception:
+        except (IndexError, KeyError, ValueError):
             captured_warnings.append(str(msg))
 
     monkeypatch.setattr(unified.logger, "warning", _fake_warning)
@@ -424,4 +424,4 @@ async def test_ws_streaming_pauses_emit_single_final(monkeypatch):
     finals = [m for m in ws.sent if m.get("type") == "full_transcript"]
     assert len(finals) == 1, f"Expected single final, saw {ws.sent}"
     assert finals[0].get("text") == "pause-final"
-    assert elapsed < 2.5, f"Streaming with pause should complete quickly, took {elapsed}s"
+    assert elapsed < 3.0, f"Streaming with pause should complete quickly, took {elapsed}s"

@@ -80,6 +80,25 @@ async def test_embeddings_model_warmup_forbidden_without_admin_role():
 
 
 @pytest.mark.asyncio
+async def test_embeddings_model_warmup_forbidden_with_permission_but_no_admin_role():
+    # User has a relevant permission but lacks the admin role; require_roles("admin")
+    # should still enforce the role-based guard.
+    principal = _make_principal(
+        roles=["user"],
+        permissions=["system.configure"],
+        is_admin=False,
+    )
+    app = _build_app_with_overrides(principal)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/embeddings/models/warmup",
+            json={"model": "text-embedding-3-small"},
+        )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_embeddings_model_warmup_allowed_with_admin_role(monkeypatch):
     principal = _make_principal(roles=["admin"], permissions=[], is_admin=True)
     app = _build_app_with_overrides(principal)
@@ -101,4 +120,3 @@ async def test_embeddings_model_warmup_allowed_with_admin_role(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("warmed") is True
-

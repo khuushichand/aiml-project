@@ -1,4 +1,5 @@
 from pathlib import Path
+import asyncio
 
 import pyotp
 import pytest
@@ -94,6 +95,69 @@ async def test_mfa_end_to_end_flow(tmp_path: Path):
             "has_backup_codes": False,
             "method": None,
         }
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_backup_code_consumption_is_atomic_under_concurrency(tmp_path: Path):
+    """
+    Verify that a single backup code cannot be successfully consumed twice
+    when two verification calls run concurrently.
+    """
+    db_path = tmp_path / "authnz_mfa_atomic.sqlite"
+    settings = Settings(
+        AUTH_MODE="multi_user",
+        DATABASE_URL=f"sqlite:///{db_path}",
+        JWT_SECRET_KEY="test-secret-key-32-characters-minimum!",
+        ENABLE_REGISTRATION=True,
+        REQUIRE_REGISTRATION_CODE=False,
+        RATE_LIMIT_ENABLED=False,
+    )
+
+    pool = DatabasePool(settings)
+    await pool.initialize()
+
+    try:
+        service = MFAService(db_pool=pool, settings=settings)
+        secret = service.generate_secret()
+        backup_codes = service.generate_backup_codes()
+
+        column_rows = await pool.fetchall("PRAGMA table_info(users)")
+        column_names = {
+            row["name"] if isinstance(row, dict) else row[1] for row in column_rows
+        }
+        required_columns = {
+            "two_factor_enabled": "INTEGER DEFAULT 0",
+            "totp_secret": "TEXT",
+            "backup_codes": "TEXT",
+            "updated_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
+        }
+        for column, decl in required_columns.items():
+            if column not in column_names:
+                await pool.execute(f"ALTER TABLE users ADD COLUMN {column} {decl}")
+
+        async with pool.transaction() as conn:
+            await conn.execute(
+                """
+                INSERT INTO users (id, username, email, password_hash, is_active)
+                VALUES (?, ?, ?, ?, 1)
+                """,
+                (7, "bob", "bob@example.com", "hashed-password"),
+            )
+
+        assert await service.enable_mfa(user_id=7, secret=secret, backup_codes=backup_codes)
+
+        code = backup_codes[0]
+
+        async def _consume():
+            return await service.verify_backup_code(7, code)
+
+        # Fire two concurrent verification attempts for the same backup code.
+        first, second = await asyncio.gather(_consume(), _consume())
+
+        # Exactly one of the calls must succeed; the other must fail.
+        assert sorted([first, second]) == [False, True]
     finally:
         await pool.close()
 

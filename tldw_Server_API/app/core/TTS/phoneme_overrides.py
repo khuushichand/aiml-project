@@ -30,7 +30,16 @@ _MAX_OVERRIDE_ENTRIES = 256
 
 @dataclass
 class PhonemeOverrideEntry:
-    """Represents a single phoneme override rule."""
+    """
+    Represents a single phoneme override rule.
+
+    Attributes:
+        term: The word or phrase to match in the input text.
+        phonemes: The phonetic representation to substitute (e.g., IPA notation).
+        lang: Optional language code to scope the override (e.g., "en", "en-US").
+        boundary: If True (default), match only on word boundaries; if False, allow mid-word matches.
+        provider: Optional TTS provider name to scope this override (e.g., "kokoro", "elevenlabs").
+    """
 
     term: str
     phonemes: str
@@ -62,7 +71,7 @@ def _resolve_config_path(path_hint: Optional[str]) -> Optional[Path]:
             if p.exists() and p.is_file():
                 return p
         except Exception as exc:  # noqa: BLE001
-            logger.debug(f"Failed to resolve phoneme override path candidate '{cand}': {exc}")
+            logger.debug(f"Skipping invalid config path candidate '{cand}': {exc}")
             continue
     return None
 
@@ -127,16 +136,24 @@ def parse_override_entries(raw: Any, provider_hint: Optional[str] = None) -> Lis
     return entries[:_MAX_OVERRIDE_ENTRIES]
 
 
-@lru_cache(maxsize=4)
 def load_override_entries(path_hint: Optional[str] = None) -> List[PhonemeOverrideEntry]:
     """
     Load phoneme overrides from YAML or JSON.
 
-    Cache is keyed by the resolved path so repeated calls are cheap.
+    Cache is keyed by the resolved path so repeated calls are cheap, even
+    when different hints resolve to the same underlying file.
     """
     path = _resolve_config_path(path_hint)
     if not path:
         return []
+
+    return _load_override_entries_cached(str(path))
+
+
+@lru_cache(maxsize=4)
+def _load_override_entries_cached(path_str: str) -> List[PhonemeOverrideEntry]:
+    """Internal cached loader keyed by resolved path string."""
+    path = Path(path_str)
 
     try:
         if path.suffix.lower() in {".yaml", ".yml"}:
@@ -215,7 +232,9 @@ def apply_overrides_to_text(
             flags=re.IGNORECASE,
         )
 
-        replacement = f"[[{ent.phonemes}]]"
         # Preserve surrounding whitespace/punctuation by replacing only the term
-        updated = pattern.sub(lambda _match: replacement, updated)
+        def _repl(_: re.Match[str], phonemes: str = ent.phonemes) -> str:
+            return f"[[{phonemes}]]"
+
+        updated = pattern.sub(_repl, updated)
     return updated

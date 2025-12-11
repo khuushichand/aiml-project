@@ -126,7 +126,17 @@ async def list_memberships_for_user(user_id: int) -> List[Dict[str, Any]]:
 # ============================
 
 async def add_org_member(*, org_id: int, user_id: int, role: str = "member") -> Dict[str, Any]:
-    """Add a user to an organization (idempotent)."""
+    """
+    Add a user to an organization (idempotent).
+
+    Parameters:
+        org_id: Organization id the user should join.
+        user_id: User id to add to the organization.
+        role: Role to assign within the organization (for example, "member" or "owner").
+
+    Returns:
+        A dict describing the membership row (for example, containing ``org_id``, ``user_id``, and ``role``).
+    """
     repo = await _get_orgs_teams_repo()
     return await repo.add_org_member(org_id=org_id, user_id=user_id, role=role)
 
@@ -134,7 +144,19 @@ async def add_org_member(*, org_id: int, user_id: int, role: str = "member") -> 
 async def list_org_members(
     *, org_id: int, limit: int = 100, offset: int = 0, role: Optional[str] = None, status: Optional[str] = None
 ) -> List[Dict[str, Any]]:
-    """List members of an organization with pagination and optional filters."""
+    """
+    List members of an organization with pagination and optional filters.
+
+    Parameters:
+        org_id: Organization id to list members for.
+        limit: Maximum number of members to return.
+        offset: Number of members to skip before returning results.
+        role: Optional role filter (for example, "owner" or "member").
+        status: Optional status filter for membership rows.
+
+    Returns:
+        A list of dicts describing organization members (for example, with ``user_id``, ``role``, ``status``, and ``added_at``).
+    """
     repo = await _get_orgs_teams_repo()
     return await repo.list_org_members(
         org_id=org_id,
@@ -146,24 +168,65 @@ async def list_org_members(
 
 
 async def remove_org_member(*, org_id: int, user_id: int) -> Dict[str, Any]:
-    """Remove a user from an organization. Returns removal status."""
+    """
+    Remove a user from an organization.
+
+    Parameters:
+        org_id: Organization id from which to remove the user.
+        user_id: User id to remove.
+
+    Returns:
+        A dict with removal status fields such as ``org_id``, ``user_id``, ``removed``,
+        and optionally an ``error`` code (for example, ``"owner_required"`` when the
+        last remaining owner cannot be removed).
+    """
     repo = await _get_orgs_teams_repo()
     return await repo.remove_org_member(org_id=org_id, user_id=user_id)
 
 
 async def update_org_member_role(*, org_id: int, user_id: int, role: str) -> Optional[Dict[str, Any]]:
-    """Update an org member's role; returns updated row or None if missing."""
+    """
+    Update an organization member's role.
+
+    Parameters:
+        org_id: Organization id of the member.
+        user_id: User id whose role should be updated.
+        role: New role to assign (for example, "member" or "owner").
+
+    Returns:
+        A dict describing the updated membership (typically containing ``org_id``,
+        ``user_id``, and ``role``), optionally including an ``error`` field when the
+        update is rejected (such as ``"owner_required"``), or ``None`` when the member
+        does not exist.
+    """
     repo = await _get_orgs_teams_repo()
     return await repo.update_org_member_role(org_id=org_id, user_id=user_id, role=role)
 
 
 async def list_org_memberships_for_user(user_id: int) -> List[Dict[str, Any]]:
-    """List org memberships for a given user: [{org_id, role}]."""
+    """
+    List organization memberships for a given user.
+
+    Parameters:
+        user_id: User id whose organization memberships should be listed.
+
+    Returns:
+        A list of dicts describing memberships, each containing at least ``org_id`` and ``role``.
+    """
     repo = await _get_orgs_teams_repo()
     return await repo.list_org_memberships_for_user(user_id)
 
 
 async def remove_team_member(*, team_id: int, user_id: int) -> Dict[str, Any]:
-    """Remove a user from a team. Returns a simple dict with removal status."""
+    """
+    Remove a user from a team.
+
+    Parameters:
+        team_id: Team id from which to remove the user.
+        user_id: User id to remove from the team.
+
+    Returns:
+        A dict with removal status fields: ``team_id``, ``user_id``, and ``removed``.
+    """
     repo = await _get_orgs_teams_repo()
     return await repo.remove_team_member(team_id=team_id, user_id=user_id)

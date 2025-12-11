@@ -49,13 +49,14 @@ def _make_principal(
     roles=None,
     permissions=None,
     is_admin: bool = False,
+    subject: str = "test-user",
     kind: str = "user",
 ) -> AuthPrincipal:
     return AuthPrincipal(
         kind=kind,
         user_id=user_id,
         api_key_id=api_key_id,
-        subject="test-user",
+        subject=subject,
         token_type="access",
         jti=None,
         roles=list(roles or []),
@@ -317,7 +318,8 @@ async def test_require_roles_checks_claims_and_allows_admin():
 async def test_require_permissions_denies_single_user_principal_without_claim():
     checker = require_permissions("media.create")
     principal = _make_principal(
-        kind="single_user",
+        kind="user",
+        subject="single_user",
         roles=["user"],
         permissions=["media.read"],
         is_admin=False,
@@ -331,7 +333,8 @@ async def test_require_permissions_denies_single_user_principal_without_claim():
 async def test_require_roles_denies_single_user_principal_without_admin_role():
     checker = require_roles("admin")
     principal = _make_principal(
-        kind="single_user",
+        kind="user",
+        subject="single_user",
         roles=["user"],
         permissions=["media.read"],
         is_admin=False,

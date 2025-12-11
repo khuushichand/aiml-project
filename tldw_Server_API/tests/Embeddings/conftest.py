@@ -25,11 +25,13 @@ def admin_user():
     app.dependency_overrides[get_request_user] = _admin
 
     async def _principal_override(request):
-        from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+        """Override get_auth_principal with an admin AuthPrincipal for tests."""
+        from fastapi import Request
+        from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal, PrincipalKind
 
         token_type: Final[str] = "access"
         principal = AuthPrincipal(
-            kind="user",
+            kind=PrincipalKind.user,
             user_id=42,
             api_key_id=None,
             subject=None,

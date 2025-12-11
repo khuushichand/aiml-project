@@ -47,7 +47,7 @@ async def create_embeddings_abtest(
     payload: EmbeddingsABTestCreateRequest,
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_request_user),  # noqa: B008
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     response: Response = None,
 ):

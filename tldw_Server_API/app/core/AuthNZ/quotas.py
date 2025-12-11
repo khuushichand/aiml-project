@@ -14,8 +14,12 @@ async def increment_and_check_jwt_quota(
     bucket: Optional[str] = None,
 ) -> Tuple[bool, int]:
     """
-    Atomically increment JWT (by jti) quota counter and compare to limit.
-    Returns (allowed, new_count). If limit is None, returns (True, current+1).
+    Atomically increment JWT (by jti) quota counter and compare to ``limit``.
+
+    Returns ``(allowed, new_count)`` as provided by
+    ``AuthnzQuotasRepo.increment_and_check_jwt_quota``. When ``limit`` is
+    ``None`` or ``jti`` is empty, this is treated as a no-op and
+    ``(True, -1)`` is returned (no persistent increment / not tracked).
     """
     repo = AuthnzQuotasRepo(db_pool=db_pool)
     return await repo.increment_and_check_jwt_quota(
@@ -34,8 +38,12 @@ async def increment_and_check_api_key_quota(
     bucket: Optional[str] = None,
 ) -> Tuple[bool, int]:
     """
-    Atomically increment API Key quota counter and compare to limit.
-    Returns (allowed, new_count). If limit is None, returns (True, current+1).
+    Atomically increment API Key quota counter and compare to ``limit``.
+
+    Returns ``(allowed, new_count)`` as provided by
+    ``AuthnzQuotasRepo.increment_and_check_api_key_quota``. When ``limit`` is
+    ``None`` or ``api_key_id`` is ``None``, this is treated as a no-op and
+    ``(True, -1)`` is returned (no persistent increment / not tracked).
     """
     repo = AuthnzQuotasRepo(db_pool=db_pool)
     return await repo.increment_and_check_api_key_quota(

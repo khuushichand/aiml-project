@@ -2,7 +2,8 @@
 # Description: FastAPI dependency injection for authentication services
 #
 # Imports
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable, Awaitable
+from collections.abc import Mapping
 import re
 import os
 #
@@ -14,10 +15,10 @@ from loguru import logger
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService, get_password_service
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal, is_single_user_principal
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService, get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager, get_session_manager
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, is_single_user_profile_mode, get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode, get_settings
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_limiter
 from tldw_Server_API.app.services.registration_service import RegistrationService, get_registration_service
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService, get_storage_service
@@ -206,7 +207,7 @@ async def get_jwt_service_dep() -> JWTService:
 
 async def get_session_manager_dep() -> SessionManager:
     """Get session manager dependency"""
-    # In pytest/TEST_MODE contexts, return a lightweight stub to avoid heavy init
+        # In pytest/TEST_MODE contexts, return a lightweight stub to avoid heavy init
     try:
         import os as _os, sys as _sys
 
@@ -284,8 +285,8 @@ async def get_session_manager_dep() -> SessionManager:
                     return changed
 
             return _StubSessionManager()  # type: ignore[return-value]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("get_session_manager_dep: test stub resolution failed; falling back to real SessionManager: {}", exc)
     return await get_session_manager()
 
 
@@ -299,9 +300,9 @@ async def get_rate_limiter_dep() -> RateLimiter:
             rl.enabled = False
             rl._initialized = True
             return rl
-    except Exception:
+    except Exception as exc:
         # Fall back to normal path if any issue
-        pass
+        logger.debug("get_rate_limiter_dep: TEST_MODE stub resolution failed; using real RateLimiter: {}", exc)
     return await get_rate_limiter()
 
 
@@ -347,164 +348,62 @@ async def get_current_user(
     try:
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
             logger.info(f"get_current_user: has_bearer={bool(credentials)} has_api_key={bool(x_api_key)} path={request.url.path}")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(f"get_current_user: TEST_MODE auth header diagnostics failed; continuing without diagnostics: {exc}")
 
-    # Fast-path: in multi-user mode, if an AuthPrincipal/AuthContext has already been
-    # resolved for this request (e.g., via get_auth_principal or budget guards),
-    # reuse the cached user representation instead of re-running JWT/API-key logic.
+    # Fast-path: if an AuthPrincipal/AuthContext has already been resolved for this
+    # request (e.g., via get_auth_principal or budget guards), reuse the cached user
+    # representation instead of re-running JWT/API-key logic.
     try:
-        if not is_single_user_mode():
-            existing_ctx = getattr(request.state, "auth", None)
-            cached_user = getattr(request.state, "_auth_user", None)
-            if isinstance(existing_ctx, AuthContext) and cached_user is not None:
-                logger.debug("get_current_user: Reusing cached AuthPrincipal/_auth_user in multi-user mode.")
-                # Normalize to a plain dict to preserve existing return shape
-                if hasattr(cached_user, "dict"):
-                    user_dict: Dict[str, Any] = dict(cached_user.dict())
-                else:
-                    user_dict = dict(cached_user)
-                # Ensure request.state.user_id is populated for downstream consumers
-                try:
-                    uid = user_dict.get("id")
-                    if uid is not None:
-                        request.state.user_id = int(uid)
-                except Exception as exc:
-                    logger.debug(
-                        "Fast-path: unable to attach user_id to request.state: {}", exc
-                    )
-                # Scope context should already be set by upstream auth, but be defensive.
-                # Prefer org/team ids from the existing principal, with request.state as fallback.
-                try:
-                    principal = getattr(existing_ctx, "principal", None)
-                    org_ids = getattr(principal, "org_ids", None) if principal is not None else None
-                    team_ids = getattr(principal, "team_ids", None) if principal is not None else None
-                    _activate_scope_context(
-                        request,
-                        user_id=getattr(principal, "user_id", None),
-                        org_ids=org_ids if org_ids is not None else getattr(request.state, "org_ids", None),
-                        team_ids=team_ids if team_ids is not None else getattr(request.state, "team_ids", None),
-                        is_admin=bool(getattr(principal, "is_admin", False)),
-                    )
-                except Exception as exc:
-                    logger.debug(
-                        "Fast-path: unable to (re)establish content scope context: {}", exc
-                    )
-                return user_dict
-    except Exception:
-        # Fall through to standard auth behavior if any issue occurs
-        logger.debug("Fast-path AuthContext reuse failed, falling back to standard auth")
-
-    # Helper: IP allowlist check for single-user mode
-    def _ip_allowed_single_user(client_ip: Optional[str]) -> bool:
-        try:
-            settings = get_settings()
-            allowed = [s.strip() for s in (settings.SINGLE_USER_ALLOWED_IPS or []) if str(s).strip()]
-            if not allowed:
-                return True
-            if not client_ip:
-                return False
-            import ipaddress as _ip
-            ip = _ip.ip_address(client_ip)
-            for entry in allowed:
-                try:
-                    # Support exact IP or CIDR
-                    if '/' in entry:
-                        if ip in _ip.ip_network(entry, strict=False):
-                            return True
-                    else:
-                        if str(ip) == entry:
-                            return True
-                except Exception:
-                    continue
-            return False
-        except Exception:
-            # Fail closed if configuration is malformed
-            return False
-
-    # Single-user mode: honor the configured SINGLE_USER_API_KEY directly (no DB lookups)
-    try:
-        if is_single_user_mode():
-            settings = get_settings()
-            client_ip = request.client.host if getattr(request, "client", None) else None
-            # Accept X-API-KEY header
-            # In pytest/TEST_MODE contexts, also accept env override in case Settings were cached pre-change.
-            _accept = False
-            if x_api_key and x_api_key == settings.SINGLE_USER_API_KEY:
-                _accept = True
+        existing_ctx = getattr(request.state, "auth", None)
+        cached_user = getattr(request.state, "_auth_user", None)
+        if isinstance(existing_ctx, AuthContext) and cached_user is not None:
+            logger.debug("get_current_user: Reusing cached AuthPrincipal/_auth_user from request.state.")
+            # Normalize to a plain dict to preserve existing return shape
+            if isinstance(cached_user, Mapping):
+                user_dict: Dict[str, Any] = dict(cached_user)
+            elif hasattr(cached_user, "dict"):
+                user_dict = dict(cached_user.dict())
             else:
-                try:
-                    import sys as _sys, os as _os
-                    if x_api_key and ("pytest" in _sys.modules or _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")):
-                        env_key = _os.getenv("SINGLE_USER_API_KEY")
-                        if env_key and x_api_key == env_key:
-                            _accept = True
-                except Exception as env_exc:
-                    logger.debug(f"Single-user API key env fallback failed; continuing: {env_exc}")
-            if _accept:
-                if not _ip_allowed_single_user(client_ip):
-                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="IP not allowed")
-                user = {
-                    "id": settings.SINGLE_USER_FIXED_ID,
-                    "username": "single_user",
-                    "email": None,
-                    "role": "admin",
-                    "roles": ["admin"],
-                    "permissions": list(
-                        getattr(settings, "SINGLE_USER_DEFAULT_PERMISSIONS", []) or []
-                    ),
-                    "is_active": True,
-                    "is_verified": True,
-                }
-                try:
-                    request.state.user_id = settings.SINGLE_USER_FIXED_ID
-                    request.state.team_ids = []
-                    request.state.org_ids = []
-                except Exception as state_exc:
-                    logger.debug(f"Single-user API key path: unable to attach state context: {state_exc}")
+                logger.debug(
+                    "get_current_user: cached _auth_user is not a mapping/Pydantic model; "
+                    "skipping fast-path reuse."
+                )
+                raise TypeError("_auth_user is not a mapping")
+            # Ensure request.state.user_id is populated for downstream consumers
+            try:
+                uid = user_dict.get("id")
+                if uid is not None:
+                    request.state.user_id = int(uid)
+            except Exception as exc:
+                logger.debug(
+                    "Fast-path: unable to attach user_id to request.state: {}",
+                    exc,
+                )
+            # Scope context should already be set by upstream auth, but be defensive.
+            # Prefer org/team ids from the existing principal, with request.state as fallback.
+            try:
+                principal = getattr(existing_ctx, "principal", None)
+                org_ids = getattr(principal, "org_ids", None) if principal is not None else None
+                team_ids = getattr(principal, "team_ids", None) if principal is not None else None
                 _activate_scope_context(
                     request,
-                    user_id=settings.SINGLE_USER_FIXED_ID,
-                    org_ids=[],
-                    team_ids=[],
-                    is_admin=True,
+                    user_id=getattr(principal, "user_id", None),
+                    org_ids=org_ids if org_ids is not None else getattr(request.state, "org_ids", None),
+                    team_ids=team_ids if team_ids is not None else getattr(request.state, "team_ids", None),
+                    is_admin=bool(getattr(principal, "is_admin", False)),
                 )
-                return user
-            # Also allow Authorization: Bearer <SINGLE_USER_API_KEY>
-            if credentials and (credentials.scheme or '').lower() == 'bearer':
-                token = credentials.credentials
-                if token == settings.SINGLE_USER_API_KEY:
-                    if not _ip_allowed_single_user(client_ip):
-                        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="IP not allowed")
-                    user = {
-                        "id": settings.SINGLE_USER_FIXED_ID,
-                        "username": "single_user",
-                        "email": None,
-                        "role": "admin",
-                        "roles": ["admin"],
-                        "permissions": list(
-                            getattr(settings, "SINGLE_USER_DEFAULT_PERMISSIONS", []) or []
-                        ),
-                        "is_active": True,
-                        "is_verified": True,
-                    }
-                    try:
-                        request.state.user_id = settings.SINGLE_USER_FIXED_ID
-                        request.state.team_ids = []
-                        request.state.org_ids = []
-                    except Exception as state_exc:
-                        logger.debug(f"Single-user bearer path: unable to attach state context: {state_exc}")
-                    _activate_scope_context(
-                        request,
-                        user_id=settings.SINGLE_USER_FIXED_ID,
-                        org_ids=[],
-                        team_ids=[],
-                        is_admin=True,
-                    )
-                    return user
-    except Exception as single_user_exc:
-        # Fall through to other mechanisms if any issue arises
-        logger.debug(f"Single-user API key path failed; falling back to other auth mechanisms: {single_user_exc}")
+            except Exception as exc:
+                logger.debug(
+                    "Fast-path: unable to (re)establish content scope context: {}",
+                    exc,
+                )
+            return user_dict
+    except Exception as exc:
+        # Fall through to standard auth behavior if any issue occurs
+        logger.debug(
+            f"get_current_user: Fast-path AuthContext reuse failed, falling back to standard auth: {exc}"
+        )
 
     # If Authorization is absent but X-API-KEY present, attempt API-key auth (SQLite/Postgres multi-user).
     if not credentials and x_api_key:
@@ -541,8 +440,8 @@ async def get_current_user(
                     request.state.user_id = fixed_id
                     request.state.team_ids = []
                     request.state.org_ids = []
-                except Exception:
-                    pass
+                except Exception as state_exc:
+                    logger.debug(f"API key test-mode path: unable to attach state context: {state_exc}")
                 return user
         try:
             api_mgr = await get_api_key_manager()
@@ -583,11 +482,12 @@ async def get_current_user(
                     org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
                     request.state.team_ids = team_ids
                     request.state.org_ids = org_ids
-                except Exception:
+                except Exception as memberships_exc:
+                    logger.debug(f"API key path: membership lookup failed; defaulting to empty lists: {memberships_exc}")
                     request.state.team_ids = []
                     request.state.org_ids = []
-            except Exception:
-                pass
+            except Exception as state_exc:
+                logger.debug(f"API key path: unable to attach user/team/org state context: {state_exc}")
 
             _activate_scope_context(
                 request,
@@ -616,8 +516,8 @@ async def get_current_user(
                 present_headers = ",".join(h for h in ("Authorization", "X-API-KEY") if request.headers.get(h)) or "none"
                 extra_headers["X-TLDW-Auth-Reason"] = "missing-bearer"
                 extra_headers["X-TLDW-Auth-Headers"] = present_headers
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"get_current_user: failed to set TEST_MODE missing-bearer diagnostic headers: {exc}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
@@ -628,19 +528,7 @@ async def get_current_user(
         # Extract token
         token = credentials.credentials
 
-        # Single-user mode should not attempt JWT initialization
-        try:
-            if is_single_user_mode():
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Authentication required",
-                    headers={"WWW-Authenticate": "Bearer"}
-                )
-        except Exception:
-            # If settings lookup fails, proceed to JWT path by default
-            pass
-
-        # Lazily obtain JWT service only in multi-user path
+        # Lazily obtain JWT service
         jwt_service = get_jwt_service()
 
         # Decode and validate JWT
@@ -723,7 +611,7 @@ async def get_current_user(
                 api_key_id=None,
                 subject=None,
                 token_type="access",
-                jti=None,
+                jti=str(jti) if jti is not None else None,
                 roles=roles,
                 permissions=perms,
                 is_admin=is_admin_flag,
@@ -741,6 +629,11 @@ async def get_current_user(
                 user_agent=user_agent,
                 request_id=request_id,
             )
+            # Optional: cache user dict for fast-path reuse in multi-user flows
+            try:
+                request.state._auth_user = user
+            except Exception as cache_exc:
+                logger.debug(f"Unable to cache _auth_user on request.state: {cache_exc}")
         except Exception as ctx_exc:
             logger.debug(f"Unable to populate AuthContext in get_current_user: {ctx_exc}")
 
@@ -792,7 +685,7 @@ async def get_auth_principal(
     return await _resolve_auth_principal(request)
 
 
-def require_permissions(*permissions: str):
+def require_permissions(*permissions: str) -> Callable[[AuthPrincipal], Awaitable[AuthPrincipal]]:
     """
     Dependency factory that enforces required permission claims on the principal.
 
@@ -816,7 +709,7 @@ def require_permissions(*permissions: str):
     return _checker
 
 
-def require_roles(*roles: str):
+def require_roles(*roles: str) -> Callable[[AuthPrincipal], Awaitable[AuthPrincipal]]:
     """
     Dependency factory that enforces required role claims on the principal.
 
@@ -899,19 +792,17 @@ async def get_user_org_policy(
     """
     Resolve the active org policy for the current user and fail closed on errors.
 
-    Behaviour (v0.1 contract):
+    Behaviour:
     - If the user has explicit org memberships, the first membership's org_id is used.
-    - In single-user mode, a synthetic org_id=1 is used to mirror legacy behaviour.
     - Otherwise, HTTP 400 is raised when no organization can be resolved.
 
-    Note: This helper remains mode-aware for now; future iterations may
-    accept an AuthPrincipal and drive org selection from principal claims.
+    New code should prefer ``get_org_policy_from_principal``, which is
+    principal-first and profile/flag-aware. This helper is retained as a
+    compatibility shim for user-dict based flows.
     """
     memberships = current_user.get("org_memberships") or []
     if memberships:
         org_id = memberships[0].get("org_id")
-    elif is_single_user_mode():
-        org_id = 1
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -931,15 +822,16 @@ async def _load_org_policy(db: Any, org_id: int) -> Dict[str, Any]:
     """
     try:
         pol = await get_policy(db, org_id)
-        if not pol:
-            pol = get_default_policy_from_env(org_id)
-        return pol
     except Exception as exc:
         logger.exception(f"Failed to load organization policy for org_id={org_id}: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to load organization policy",
         ) from exc
+    else:
+        if not pol:
+            pol = get_default_policy_from_env(org_id)
+        return pol
 
 
 async def get_org_policy_from_principal(
@@ -968,16 +860,16 @@ async def get_org_policy_from_principal(
           prefer principal/profile-driven behaviour and only treat the
           environment as single-user for org-policy purposes when:
             * PROFILE indicates a single-user profile, and
-            * the principal is explicitly single-user (kind or fixed id).
+            * the principal is explicitly marked as the single-user profile (subject/helper).
         - When the flag is explicitly disabled (\"0\"/\"false\"/\"off\"):
           preserve legacy behaviour using mode/profile helpers
           (is_single_user_mode or is_single_user_profile_mode).
         """
         flag = os.getenv("ORG_POLICY_SINGLE_USER_PRINCIPAL", "").strip().lower()
         if flag in {"0", "false", "off"}:
-            # Explicit compatibility mode: defer to legacy mode/profile checks.
+            # Explicit compatibility mode: defer to profile-based single-user hints.
             try:
-                return is_single_user_mode() or is_single_user_profile_mode()
+                return is_single_user_profile_mode()
             except Exception:
                 return False
 
@@ -988,8 +880,11 @@ async def get_org_policy_from_principal(
 
         if not single_profile:
             return False
-        # Principal-first: only explicit single_user principals qualify
-        return getattr(p, "kind", None) == "single_user"
+        # Principal-first: only explicit single-user principals qualify.
+        # Detection relies on the shared helper, which treats single-user
+        # principals as `kind="user"` tagged with subject "single_user"
+        # (and compatible legacy contexts), not a separate principal kind.
+        return is_single_user_principal(p)
 
     # 1) Claim-first: use principal.org_ids when available.
     org_ids = list(getattr(principal, "org_ids", []) or [])
@@ -1094,10 +989,11 @@ def require_role(role: str):
 
 async def get_optional_current_user(
     request: Request,
+    response: Response,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    jwt_service: JWTService = Depends(get_jwt_service_dep),
     session_manager: SessionManager = Depends(get_session_manager_dep),
-    db_pool: DatabasePool = Depends(get_db_pool)
+    db_pool: DatabasePool = Depends(get_db_pool),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
 ) -> Optional[Dict[str, Any]]:
     """
     Legacy shim – do not use in new code.
@@ -1109,20 +1005,26 @@ async def get_optional_current_user(
 
     Args:
         request: FastAPI request object
+        response: FastAPI response object
         credentials: Optional bearer token
-        jwt_service: JWT service instance
         session_manager: Session manager instance
         db_pool: Database pool instance
+        x_api_key: Optional API key from X-API-KEY header
 
     Returns:
         User dictionary if authenticated, None otherwise
     """
-    if not credentials:
+    if not credentials and not x_api_key:
         return None
 
     try:
         return await get_current_user(
-            request, credentials, jwt_service, session_manager, db_pool
+            request=request,
+            response=response,
+            credentials=credentials,  # may be None if authenticating via X-API-KEY only
+            session_manager=session_manager,
+            db_pool=db_pool,
+            x_api_key=x_api_key,
         )
     except HTTPException:
         return None
@@ -1150,24 +1052,22 @@ async def check_rate_limit(
     if _is_test_mode():
         return  # Skip enforcement in test environments
 
-    # Additional bypass: in single-user mode, honor the configured SINGLE_USER_API_KEY
-    # to avoid noisy 429s during local/dev and E2E runs against a live server.
+    # Additional bypass: in local single-user-style profiles, allow admin principals
+    # to skip global IP rate limits. This relies on AuthPrincipal claims and
+    # profile hints instead of AUTH_MODE.
     try:
-        from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings as _get_settings
-        if is_single_user_mode():
-            settings = _get_settings()
-            api_key_hdr = request.headers.get("X-API-KEY") if getattr(request, "headers", None) else None
-            auth_hdr = request.headers.get("Authorization") if getattr(request, "headers", None) else None
-            bearer_tok = auth_hdr.split(" ", 1)[1] if isinstance(auth_hdr, str) and auth_hdr.startswith("Bearer ") else None
-            # Accept env override if settings cache is stale in long-lived servers
-            import os as _os
-            env_key = _os.getenv("SINGLE_USER_API_KEY")
-            configured_key = settings.SINGLE_USER_API_KEY or env_key
-            if configured_key and (api_key_hdr == configured_key or bearer_tok == configured_key):
-                return  # Bypass rate limiting for the single-user API key
+        ctx = getattr(request.state, "auth", None)
+        principal = ctx.principal if isinstance(ctx, AuthContext) else None
     except Exception:
-        # Non-fatal; fall through to standard enforcement
-        pass
+        principal = None
+
+    try:
+        profile_single_user = is_single_user_profile_mode()
+    except Exception:
+        profile_single_user = False
+
+    if principal is not None and principal.is_admin and profile_single_user:
+        return
 
     # Get client IP
     client_ip = request.client.host if request.client else "unknown"
@@ -1216,21 +1116,21 @@ async def check_auth_rate_limit(
     if _is_test_mode():
         return
 
-    # Additional bypass: in single-user mode, bypass for the configured SINGLE_USER_API_KEY
+    # Additional bypass: in local single-user-style profiles, allow admin principals
+    # to skip auth-specific IP rate limits.
     try:
-        from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings as _get_settings
-        if is_single_user_mode():
-            settings = _get_settings()
-            api_key_hdr = request.headers.get("X-API-KEY") if getattr(request, "headers", None) else None
-            auth_hdr = request.headers.get("Authorization") if getattr(request, "headers", None) else None
-            bearer_tok = auth_hdr.split(" ", 1)[1] if isinstance(auth_hdr, str) and auth_hdr.startswith("Bearer ") else None
-            import os as _os
-            env_key = _os.getenv("SINGLE_USER_API_KEY")
-            configured_key = settings.SINGLE_USER_API_KEY or env_key
-            if configured_key and (api_key_hdr == configured_key or bearer_tok == configured_key):
-                return
+        ctx = getattr(request.state, "auth", None)
+        principal = ctx.principal if isinstance(ctx, AuthContext) else None
     except Exception:
-        pass
+        principal = None
+
+    try:
+        profile_single_user = is_single_user_profile_mode()
+    except Exception:
+        profile_single_user = False
+
+    if principal is not None and principal.is_admin and profile_single_user:
+        return
 
     # Get client IP
     client_ip = request.client.host if request.client else "unknown"
@@ -1244,7 +1144,12 @@ async def check_auth_rate_limit(
         window_minutes=1,
         rate_limiter=rate_limiter,
     )
-    retry_after = metadata.get("retry_after", 60) if isinstance(metadata, dict) else 60
+    retry_after = 60
+    if isinstance(metadata, dict):
+        try:
+            retry_after = int(metadata.get("retry_after", retry_after))
+        except Exception:
+            retry_after = 60
 
     if not allowed:
         raise HTTPException(
@@ -1303,7 +1208,8 @@ async def enforce_rbac_rate_limit(
                     role_ids_list, resource
                 )
         else:  # SQLite
-            cur = await db_pool.acquire().__aenter__()
+            acquire_cm = db_pool.acquire()
+            cur = await acquire_cm.__aenter__()
             try:
                 c1 = await cur.execute(
                     "SELECT limit_per_min, burst FROM rbac_user_rate_limits WHERE user_id = ? AND resource = ?",
@@ -1322,7 +1228,7 @@ async def enforce_rbac_rate_limit(
                 )
                 role_limit = await c2.fetchone()
             finally:
-                await db_pool.acquire().__aexit__(None, None, None)
+                await acquire_cm.__aexit__(None, None, None)
 
         # Choose strictest (lowest) effective limits
         candidates = []

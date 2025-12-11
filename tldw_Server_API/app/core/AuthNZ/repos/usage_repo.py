@@ -191,10 +191,6 @@ class AuthnzUsageRepo:
                     (cutoff.isoformat(),),
                 )
                 deleted = getattr(cursor, "rowcount", 0) or 0
-                try:
-                    await conn.commit()
-                except Exception:
-                    pass
                 return int(deleted)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzUsageRepo.prune_llm_usage_log_before failed: {exc}")
@@ -210,24 +206,17 @@ class AuthnzUsageRepo:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
                     cutoff_param = cutoff.replace(tzinfo=None) if getattr(cutoff, "tzinfo", None) else cutoff
-                    result = await conn.execute(
-                        "DELETE FROM usage_log WHERE ts < $1",
+                    rows = await conn.fetch(
+                        "DELETE FROM usage_log WHERE ts < $1 RETURNING 1",
                         cutoff_param,
                     )
-                    try:
-                        return int(result.split()[-1]) if isinstance(result, str) else 0
-                    except Exception:
-                        return 0
+                    return len(rows)
 
                 cursor = await conn.execute(
                     "DELETE FROM usage_log WHERE ts < ?",
                     (cutoff.isoformat(),),
                 )
                 deleted = getattr(cursor, "rowcount", 0) or 0
-                try:
-                    await conn.commit()
-                except Exception:
-                    pass
                 return int(deleted)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzUsageRepo.prune_usage_log_before failed: {exc}")
@@ -242,23 +231,16 @@ class AuthnzUsageRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
-                    result = await conn.execute(
-                        "DELETE FROM usage_daily WHERE day < $1::date",
+                    rows = await conn.fetch(
+                        "DELETE FROM usage_daily WHERE day < $1::date RETURNING 1",
                         cutoff_day,
                     )
-                    try:
-                        return int(result.split()[-1]) if isinstance(result, str) else 0
-                    except Exception:
-                        return 0
+                    return len(rows)
                 cursor = await conn.execute(
                     "DELETE FROM usage_daily WHERE day < ?",
                     (cutoff_day.isoformat(),),
                 )
                 deleted = getattr(cursor, "rowcount", 0) or 0
-                try:
-                    await conn.commit()
-                except Exception:
-                    pass
                 return int(deleted)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzUsageRepo.prune_usage_daily_before failed: {exc}")
@@ -348,10 +330,6 @@ class AuthnzUsageRepo:
                     (cutoff_day.isoformat(),),
                 )
                 deleted = getattr(cursor, "rowcount", 0) or 0
-                try:
-                    await conn.commit()
-                except Exception:
-                    pass
                 return int(deleted)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzUsageRepo.prune_llm_usage_daily_before failed: {exc}")

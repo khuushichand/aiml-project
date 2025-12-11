@@ -25,7 +25,7 @@ class DummyWebSocket:
 
     async def receive_text(self):
         if not self._messages:
-            raise RuntimeError("No more messages")
+            raise RuntimeError("No more messages")  # noqa: TRY003
         return self._messages.pop(0)
 
     async def send_bytes(self, data: bytes):
@@ -43,24 +43,25 @@ class _DummyTTSService:
     def __init__(self, chunks):
         self._chunks = chunks
 
-    async def generate_speech(self, *args, **kwargs):  # noqa: ARG002
+    async def generate_speech(self, *_args, **_kwargs):  # noqa: ARG002
         for chunk in self._chunks:
             yield chunk
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_websocket_tts_streams_audio(monkeypatch: pytest.MonkeyPatch):
     prompt = {"type": "prompt", "text": "hello", "format": "pcm"}
     ws = DummyWebSocket(prompt)
 
     # Stub auth + quotas
-    async def _auth_stub(*args, **kwargs):
+    async def _auth_stub(*_args, **_kwargs):
         return True, 1
 
-    async def _can_start_stream_stub(user_id):
+    async def _can_start_stream_stub(_user_id):
         return True, None
 
-    async def _finish_stream_stub(user_id):
+    async def _finish_stream_stub(_user_id):
         return None
 
     monkeypatch.setattr(audio, "_audio_ws_authenticate", _auth_stub)
@@ -83,13 +84,14 @@ async def test_websocket_tts_streams_audio(monkeypatch: pytest.MonkeyPatch):
     assert ws.closed is True
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_websocket_tts_records_underrun(monkeypatch: pytest.MonkeyPatch):
     prompt = {"type": "prompt", "text": "hello", "format": "pcm"}
     ws = DummyWebSocket(prompt)
 
     class QueueStub:
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *_args, **_kwargs):
             self.items = []
             self.first_full = True
 
@@ -119,18 +121,18 @@ async def test_websocket_tts_records_underrun(monkeypatch: pytest.MonkeyPatch):
         def increment(self, name, value=1, labels=None):
             self.increments.append((name, value, labels or {}))
 
-        def observe(self, *args, **kwargs):  # noqa: ARG002
+        def observe(self, *_args, **_kwargs):  # noqa: ARG002
             return None
 
     reg = DummyRegistry()
 
-    async def _auth_stub(*args, **kwargs):
+    async def _auth_stub(*_args, **_kwargs):
         return True, 1
 
-    async def _can_start_stream_stub(user_id):
+    async def _can_start_stream_stub(_user_id):
         return True, None
 
-    async def _finish_stream_stub(user_id):
+    async def _finish_stream_stub(_user_id):
         return None
 
     dummy_service = _DummyTTSService([b"a", b"b"])

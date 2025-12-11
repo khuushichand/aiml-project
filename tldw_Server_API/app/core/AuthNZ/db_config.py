@@ -192,25 +192,25 @@ class AuthDatabaseConfig:
             logger.info(f"Created UserDatabase with {self.backend_type} backend")
         return self._user_db
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset configuration and database instance (mainly for testing)."""
         # Close any existing UserDatabase backend connections so tests do not
         # reuse pools pointing at dropped per-test databases.
-        try:
-            if self._user_db is not None:
-                backend = getattr(self._user_db, "backend", None)
-                if backend is not None:
+        if self._user_db is not None:
+            backend = getattr(self._user_db, "backend", None)
+            if backend is not None:
+                pool_factory = getattr(backend, "get_pool", None)
+                if callable(pool_factory):
                     try:
-                        pool = getattr(backend, "get_pool", None)
-                        if callable(pool):
-                            p = pool()
-                            close_all = getattr(p, "close_all", None)
-                            if callable(close_all):
-                                close_all()
-                    except Exception as pool_exc:
-                        logger.debug(f"AuthDatabaseConfig.reset: backend pool close skipped: {pool_exc}")
-        except Exception as exc:
-            logger.debug(f"AuthDatabaseConfig.reset: ignoring backend cleanup error: {exc}")
+                        pool = pool_factory()
+                        close_all = getattr(pool, "close_all", None)
+                        if callable(close_all):
+                            close_all()
+                    except Exception as pool_exc:  # noqa: BLE001 - best-effort cleanup only
+                        logger.debug(
+                            "AuthDatabaseConfig.reset: backend pool close skipped",
+                            exc_info=pool_exc,
+                        )
         self._user_db = None
         # Ensure backend detection reflects updated environment/settings
         self.settings = get_settings()

@@ -67,6 +67,7 @@ def _build_app_with_overrides(principal: AuthPrincipal) -> FastAPI:
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
 async def test_execute_tool_forbidden_without_permission():
     principal = _make_principal(
         roles=["user"],
@@ -84,6 +85,7 @@ async def test_execute_tool_forbidden_without_permission():
 
 
 @pytest.mark.asyncio
+@pytest.mark.unit
 async def test_execute_tool_allowed_with_permission(monkeypatch):
     principal = _make_principal(
         roles=["user"],
@@ -116,4 +118,3 @@ async def test_execute_tool_allowed_with_permission(monkeypatch):
     body = resp.json()
     assert body.get("ok") is True
     assert "execute" in fake_executor.calls
-

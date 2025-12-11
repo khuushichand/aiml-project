@@ -7,11 +7,8 @@ from typing import Optional, Tuple
 from fastapi import Depends, HTTPException
 from fastapi import Request, Response
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.AuthNZ.settings import (
-    is_single_user_mode,
-    get_settings,
-    reset_settings,
-)
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Infrastructure.redis_factory import (
     create_async_redis_client,
@@ -62,24 +59,6 @@ def _bp_limits() -> Tuple[int, float]:
     max_depth = _cfg_int("EMB_BACKPRESSURE_MAX_DEPTH", 25000)
     max_age = _cfg_float("EMB_BACKPRESSURE_MAX_AGE_SECONDS", 300.0)
     return max_depth, max_age
-
-
-def _is_single_user_mode_runtime() -> bool:
-    """Determine auth mode, allowing env overrides to take effect without restart."""
-    env_mode = os.getenv("AUTH_MODE")
-    if env_mode:
-        normalized = env_mode.strip().lower()
-        try:
-            settings_obj = get_settings()
-            if settings_obj.AUTH_MODE.lower() != normalized:
-                reset_settings()
-        except Exception:
-            try:
-                reset_settings()
-            except Exception:
-                pass
-        return normalized != "multi_user"
-    return is_single_user_mode()
 
 
 async def _orchestrator_depth_and_age(client: aioredis.Redis) -> Tuple[int, float]:
@@ -133,9 +112,68 @@ async def guard_backpressure_and_quota(
         except Exception:
             pass
 
+def _should_enforce_ingest_tenant_rps(request: Request, current_user: User) -> bool:
+    """
+    Decide whether to enforce per-tenant RPS quotas for ingestion.
+
+    Behaviour:
+    - In single-user-style profiles (local/desktop), do not enforce quotas
+      for admin principals to keep local/dev runs free of tenant-style 429s.
+    - Otherwise, enforce quotas when a positive RPS limit is configured.
+    """
+    try:
+        ctx = getattr(request.state, "auth", None)
+        principal: Optional[AuthPrincipal] = ctx.principal if isinstance(ctx, AuthContext) else None
+    except Exception:
+        principal = None
+
+    try:
+        single_profile = is_single_user_profile_mode()
+    except Exception:
+        single_profile = False
+
+    # Local single-user-style profiles: never enforce tenant quotas for admin principals.
+    if principal is not None and principal.is_admin and single_profile:
+        return False
+
+    # If we lack principal context entirely, treat local single-user-style profiles
+    # as non-tenant for ingestion quotas.
+    if principal is None and single_profile:
+        return False
+
+    return True
+
+
+async def guard_backpressure_and_quota(
+    request: Request,
+    response: Response,
+    current_user: User = Depends(get_request_user),
+):
+    # Backpressure by orchestrator depth/age
+    client: Optional[aioredis.Redis] = None
+    try:
+        try:
+            client = await _get_redis_client()
+        except Exception:
+            client = None
+        if client is not None:
+            max_depth, max_age = _bp_limits()
+            depth, age = await _orchestrator_depth_and_age(client)
+            if depth >= max_depth or age >= max_age:
+                retry_after = 5
+                if age >= max_age:
+                    retry_after = min(60, int(max(5, age / 2)))
+                raise HTTPException(status_code=429, detail="Backpressure: queue overload", headers={"Retry-After": str(retry_after)})
+    finally:
+        try:
+            if client is not None:
+                await ensure_async_client_closed(client)
+        except Exception:
+            pass
+
     # Tenant quota (allow override key for ingestion; fallback to embeddings quota)
     rps = _cfg_int("INGEST_TENANT_RPS", 0) or _cfg_int("EMBEDDINGS_TENANT_RPS", 0)
-    if not _is_single_user_mode_runtime() and rps > 0:
+    if rps > 0 and _should_enforce_ingest_tenant_rps(request, current_user):
         client2: Optional[aioredis.Redis] = None
         try:
             client2 = await _get_redis_client()

@@ -170,20 +170,11 @@ class AuthnzTokenBlacklistRepo:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchrow"):
                     now_param = _strip_tzinfo(now)
-                    result = await conn.execute(
-                        "DELETE FROM token_blacklist WHERE expires_at < $1",
+                    rows = await conn.fetch(
+                        "DELETE FROM token_blacklist WHERE expires_at < $1 RETURNING id",
                         now_param,
                     )
-                    try:
-                        # asyncpg returns status like "DELETE N"
-                        if isinstance(result, str) and result.startswith("DELETE"):
-                            return int(result.split()[-1])
-                        return 0
-                    except (ValueError, IndexError) as parse_err:
-                        logger.debug(
-                            "Could not parse DELETE result '{}': {}", result, parse_err
-                        )
-                        return 0
+                    return len(rows or [])
 
                 cursor = await conn.execute(
                     "DELETE FROM token_blacklist WHERE expires_at < ?",

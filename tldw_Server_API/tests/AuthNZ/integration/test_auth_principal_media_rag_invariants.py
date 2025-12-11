@@ -62,10 +62,8 @@ def _install_auth_capture(app: FastAPI) -> Tuple[Dict[str, Any], Any]:
 
 
 def _restore_auth_capture(app: FastAPI, original_get_auth_principal: Any) -> None:
-    try:
-        app.dependency_overrides.pop(auth_deps.get_auth_principal, None)
-    finally:
-        auth_deps.get_auth_principal = original_get_auth_principal  # type: ignore[assignment]
+    """Remove the auth capture wrapper from dependency overrides."""
+    app.dependency_overrides.pop(auth_deps.get_auth_principal, None)
 
 
 def _run_async(coro):
@@ -223,6 +221,8 @@ async def _create_api_key(db_name: str, username: str) -> Dict[str, Any]:
 
 
 class _StubRagResult:
+    """Lightweight stub emulating RAG pipeline results for auth-focused tests."""
+
     def __init__(self, query: str):
         self.documents = []
         self.query = query

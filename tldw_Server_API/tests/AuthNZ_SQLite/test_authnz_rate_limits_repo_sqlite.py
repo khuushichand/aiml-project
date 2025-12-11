@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
 from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
@@ -14,7 +15,9 @@ from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
 @pytest.mark.asyncio
-async def test_authnz_rate_limits_repo_lockout_and_cleanup_sqlite(tmp_path, monkeypatch):
+@pytest_asyncio.fixture
+async def sqlite_rate_limits_repo(tmp_path, monkeypatch) -> AuthnzRateLimitsRepo:
+    """Provide an AuthnzRateLimitsRepo wired to a fresh SQLite AuthNZ database."""
     """AuthnzRateLimitsRepo lockout + rate_limits helpers should work on SQLite."""
     db_path = tmp_path / "users.db"
     monkeypatch.setenv("AUTH_MODE", "single_user")
@@ -26,7 +29,15 @@ async def test_authnz_rate_limits_repo_lockout_and_cleanup_sqlite(tmp_path, monk
     pool = await get_db_pool()
     ensure_authnz_tables(Path(pool.db_path))
 
-    repo = AuthnzRateLimitsRepo(pool)
+    return AuthnzRateLimitsRepo(pool)
+
+
+@pytest.mark.asyncio
+async def test_authnz_rate_limits_repo_lockout_and_cleanup_sqlite(
+    sqlite_rate_limits_repo: AuthnzRateLimitsRepo,
+) -> None:
+    """AuthnzRateLimitsRepo lockout + rate_limits helpers should work on SQLite."""
+    repo = sqlite_rate_limits_repo
 
     identifier = "ip:127.0.0.1"
     attempt_type = "login"

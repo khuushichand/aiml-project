@@ -51,6 +51,22 @@ async def test_authnz_token_blacklist_repo_postgres(test_db_pool):
     deleted_none = await repo.cleanup_expired(now=now - timedelta(hours=1))
     assert deleted_none == 0
 
-    # Cleanup with future cutoff should be able to delete it
-    deleted_some = await repo.cleanup_expired(now=now + timedelta(days=1))
-    assert deleted_some >= 1
+    # Cleanup with future cutoff should be able to delete all expired rows.
+    cutoff = now + timedelta(days=1)
+    # Count rows that will be considered expired by this cutoff (including our test row).
+    cutoff_naive = cutoff.replace(tzinfo=None)
+    before_expired = await pool.fetchval(
+        "SELECT COUNT(*) FROM token_blacklist WHERE expires_at < $1",
+        cutoff_naive,
+    )
+    assert before_expired >= 1
+
+    deleted_some = await repo.cleanup_expired(now=cutoff)
+    # The repo should report the same number of deletions as actually removed rows.
+    assert deleted_some == before_expired
+
+    after_expired = await pool.fetchval(
+        "SELECT COUNT(*) FROM token_blacklist WHERE expires_at < $1",
+        cutoff_naive,
+    )
+    assert after_expired == 0

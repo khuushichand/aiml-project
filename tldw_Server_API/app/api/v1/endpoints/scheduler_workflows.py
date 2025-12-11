@@ -134,9 +134,9 @@ async def create_schedule(
     ],
 )
 async def admin_rescan(
-    principal: AuthPrincipal = Depends(get_auth_principal),
+    _principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
 ):
-    """Force a one-shot rescan of all users’ schedules.
+    """Force a one-shot rescan of all users' schedules.
 
     Requires the ``workflows.admin`` permission (via
     :data:`tldw_Server_API.app.core.AuthNZ.permissions.WORKFLOWS_ADMIN`) or an

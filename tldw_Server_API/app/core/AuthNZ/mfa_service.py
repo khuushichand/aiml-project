@@ -60,12 +60,14 @@ class MFAService:
     def __init__(
         self,
         db_pool: Optional[DatabasePool] = None,
-        settings: Optional[Settings] = None
+        settings: Optional[Settings] = None,
+        repo: Optional[AuthnzMfaRepo] = None,
     ):
         """Initialize MFA service"""
         self.settings = settings or get_settings()
         self.db_pool = db_pool
         self._initialized = False
+        self._repo: Optional[AuthnzMfaRepo] = repo
         self._cipher: Optional[Fernet] = None
         self._cipher_candidates: List[Fernet] = []
         self._cipher_key_material: Tuple[bytes, ...] = tuple()
@@ -96,6 +98,18 @@ class MFAService:
         if not self.db_pool:
             raise DatabaseError("MFAService database pool not initialized")
         return self.db_pool
+
+    def _get_repo(self) -> AuthnzMfaRepo:
+        """
+        Return the MFA repository, constructing it lazily when needed.
+
+        This allows reusing a single repo instance and makes it easy to
+        inject a fake or preconfigured repo in tests.
+        """
+        if self._repo is not None:
+            return self._repo
+        self._repo = AuthnzMfaRepo(self._ensure_db_pool())
+        return self._repo
 
     def _ensure_cipher_candidates(self) -> List[Fernet]:
         """Return Fernet instances for all active/legacy key materials."""
@@ -316,7 +330,7 @@ class MFAService:
             hashed_codes = [self._hash_backup_code(user_id, code) for code in backup_codes]
             backup_codes_json = json.dumps(hashed_codes)
 
-            repo = AuthnzMfaRepo(self._ensure_db_pool())
+            repo = self._get_repo()
             await repo.set_mfa_config(
                 user_id=user_id,
                 encrypted_secret=encrypted_secret,
@@ -345,7 +359,7 @@ class MFAService:
             await self.initialize()
 
         try:
-            repo = AuthnzMfaRepo(self._ensure_db_pool())
+            repo = self._get_repo()
             await repo.clear_mfa_config(
                 user_id=user_id,
                 updated_at=datetime.now(timezone.utc),
@@ -364,7 +378,7 @@ class MFAService:
             await self.initialize()
 
         try:
-            repo = AuthnzMfaRepo(self._ensure_db_pool())
+            repo = self._get_repo()
             encrypted = await repo.get_encrypted_totp_secret(user_id)
             return self._decrypt_secret(encrypted)
         except DatabaseError:
@@ -387,7 +401,7 @@ class MFAService:
             await self.initialize()
 
         try:
-            repo = AuthnzMfaRepo(self._ensure_db_pool())
+            repo = self._get_repo()
             row = await repo.get_mfa_status_row(user_id)
 
             if row:
@@ -431,7 +445,7 @@ class MFAService:
             await self.initialize()
 
         try:
-            repo = AuthnzMfaRepo(self._ensure_db_pool())
+            repo = self._get_repo()
 
             # Get backup codes JSON
             backup_codes_json = await repo.get_backup_codes_json(user_id)
@@ -472,12 +486,20 @@ class MFAService:
 
             updated_codes_json = json.dumps(normalized_codes)
 
-            # Persist updated backup codes
-            await repo.update_backup_codes_json(
+            # Atomically persist updated codes only if the underlying value has not
+            # changed since we loaded it, so the same backup code cannot be consumed
+            # twice under concurrent requests.
+            consumed = await repo.consume_backup_codes_json(
                 user_id=user_id,
-                backup_codes_json=updated_codes_json,
+                expected_backup_codes_json=backup_codes_json,
+                updated_backup_codes_json=updated_codes_json,
             )
-        except Exception as e:
+            if not consumed:
+                logger.info(
+                    f"Backup code for user {user_id} could not be consumed (already used or refreshed)."
+                )
+                return False
+        except Exception as e:  # noqa: BLE001 - fail closed on any unexpected error in auth path
             logger.error(f"Failed to verify backup code: {e}")
             return False
         else:
@@ -506,7 +528,7 @@ class MFAService:
             hashed_codes = [self._hash_backup_code(user_id, code) for code in new_codes]
             backup_codes_json = json.dumps(hashed_codes)
 
-            repo = AuthnzMfaRepo(self._ensure_db_pool())
+            repo = self._get_repo()
             await repo.set_backup_codes_with_timestamp(
                 user_id=user_id,
                 backup_codes_json=backup_codes_json,

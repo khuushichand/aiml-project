@@ -288,6 +288,67 @@ class AuthnzMfaRepo:
             )
             raise
 
+    async def consume_backup_codes_json(
+        self,
+        *,
+        user_id: int,
+        expected_backup_codes_json: str,
+        updated_backup_codes_json: str,
+    ) -> bool:
+        """
+        Atomically persist updated ``backup_codes`` JSON when the current value matches.
+
+        This implements a simple compare-and-swap pattern:
+
+        - The caller provides the previously observed JSON payload
+          (``expected_backup_codes_json``) and the desired updated payload
+          (``updated_backup_codes_json``).
+        - The UPDATE succeeds only when the row exists and ``backup_codes`` still
+          equals the expected value; exactly one row is affected in that case.
+        - When another concurrent operation has already changed ``backup_codes``,
+          the UPDATE affects zero rows and this method returns ``False`` without
+          raising, signalling that the code was already consumed or refreshed.
+
+        Returns:
+            True when the backup codes were updated; False when no row matched the
+            expected JSON (concurrent update / already-consumed code).
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres(conn):
+                    result = await conn.execute(
+                        "UPDATE users SET backup_codes = $1 WHERE id = $2 AND backup_codes = $3",
+                        updated_backup_codes_json,
+                        user_id,
+                        expected_backup_codes_json,
+                    )
+                else:
+                    result = await conn.execute(
+                        "UPDATE users SET backup_codes = ? WHERE id = ? AND backup_codes = ?",
+                        (updated_backup_codes_json, user_id, expected_backup_codes_json),
+                    )
+
+                # Interpret result without raising on zero-row updates: this path is
+                # used to guard against concurrent consumption of the same code.
+                try:
+                    if isinstance(result, str):
+                        parts = result.split()
+                        if parts and parts[-1].isdigit():
+                            return int(parts[-1]) > 0
+                        return False
+                    rowcount = getattr(result, "rowcount", None)
+                    return bool(rowcount)
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.debug(f"AuthnzMfaRepo.consume_backup_codes_json introspection failed: {exc}")
+                    # In doubt, treat as no-op rather than raising; caller will
+                    # interpret this as a failed consume.
+                    return False
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(
+                f"AuthnzMfaRepo.consume_backup_codes_json failed for user {user_id}: {exc}"
+            )
+            raise
+
     async def set_backup_codes_with_timestamp(
         self,
         *,

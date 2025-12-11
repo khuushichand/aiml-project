@@ -270,23 +270,23 @@ async def list_users(
         Paginated list of users
     """
     # TEST_MODE diagnostics: annotate DB backend and admin dependency success
-    try:
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
-            try:
-                from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-
-                pool = await get_db_pool()
-                db_backend = "postgres" if getattr(pool, "pool", None) is not None else "sqlite"
-                response.headers["X-TLDW-Admin-DB"] = db_backend
-                response.headers["X-TLDW-Admin-Req"] = "ok"
-                from loguru import logger as _logger
-
-                auth_hdr = request.headers.get("Authorization")
-                _logger.info(f"Admin list_users TEST_MODE: Authorization present={bool(auth_hdr)}")
-            except Exception as _e:
-                response.headers["X-TLDW-Admin-Diag-Error"] = str(_e)
-    except Exception as diag_exc:
-        logger.debug(f"Admin list_users TEST_MODE diagnostics failed: {diag_exc}")
+    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        try:
+            pool = await get_db_pool()
+            db_backend = "postgres" if getattr(pool, "pool", None) is not None else "sqlite"
+            response.headers["X-TLDW-Admin-DB"] = db_backend
+            response.headers["X-TLDW-Admin-Req"] = "ok"
+            auth_hdr = request.headers.get("Authorization")
+            logger.info(
+                "Admin list_users TEST_MODE: Authorization present={}",
+                bool(auth_hdr),
+            )
+        except Exception as diag_exc:  # noqa: BLE001 - diagnostics only, do not fail request
+            response.headers["X-TLDW-Admin-Diag-Error"] = str(diag_exc)
+            logger.debug(
+                "Admin list_users TEST_MODE diagnostics failed: {}",
+                diag_exc,
+            )
 
     try:
         offset = (page - 1) * limit
@@ -1096,17 +1096,17 @@ async def get_user_details(
 
         return user_dict
 
-    except UserNotFoundError:
+    except UserNotFoundError as err:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"User {user_id} not found",
-        )
+        ) from err
     except Exception as e:
         logger.error(f"Failed to get user {user_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve user details",
-        )
+        ) from e
 
 
 @router.put("/users/{user_id}")
@@ -2034,7 +2034,7 @@ async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest,
         if not perm_id:
             raise HTTPException(status_code=400, detail="permission_id or permission_name required")
 
-        granted = True if payload.effect == 'allow' else False
+        granted = payload.effect == "allow"
         if _is_pg:
             await db.execute(
                 """
@@ -2568,14 +2568,21 @@ async def create_registration_code(
 
         logger.info(f"Admin created registration code: {code[:8]}...")
 
+        if isinstance(result, tuple):
+            created_at = result[5]
+        else:
+            created_at = result["created_at"]
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+
         return RegistrationCodeResponse(
-            id=result[0] if isinstance(result, tuple) else result['id'],
+            id=result[0] if isinstance(result, tuple) else result["id"],
             code=code,
             max_uses=request.max_uses,
             times_used=0,
             expires_at=expires_at,
-            created_at=datetime.utcnow(),
-            role_to_grant=request.role_to_grant
+            created_at=created_at,
+            role_to_grant=request.role_to_grant,
         )
 
     except Exception as e:

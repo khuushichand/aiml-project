@@ -25,20 +25,25 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Usage.audio_quota import TIER_LIMITS, get_user_tier, set_user_tier
 
 
-router = APIRouter(
-    dependencies=[
-        Depends(require_roles("admin")),
-        Depends(require_permissions(SYSTEM_MAINTENANCE)),
-    ]
-)
+router = APIRouter()
+
+_ADMIN_DEPS = [
+    Depends(require_roles("admin")),
+    Depends(require_permissions(SYSTEM_MAINTENANCE)),
+]
 
 
 def get_job_manager() -> JobManager:
     """
-    Dependency helper to construct a JobManager using JOBS_DB_URL.
+    Dependency helper to construct a JobManager using JOBS_DB_URL when set.
+
+    When JOBS_DB_URL is a Postgres DSN, use the Postgres backend; otherwise
+    fall back to JobManager's default backend resolution (typically SQLite).
     """
     db_url = os.getenv("JOBS_DB_URL")
     if not db_url:
+        # Fail fast with a clear message; the dependency layer will surface
+        # this as a 500 to the client.
         raise RuntimeError("JOBS_DB_URL is not set; cannot initialize JobManager")
 
     backend = "postgres" if db_url.startswith("postgres") else None
@@ -183,16 +188,13 @@ async def get_audio_job(
             raise HTTPException(status_code=404, detail="Job not found")
         # Owner/admin check
         owner = str(d.get("owner_user_id") or "")
-        is_admin = bool(
-            principal.is_admin
-            or ("admin" in (principal.roles or []))
-        )
+        is_admin = principal.is_admin
         if not (is_admin or owner == str(current_user.id)):
             raise HTTPException(status_code=403, detail="Not authorized for this job")
         return AudioJob(**{k: d.get(k) for k in _AUDIO_JOB_FIELD_MAP.keys()})
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception(
             f"Failed to fetch job: job_id={job_id}, user_id={getattr(current_user, 'id', None)}"
         )
@@ -207,12 +209,13 @@ class ListAudioJobsResponse(BaseModel):
     "/jobs/admin/list",
     response_model=ListAudioJobsResponse,
     summary="List audio jobs (admin)",
+    dependencies=_ADMIN_DEPS,
 )
 async def list_audio_jobs_admin(
+    jm: Annotated[JobManager, Depends(get_job_manager)],
     status_filter: Optional[str] = Query(None, description="Filter by status: queued|processing|completed|failed|cancelled"),
     owner_user_id: Optional[str] = Query(None, description="Filter by owner user id"),
     limit: int = Query(50, ge=1, le=200),
-    jm: Annotated[JobManager, Depends(get_job_manager)],
 ):
     try:
         logger.info(
@@ -249,10 +252,11 @@ class AudioJobsSummary(BaseModel):
     "/jobs/admin/summary",
     response_model=AudioJobsSummary,
     summary="Summarize audio jobs by status (admin)",
+    dependencies=_ADMIN_DEPS,
 )
 async def summarize_audio_jobs_admin(
-    owner_user_id: Optional[str] = Query(None, description="Optional owner filter"),
     jm: Annotated[JobManager, Depends(get_job_manager)],
+    owner_user_id: Optional[str] = Query(None, description="Optional owner filter"),
 ):
     try:
         logger.info(
@@ -286,6 +290,7 @@ class AudioJobsSummaryByOwner(BaseModel):
     "/jobs/admin/summary-by-owner",
     response_model=AudioJobsSummaryByOwner,
     summary="Summarize audio jobs by owner and status (admin)",
+    dependencies=_ADMIN_DEPS,
 )
 async def summary_by_owner_admin(
     jm: Annotated[JobManager, Depends(get_job_manager)],
@@ -320,6 +325,7 @@ class OwnerProcessingSummary(BaseModel):
     "/jobs/admin/owner/{owner_user_id}/processing",
     response_model=OwnerProcessingSummary,
     summary="Get owner's processing count and limit (admin)",
+    dependencies=_ADMIN_DEPS,
 )
 async def owner_processing_summary(
     owner_user_id: int,
@@ -382,6 +388,7 @@ class SetUserTierRequest(BaseModel):
     "/jobs/admin/tiers/{user_id}",
     response_model=UserTierResponse,
     summary="Get user's audio tier (admin)",
+    dependencies=_ADMIN_DEPS,
 )
 async def get_user_tier_admin(user_id: int):
     try:
@@ -398,6 +405,7 @@ async def get_user_tier_admin(user_id: int):
     "/jobs/admin/tiers/{user_id}",
     response_model=UserTierResponse,
     summary="Set user's audio tier (admin)",
+    dependencies=_ADMIN_DEPS,
 )
 async def set_user_tier_admin(user_id: int, req: SetUserTierRequest):
     try:

@@ -2,6 +2,7 @@ import json
 from collections import defaultdict
 from datetime import datetime, timedelta
 import types
+import os
 
 import pytest
 
@@ -399,15 +400,17 @@ async def test_is_token_blacklisted_checks_refresh_hash_fallback(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_refresh_session_survives_hmac_rotation(tmp_path, monkeypatch):
+async def test_refresh_session_survives_hmac_rotation(isolated_test_environment, monkeypatch):
     reset_settings()
-    db_path = tmp_path / "session_rotation.sqlite"
+    # Provision a per-test PostgreSQL database via the shared AuthNZ fixture
+    _client, _db_name = isolated_test_environment  # client unused; ensures DB is created and env is set
     old_secret = "old-session-secret-key-for-tests-001"
     new_secret = "new-session-secret-key-for-tests-002"
 
+    db_url = os.getenv("DATABASE_URL", "")
     old_settings = Settings(
         AUTH_MODE="multi_user",
-        DATABASE_URL=f"sqlite:///{db_path}",
+        DATABASE_URL=db_url,
         JWT_SECRET_KEY=old_secret,
         ENABLE_REGISTRATION=True,
         REQUIRE_REGISTRATION_CODE=False,
@@ -421,23 +424,17 @@ async def test_refresh_session_survives_hmac_rotation(tmp_path, monkeypatch):
     await manager_old.initialize()
     manager_rotated: SessionManager | None = None
 
-    # Some lightweight SQLite builds may miss columns from later migrations; ensure availability.
-    session_columns = await pool.fetchall("PRAGMA table_info(sessions)")
-    session_column_names = {
-        row["name"] if isinstance(row, dict) else row[1] for row in session_columns
-    }
-    if "last_activity" not in session_column_names:
-        async with pool.transaction() as conn:
-            await conn.execute("ALTER TABLE sessions ADD COLUMN last_activity TIMESTAMP")
-
     # Ensure a user exists for FK constraints
     async with pool.transaction() as conn:
         await conn.execute(
             """
             INSERT INTO users (id, username, email, password_hash, is_active)
-            VALUES (?, ?, ?, ?, 1)
+            VALUES ($1, $2, $3, $4, TRUE)
             """,
-            (1, "alice", "alice@example.com", "hashed-password"),
+            1,
+            "alice",
+            "alice@example.com",
+            "hashed-password",
         )
 
     jwt_old = JWTService(settings=old_settings)
@@ -467,7 +464,7 @@ async def test_refresh_session_survives_hmac_rotation(tmp_path, monkeypatch):
 
         rotated_settings = Settings(
             AUTH_MODE="multi_user",
-            DATABASE_URL=f"sqlite:///{db_path}",
+            DATABASE_URL=db_url,
             JWT_SECRET_KEY=new_secret,
             JWT_SECONDARY_SECRET=old_secret,
             ENABLE_REGISTRATION=True,
@@ -495,7 +492,7 @@ async def test_refresh_session_survives_hmac_rotation(tmp_path, monkeypatch):
         assert result["session_id"] == session_info["session_id"]
 
         row_after = await pool.fetchone(
-            "SELECT refresh_token_hash FROM sessions WHERE id = ?",
+            "SELECT refresh_token_hash FROM sessions WHERE id = $1",
             session_info["session_id"],
         )
         assert row_after is not None
@@ -515,12 +512,14 @@ async def test_refresh_session_survives_hmac_rotation(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_validate_session_persists_last_activity_sqlite(tmp_path):
+async def test_validate_session_persists_last_activity(isolated_test_environment):
     reset_settings()
-    db_path = tmp_path / "session_last_activity.sqlite"
+    # Use per-test PostgreSQL database from AuthNZ fixture
+    _client, _db_name = isolated_test_environment  # client unused; ensures DB is created and env is set
+    db_url = os.getenv("DATABASE_URL", "")
     settings = Settings(
         AUTH_MODE="multi_user",
-        DATABASE_URL=f"sqlite:///{db_path}",
+        DATABASE_URL=db_url,
         JWT_SECRET_KEY="session-last-activity-secret-1234567890abcd",
         ENABLE_REGISTRATION=True,
         REQUIRE_REGISTRATION_CODE=False,
@@ -530,21 +529,17 @@ async def test_validate_session_persists_last_activity_sqlite(tmp_path):
     pool = DatabasePool(settings)
     await pool.initialize()
 
-    session_columns = await pool.fetchall("PRAGMA table_info(sessions)")
-    column_names = {
-        row["name"] if isinstance(row, dict) else row[1] for row in session_columns or []
-    }
-    if "last_activity" not in column_names:
-        async with pool.transaction() as conn:
-            await conn.execute("ALTER TABLE sessions ADD COLUMN last_activity TIMESTAMP")
-
+    # Ensure a user exists for FK constraints
     async with pool.transaction() as conn:
         await conn.execute(
             """
             INSERT INTO users (id, username, email, password_hash, is_active)
-            VALUES (?, ?, ?, ?, 1)
+            VALUES ($1, $2, $3, $4, TRUE)
             """,
-            (1, "bob", "bob@example.com", "hashed-password"),
+            1,
+            "bob",
+            "bob@example.com",
+            "bob-hashed-password",
         )
 
     manager = SessionManager(db_pool=pool, settings=settings)
@@ -563,7 +558,7 @@ async def test_validate_session_persists_last_activity_sqlite(tmp_path):
     )
 
     row_before = await pool.fetchone(
-        "SELECT last_activity FROM sessions WHERE id = ?",
+        "SELECT last_activity FROM sessions WHERE id = $1",
         session_info["session_id"],
     )
     before_value = None
@@ -577,7 +572,7 @@ async def test_validate_session_persists_last_activity_sqlite(tmp_path):
     assert result is not None
 
     row_after = await pool.fetchone(
-        "SELECT last_activity FROM sessions WHERE id = ?",
+        "SELECT last_activity FROM sessions WHERE id = $1",
         session_info["session_id"],
     )
     assert row_after is not None

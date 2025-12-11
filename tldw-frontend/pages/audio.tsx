@@ -12,8 +12,16 @@ function httpToWs(url: string) {
   return url.replace(/^http/, 'ws');
 }
 
+const tabs = [
+  { key: 'tts', label: 'TTS' },
+  { key: 'stt', label: 'Streaming STT' },
+  { key: 'chat', label: 'Voice Chat (WS)' },
+] as const;
+
+type TabKey = (typeof tabs)[number]['key'];
+
 export default function AudioPage() {
-  const [tab, setTab] = useState<'tts'|'stt'|'chat'>('tts');
+  const [tab, setTab] = useState<TabKey>('tts');
   return (
     <Layout>
       <div className="mx-auto max-w-3xl space-y-4">
@@ -27,13 +35,9 @@ export default function AudioPage() {
           <h1 className="text-2xl font-bold text-gray-900">Audio</h1>
           <div className="w-1/2">
             <Tabs
-              items={[
-                {key:'tts',label:'TTS'},
-                {key:'stt',label:'Streaming STT'},
-                {key:'chat',label:'Voice Chat (WS)'},
-              ]}
+              items={tabs}
               value={tab}
-              onChange={(k)=>setTab(k as any)}
+              onChange={(k)=>setTab(k as TabKey)}
             />
           </div>
         </div>
@@ -480,6 +484,11 @@ function VoiceChatStreamSection() {
       ws.onopen = () => {
         setConnected(true);
         setStatus('Connected');
+        setPartial('');
+        setTranscripts([]);
+        setAssistant('');
+        setAssistantInfo(null);
+        resetTtsBuffers();
         const cfg: any = {
           type: 'config',
           session_id: sessionId || undefined,
@@ -541,7 +550,14 @@ function VoiceChatStreamSection() {
           if (buf) ttsChunksRef.current.push(buf);
         }
       };
-      ws.onerror = () => setStatus('WebSocket error');
+      ws.onerror = () => {
+        setStatus('WebSocket error');
+        show({
+          title: 'WebSocket error',
+          description: 'Voice chat connection failed or interrupted',
+          variant: 'danger',
+        });
+      };
       ws.onclose = () => {
         cleanupAudio();
         setConnected(false);
@@ -591,7 +607,9 @@ function VoiceChatStreamSection() {
           const chunk = new Float32Array(bufferRef.current.slice(0, target));
           bufferRef.current = bufferRef.current.slice(target);
           const b64 = arrayBufferToBase64(chunk.buffer);
-          wsRef.current?.send(JSON.stringify({ type: 'audio', data: b64 }));
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'audio', data: b64 }));
+          }
         }
       };
       recordingRef.current = true;

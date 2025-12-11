@@ -79,10 +79,10 @@ def _make_single_user_principal(
     permissions: Optional[list[str]] = None,
 ) -> AuthPrincipal:
     return AuthPrincipal(
-        kind="single_user",
+        kind="user",
         user_id=1,
         api_key_id=None,
-        subject=None,
+        subject="single_user",
         token_type="api_key",
         jti=None,
         roles=roles or [],

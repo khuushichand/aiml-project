@@ -1954,6 +1954,11 @@ async def handle_unified_websocket(
                 if isinstance(raw_vad, str):
                     normalized_vad = raw_vad.strip().lower()
                     raw_vad = normalized_vad in {"1", "true", "yes", "on"}
+                elif raw_vad is not None and not isinstance(raw_vad, (bool, int)):
+                    logger.debug(
+                        f"Unexpected type for enable_vad in config: {type(raw_vad).__name__}; "
+                        f"coercing to bool(raw_vad)={bool(raw_vad)}"
+                    )
                 config.enable_vad = bool(raw_vad)
                 config.vad_threshold = _clamp_float(
                     config_data.get("vad_threshold", config.vad_threshold),

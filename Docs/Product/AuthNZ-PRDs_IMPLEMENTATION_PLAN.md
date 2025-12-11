@@ -201,7 +201,7 @@ The following checklist is scoped for a single, reviewable PR that implements th
 **Notes (v0.1 snapshot – `is_single_user_mode()` audit)**:
 - Auth-adjacent callsites previously driven by `is_single_user_mode()` now have principal-/profile-first replacements behind explicit flags:
   - Org policy helpers use `get_org_policy_from_principal` with `ORG_POLICY_SINGLE_USER_PRINCIPAL` to drive the synthetic `org_id=1` path from `AuthPrincipal` + profile instead of mode.
-  - Embeddings tenant quotas use `_should_enforce_tenant_rps` with `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE` to decide when to enforce/disable tenant RPS based on profile and `principal.kind=="single_user"`, rather than raw `AUTH_MODE`.
+  - Embeddings tenant quotas use `_should_enforce_tenant_rps` with `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE` to decide when to enforce/disable tenant RPS based on profile and principals explicitly tagged as single-user (subject `"single_user"` via `is_single_user_principal`), rather than raw `AUTH_MODE`.
   - MCP single-user API-key behavior uses `_should_use_single_user_api_key_compat` with `MCP_SINGLE_USER_COMPAT_SHIM` so that single-user admin principals are claim-/flag-driven instead of mode-driven.
 - Remaining uses of `is_single_user_mode()` are classified as coordination/UX or operational/backpressure, not authorization:
   - `tldw_Server_API/app/main.py`: startup banners, ChaChaNotes warm-up for the fixed single-user id, and `/webui/config.json` hints (including optional API-key injection for local single-user) branch on mode/profile purely for UX; no permissions or guardrails depend on these checks.

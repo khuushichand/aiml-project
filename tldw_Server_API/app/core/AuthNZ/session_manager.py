@@ -1169,75 +1169,18 @@ class SessionManager:
             encrypted_refresh_token = self.encrypt_token(refresh_token)
 
             db_pool = await self._ensure_db_pool()
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
-                    await conn.execute(
-                        """
-                        UPDATE sessions
-                        SET token_hash = $2,
-                            refresh_token_hash = $3,
-                            access_jti = COALESCE($4, access_jti),
-                            refresh_jti = COALESCE($5, refresh_jti),
-                            expires_at = COALESCE($6, expires_at),
-                            refresh_expires_at = COALESCE($7, refresh_expires_at),
-                            encrypted_token = $8,
-                            encrypted_refresh = $9
-                        WHERE id = $1
-                        """,
-                        session_id,
-                        access_token_hash,
-                        refresh_token_hash,
-                        access_jti,
-                        refresh_jti,
-                        access_exp,
-                        refresh_exp,
-                        encrypted_access_token,
-                        encrypted_refresh_token,
-                    )
-                    session_row = await conn.fetchrow(
-                        "SELECT user_id FROM sessions WHERE id = $1",
-                        session_id,
-                    )
-                else:
-                    await conn.execute(
-                        """
-                        UPDATE sessions
-                        SET token_hash = ?,
-                            refresh_token_hash = ?,
-                            access_jti = COALESCE(?, access_jti),
-                            refresh_jti = COALESCE(?, refresh_jti),
-                            expires_at = COALESCE(?, expires_at),
-                            refresh_expires_at = COALESCE(?, refresh_expires_at),
-                            encrypted_token = ?,
-                            encrypted_refresh = ?
-                        WHERE id = ?
-                        """,
-                        (
-                            access_token_hash,
-                            refresh_token_hash,
-                            access_jti,
-                            refresh_jti,
-                            access_exp.isoformat() if access_exp else None,
-                            refresh_exp.isoformat() if refresh_exp else None,
-                            encrypted_access_token,
-                            encrypted_refresh_token,
-                            session_id,
-                        ),
-                    )
-                    cursor = await conn.execute(
-                        "SELECT user_id FROM sessions WHERE id = ?",
-                        (session_id,),
-                    )
-                    session_row = await cursor.fetchone()
-
-            user_id = None
-            if session_row:
-                if isinstance(session_row, dict):
-                    user_id = session_row.get("user_id")
-                elif hasattr(session_row, "get"):
-                    user_id = session_row.get("user_id")
-                else:
-                    user_id = session_row[0]
+            repo = AuthnzSessionsRepo(db_pool)
+            user_id = await repo.update_session_tokens_after_creation(
+                session_id=session_id,
+                access_token_hash=access_token_hash,
+                refresh_token_hash=refresh_token_hash,
+                access_jti=access_jti,
+                refresh_jti=refresh_jti,
+                access_expires_at=access_exp,
+                refresh_expires_at=refresh_exp,
+                encrypted_access_token=encrypted_access_token,
+                encrypted_refresh_token=encrypted_refresh_token,
+            )
 
             expires_at_dt = access_exp
             if isinstance(expires_at_dt, str):
@@ -1327,62 +1270,9 @@ class SessionManager:
 
             # Check database for revoked sessions
             db_pool = await self._ensure_db_pool()
-            if getattr(db_pool, "pool", None):
-                # PostgreSQL
-                primary_query = """
-                    SELECT COUNT(*)
-                    FROM sessions
-                    WHERE is_revoked = true
-                      AND (token_hash = $1 OR refresh_token_hash = $1)
-                """
-                legacy_query = """
-                    SELECT COUNT(*)
-                    FROM sessions
-                    WHERE token_hash = $1 AND is_revoked = true
-                """
-                try:
-                    for candidate_hash in token_hashes:
-                        result = await db_pool.fetchval(primary_query, candidate_hash)
-                        if result:
-                            return True
-                except Exception as exc:
-                    logger.debug(
-                        "Session blacklist fallback using legacy token_hash-only query: {}", exc
-                    )
-                    for candidate_hash in token_hashes:
-                        result = await db_pool.fetchval(legacy_query, candidate_hash)
-                        if result:
-                            return True
-                return False
-            else:
-                # SQLite
-                primary_query = """
-                    SELECT COUNT(*)
-                    FROM sessions
-                    WHERE is_revoked = 1
-                      AND (token_hash = ? OR refresh_token_hash = ?)
-                """
-                legacy_query = """
-                    SELECT COUNT(*)
-                    FROM sessions
-                    WHERE token_hash = ? AND is_revoked = 1
-                """
-                try:
-                    for candidate_hash in token_hashes:
-                        result = await db_pool.fetchval(
-                            primary_query, candidate_hash, candidate_hash
-                        )
-                        if result:
-                            return True
-                except Exception as exc:
-                    logger.debug(
-                        "Session blacklist fallback using legacy token_hash-only query (SQLite): {}", exc
-                    )
-                    for candidate_hash in token_hashes:
-                        result = await db_pool.fetchval(legacy_query, candidate_hash)
-                        if result:
-                            return True
-
+            repo = AuthnzSessionsRepo(db_pool)
+            if await repo.has_revoked_session_for_token_hash_candidates(token_hashes):
+                return True
             return False
 
         except Exception as e:

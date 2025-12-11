@@ -35,45 +35,40 @@ async def test_get_auth_principal_reuses_existing_context():
 
 @pytest.mark.asyncio
 async def test_get_auth_principal_single_user_mode(monkeypatch):
-    # Force single-user mode
-    fake_settings = SimpleNamespace(PII_REDACT_LOGS=False)
-
-    def _fake_get_settings() -> Any:
-        return fake_settings
-
-    def _fake_is_single_user_mode() -> bool:
-        return True
-
-    async def _fake_verify_single_user_api_key(request, api_key=None, authorization=None):
-        # Parameters are intentionally ignored; they are present to match the
-        # real dependency signature for keyword-argument calls.
-        _ = (request, api_key, authorization)
-        return True
-
-    def _fake_get_single_user_instance() -> User:
-        return User(id=1, username="single_user", is_active=True)
+    async def _fake_authenticate_api_key_user(request, _api_key: str) -> User:
+        # Simulate a bootstrapped single-user admin principal.
+        user = User(id=1, username="single_user", is_active=True, roles=["admin"], permissions=["*"], is_admin=True)
+        request.state.user_id = 1
+        request.state.org_ids = []
+        request.state.team_ids = []
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=123,
+            subject="single_user",
+            token_type="api_key",
+            jti=None,
+            roles=list(user.roles or []),
+            permissions=list(user.permissions or []),
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        ctx = AuthContext(principal=principal, ip="127.0.0.1", user_agent=None, request_id=None)
+        request.state.auth = ctx
+        request.state._auth_user = user
+        return user
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.auth_principal_resolver.get_settings",
-        _fake_get_settings,
-    )
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.auth_principal_resolver.is_single_user_mode",
-        _fake_is_single_user_mode,
-    )
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.User_DB_Handling.verify_single_user_api_key",
-        _fake_verify_single_user_api_key,
-    )
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.User_DB_Handling.get_single_user_instance",
-        _fake_get_single_user_instance,
+        "tldw_Server_API.app.core.AuthNZ.User_DB_Handling.authenticate_api_key_user",
+        _fake_authenticate_api_key_user,
     )
 
     req = _make_request(headers={"X-API-KEY": "fixed-key"})
 
     principal = await get_auth_principal(req)
-    assert principal.kind == "single_user"
+    assert principal.kind == "user"
+    assert principal.subject == "single_user"
     assert principal.user_id == 1
     assert principal.is_admin is True
     assert "admin" in principal.roles
@@ -83,12 +78,6 @@ async def test_get_auth_principal_single_user_mode(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_auth_principal_jwt_path(monkeypatch):
-    def _fake_get_settings() -> Any:
-        return SimpleNamespace(PII_REDACT_LOGS=False)
-
-    def _fake_is_single_user_mode() -> bool:
-        return False
-
     async def _fake_verify_jwt_and_fetch_user(request, _token: str = "") -> User:
         # simulate User with claims and membership already attached to request.state
         request.state.user_id = 42
@@ -103,14 +92,6 @@ async def test_get_auth_principal_jwt_path(monkeypatch):
             is_admin=False,
         )
 
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.auth_principal_resolver.get_settings",
-        _fake_get_settings,
-    )
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.auth_principal_resolver.is_single_user_mode",
-        _fake_is_single_user_mode,
-    )
     monkeypatch.setattr(
         "tldw_Server_API.app.core.AuthNZ.User_DB_Handling.verify_jwt_and_fetch_user",
         _fake_verify_jwt_and_fetch_user,
@@ -128,12 +109,6 @@ async def test_get_auth_principal_jwt_path(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_auth_principal_api_key_path(monkeypatch):
-    def _fake_get_settings() -> Any:
-        return SimpleNamespace(PII_REDACT_LOGS=False)
-
-    def _fake_is_single_user_mode() -> bool:
-        return False
-
     async def _fake_authenticate_api_key_user(request, _api_key: str) -> User:
         request.state.user_id = 7
         request.state.api_key_id = 100
@@ -148,14 +123,6 @@ async def test_get_auth_principal_api_key_path(monkeypatch):
             is_admin=False,
         )
 
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.auth_principal_resolver.get_settings",
-        _fake_get_settings,
-    )
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.auth_principal_resolver.is_single_user_mode",
-        _fake_is_single_user_mode,
-    )
     monkeypatch.setattr(
         "tldw_Server_API.app.core.AuthNZ.User_DB_Handling.authenticate_api_key_user",
         _fake_authenticate_api_key_user,
@@ -173,21 +140,6 @@ async def test_get_auth_principal_api_key_path(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_auth_principal_missing_credentials_raises_401(monkeypatch):
-    def _fake_get_settings() -> Any:
-        return SimpleNamespace(PII_REDACT_LOGS=False)
-
-    def _fake_is_single_user_mode() -> bool:
-        return False
-
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.auth_principal_resolver.get_settings",
-        _fake_get_settings,
-    )
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.AuthNZ.auth_principal_resolver.is_single_user_mode",
-        _fake_is_single_user_mode,
-    )
-
     req = _make_request()
 
     with pytest.raises(HTTPException) as exc_info:

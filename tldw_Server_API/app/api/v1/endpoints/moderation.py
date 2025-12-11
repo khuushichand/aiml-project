@@ -105,7 +105,11 @@ async def get_effective_policy(user_id: Optional[str] = Query(None, description=
         snapshot = svc.effective_policy_snapshot(user_id)
         return snapshot
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to compute effective policy: {e}")
+        logger.error("Failed to compute effective moderation policy: {}", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to compute effective policy: {e}",
+        )
 
 
 @router.post(
@@ -119,7 +123,11 @@ async def reload_moderation():
         svc.reload()
         return {"status": "ok"}
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to reload moderation: {e}")
+        logger.error("Failed to reload moderation configuration: {}", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to reload moderation: {e}",
+        )
 
 
 @router.get(
@@ -134,7 +142,11 @@ async def get_moderation_settings():
         data = svc.get_settings()
         return data
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to get moderation settings: {}", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
 
 
 @router.put(
@@ -149,7 +161,11 @@ async def update_moderation_settings(body: ModerationSettingsUpdate):
         data = svc.update_settings(pii_enabled=body.pii_enabled, categories_enabled=body.categories_enabled, persist=bool(body.persist))
         return data
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to update moderation settings: {}", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
 
 
 @router.get(
@@ -243,7 +259,11 @@ async def lint_blocklist(
         items = [BlocklistLintItem(**it) for it in (res.get("items") or [])]
         return BlocklistLintResponse(items=items, valid_count=int(res.get("valid_count", 0)), invalid_count=int(res.get("invalid_count", 0)))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to lint blocklist lines: {}", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
 
 
 @router.post(

@@ -1,3 +1,10 @@
+"""
+SQLite-specific tests for single-user bootstrap flow.
+
+Validates that bootstrap_single_user_profile correctly creates the admin user
+and primary API key in SQLite, and that the bootstrap is idempotent.
+"""
+
 from pathlib import Path
 
 import pytest
@@ -127,7 +134,7 @@ async def test_single_user_bootstrap_reuses_preseeded_primary_key(tmp_path, monk
         )
         try:
             await conn.commit()  # type: ignore[attr-defined]
-        except Exception as e:
+        except (AttributeError, RuntimeError) as e:
             # Some adapters commit implicitly on context exit
             logger.debug(f"Explicit commit skipped (adapter may auto-commit): {e}")
 

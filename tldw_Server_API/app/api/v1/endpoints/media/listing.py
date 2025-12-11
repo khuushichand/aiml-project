@@ -173,7 +173,7 @@ async def list_media_endpoint(
                 # Surface failure via a coarse availability flag so clients can
                 # distinguish "no keywords" from "keyword lookup failed".
                 keywords_available = False
-            except Exception as exc:  # pragma: no cover - unexpected failures
+            except Exception as exc:  # noqa: BLE001  # pragma: no cover - unexpected failures
                 # Preserve graceful degradation for unexpected errors while
                 # still logging with full context for observability.
                 logger.error(

@@ -17,6 +17,9 @@ from tldw_Server_API.app.core.MCP_unified.modules.registry import reset_module_r
 from tldw_Server_API.app.core.MCP_unified.modules.base import BaseModule, ModuleConfig
 
 
+pytestmark = pytest.mark.unit
+
+
 class _StubUser:
     def __init__(self, user_id: int = 1):
         self.id = user_id
@@ -59,12 +62,19 @@ class _StubChatDB:
     def get_character_card_by_name(self, name: str):
         return {"id": 1, "name": name, "system_prompt": "You are helpful."}
 
-    def create_character_card(self, name: str, description: str, system_prompt: str, client_id: str):
+    def create_character_card(self, _name: str, _description: str, _system_prompt: str, _client_id: str):
         return 1
 
 
 class _StubTTSService:
-    async def generate_speech(self, request, provider=None, fallback=True, voice_to_voice_start=None, voice_to_voice_route="audio.speech"):
+    async def generate_speech(
+        self,
+        _request,
+        _provider=None,
+        _fallback=True,
+        _voice_to_voice_start=None,
+        _voice_to_voice_route="audio.speech",
+    ):
         # Return a single tiny chunk of bytes
         yield b"stub-audio"
 
@@ -85,7 +95,7 @@ class _DummyActionModule(BaseModule):
     async def get_tools(self) -> list[Dict[str, Any]]:
         return [{"name": "play_music", "description": "Play a song"}]
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
+    async def execute_tool(self, _tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
         return {"played": arguments.get("input"), "ctx_user": getattr(context, "user_id", None)}
 
 
@@ -101,7 +111,7 @@ async def test_run_speech_chat_turn_happy_path(monkeypatch):
     # Stub STT to return fixed transcript
     from tldw_Server_API.app.core.Streaming import speech_chat_service
 
-    async def _fake_transcribe_audio(**kwargs):
+    async def _fake_transcribe_audio(**_kwargs):
         return "hello from audio"
 
     # transcribe_audio is synchronous in the module; patch to simple function
@@ -110,15 +120,15 @@ async def test_run_speech_chat_turn_happy_path(monkeypatch):
     )
 
     # Stub character/conv helpers to avoid touching real DB schema
-    async def _fake_get_or_create_character_context(db, character_id, loop):
+    async def _fake_get_or_create_character_context(_db, _character_id, _loop):
         return {"id": 1, "name": "Test Character", "system_prompt": "You are helpful."}, 1
 
     async def _fake_get_or_create_conversation(
-        db, conversation_id, character_id, character_name, client_id, loop
+        _db, conversation_id, _character_id, _character_name, _client_id, _loop
     ):
         return conversation_id or "conv-1", conversation_id is None
 
-    async def _fake_load_history(db, conversation_id, character_card, limit=20, loop=None):
+    async def _fake_load_history(_db, conversation_id, _character_card, limit=20, _loop=None):
         return []
 
     monkeypatch.setattr(
@@ -138,7 +148,7 @@ async def test_run_speech_chat_turn_happy_path(monkeypatch):
     )
 
     # Stub LLM orchestrator
-    async def _fake_chat_api_call_async(**kwargs):
+    async def _fake_chat_api_call_async(**_kwargs):
         return {
             "choices": [
                 {"message": {"role": "assistant", "content": "stub assistant reply"}}
@@ -190,15 +200,15 @@ async def test_run_speech_chat_turn_stt_error_sentinel_raises(monkeypatch):
     )
 
     # Reuse the same DB/LLM/character stubs from the happy-path test
-    async def _fake_get_or_create_character_context(db, character_id, loop):
+    async def _fake_get_or_create_character_context(_db, _character_id, _loop):
         return {"id": 1, "name": "Test Character", "system_prompt": "You are helpful."}, 1
 
     async def _fake_get_or_create_conversation(
-        db, conversation_id, character_id, character_name, client_id, loop
+        _db, conversation_id, _character_id, _character_name, _client_id, _loop
     ):
         return conversation_id or "conv-1", conversation_id is None
 
-    async def _fake_load_history(db, conversation_id, character_card, limit=20, loop=None):
+    async def _fake_load_history(_db, conversation_id, _character_card, limit=20, _loop=None):
         return []
 
     monkeypatch.setattr(
@@ -217,7 +227,7 @@ async def test_run_speech_chat_turn_stt_error_sentinel_raises(monkeypatch):
         _fake_load_history,
     )
 
-    async def _fake_chat_api_call_async(**kwargs):
+    async def _fake_chat_api_call_async(**_kwargs):
         return {
             "choices": [
                 {"message": {"role": "assistant", "content": "stub assistant reply"}}

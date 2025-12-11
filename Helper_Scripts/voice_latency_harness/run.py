@@ -25,7 +25,7 @@ import io
 import json
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Iterable, Sequence
 
 import numpy as np
 import requests
@@ -40,6 +40,14 @@ HISTOGRAM_METRIC_NAMES = {
     "audio_chat_latency_seconds",
 }
 
+_SOUNDFILE_MISSING_MSG = (
+    "The 'soundfile' package is required for the harness; `pip install soundfile`."
+)
+
+_PROMETHEUS_CLIENT_MISSING_MSG = (
+    "Prometheus text parsing requires prometheus_client; install to enable fallback."
+)
+
 
 def _make_silence(duration_sec: float = 0.2, sr: int = 16000) -> bytes:
     """Generate a silent WAV clip for quick end-to-end harness checks."""
@@ -48,7 +56,7 @@ def _make_silence(duration_sec: float = 0.2, sr: int = 16000) -> bytes:
     try:
         import soundfile as sf
     except ImportError as exc:  # pragma: no cover - optional dep guard
-        raise RuntimeError("The 'soundfile' package is required for the harness; `pip install soundfile`.") from exc
+        raise RuntimeError(_SOUNDFILE_MISSING_MSG) from exc
     sf.write(buf, data, sr, format="WAV")
     return buf.getvalue()
 
@@ -145,12 +153,12 @@ def _histogram_percentiles_from_buckets(hist: Dict[str, Any], pcts: Sequence[int
     return results
 
 
-def _parse_prometheus_histograms(prom_text: str, target_names: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+def _parse_prometheus_histograms(prom_text: str, target_names: Optional[Iterable[str]] = None) -> Dict[str, Any]:
     """Parse Prometheus text exposition into histogram bucket dictionaries."""
     try:
         from prometheus_client.parser import text_string_to_metric_families
-    except Exception as exc:  # pragma: no cover - optional dependency
-        raise RuntimeError("Prometheus text parsing requires prometheus_client; install to enable fallback.") from exc
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise RuntimeError(_PROMETHEUS_CLIENT_MISSING_MSG) from exc
 
     targets = set(target_names) if target_names else None
     histograms: Dict[str, Dict[str, Any]] = {}
@@ -188,7 +196,7 @@ def _extract_histogram_percentiles(metrics: Dict[str, Any], name: str) -> Dict[s
     elif isinstance(series, dict) and "buckets" in series:
         return _histogram_percentiles_from_buckets(series)
     elif isinstance(series, list):
-        values = series
+        values = [v for v in series if isinstance(v, (int, float))]
     else:
         values = []
     return _percentiles(values)

@@ -110,7 +110,9 @@ async def list_alerts(
     unread_only: bool = Query(False, description="Only unread alerts"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-):
+) -> AlertsListResponse:
+    """List monitoring alerts with optional filters and pagination."""
+
     db = TopicMonitoringDB()  # default path from env handled in service; keep simple here
     rows = db.list_alerts(user_id=user_id, since_iso=since, unread_only=unread_only, limit=limit, offset=offset)
     items: list[AlertItem] = []
@@ -133,7 +135,9 @@ async def list_alerts(
     summary="Mark an alert as read",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def mark_alert_read(alert_id: int):
+async def mark_alert_read(alert_id: int) -> MarkReadResponse:
+    """Mark a single alert as read by ID."""
+
     db = TopicMonitoringDB()
     ok = db.mark_read(alert_id)
     if not ok:
@@ -148,7 +152,9 @@ async def mark_alert_read(alert_id: int):
     summary="Get notification settings",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_notifications_settings():
+async def get_notifications_settings() -> NotificationSettings:
+    """Return the current in-memory notification settings."""
+
     svc = get_notification_service()
     return NotificationSettings(**svc.get_settings())
 
@@ -160,7 +166,11 @@ async def get_notifications_settings():
     summary="Update notification settings (runtime only)",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def update_notifications_settings(payload: NotificationSettingsUpdate):
+async def update_notifications_settings(
+    payload: NotificationSettingsUpdate,
+) -> NotificationSettings:
+    """Update notification settings for the running process."""
+
     svc = get_notification_service()
     data = payload.model_dump(exclude_unset=True)
     updated = svc.update_settings(**data)
@@ -173,7 +183,9 @@ async def update_notifications_settings(payload: NotificationSettingsUpdate):
     summary="Send a test notification (critical by default)",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def send_test_notification(payload: NotificationTestRequest):
+async def send_test_notification(payload: NotificationTestRequest) -> dict[str, str]:
+    """Send a synthetic test notification using the current settings."""
+
     notifier = get_notification_service()
     alert = TopicAlert(
         user_id=payload.user_id or "admin",
@@ -201,7 +213,11 @@ async def send_test_notification(payload: NotificationTestRequest):
     summary="Tail recent notifications from file (JSONL)",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_recent_notifications(limit: int = Query(50, ge=1, le=500)):
+async def get_recent_notifications(
+    limit: int = Query(50, ge=1, le=500),
+) -> dict[str, list[dict]]:
+    """Return a bounded tail of recent notification events from the JSONL log file."""
+
     svc = get_notification_service()
     path = getattr(svc, 'file_path', None)
     items: list[dict] = []
@@ -228,4 +244,4 @@ async def get_recent_notifications(limit: int = Query(50, ge=1, le=500)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to read recent notifications",
-        )
+        ) from e

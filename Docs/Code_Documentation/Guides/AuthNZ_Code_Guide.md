@@ -45,7 +45,7 @@ See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentati
   - Optional `PROFILE=multi-user-sqlite` for small dev setups.
   - Auth-adjacent behaviour flags:
     - `ORG_POLICY_SINGLE_USER_PRINCIPAL` – single-user org-policy fallback driven by `AuthPrincipal` + profile vs legacy mode heuristics.
-    - `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE` – embeddings tenant RPS quotas driven by profile and `principal.kind=="single_user"` vs legacy `AUTH_MODE`.
+    - `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE` – embeddings tenant RPS quotas driven by profile and principals explicitly tagged as single-user (subject `"single_user"` via `is_single_user_principal`) vs legacy `AUTH_MODE`.
     - `MCP_SINGLE_USER_COMPAT_SHIM` – MCP single-user API-key compatibility shim vs always using the multi-user API key manager.
 - New code should treat mode/profile/flags as **coordination and guardrail-tuning inputs** (bootstrap, banners, WebUI hints, quotas), not as authorization shortcuts. Auth decisions must use `AuthPrincipal` claims via the dependencies below and MUST NOT branch on `is_single_user_mode()` / `is_multi_user_mode()` or `AUTH_MODE` to grant or bypass permissions.
 
@@ -78,7 +78,7 @@ Recommended combinations (v0.1):
 - Virtual keys (JWT) are short-lived scoped tokens minted by authenticated users for automation/integrations. Validation works in both modes when JWT is configured. In single-user mode the JWT service derives a surrogate secret from `SINGLE_USER_API_KEY`, so bearer JWTs can be validated; API keys remain the simplest option when operating single-user.
 
 Note on single-user JWTs:
-- In single-user mode, `get_current_user` does not accept arbitrary JWTs; it only accepts `SINGLE_USER_API_KEY` via `X-API-KEY` or as Bearer (see tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:574). Virtual JWTs can still be verified and scoped via `require_token_scope`, but they do not authenticate a user in single-user mode.
+- In single-user mode, `get_current_user` does not accept arbitrary JWTs; it only accepts `SINGLE_USER_API_KEY` via `X-API-KEY` or as Bearer (see `tldw_Server_API.app.api.v1.API_Deps.auth_deps.get_current_user`). Virtual JWTs can still be verified and scoped via `require_token_scope`, but they do not authenticate a user in single-user mode.
 
 JWT virtual keys support additional constraints via claims (enforced with `auth_deps.require_token_scope`, not in `get_current_user`):
 - `allowed_endpoints`: list of endpoint codes (e.g., `chat.completions`)
@@ -443,24 +443,24 @@ Notes:
 - Virtual key features can be toggled via `VIRTUAL_KEYS_ENABLED` in settings (enabled by default).
 - Security alerts sinks (file/webhook/email) are configured via `SECURITY_ALERTS_*` settings; see the AuthNZ settings section for details.
 - Registration toggles: `ENABLE_REGISTRATION` and `REQUIRE_REGISTRATION_CODE` control whether registration is exposed and whether codes are required.
- - MFA prerequisites: enforced via `_ensure_mfa_available` — tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:47
- - Virtual key feature and budget settings: `VIRTUAL_KEYS_ENABLED`, `LLM_BUDGET_ENFORCE`, `LLM_BUDGET_ENDPOINTS` — tldw_Server_API/app/core/AuthNZ/settings.py:370, tldw_Server_API/app/core/AuthNZ/settings.py:374, tldw_Server_API/app/core/AuthNZ/settings.py:378
+ - MFA prerequisites: enforced via `_ensure_mfa_available` — `tldw_Server_API.app.api.v1.endpoints.auth_enhanced._ensure_mfa_available`
+ - Virtual key feature and budget settings: `VIRTUAL_KEYS_ENABLED`, `LLM_BUDGET_ENFORCE`, `LLM_BUDGET_ENDPOINTS` — see `VIRTUAL_KEYS_ENABLED`, `LLM_BUDGET_ENFORCE`, and `LLM_BUDGET_ENDPOINTS` on `tldw_Server_API.app.core.AuthNZ.settings.Settings`
 
 Auth Endpoints (summary):
-- `POST /api/v1/auth/login` – Username/password login (multi-user) — tldw_Server_API/app/api/v1/endpoints/auth.py:234
-- `POST /api/v1/auth/refresh` – Refresh JWT (multi-user) — tldw_Server_API/app/api/v1/endpoints/auth.py:622
-- `POST /api/v1/auth/logout` – Logout; optional all devices (multi-user) — tldw_Server_API/app/api/v1/endpoints/auth.py:569
-- `POST /api/v1/auth/register` – Registration flow (if enabled by settings) — tldw_Server_API/app/api/v1/endpoints/auth.py:857
-- `POST /api/v1/auth/forgot-password` – Send password reset email (multi-user) — tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:125
-- `POST /api/v1/auth/reset-password` – Reset password with token (multi-user) — tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:228
-- `GET /api/v1/auth/verify-email` – Verify email (multi-user) — tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:384
-- `POST /api/v1/auth/resend-verification` – Resend verification email (multi-user) — tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:439
-- `POST /api/v1/auth/mfa/setup` | `POST /mfa/verify` | `POST /mfa/disable` – MFA endpoints; MFA is available only in multi-user deployments with PostgreSQL — tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:504
-- `POST /api/v1/auth/virtual-key` – Mint scoped virtual JWT; multi-user only — tldw_Server_API/app/api/v1/endpoints/auth.py:176
+- `POST /api/v1/auth/login` – Username/password login (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth.login`
+- `POST /api/v1/auth/refresh` – Refresh JWT (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth.refresh_token`
+- `POST /api/v1/auth/logout` – Logout; optional all devices (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth.logout`
+- `POST /api/v1/auth/register` – Registration flow (if enabled by settings) — `tldw_Server_API.app.api.v1.endpoints.auth.register`
+- `POST /api/v1/auth/forgot-password` – Send password reset email (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth_enhanced.forgot_password`
+- `POST /api/v1/auth/reset-password` – Reset password with token (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth_enhanced.reset_password`
+- `GET /api/v1/auth/verify-email` – Verify email (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth_enhanced.verify_email`
+- `POST /api/v1/auth/resend-verification` – Resend verification email (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth_enhanced.resend_verification`
+- `POST /api/v1/auth/mfa/setup` | `POST /mfa/verify` | `POST /mfa/disable` – MFA endpoints; MFA is available only in multi-user deployments with PostgreSQL — see `setup_mfa`, `verify_mfa_setup`, and `disable_mfa` in `tldw_Server_API.app.api.v1.endpoints.auth_enhanced`
+- `POST /api/v1/auth/virtual-key` – Mint scoped virtual JWT; multi-user only — `tldw_Server_API.app.api.v1.endpoints.auth.mint_self_virtual_key`
 
 References:
-- tldw_Server_API/app/api/v1/endpoints/auth.py:176
-- tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:1
+- `tldw_Server_API.app.api.v1.endpoints.auth.mint_self_virtual_key`
+- `tldw_Server_API.app.api.v1.endpoints.auth_enhanced`
 
 Operator references:
 - JWT rotation runbook: `Docs/Deployment/Operations/JWT_Rotation_Runbook.md`
@@ -531,7 +531,7 @@ async def mint_vk(user=Depends(get_current_user)):
 - In TEST_MODE, `get_session_manager_dep` returns a stub `SessionManager` and `get_rate_limiter_dep` returns a disabled limiter stub to avoid DB/Redis work and keep tests deterministic.
 - Postgres-dependent tests use a provisioned container unless `TLDW_TEST_NO_DOCKER=1`; see `tldw_Server_API/tests/AuthNZ_Postgres/` and project test README.
 - Many endpoint utilities add test-only diagnostics headers for clarity (e.g., `X-TLDW-DB`, `X-TLDW-CSRF-Enabled`).
-- 401 diagnostics in TEST_MODE: auth failures from `get_current_user` include `X-TLDW-Auth-Reason` and `X-TLDW-Auth-Headers` to explain why authentication failed and which headers were present (see tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:552).
+- 401 diagnostics in TEST_MODE: auth failures from `get_current_user` include `X-TLDW-Auth-Reason` and `X-TLDW-Auth-Headers` to explain why authentication failed and which headers were present (see `tldw_Server_API.app.api.v1.API_Deps.auth_deps.get_current_user`).
 
 ## Extending AuthNZ
 

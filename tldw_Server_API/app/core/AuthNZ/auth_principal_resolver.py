@@ -20,10 +20,6 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import (
     AuthPrincipal,
     PrincipalKind,
 )
-from tldw_Server_API.app.core.AuthNZ.settings import (
-    get_settings,
-    is_single_user_mode,
-)
 
 
 def _extract_bearer_token(request: Request) -> Optional[str]:
@@ -56,6 +52,7 @@ def _build_principal_from_user(
     request: Request,
     token_type: Optional[str] = None,
     jti: Optional[str] = None,
+    subject: Optional[str] = None,
     api_key_id: Optional[int] = None,
 ) -> AuthPrincipal:
     """
@@ -96,7 +93,7 @@ def _build_principal_from_user(
         kind=kind,
         user_id=user_id_int,
         api_key_id=api_key_id,
-        subject=None,
+        subject=subject,
         token_type=token_type,
         jti=jti,
         roles=roles,
@@ -144,85 +141,14 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
 
     Behavior:
     - If request.state.auth is already populated with an AuthContext, reuse it.
-    - In single-user mode, validate the configured API key and treat the
-      bootstrapped user as a single_user principal with admin-style claims.
-    - In multi-user mode, prefer Bearer JWT tokens; fall back to X-API-KEY.
+    - Prefer Bearer JWT tokens; fall back to X-API-KEY when no token is present.
     - On missing or invalid credentials, raise HTTP 401 with stable semantics.
     """
     # Fast-path: reuse existing AuthContext if present
     existing = getattr(request.state, "auth", None)
     if isinstance(existing, AuthContext):
         return existing.principal
-
-    # Single-user mode: validate fixed API key and map to single_user principal
-    try:
-        if is_single_user_mode():
-            api_key = _extract_api_key(request)
-            authorization = request.headers.get("Authorization") if getattr(request, "headers", None) else None
-
-            # Reuse existing verification helper to honor all existing semantics
-            await User_DB_Handling.verify_single_user_api_key(
-                request,
-                api_key=api_key,
-                authorization=authorization,
-            )
-
-            base_user = User_DB_Handling.get_single_user_instance()
-            # Mirror the claims semantics from get_request_user's single-user branch
-            settings = get_settings()
-            user = User(
-                id=base_user.id,
-                username=base_user.username,
-                email=base_user.email,
-                is_active=base_user.is_active,
-                roles=["admin"],
-                permissions=list(
-                    getattr(settings, "SINGLE_USER_DEFAULT_PERMISSIONS", [])
-                    or []
-                ),
-                is_admin=True,
-            )
-
-            # Maintain legacy request.state fields for compatibility
-            try:
-                request.state.user_id = user.id
-                request.state.team_ids = []
-                request.state.org_ids = []
-                # Cache the resolved user for downstream dependencies
-                request.state._auth_user = user
-            except Exception as exc:  # noqa: BLE001 - defensive: request.state failures must not break auth
-                logger.exception(
-                    "Unable to set request.state for single-user principal: {}", exc
-                )
-
-            principal = _build_principal_from_user(
-                user=user,
-                kind="single_user",
-                request=request,
-                token_type="api_key",
-                jti=None,
-                api_key_id=None,
-            )
-            ctx = _build_context(principal, request)
-            try:
-                request.state.auth = ctx
-            except Exception as exc:  # noqa: BLE001 - defensive: caching failures must not break auth
-                logger.exception(
-                    "Unable to cache auth context in single-user mode: {}", exc
-                )
-            return principal
-    except HTTPException:
-        # Propagate auth failures as-is
-        raise
-    except Exception as exc:
-        logger.error(f"Error resolving principal in single-user mode: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        ) from exc
-
-    # Multi-user mode: prefer Bearer JWT, fall back to X-API-KEY
+    # Prefer Bearer JWT, fall back to X-API-KEY
     token = _extract_bearer_token(request)
     api_key = _extract_api_key(request)
 
@@ -239,14 +165,24 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
         try:
             user = await User_DB_Handling.verify_jwt_and_fetch_user(request, token)
         except HTTPException:
+            # Propagate explicit HTTP errors (401/400/etc.) unchanged
             raise
-        except Exception as exc:
-            logger.error(f"Error resolving principal from JWT: {exc}")
+        except Exception as exc:  # noqa: BLE001 - defensive: unexpected JWT errors -> 401
+            logger.exception("Error resolving principal from JWT: {}", exc)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate credentials",
                 headers={"WWW-Authenticate": "Bearer"},
             ) from exc
+
+        # verify_jwt_and_fetch_user populates request.state.auth / _auth_user; reuse if present.
+        try:
+            ctx = getattr(request.state, "auth", None)
+            if isinstance(ctx, AuthContext):
+                return ctx.principal
+        except Exception:
+            # Fall back to rebuilding principal if state is missing/misconfigured.
+            pass
 
         principal = _build_principal_from_user(
             user=user,
@@ -271,12 +207,20 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             user = await User_DB_Handling.authenticate_api_key_user(request, api_key)
         except HTTPException:
             raise
-        except Exception as exc:
-            logger.error(f"Error resolving principal from API key: {exc}")
+        except Exception as exc:  # noqa: BLE001 - defensive: unexpected API key errors -> 401
+            logger.exception("Error resolving principal from API key: {}", exc)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Authentication failed",
             ) from exc
+
+        # authenticate_api_key_user populates request.state.auth / _auth_user; reuse if present.
+        try:
+            ctx = getattr(request.state, "auth", None)
+            if isinstance(ctx, AuthContext):
+                return ctx.principal
+        except Exception:
+            pass
 
         api_key_id: Optional[int] = None
         try:

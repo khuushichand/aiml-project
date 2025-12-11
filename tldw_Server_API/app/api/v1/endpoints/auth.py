@@ -4,7 +4,7 @@
 # Imports
 from typing import Dict, Any, Optional
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 #
 # 3rd-party imports
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
@@ -236,7 +236,7 @@ async def mint_self_virtual_key(
 async def login(
     request: Request,
     response: Response,
-    _diag=Depends(_login_runtime_diag),
+    _diag=Depends(_login_runtime_diag),  # noqa: B008
     form_data: OAuth2PasswordRequestForm = Depends(),
     db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
@@ -292,9 +292,11 @@ async def login(
 
                     now = datetime.now(lockout_expires.tzinfo or _tz.utc)
                     retry_after_seconds = max(0, int((lockout_expires - now).total_seconds()))
-                except Exception:
-                    # Fallback to default retry_after_seconds
-                    pass
+                except Exception as exc:
+                    # Fallback to default retry_after_seconds, but keep it observable.
+                    logger.debug(
+                        f"login: failed to compute lockout expiry; using default Retry-After: {exc}"
+                    )
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many failed login attempts. Please try again later.",
@@ -881,7 +883,7 @@ async def refresh_token(
 async def register(
     request: RegisterRequest,
     response: Response,
-    _diag=Depends(_register_runtime_diag),
+    _diag=Depends(_register_runtime_diag),  # noqa: B008
     registration_service: RegistrationService = Depends(get_registration_service_dep)
 ) -> RegistrationResponse:
     """

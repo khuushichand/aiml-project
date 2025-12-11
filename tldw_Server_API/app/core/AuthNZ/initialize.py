@@ -273,7 +273,7 @@ async def setup_database():
                                 )
 
             # Ensure API key tables after org/team tables exist
-            api_mgr = APIKeyManager()
+            api_mgr = APIKeyManager(db_pool=pool)
             await api_mgr.initialize()
 
             # Ensure usage/LLM usage tables and virtual-key counters for Postgres.
@@ -413,7 +413,7 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
         # exercise multi-user registration flows. Only single-user profile
         # (AUTH_MODE=single_user) should reach the seed logic below.
         logger.debug(
-            "ensure_single_user_rbac_seed_if_needed: skipping seed; AUTH_MODE=%s",
+            "ensure_single_user_rbac_seed_if_needed: skipping seed; AUTH_MODE={}",
             settings.AUTH_MODE,
         )
         return
@@ -534,7 +534,14 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                             "admin",
                         )
                 except Exception as role_assign_err:
-                    logger.debug(f"Single-user admin role assignment skipped: {role_assign_err}")
+                    # Log at warning level with context so repeated failures surface operationally
+                    logger.warning(
+                        "Single-user admin role assignment skipped in ensure_single_user_rbac_seed_if_needed "
+                        "(AUTH_MODE=%s, db_url=%s): %s",
+                        settings.AUTH_MODE,
+                        getattr(settings, "DATABASE_URL", "unset"),
+                        role_assign_err,
+                    )
                 return
 
         # SQLite path (pool adapters expose .execute returning cursor-like)
@@ -647,7 +654,14 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
             except Exception:
                 pass
     except Exception as e:
-        logger.debug(f"Single-user RBAC seed ensure skipped or failed: {e}")
+        # Non-fatal but important for observability: surface failures at warning level
+        logger.warning(
+            "Single-user RBAC seed ensure skipped or failed in ensure_single_user_rbac_seed_if_needed "
+            "(AUTH_MODE=%s, db_url=%s): %s",
+            settings.AUTH_MODE,
+            getattr(settings, "DATABASE_URL", "unset"),
+            e,
+        )
 
 async def create_admin_user():
     """Create initial admin user for multi-user mode"""
@@ -768,15 +782,13 @@ async def bootstrap_single_user_profile() -> bool:
 
     try:
         # Use APIKeyManager to ensure tables and compute key hash
-        from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
-
-        manager = APIKeyManager()
+        pool = await get_db_pool()
+        manager = APIKeyManager(db_pool=pool)
         await manager.initialize()
 
         key_hash = manager.hash_api_key(api_key_value)
         key_prefix = (api_key_value[:10] + "...") if len(api_key_value) > 10 else api_key_value
 
-        pool = await get_db_pool()
         from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
 
         repo = AuthnzApiKeysRepo(pool)

@@ -6,7 +6,7 @@ The server exports metrics across HTTP, DB, LLM, RAG, embeddings, uploads, syste
 - JSON: `GET /api/v1/metrics/json`
 - Health: `GET /api/v1/metrics/health`
 - Chat metrics (JSON): `GET /api/v1/metrics/chat` (includes `token_costs`)
-- Reset metrics: `POST /api/v1/metrics/reset` (admin-only; clears in-memory counters)
+- Reset metrics: `POST /api/v1/metrics/reset` (admin-only; clears in-memory counters; enforced by AuthNZ)
 
 ## HTTP
 - `http_requests_total{method,endpoint,status}`: Counter of HTTP requests.
@@ -144,6 +144,7 @@ Notes:
 - Prometheus scrape (requires `system.logs` permission via AuthPrincipal): `GET /api/v1/mcp/metrics/prometheus`.
   - Security: expose only on trusted networks or behind an authing proxy.
   - If Prometheus client is not installed, the endpoint returns a placeholder comment.
+  - Migration note: existing Prometheus scrapers must authenticate using a principal that holds the `system.logs` permission (for example, via an API key or JWT with that claim). Without this permission, the endpoint returns `403 Forbidden` and no metrics are exposed.
 
 ## Grafana Provisioning
 

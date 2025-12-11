@@ -18,17 +18,21 @@ router = APIRouter()
 
 
 async def _resolve_api_key_id(request: Request, x_api_key: Optional[str]) -> Dict[str, Any]:
-    # Prefer earlier resolution from auth middlewares/deps
+    # Prefer principal-first resolution from AuthContext, then legacy fallbacks.
     """
     Resolve an API key to its `api_key_id` and associated `user_id` for the incoming request.
 
-    Prefers values previously set on `request.state` by auth middleware. Otherwise
-    extracts an API key from the provided `x_api_key` parameter or a Bearer token
-    in the Authorization header and resolves it via `resolve_api_key_by_hash`.
+    Prefers values from an `AuthContext` on `request.state` (principal-first), short-circuiting
+    to `principal.api_key_id` and `principal.user_id` when available. If no suitable principal
+    is present, falls back to legacy resolution: previously set `request.state.api_key_id` /
+    `request.state.user_id`, then an explicit `x_api_key` parameter or a Bearer token in the
+    Authorization header resolved via `resolve_api_key_by_hash`.
 
     Parameters:
-        request (Request): The incoming FastAPI request; may contain pre-resolved `state.api_key_id` and `state.user_id`.
-        x_api_key (Optional[str]): An explicit API key (typically from the X-API-KEY header) to resolve; if omitted, the Authorization header is inspected.
+        request (Request): The incoming FastAPI request; may contain an `AuthContext` on
+            `request.state.auth` and/or pre-resolved `state.api_key_id` and `state.user_id`.
+        x_api_key (Optional[str]): An explicit API key (typically from the X-API-KEY header)
+            to resolve; if omitted, the Authorization header is inspected.
 
     Returns:
         dict: A mapping with keys:

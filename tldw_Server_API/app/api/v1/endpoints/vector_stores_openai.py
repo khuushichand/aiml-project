@@ -17,8 +17,12 @@ import tiktoken
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import get_auth_principal
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles, require_permissions, rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
+    require_roles,
+    require_permissions,
+    rbac_rate_limit,
+)
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
     VectorStoreAdapter,

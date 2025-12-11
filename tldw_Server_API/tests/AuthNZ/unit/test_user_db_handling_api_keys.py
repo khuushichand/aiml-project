@@ -1,9 +1,11 @@
+from types import SimpleNamespace
+
 import pytest
 from fastapi import HTTPException, status
 from starlette.requests import Request
 
 from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as user_handling
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
 def _build_request() -> Request:
@@ -20,25 +22,30 @@ def _build_request() -> Request:
 
 @pytest.mark.asyncio
 async def test_verify_single_user_api_key_accepts_bearer(monkeypatch):
-    monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-abcdefghijklmnopqrstuvwxyz")
-    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
-    reset_settings()
+    # Configure a synthetic single-user id for this test.
+    fake_settings = SimpleNamespace(SINGLE_USER_FIXED_ID=99, PII_REDACT_LOGS=False)
+
+    monkeypatch.setattr(user_handling, "get_settings", lambda: fake_settings)
+
+    async def _fake_authenticate_api_key_user(request, api_key: str) -> user_handling.User:
+        # The verification helper should pass the raw API key through.
+        assert api_key == "test-api-key-abcdefghijklmnopqrstuvwxyz"
+        return user_handling.User(id=fake_settings.SINGLE_USER_FIXED_ID, username="single_user", is_active=True)
+
+    monkeypatch.setattr(user_handling, "authenticate_api_key_user", _fake_authenticate_api_key_user)
 
     request = _build_request()
-    settings = get_settings()
+
+    # Happy path: Authorization bearer with the configured key resolves to the single-user id.
     assert await user_handling.verify_single_user_api_key(
         request,
         api_key=None,
-        authorization=f"Bearer {settings.SINGLE_USER_API_KEY}",
+        authorization="Bearer test-api-key-abcdefghijklmnopqrstuvwxyz",
     ) is True
 
+    # Missing credentials should raise 401.
     with pytest.raises(HTTPException):
         await user_handling.verify_single_user_api_key(request, api_key=None, authorization=None)
-
-    for env_key in ("AUTH_MODE", "SINGLE_USER_API_KEY", "DATABASE_URL"):
-        monkeypatch.delenv(env_key, raising=False)
-    reset_settings()
 
 
 @pytest.mark.asyncio

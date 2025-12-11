@@ -308,13 +308,10 @@ async def _maybe_rg_shadow_chat_decision(
 
     Control flow always follows the legacy limiter; RG is observability-only for
     *enforcement* in this path. The shadow decision uses the same governor
-    instance and issues real reserve/commit calls, which will consume quota units
-    under the configured chat policy. When RG middleware or endpoint-level
-    enforcement is also enabled for chat, enabling RG_SHADOW_CHAT will
-    effectively double-count requests/tokens in the governor. Operators should
-    treat RG_SHADOW_CHAT as an instrumentation/diagnostics flag and avoid using
-    it alongside other chat RG enforcement paths unless this double-counting is
-    acceptable.
+    instance but only issues a read-only ``check`` call, so it does not reserve
+    or commit units and therefore does not consume quota or mutate governor
+    windows/concurrency state. This avoids double-counting when other RG
+    enforcement paths are enabled for chat.
     """
     if request is None:
         return
@@ -385,13 +382,15 @@ async def _maybe_rg_shadow_chat_decision(
         policy_id = "chat.default"
 
     try:
-        op_id = f"chat-shadow:{limiter_user_id}:{limiter_conversation_id or 'none'}"
-        dec, handle_id = await gov.reserve(
-            RGRequest(entity=entity, categories=cats, tags={"policy_id": policy_id, "endpoint": "/api/v1/chat/completions"}),
-            op_id=op_id,
+        dec = await gov.check(
+            RGRequest(
+                entity=entity,
+                categories=cats,
+                tags={"policy_id": policy_id, "endpoint": "/api/v1/chat/completions"},
+            )
         )
     except Exception as exc:  # noqa: BLE001 - defensive
-        logger.debug("RG shadow: reserve failed, skipping shadow comparison: {}", exc)
+        logger.debug("RG shadow: check failed, skipping shadow comparison: {}", exc)
         return
 
     legacy_dec = "allow" if legacy_allowed else "deny"
@@ -411,16 +410,6 @@ async def _maybe_rg_shadow_chat_decision(
         except Exception as exc:  # noqa: BLE001 - defensive
             # Metrics must never affect control flow
             logger.debug("RG shadow: mismatch metric recording failed: {}", exc)
-
-    if handle_id:
-        try:
-            actuals: Dict[str, int] = {"requests": 1}
-            if "tokens" in cats and est_tokens > 0:
-                actuals["tokens"] = est_tokens
-            await gov.commit(handle_id, actuals=actuals)
-        except Exception as exc:  # noqa: BLE001 - defensive
-            # Shadow commits are best-effort only
-            logger.debug("RG shadow: commit failed for handle_id={}, ignoring: {}", handle_id, exc)
 
 # ------------------------------------------------------------------------------------
 # New Endpoints: Chat Commands discovery and Dictionary Validation
@@ -1502,7 +1491,7 @@ async def create_chat_completion(
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
             # --- Character/Conversation Context, History, and Current Turn ---
-            character_card_for_context, _character_db_id, final_conversation_id, conversation_created_this_turn, llm_payload_messages, should_persist = await build_context_and_messages(
+            character_card_for_context, _, final_conversation_id, conversation_created_this_turn, llm_payload_messages, should_persist = await build_context_and_messages(
                 chat_db=chat_db,
                 request_data=request_data,
                 loop=current_loop,

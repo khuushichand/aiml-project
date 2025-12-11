@@ -243,7 +243,7 @@ To make “mode” an implementation detail of a higher-level deployment profile
      - If `PROFILE` is unset, the system behaves exactly as today and infers behavior from `AUTH_MODE` + `DATABASE_URL`.
      - If `PROFILE` is set, helper functions (e.g., `is_single_user_mode`, `is_multi_user_mode`) continue to read `AUTH_MODE` but may log/emit diagnostics when `PROFILE` and `AUTH_MODE` disagree (no hard failures yet).
    - Status (v1.0):
-     - `tldw_Server_API/app/core/AuthNZ/settings.Settings` exposes a `PROFILE` field (env `PROFILE`) and a helper `get_profile()` which returns either the explicit value or a derived profile string based on `AUTH_MODE` + `DATABASE_URL` (for example, `local-single-user`, `multi-user-postgres`, `multi-user-sqlite`). This value is used only for coordination/UX and feature gating (startup logs, WebUI `/webui/config.json` hints, embeddings tenant-quota behavior); all authentication and authorization decisions are **claim-first** and use `AuthPrincipal`-based dependencies (`get_auth_principal`, `require_permissions`, `require_roles`) instead of mode checks.
+     - `tldw_Server_API/app/core/AuthNZ/settings.Settings` exposes a `PROFILE` field (env `PROFILE`) and a helper `get_profile()` which returns either the explicit value or a derived profile string based on `AUTH_MODE` + `DATABASE_URL` (for example, `local-single-user`, `multi-user-postgres`, `multi-user-sqlite`). Callers should treat this primarily as a coordination/UX hint and feature-gating signal (startup logs, WebUI `/webui/config.json` hints, embeddings tenant-quota behavior); all authentication and authorization decisions are **claim-first** and use `AuthPrincipal`-based dependencies (`get_auth_principal`, `require_permissions`, `require_roles`) instead of mode checks. It is acceptable to use `PROFILE` as an additional tightening signal for deployment-specific flows (for example, disabling self-registration in `local-single-user` deployments), but it must never be used to bypass or relax auth decisions or to grant permissions beyond those implied by `AUTH_MODE` and claims.
 
 2. **Add feature flags that clarify UX vs auth semantics**, without changing defaults:
    - Examples:
@@ -252,7 +252,7 @@ To make “mode” an implementation detail of a higher-level deployment profile
      - `ENABLE_ORGS_TEAMS`, `ENABLE_VIRTUAL_KEYS`, `ENABLE_JOBS_DOMAIN_SCOPING`, etc. (all default to current behavior).
      - Auth-adjacent behavior flags that steer profile-aware guardrails without reintroducing mode-based authorization:
        - `ORG_POLICY_SINGLE_USER_PRINCIPAL` – controls whether the synthetic single-user org (`org_id=1`) fallback in `get_org_policy_from_principal` is driven by `AuthPrincipal` + profile (enabled) or by legacy `is_single_user_mode()` heuristics (disabled).
-       - `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE` – controls whether embeddings tenant RPS quotas are enforced based on profile and `principal.kind=="single_user"` (enabled) or legacy `AUTH_MODE`-based checks (disabled).
+       - `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE` – controls whether embeddings tenant RPS quotas are enforced based on profile and principals explicitly tagged as single-user (subject `"single_user"` via `is_single_user_principal`) (enabled) or legacy `AUTH_MODE`-based checks (disabled).
        - `MCP_SINGLE_USER_COMPAT_SHIM` – controls whether MCP HTTP endpoints treat `SINGLE_USER_API_KEY` as a bootstrap admin principal in single-user deployments (enabled) or always validate `X-API-KEY` via the multi-user API key manager (disabled).
    - For `v0.1.x`, these flags gate **UX/feature surface** (show/hide endpoints, admin controls, and WebUI affordances) rather than changing core auth semantics. All flags default to values that exactly match today’s behavior.
 
@@ -298,7 +298,7 @@ To make “mode” an implementation detail of a higher-level deployment profile
 - Repository introduction (Stage 3) is in progress:
   - `AuthnzUsersRepo`, `AuthnzApiKeysRepo`, and `AuthnzRbacRepo` are implemented and used by `User_DB_Handling`, `APIKeyManager`, and RBAC helpers.
   - New repositories `AuthnzOrgsTeamsRepo`, `AuthnzUsageRepo`, `AuthnzRateLimitsRepo`, `AuthnzSessionsRepo`, `AuthnzTokenBlacklistRepo`, `AuthnzMfaRepo`, `AuthnzMonitoringRepo`, and `AuthnzRegistrationCodesRepo` encapsulate orgs/teams membership, usage/LLM-usage tables, AuthNZ rate-limiter storage, session persistence, token blacklist storage, MFA persistence, monitoring/audit metrics, and registration-code cleanup respectively, with cross-backend tests where applicable.
-- Backend drift reduction (Stage 4) is partially complete:
+- Backend drift reduction (Stage 4) is in progress:
   - `virtual_keys` budget and usage paths delegate to `AuthnzApiKeysRepo` / `AuthnzUsageRepo` instead of embedding dialect-specific SQL.
   - `orgs_teams` is now a thin orchestration layer over `AuthnzOrgsTeamsRepo` for organization, team, and membership operations (including default-team handling).
   - `rate_limiter` uses `AuthnzRateLimitsRepo` for all DB-backed rate-limiter tables (`rate_limits`, `failed_attempts`, `account_lockouts`), and the AuthNZ scheduler prunes usage tables via `AuthnzUsageRepo`.
@@ -405,7 +405,7 @@ To make “mode” an implementation detail of a higher-level deployment profile
 - Identify and refactor 2–3 high-impact modules (e.g., `virtual_keys`, `orgs_teams`, parts of `rate_limiter` that are AuthNZ-specific) to use repositories.
 - Remove duplicated Postgres/SQLite branches that are now redundant.
 
-- **Status (v0.1)**: Done (with tech debt) — key modules such as `virtual_keys`, `orgs_teams`, and AuthNZ rate-limiter storage now use repos; remaining backend drift and mode cleanup is tracked as post-v0.1 tech debt in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` and is not in scope for this release.
+- **Status (v0.1)**: In Progress — key modules such as `virtual_keys`, `orgs_teams`, and AuthNZ rate-limiter storage already use repos, but remaining backend drift and mode cleanup is tracked as post-v0.1 tech debt in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` and will be addressed incrementally.
 
 ### Repo Coverage vs Inline SQL (AuthNZ v0.1)
 
@@ -513,7 +513,7 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
 - `tldw_Server_API/tests/AuthNZ_Unit/test_permissions_claim_first.py` includes additional coverage for single-user claim-first behavior:
   - Claims govern access when present (DB is not consulted).
   - An explicit `"admin"` role in single-user mode implies both `admin` and `user` checks while still rejecting unrelated roles.
-  - Negative paths for single-user principals without sufficient claims are covered: `require_permissions` / `require_roles` return HTTP 403 for `kind="single_user"` principals lacking the required permission/role, matching multi-user semantics.
+  - Negative paths for single-user principals without sufficient claims are covered: `require_permissions` / `require_roles` return HTTP 403 for `kind="user"` principals tagged with `subject="single_user"` when they lack the required permission/role, matching multi-user semantics.
   - Additional tests ensure that when no claim lists are attached in single-user mode, `check_permission` / `check_role` fall back to the configured `UserDatabase` instead of auto-allowing, so single-user deployments share the same fallback behavior as multi-user.
 - Remaining `is_single_user_mode()` shortcuts are being removed from business/endpoints in favor of claim-based behavior. MCP HTTP diagnostics and persona streaming now derive identity from validated API keys instead of checking `AUTH_MODE` directly:
   - `tldw_Server_API/app/api/v1/endpoints/mcp_unified_endpoint.py::mcp_request`, `::mcp_request_batch`, and `::list_tools` no longer branch on `is_single_user_mode()` when computing `user_id`; they rely on `get_current_user`’s `TokenData` (which already encodes the single-user admin) and pass that through to MCP.

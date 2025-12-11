@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
+import json
 
 import pytest
 from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import AuthnzMonitoringRepo
@@ -10,7 +12,7 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio
-async def test_authnz_monitoring_repo_postgres_basic(test_db_pool) -> None:
+async def test_authnz_monitoring_repo_postgres_basic(test_db_pool: Any) -> None:
     """AuthnzMonitoringRepo should aggregate metrics on Postgres."""
     pool = test_db_pool
     repo = AuthnzMonitoringRepo(pool)
@@ -93,3 +95,6 @@ async def test_authnz_monitoring_repo_postgres_basic(test_db_pool) -> None:
     alerts = await repo.get_recent_security_alerts(limit=5)
     assert alerts
     assert alerts[0]["action"] == "metric_security_alert"
+    details = json.loads(alerts[0]["details"])
+    assert details["labels"]["alert_type"] == "test_pg"
+    assert details["labels"]["severity"] == "high"

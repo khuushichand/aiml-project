@@ -11,7 +11,7 @@ from pydantic import BaseModel, ValidationError, Field
 #
 # Local Imports
 # New unified settings
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode, is_multi_user_mode
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 # New JWT service
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
@@ -182,26 +182,26 @@ except Exception:
 
 #######################################################################################################################
 
-# --- Mode-Specific Verification Dependencies ---
+# --- Verification Dependencies ---
 
 async def verify_single_user_api_key(
     _request: Request,
     api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     authorization: Optional[str] = Header(None, alias="Authorization"),
-):
+) -> bool:
     """
-    Dependency to verify the fixed API key in single-user mode.
-    Uses the unified settings system.
-    """
-    # Check mode using the helper function
-    if not is_single_user_mode():
-         logger.error("verify_single_user_api_key called unexpectedly in multi-user mode.")
-         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Configuration error")
+    Dependency to verify that the provided credentials correspond to the
+    bootstrapped single-user admin principal.
 
-    # Compare with the API key from settings
+    This helper no longer branches on AUTH_MODE. Instead, it:
+    - Extracts the candidate API key from headers (X-API-KEY or Bearer).
+    - Uses the standard API-key authentication flow to resolve a User.
+    - Asserts that the resolved user id matches SINGLE_USER_FIXED_ID.
+    """
     settings = get_settings()
-    expected_key = settings.SINGLE_USER_API_KEY or ""
+    expected_user_id = getattr(settings, "SINGLE_USER_FIXED_ID", 1)
 
+    # Derive the presented API key from headers
     provided = api_key or ""
     if not provided and authorization:
         try:
@@ -210,34 +210,53 @@ async def verify_single_user_api_key(
                 provided = credential.strip()
         except Exception:
             provided = ""
-    try:
-        matches = hmac.compare_digest(provided, expected_key)
-    except Exception:
-        matches = False
-    if not matches:
+
+    if not provided:
         if settings.PII_REDACT_LOGS:
-            logger.warning("Invalid API Key received in single-user mode")
+            logger.warning("Invalid or missing API Key for single-user verification (no credentials)")
         else:
-            preview = f"{provided[:5]}..." if provided else "<missing>"
-            logger.warning(f"Invalid API Key received in single-user mode: '{preview}'")
+            logger.warning("Invalid or missing API Key for single-user verification: '<missing>'")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing API Key"
+            detail="Invalid or missing API Key",
         )
-    logger.debug("Single-user API Key verified successfully.")
-    # Return value doesn't strictly matter for a verification dependency
+
+    # Use the shared API-key authentication path so that verification is
+    # driven by AuthNZ tables and RBAC rather than inline comparisons.
+    user = await authenticate_api_key_user(_request, provided)
+
+    try:
+        user_id_val = getattr(user, "id_int", None)
+        if user_id_val is None:
+            user_id_val = int(getattr(user, "id"))
+    except Exception:
+        user_id_val = None
+
+    if user_id_val != expected_user_id:
+        if settings.PII_REDACT_LOGS:
+            logger.warning("API Key resolved to non-single-user principal during single-user verification")
+        else:
+            logger.warning(
+                f"API Key resolved to user_id={user_id_val} during single-user verification; "
+                f"expected {expected_user_id}"
+            )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API Key",
+        )
+
+    logger.debug("Single-user API Key verified successfully via AuthNZ store.")
     return True
 
 
 async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth2_scheme)) -> User:
     """
-    Dependency to verify JWT and fetch user details in multi-user mode.
-    Uses the new JWT service for token validation.
+    Dependency to verify JWT and fetch user details.
+
+    Uses the new JWT service for token validation and is agnostic to
+    AUTH_MODE; callers decide whether JWTs are appropriate for their
+    deployment via configuration and routing, not via this helper.
     """
-    # Check mode using the helper function
-    if is_single_user_mode():
-         logger.error("verify_jwt_and_fetch_user called unexpectedly in single-user mode.")
-         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Configuration error")
 
     # Import Users_DB here to avoid import errors in single-user mode
     try:
@@ -612,11 +631,19 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 except Exception:
                     api_key_id_val = None
 
+            subject_val: Optional[str] = None
+            try:
+                single_id = getattr(settings, "SINGLE_USER_FIXED_ID", None)
+                if single_id is not None and user_obj.id_int == int(single_id):
+                    subject_val = "single_user"
+            except Exception:
+                subject_val = None
+
             principal = AuthPrincipal(
                 kind="api_key",
                 user_id=user_obj.id_int,
                 api_key_id=api_key_id_val,
-                subject=None,
+                subject=subject_val,
                 token_type="api_key",
                 jti=None,
                 roles=list(user_obj.roles or []),
@@ -668,210 +695,103 @@ async def get_request_user(
     api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     token: Optional[str] = Depends(oauth2_scheme),  # Bearer from Authorization
     legacy_token_header: Optional[str] = Header(None, alias="Token"),  # Back-compat for chat endpoint tests
-    ) -> User:
+) -> User:
     """
-    Determines the current user based on the application mode (single/multi)
-    by checking the 'settings' dictionary.
+    Unified authentication dependency for endpoints that require a User.
 
-    - In Single-User Mode: Verifies X-API-KEY from header against settings["SINGLE_USER_API_KEY"]
-      and returns a fixed User object (_single_user_instance).
-    - In Multi-User Mode: Verifies the Bearer token (passed via 'token' parameter)
-      and returns the User object fetched from Users_DB.
+    Behavior:
+    - Uses the shared JWT/API-key helpers (verify_jwt_and_fetch_user,
+      authenticate_api_key_user) for all deployments.
+    - Does not branch on AUTH_MODE; single-user deployments authenticate
+      via the same AuthNZ tables and RBAC as multi-user, with the
+      bootstrapped admin treated as a normal user with roles/permissions.
     """
     # Test-mode bypasses are disabled in production for safety
     try:
         import os as _os
         _prod = _os.getenv("tldw_production", "false").lower() in {"1", "true", "yes", "on", "y"}
         # Test-mode bypass for evaluations when admin gating is explicitly disabled
-        if not _prod and _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"} and \
-           _os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in {"1", "true", "yes", "on"}:
-            logger.info("TESTING with EVALS_HEAVY_ADMIN_ONLY disabled: bypassing auth, returning single-user test instance")
+        if (
+            not _prod
+            and _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
+            and _os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in {"1", "true", "yes", "on"}
+        ):
+            logger.info(
+                "TESTING with EVALS_HEAVY_ADMIN_ONLY disabled: "
+                "bypassing auth, returning single-user test instance"
+            )
             return get_single_user_instance()
     except Exception:
         pass
+
     # Warn if test flags are present in production deployments
     try:
         import os as _os
         _prod = _os.getenv("tldw_production", "false").lower() in {"1", "true", "yes", "on", "y"}
-        if _prod and (_os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} or _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}):
+        if _prod and (
+            _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            or _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
+        ):
             if not getattr(get_request_user, "_warned_testflags_prod", False):
-                logger.warning("TEST flags detected while tldw_production=true; test-only auth bypasses are disabled.")
+                logger.warning(
+                    "TEST flags detected while tldw_production=true; "
+                    "test-only auth bypasses are disabled."
+                )
                 setattr(get_request_user, "_warned_testflags_prod", True)
     except Exception:
         pass
 
-    # Fast-path: if an AuthPrincipal has already been resolved in multi-user mode,
-    # reuse the cached _auth_user instead of re-running authentication logic.
+    # Fast-path: if an AuthPrincipal has already been resolved, reuse the cached
+    # _auth_user instead of re-running authentication logic.
     try:
-        if not is_single_user_mode():
-            existing_ctx = getattr(request.state, "auth", None)
-            cached_user = getattr(request.state, "_auth_user", None)
-            if isinstance(existing_ctx, AuthContext) and isinstance(cached_user, User):
-                logger.debug("get_request_user: Reusing cached AuthPrincipal/_auth_user in multi-user mode.")
-                return cached_user
+        existing_ctx = getattr(request.state, "auth", None)
+        cached_user = getattr(request.state, "_auth_user", None)
+        if isinstance(existing_ctx, AuthContext) and isinstance(cached_user, User):
+            logger.debug("get_request_user: Reusing cached AuthPrincipal/_auth_user from request.state.")
+            return cached_user
     except Exception as fastpath_exc:
         # Fall through to normal auth paths on any issues, but make failures observable.
-        logger.debug(f"get_request_user fast-path reuse failed; falling back to normal auth: {fastpath_exc}")
+        logger.debug(
+            f"get_request_user fast-path reuse failed; falling back to normal auth: {fastpath_exc}"
+        )
 
-    #print(f"DEBUGPRINT: Inside get_request_user. api_key from header: '{api_key}', token from scheme: '{token}'") #DEBUGPRINT
-    # Check mode from the settings
-    settings = get_settings()
-    logger.debug(f"Authentication mode: {'single_user' if is_single_user_mode() else 'multi_user'} (AUTH_MODE={settings.AUTH_MODE})")
-    if is_single_user_mode():
-        # Single-User Mode: X-API-KEY is primary.
-        # The 'token' parameter from oauth2_scheme will likely be None here, which is fine.
-        logger.debug("get_request_user: In SINGLE_USER_MODE.")
-        if api_key is None:
-            # Backward compatibility: some clients send a 'Token' header with 'Bearer <API_KEY>'
+    # Backwards-compatibility: treat a legacy "Token: Bearer <API_KEY>" header as an
+    # API key when X-API-KEY is absent.
+    if api_key is None and legacy_token_header and isinstance(legacy_token_header, str):
+        extracted = None
+        try:
+            legacy_token_header = legacy_token_header.strip()
+            if legacy_token_header.lower().startswith("bearer "):
+                extracted = legacy_token_header[len("Bearer ") :].strip()
+        except Exception:
             extracted = None
-            try:
-                if legacy_token_header and isinstance(legacy_token_header, str):
-                    logger.warning("Deprecated header 'Token' used in single-user mode; prefer 'X-API-KEY'.")
-                    legacy_token_header = legacy_token_header.strip()
-                    if legacy_token_header.lower().startswith("bearer "):
-                        extracted = legacy_token_header[len("Bearer "):].strip()
-            except Exception:
-                extracted = None
+        if extracted:
+            api_key = extracted
 
-            # Note on header compatibility in SINGLE-USER mode only:
-            # Accept Authorization Bearer token as API key in single-user mode to support
-            # OpenAI-compatible clients that send Bearer tokens (e.g., SDKs/tools). This fallback is
-            # NEVER used in multi-user flows and must not loosen JWT validation there.
-            if extracted is not None:
-                api_key = extracted
-            elif token:
-                api_key = token
-            else:
-                # Missing credentials must result in an auth failure, even in tests.
-                # This ensures negative E2E scenarios (e.g., missing API key) see 401/403
-                # instead of being silently granted access.
-                logger.warning("Single-User Mode: Missing X-API-KEY and Authorization Bearer; cannot authenticate.")
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Missing API credentials"
-                )
-        # In pytest or TEST_MODE, normalize common placeholders to the configured test key
+    # Prefer Bearer JWT when present; otherwise fall back to API key.
+    if token:
+        logger.debug("get_request_user: Attempting JWT-based authentication.")
+        user = await verify_jwt_and_fetch_user(request, token)
+        # verify_jwt_and_fetch_user already sets request.state.auth; cache user for fast-path reuse.
         try:
-            import os as _os
-            if (_os.getenv("PYTEST_CURRENT_TEST") or _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}):
-                if str(api_key).strip() in {"default-secret-key-for-single-user", "CHANGE_ME_TO_SECURE_API_KEY"}:
-                    api_key = get_settings().SINGLE_USER_API_KEY
-        except Exception:
-            pass
-        if api_key != settings.SINGLE_USER_API_KEY:
-            # Fallback to app-level settings (helps when AuthNZ settings were initialized before env was set in tests)
-            fallback_key = app_settings.get("SINGLE_USER_API_KEY")
-            if not fallback_key or api_key != fallback_key:
-                # Last-chance fallback to environment variables
-                try:
-                    import os as _os
-                    env_key = _os.getenv("SINGLE_USER_API_KEY") or _os.getenv("API_BEARER")
-                except Exception:
-                    env_key = None
-                if env_key and api_key == env_key:
-                    logger.debug("API key matched environment fallback; accepting.")
-                else:
-                    if settings.PII_REDACT_LOGS:
-                        logger.warning("Single-User Mode: Invalid X-API-KEY provided")
-                    else:
-                        logger.warning(
-                            f"Single-User Mode: Invalid X-API-KEY. Got: '{api_key[:10]}...'"
-                        )
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid API key"
-                    )
-            else:
-                logger.debug("X-API-KEY matched fallback app settings; accepting.")
-        logger.debug("Single-user API Key verified. Returning fixed user object.")
-        base = get_single_user_instance()  # Use the getter function
-        # Single-user: expose admin-style claims for RBAC compatibility
-        user = User(
-            id=base.id,
-            username=base.username,
-            email=base.email,
-            is_active=base.is_active,
-            roles=["admin"],
-            permissions=list(
-                getattr(settings, "SINGLE_USER_DEFAULT_PERMISSIONS", []) or []
-            ),
-            is_admin=True,
-        )
-        try:
-            request.state.user_id = user.id
-        except Exception:
-            pass
-        try:
-            request.state.team_ids = []
-            request.state.org_ids = []
-        except Exception:
-            pass
-        try:
-            set_scope(
-                user_id=user.id_int,
-                org_ids=[],
-                team_ids=[],
-                is_admin=True,
-            )
-        except Exception:
-            pass
-
-        # Populate AuthContext for single-user compatibility
-        try:
-            principal = AuthPrincipal(
-                kind="single_user",
-                user_id=user.id_int,
-                api_key_id=None,
-                subject=None,
-                token_type="api_key",
-                jti=None,
-                roles=list(user.roles or []),
-                permissions=list(user.permissions or []),
-                is_admin=True,
-                org_ids=[],
-                team_ids=[],
-            )
-            ip = request.client.host if getattr(request, "client", None) else None
-            user_agent = request.headers.get("User-Agent") if getattr(request, "headers", None) else None
-            request_id = (
-                request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None
-            ) or getattr(request.state, "request_id", None)
-            request.state.auth = AuthContext(
-                principal=principal,
-                ip=ip,
-                user_agent=user_agent,
-                request_id=request_id,
-            )
-        except Exception as ctx_exc:
-            logger.debug(f"Unable to populate AuthContext in single-user get_request_user: {ctx_exc}")
-
+            request.state._auth_user = user
+        except Exception as cache_exc:
+            logger.debug(f"Failed to cache _auth_user on request.state: {cache_exc}")
         return user
-    else:
-        # Multi-User Mode: Prefer Bearer token, but allow X-API-KEY for SQLite multi-user setups.
-        logger.debug("get_request_user: In MULTI_USER_MODE.")
-        if token:
-            logger.debug("Multi-User Mode: Attempting to verify bearer token.")
-            user = await verify_jwt_and_fetch_user(request, token)
-            # verify_jwt_and_fetch_user already sets request.state.auth; return user
-            try:
-                request.state._auth_user = user
-            except Exception as cache_exc:
-                logger.debug(f"Failed to cache _auth_user on request.state: {cache_exc}")
-            return user
 
-        # If no Bearer token but an API key is provided, validate via shared helper
-        if api_key:
-            return await authenticate_api_key_user(request, api_key)
+    if api_key:
+        logger.debug("get_request_user: Attempting API-key-based authentication.")
+        return await authenticate_api_key_user(request, api_key)
 
-        # Neither Bearer token nor API key provided
-        logger.warning(
-            "Multi-User Mode: No credentials provided (missing Bearer token or X-API-KEY)."
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated (provide Bearer token or X-API-KEY)",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    # Neither Bearer token nor API key provided
+    logger.warning(
+        "get_request_user: No credentials provided (missing Bearer token or X-API-KEY)."
+    )
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated (provide Bearer token or X-API-KEY)",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 

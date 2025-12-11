@@ -618,13 +618,11 @@ async def workflows_virtual_key(
 ):
     # Admin-only in multi-user; not applicable in single-user
     settings = get_settings()
-    try:
-        if settings.AUTH_MODE != "multi_user":
-            raise HTTPException(status_code=400, detail="Virtual keys only apply in multi-user mode")
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    if settings.AUTH_MODE != "multi_user":
+        raise HTTPException(
+            status_code=400,
+            detail="Virtual keys only apply in multi-user mode",
+        )
 
     # Build a minimal access token with custom TTL and scope claims
     try:
@@ -1526,8 +1524,8 @@ async def get_run_webhook_deliveries(
 @router.get(
     "/webhooks/dlq",
     dependencies=[
-        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
         Depends(auth_deps.require_roles("admin")),
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
     ],
 )
 async def list_webhook_dlq(
@@ -1536,10 +1534,11 @@ async def list_webhook_dlq(
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
-    """Admin: list webhook DLQ entries (all tenants)."""
-    if not bool(getattr(current_user, "is_admin", False)):
-        # Hide presence (preserve legacy behavior)
-        raise HTTPException(status_code=404, detail="Not found")
+    """Admin: list webhook DLQ entries (all tenants).
+
+    Access is gated via claim-first dependencies (admin role +
+    WORKFLOWS_RUNS_CONTROL) to align with other admin surfaces.
+    """
     rows = db.list_webhook_dlq_all(limit=limit, offset=offset)
     out = []
     for r in rows:
@@ -1564,8 +1563,8 @@ async def list_webhook_dlq(
 @router.post(
     "/webhooks/dlq/{dlq_id}/replay",
     dependencies=[
-        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
         Depends(auth_deps.require_roles("admin")),
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
     ],
 )
 async def replay_webhook_dlq(
@@ -1576,11 +1575,10 @@ async def replay_webhook_dlq(
     """Admin: attempt immediate replay of a DLQ item.
 
     Honors the same allow/deny and replay headers as the engine.
-    In TEST_MODE, if WORKFLOWS_TEST_REPLAY_SUCCESS=true, the entry is deleted without network.
+    In TEST_MODE, if WORKFLOWS_TEST_REPLAY_SUCCESS=true, the entry is deleted
+    without network. Access is gated via claim-first dependencies (admin role
+    + WORKFLOWS_RUNS_CONTROL) consistent with other admin endpoints.
     """
-    if not bool(getattr(current_user, "is_admin", False)):
-        raise HTTPException(status_code=404, detail="Not found")
-
     # Find the entry
     rows = db.list_webhook_dlq_all(limit=1, offset=0)
     target = None
@@ -2614,61 +2612,6 @@ async def list_workflow_templates(q: Optional[str] = Query(None, description="Se
         return items
     except Exception as e:
         logger.warning(f"Failed to list workflow templates: {e}")
-        return []
-
-
-@router.get(
-    "/templates/tags",
-    openapi_extra={
-        "x-codeSamples": [
-            {
-                "lang": "bash",
-                "label": "List tags",
-                "source": "curl -sS -H 'X-API-KEY: $API_KEY' \"$BASE/api/v1/workflows/templates/tags\" | jq ."
-            }
-        ]
-    },
-)
-async def list_workflow_template_tags() -> list[str]:
-    return await list_workflow_template_tags_internal()
-
-@router.get(
-    "/templates/_tags_internal",
-)
-async def list_workflow_template_tags_internal() -> list[str]:
-    """Return the unique set of tags from all bundled templates."""
-    try:
-        # Robust search for Samples/Workflows
-        here = Path(__file__).resolve()
-        tpl_dir = None
-        p = here
-        for _ in range(0, 9):
-            candidate = p.parent / "Samples" / "Workflows"
-            if candidate.exists():
-                tpl_dir = candidate
-                break
-            p = p.parent
-        if tpl_dir is None or not tpl_dir.exists():
-            return []
-        tags_set: set[str] = set()
-        for f in tpl_dir.glob("*.workflow.json"):
-            try:
-                import json as _json
-                data = _json.loads(f.read_text(encoding="utf-8"))
-                tags = data.get("tags") or []
-                if isinstance(tags, list):
-                    for t in tags:
-                        try:
-                            s = str(t).strip()
-                            if s:
-                                tags_set.add(s)
-                        except Exception:
-                            continue
-            except Exception:
-                continue
-        return sorted(tags_set)
-    except Exception as e:
-        logger.warning(f"Failed to list template tags: {e}")
         return []
 
 

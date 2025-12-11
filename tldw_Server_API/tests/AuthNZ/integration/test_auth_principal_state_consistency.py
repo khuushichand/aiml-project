@@ -135,7 +135,7 @@ def test_single_user_flow_principal_matches_state(single_user_app: TestClient):
     assert resp_principal.status_code == 200
     principal = resp_principal.json()
 
-    assert principal["kind"] == "single_user"
+    assert principal["kind"] == "user"
     assert int(principal["user_id"]) == int(user["id"])
     assert principal["roles"]
     assert principal["permissions"]
@@ -157,7 +157,7 @@ def test_single_user_get_current_and_request_user_align_with_principal(
     state_auth_principal = payload["state_auth_principal"]
 
     # Principal identity should align with both user representations
-    assert principal["kind"] == "single_user"
+    assert principal["kind"] == "user"
     assert principal["user_id"] is not None
     assert str(principal["user_id"]) == str(current_user["id"])
     assert str(principal["user_id"]) == str(request_user["id"])

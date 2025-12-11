@@ -640,8 +640,8 @@ async def reset_db_pool():
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as _reset_settings
         _reset_settings()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring settings reset error: {e}")
     # Also reset the AuthNZ UserDatabase / backend config so helpers that
     # use AuthDatabaseConfig (e.g. RBAC helpers via UserDatabase_v2) see
     # the latest DATABASE_URL/AUTH_MODE for each test run.
@@ -660,32 +660,32 @@ async def reset_db_pool():
     try:
         from tldw_Server_API.app.core.MCP_unified.auth.authnz_rbac import reset_rbac_policy as _reset_rbac_policy
         _reset_rbac_policy()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring RBAC policy reset error: {e}")
     # Reset MCP cached configuration/filters so tests pick up new DB/config values
     try:
         from tldw_Server_API.app.core.MCP_unified.config import get_config as _get_mcp_config
         if hasattr(_get_mcp_config, "cache_clear"):
             _get_mcp_config.cache_clear()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring MCP config cache reset error: {e}")
     try:
         from tldw_Server_API.app.core.MCP_unified.security.ip_filter import get_ip_access_controller as _get_ip_controller
         if hasattr(_get_ip_controller, "cache_clear"):
             _get_ip_controller.cache_clear()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring MCP IP access controller reset error: {e}")
     try:
 
         from tldw_Server_API.app.core.MCP_unified.server import reset_mcp_server as _reset_mcp_server
         await _reset_mcp_server()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring MCP server reset error: {e}")
     try:
         from tldw_Server_API.app.core.AuthNZ.api_key_manager import reset_api_key_manager as _reset_api_manager
         await _reset_api_manager()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring API key manager reset error: {e}")
 
 async def get_db():
     """FastAPI dependency to get database connection"""

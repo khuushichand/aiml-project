@@ -4,8 +4,20 @@ from datetime import datetime, timezone, date
 from typing import Optional, Dict, Any
 
 from loguru import logger
+import os
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+
+
+def _debug_log(msg: str) -> None:
+    """Emit debug logging when budget debug mode or pytest is active."""
+    try:
+        debug_flag = os.getenv("BUDGET_MW_DEBUG", "").lower()
+        if debug_flag in {"1", "true", "yes", "on"} or os.getenv("PYTEST_CURRENT_TEST"):
+            logger.debug(msg)
+            print(f"[BUDGET_DEBUG] {msg}")
+    except (OSError, TypeError) as exc:
+        logger.trace(f"Debug logging failed: {exc}")
 
 
 def _utc_today() -> date:
@@ -72,13 +84,7 @@ async def summarize_usage_for_key_day(
         "tokens": int(summary.get("tokens", 0)),
         "usd": float(summary.get("usd", 0.0)),
     }
-    try:
-        import os
-        if os.getenv("BUDGET_MW_DEBUG", "").lower() in {"1","true","yes","on"} or os.getenv("PYTEST_CURRENT_TEST") is not None:
-            logger.debug(f"VK summarize day: key_id={key_id} day={day_val} -> {result}")
-            print(f"[BUDGET_DEBUG] day-summary key={key_id} day={day_val} -> {result}")
-    except Exception:
-        pass
+    _debug_log(f"VK summarize day: key_id={key_id} day={day_val} -> {result}")
     return result
 
 
@@ -99,13 +105,7 @@ async def summarize_usage_for_key_month(key_id: int) -> Dict[str, Any]:
         "tokens": int(totals.get("tokens", 0)),
         "usd": float(totals.get("usd", 0.0)),
     }
-    try:
-        import os
-        if os.getenv("BUDGET_MW_DEBUG", "").lower() in {"1","true","yes","on"} or os.getenv("PYTEST_CURRENT_TEST") is not None:
-            logger.debug(f"VK summarize month: key_id={key_id} start={start_dt} end={end_dt} -> {out}")
-            print(f"[BUDGET_DEBUG] month-summary key={key_id} start={start_dt} end={end_dt} -> {out}")
-    except Exception:
-        pass
+    _debug_log(f"VK summarize month: key_id={key_id} rolling_days=30 -> {out}")
     return out
 
 
@@ -143,11 +143,5 @@ async def is_key_over_budget(key_id: int) -> Dict[str, Any]:
         reasons.append(f"month_usd_exceeded:{month['usd']}/{m_usd}")
 
     result = {"over": len(reasons) > 0, "reasons": reasons, "day": day, "month": month, "limits": limits}
-    try:
-        import os
-        if os.getenv("BUDGET_MW_DEBUG", "").lower() in {"1","true","yes","on"} or os.getenv("PYTEST_CURRENT_TEST") is not None:
-            logger.debug(f"VK over_budget check: key_id={key_id} -> {result}")
-            print(f"[BUDGET_DEBUG] over-budget key={key_id} -> {result}")
-    except Exception:
-        pass
+    _debug_log(f"VK over_budget check: key_id={key_id} -> {result}")
     return result
