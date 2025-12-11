@@ -2,6 +2,11 @@
 Unified MCP API Endpoints
 
 Production-ready endpoints for the unified MCP module with enhanced security and monitoring.
+
+Environment:
+    - ``MCP_SINGLE_USER_COMPAT_SHIM``: When set to ``0``/``false``/``off``, disables
+      the single-user API key compatibility shim so that all API keys are validated
+      via the multi-user API key manager path regardless of AUTH_MODE/PROFILE.
 """
 
 import ipaddress
@@ -27,7 +32,11 @@ from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode, get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import (
+    is_single_user_mode,
+    is_single_user_profile_mode,
+    get_settings,
+)
 from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_permissions,
@@ -145,6 +154,12 @@ async def get_current_user(
        - Single-user mode: treat SINGLE_USER_API_KEY (and, in TEST_MODE,
          SINGLE_USER_TEST_API_KEY) as an admin-style principal.
        - Multi-user: validate via APIKeyManager and map to a user id.
+
+    When the multi-user API key path succeeds, this helper also attaches the
+    resolved API key metadata to ``request.state.mcp_api_key_info`` so that
+    downstream handlers (for example, :func:`get_mcp_auth_context` and
+    ``_attach_api_key_metadata``) can reuse the information without re-validating
+    the same key or double-counting usage/audit events.
     """
     # Try AuthNZ JWT first (multi-user)
     try:
@@ -161,7 +176,11 @@ async def get_current_user(
                     token_type="access",
                 )
     except Exception:
-        logger.debug("AuthNZ JWT check failed", exc_info=True)
+        logger.debug(
+            "AuthNZ JWT check failed; falling back to MCP JWT / API key",
+            extra={"auth_method": "authnz_jwt"},
+            exc_info=True,
+        )
 
     # MCP JWT fallback
     try:
@@ -169,7 +188,11 @@ async def get_current_user(
             jwt_manager = get_jwt_manager()
             return jwt_manager.verify_token(credentials.credentials)
     except Exception:
-        logger.debug("MCP token verification failed", exc_info=True)
+        logger.debug(
+            "MCP token verification failed; falling back to API key",
+            extra={"auth_method": "mcp_jwt"},
+            exc_info=True,
+        )
 
     # API key fallback
     try:
@@ -185,6 +208,38 @@ async def get_current_user(
                         "yes",
                         "on",
                     }
+                    if test_mode:
+                        # Guard against accidental production use of TEST_MODE-based
+                        # SINGLE_USER_TEST_API_KEY shortcuts. Only honor TEST_MODE
+                        # in clear dev/test contexts (debug or explicit env/pytest).
+                        try:
+                            cfg = get_config()
+                        except Exception:
+                            cfg = None
+                        env = (
+                            os.getenv("ENVIRONMENT")
+                            or os.getenv("APP_ENV")
+                            or os.getenv("ENV")
+                            or ""
+                        ).lower()
+                        is_dev_ctx = bool(cfg and getattr(cfg, "debug_mode", False))
+                        if os.getenv("PYTEST_CURRENT_TEST") is not None:
+                            is_dev_ctx = True
+                        try:
+                            import sys as _sys
+
+                            if "pytest" in _sys.modules:
+                                is_dev_ctx = True
+                        except Exception:
+                            pass
+                        if env in {"dev", "development", "test", "ci"}:
+                            is_dev_ctx = True
+                        if not is_dev_ctx:
+                            logger.error(
+                                "TEST_MODE enabled outside dev/test context; refusing SINGLE_USER_TEST_API_KEY",
+                                extra={"audit": True, "env": env, "debug_mode": bool(cfg and getattr(cfg, 'debug_mode', False))},
+                            )
+                            test_mode = False
                     allowed: set[str] = set()
                     if settings.SINGLE_USER_API_KEY:
                         allowed.add(settings.SINGLE_USER_API_KEY)
@@ -205,7 +260,9 @@ async def get_current_user(
             except Exception:
                 # Fall through to multi-user API key validation
                 logger.debug(
-                    "Single-user API key check failed, falling through to multi-user validation"
+                    "Single-user API key check failed, falling through to multi-user validation",
+                    extra={"auth_method": "single_user_api_key"},
+                    exc_info=True,
                 )
             api_mgr = await get_api_key_manager()
             client_ip = request.client.host if request and getattr(request, "client", None) else None
@@ -221,6 +278,7 @@ async def get_current_user(
                 except Exception:
                     logger.debug(
                         "MCP unified: failed to attach API key info to request state",
+                        extra={"auth_method": "api_key"},
                         exc_info=True,
                     )
                 return TokenData(
@@ -231,7 +289,11 @@ async def get_current_user(
                     token_type="access",
                 )
     except Exception:
-        logger.debug("API key check failed", exc_info=True)
+        logger.debug(
+            "API key check failed in MCP unified get_current_user",
+            extra={"auth_method": "api_key"},
+            exc_info=True,
+        )
 
     return None
 
@@ -243,8 +305,11 @@ async def get_mcp_auth_context(
 ) -> McpAuthContext:
     """Resolve MCP auth context (user + API key metadata) for HTTP endpoints.
 
-    Reuses ``get_current_user`` for primary auth and surfaces any API key
-    metadata attached to ``request.state`` by the multi-user API key path.
+    Reuses :func:`get_current_user` for primary auth and surfaces any API key
+    metadata attached to ``request.state.mcp_api_key_info`` by the multi-user
+    API key path. HTTP handlers should rely on the resulting
+    :class:`McpAuthContext` (and helper functions like ``_attach_api_key_metadata``)
+    rather than re-validating API keys themselves.
     """
     user = await get_current_user(credentials, x_api_key, request)
     api_key_info: Optional[Dict[str, Any]] = None
@@ -266,7 +331,7 @@ async def _attach_api_key_metadata(
     *,
     log_on_error: bool = False,
     log_prefix: str = "HTTP",
-) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+) -> Dict[str, Any]:
     """Attach API-key-derived metadata (org/team) for MCP HTTP endpoints.
 
     Prefers any API key info already attached to the auth context and falls back
@@ -302,7 +367,7 @@ async def _attach_api_key_metadata(
         if api_key_info.get("team_id") is not None:
             metadata["team_id"] = api_key_info.get("team_id")
 
-    return metadata, api_key_info
+    return metadata
 
 
 async def require_user(
@@ -400,7 +465,7 @@ async def mcp_request(
     # Attach org/team metadata when auth via API key. Prefer any metadata attached
     # by get_current_user to avoid re-validating the same key and double-counting
     # usage/audit; fall back to a direct lookup when needed.
-    metadata, _ = await _attach_api_key_metadata(auth, http_request)
+    metadata = await _attach_api_key_metadata(auth, http_request)
 
     # Derive user id from the authenticated token user when present.
     derived_user_id = _get_derived_user_id(auth.user)
@@ -485,7 +550,7 @@ async def mcp_request_batch(
     # Attach org/team metadata when auth via API key. Prefer any metadata attached
     # by get_current_user to avoid re-validating the same key and double-counting
     # usage/audit; fall back to a direct lookup when needed.
-    metadata, _ = await _attach_api_key_metadata(
+    metadata = await _attach_api_key_metadata(
         auth,
         http_request,
         log_on_error=True,

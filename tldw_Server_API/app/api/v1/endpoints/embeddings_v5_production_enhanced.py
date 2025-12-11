@@ -1085,6 +1085,7 @@ async def run_compactor_once(
         # Lazy import to avoid heavy imports on module import
         from tldw_Server_API.app.core.Embeddings.services.vector_compactor import compact_once as _compact_once  # type: ignore
     except Exception:
+        logger.exception("Compactor module import failed")
         raise HTTPException(status_code=503, detail="Compactor unavailable")
     uid = str(req.user_id or current_user.id)
     try:
@@ -1093,7 +1094,12 @@ async def run_compactor_once(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Compactor run failed: {e}")
+        logger.exception(
+            "Compactor run failed for user '{}' with db_path_override={}",
+            uid,
+            bool(req.media_db_path),
+        )
+        raise HTTPException(status_code=500, detail="Compactor run failed")
 
 # ============================================================================
 # Token-array handling and dimension adjustment helpers

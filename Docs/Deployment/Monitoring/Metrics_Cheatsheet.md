@@ -226,6 +226,25 @@ scrape_configs:
       - targets: ['tldw-server.local:8000']
 ```
 
+Prometheus scrape_config example (with authentication):
+```yaml
+scrape_configs:
+  - job_name: 'tldw-mcp'
+    metrics_path: /api/v1/mcp/metrics/prometheus
+    static_configs:
+      - targets: ['tldw-server.local:8000']
+    # Option 1: Bearer token (API key or JWT)
+    authorization:
+      type: Bearer
+      credentials: '<api_key_or_jwt_with_system.logs_permission>'
+
+    # Option 2: Custom header (if using header-based API key)
+    # relabel_configs:
+    #   - source_labels: [__address__]
+    #     target_label: __param_api_key
+    #     replacement: '<your_api_key>'
+```
+
 Sample PromQL queries:
 - Total requests (5m): `sum(rate(mcp_requests_total[5m])) by (method, status)`
 - p50 latency per method (5m):

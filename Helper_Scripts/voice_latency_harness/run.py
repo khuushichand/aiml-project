@@ -99,7 +99,11 @@ def _fetch_metrics(base_url: str, api_key: Optional[str]) -> Dict[str, Any]:
     r.raise_for_status()
     try:
         data = r.json()
-        return data.get("metrics", data) if isinstance(data, dict) else data
+        if isinstance(data, dict):
+            return data.get("metrics", data)
+        # Non-dict JSON is unexpected for this harness; wrap the payload so callers
+        # can still treat the result as a mapping without special-casing lists.
+        return {"raw": data}
     except ValueError:
         return _parse_prometheus_histograms(r.text, target_names=HISTOGRAM_METRIC_NAMES)
 
@@ -113,7 +117,23 @@ def _percentiles(values: Sequence[float], pcts: Sequence[int] = (50, 90)) -> Dic
 
 
 def _histogram_percentiles_from_buckets(hist: Dict[str, Any], pcts: Sequence[int] = (50, 90)) -> Dict[str, float]:
-    """Approximate percentiles from Prometheus histogram buckets."""
+    """
+    Approximate percentiles from Prometheus histogram buckets.
+
+    Uses linear interpolation within buckets to estimate percentile values. For each
+    requested percentile, this helper finds the bucket whose cumulative count
+    crosses the target rank and interpolates between the bucket's lower and upper
+    bounds based on the relative position of the target within that bucket.
+
+    Args:
+        hist: Histogram dict with a cumulative "buckets" mapping (le -> count),
+            plus optional "count" and "sum" fields.
+        pcts: Percentiles to compute (for example, (50, 90) for p50 and p90).
+
+    Returns:
+        A dictionary mapping keys like "p50" and "p90" to the estimated percentile
+        values in the same units as the bucket bounds.
+    """
     buckets = hist.get("buckets") or {}
     ordered = []
     for bound, cumulative in buckets.items():

@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import string
 from io import BytesIO
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional, List, Tuple, Dict, Any
 #
 # 3rd-party imports
@@ -29,10 +29,7 @@ else:
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
-    derive_hmac_key,
-    derive_hmac_key_candidates,
-)
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     AuthenticationError,
@@ -418,6 +415,11 @@ class MFAService:
 
         except Exception as e:
             logger.error(f"Failed to get MFA status: {e}")
+            # This method is used for read-only status introspection. On
+            # unexpected failures we intentionally fall back to a "MFA
+            # disabled" snapshot instead of propagating the error, so that
+            # dashboard/profile views are not blocked by transient MFA
+            # backend issues.
 
         return {
             "enabled": False,
@@ -464,12 +466,17 @@ class MFAService:
                     matched = True
                     break
             if not matched:
+                # Fallback for backward compatibility: older deployments stored
+                # backup codes as plain-text strings. Compare normalized values
+                # here and then re-save remaining codes as hashes below. This
+                # path can be removed once all users have migrated.
                 for candidate in list(backup_codes):
                     if not isinstance(candidate, str):
                         continue
                     if self._normalize_backup_code(candidate) == normalized_input:
                         backup_codes.remove(candidate)
                         matched = True
+                        logger.debug(f"User {user_id} used legacy plain-text backup code")
                         break
             if not matched:
                 return False

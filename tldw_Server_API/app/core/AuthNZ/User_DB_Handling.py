@@ -684,7 +684,12 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error validating API key in multi-user mode: {e}")
+        # Avoid logging exception messages directly to prevent leaking secrets
+        # from API key validation paths; log only the exception type.
+        logger.error(
+            "Error validating API key in multi-user mode (type={})",
+            type(e).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Authentication failed due to internal error",
@@ -721,8 +726,10 @@ async def get_request_user(
                 "bypassing auth, returning single-user test instance"
             )
             return get_single_user_instance()
-    except Exception:
-        pass
+    except Exception as env_exc:
+        logger.debug(
+            f"get_request_user: test-mode bypass env detection failed; continuing with normal auth: {env_exc}"
+        )
 
     # Warn if test flags are present in production deployments
     try:
@@ -738,8 +745,10 @@ async def get_request_user(
                     "test-only auth bypasses are disabled."
                 )
                 setattr(get_request_user, "_warned_testflags_prod", True)
-    except Exception:
-        pass
+    except Exception as warn_exc:
+        logger.debug(
+            f"get_request_user: production test-flag warning emission failed; continuing without warning: {warn_exc}"
+        )
 
     # Fast-path: if an AuthPrincipal has already been resolved, reuse the cached
     # _auth_user instead of re-running authentication logic.

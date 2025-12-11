@@ -170,6 +170,17 @@ import ipaddress
 # Provide an alias to the public function for backward compatibility in tests.
 _is_postgres_backend = is_postgres_backend
 
+
+def _get_rbac_repo() -> AuthnzRbacRepo:
+    """
+    Factory for AuthnzRbacRepo used by admin RBAC endpoints.
+
+    Keeping construction behind a small helper makes it easy to monkeypatch
+    in tests and provides a single place to attach request-scoped state if
+    we later bind the repo to a specific backend handle.
+    """
+    return AuthnzRbacRepo()
+
 # Best-effort coordination for test-time SQLite migrations
 _authnz_migration_lock = asyncio.Lock()
 
@@ -1920,7 +1931,7 @@ async def revoke_permission_from_role(role_id: int, permission_id: int, db=Depen
 @router.get("/users/{user_id}/roles", response_model=UserRoleListResponse)
 async def get_user_roles_admin(user_id: int) -> UserRoleListResponse:
     try:
-        repo = AuthnzRbacRepo()
+        repo = _get_rbac_repo()
         rows = repo.get_user_roles(user_id=int(user_id))
         roles = [
             RoleResponse(
@@ -1976,7 +1987,7 @@ async def remove_role_from_user(user_id: int, role_id: int, db=Depends(get_db_tr
 @router.get("/users/{user_id}/overrides", response_model=UserOverridesResponse)
 async def list_user_overrides(user_id: int) -> UserOverridesResponse:
     try:
-        repo = AuthnzRbacRepo()
+        repo = _get_rbac_repo()
         rows = repo.get_user_overrides(user_id=int(user_id))
         entries = [
             UserOverrideEntry(
@@ -2112,7 +2123,7 @@ async def get_role_effective_permissions(role_id: int) -> RoleEffectivePermissio
     - all_permissions: union of both, sorted
     """
     try:
-        repo = AuthnzRbacRepo()
+        repo = _get_rbac_repo()
         data = repo.get_role_effective_permissions(role_id=int(role_id))
         return RoleEffectivePermissionsResponse(
             role_id=role_id,
@@ -2545,16 +2556,30 @@ async def create_registration_code(
                 (code, max_uses, expires_at, created_by, role_to_grant, metadata)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING id, code, max_uses, times_used, expires_at, created_at, role_to_grant
-            """, code, request.max_uses, expires_at, creator_id,
-                request.role_to_grant, __import__('json').dumps(request.metadata or {}))
+            """,
+                code,
+                request.max_uses,
+                expires_at,
+                creator_id,
+                request.role_to_grant,
+                json.dumps(request.metadata or {}),
+            )
         else:
             # SQLite
             cursor = await db.execute("""
                 INSERT INTO registration_codes
                 (code, max_uses, expires_at, created_by, role_to_grant, metadata)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (code, request.max_uses, expires_at.isoformat(), creator_id,
-                  request.role_to_grant, __import__('json').dumps(request.metadata or {})))
+            """,
+                (
+                    code,
+                    request.max_uses,
+                    expires_at.isoformat(),
+                    creator_id,
+                    request.role_to_grant,
+                    json.dumps(request.metadata or {}),
+                ),
+            )
 
             code_id = cursor.lastrowid
             await db.commit()

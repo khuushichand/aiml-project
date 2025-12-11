@@ -85,33 +85,6 @@ async def _orchestrator_depth_and_age(client: aioredis.Redis) -> Tuple[int, floa
     return (max(depths) if depths else 0, max(ages) if ages else 0.0)
 
 
-async def guard_backpressure_and_quota(
-    request: Request,
-    response: Response,
-    current_user: User = Depends(get_request_user),
-):
-    # Backpressure by orchestrator depth/age
-    client: Optional[aioredis.Redis] = None
-    try:
-        try:
-            client = await _get_redis_client()
-        except Exception:
-            client = None
-        if client is not None:
-            max_depth, max_age = _bp_limits()
-            depth, age = await _orchestrator_depth_and_age(client)
-            if depth >= max_depth or age >= max_age:
-                retry_after = 5
-                if age >= max_age:
-                    retry_after = min(60, int(max(5, age / 2)))
-                raise HTTPException(status_code=429, detail="Backpressure: queue overload", headers={"Retry-After": str(retry_after)})
-    finally:
-        try:
-            if client is not None:
-                await ensure_async_client_closed(client)
-        except Exception:
-            pass
-
 def _should_enforce_ingest_tenant_rps(request: Request, current_user: User) -> bool:
     """
     Decide whether to enforce per-tenant RPS quotas for ingestion.

@@ -294,7 +294,7 @@ async def _decrement_active_request(user_id: str) -> None:
 async def _maybe_rg_shadow_chat_decision(
     request: Optional[Request],
     limiter_user_id: str,
-    limiter_conversation_id: Optional[str],
+    limiter_conversation_id: Optional[str],  # noqa: ARG001 - intentionally unused (reserved for future use)
     estimated_tokens: int,
     legacy_allowed: bool,
 ) -> None:

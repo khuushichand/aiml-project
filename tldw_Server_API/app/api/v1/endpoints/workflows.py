@@ -624,12 +624,26 @@ async def workflows_virtual_key(
             detail="Virtual keys only apply in multi-user mode",
         )
 
+    # Virtual keys require numeric user ids so that downstream
+    # AuthNZ components can safely treat the subject as an integer.
+    user_id = getattr(current_user, "id_int", None)
+    if user_id is None:
+        try:
+            user_id = int(getattr(current_user, "id"))
+        except Exception:
+            user_id = None
+    if user_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Virtual keys require numeric user ids",
+        )
+
     # Build a minimal access token with custom TTL and scope claims
     try:
         from datetime import datetime, timedelta
         svc = JWTService(settings)
         token = svc.create_virtual_access_token(
-            user_id=int(current_user.id),
+            user_id=user_id,
             username=str(getattr(current_user, "username", "user")),
             role=(current_user.roles[0] if getattr(current_user, "roles", None) else ("admin" if getattr(current_user, "is_admin", False) else "user")),
             scope=str(body.scope or "workflows"),
@@ -1531,7 +1545,7 @@ async def get_run_webhook_deliveries(
 async def list_webhook_dlq(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    current_user: User = Depends(get_request_user),
+    _current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
     """Admin: list webhook DLQ entries (all tenants).
@@ -1569,7 +1583,7 @@ async def list_webhook_dlq(
 )
 async def replay_webhook_dlq(
     dlq_id: int,
-    current_user: User = Depends(get_request_user),
+    _current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
     """Admin: attempt immediate replay of a DLQ item.

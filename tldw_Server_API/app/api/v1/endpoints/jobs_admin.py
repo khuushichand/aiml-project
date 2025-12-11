@@ -295,7 +295,7 @@ async def prune_jobs_endpoint(
         # Best-effort audit logging for admin prune action
         try:
             ctx = AuditContext(
-                user_id=str(admin_user.get("id")),
+                user_id=str(admin_user.get("id") or principal.principal_id),
                 endpoint="/api/v1/jobs/prune",
                 method="POST",
             )

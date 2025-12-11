@@ -10,7 +10,7 @@ import json
 import asyncio
 import time
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Annotated
 from fastapi import APIRouter, HTTPException, Depends, status, Query, Request, Response, Header, BackgroundTasks, UploadFile, File, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
@@ -146,8 +146,8 @@ async def admin_cleanup_idempotency(
     ttl_hours: int = Query(72, ge=1, le=720, description="Delete idempotency keys older than this TTL (hours)"),
     target_user_id: Optional[int] = Query(None, description="If provided, only clean this user's evaluations DB"),
     _user_ctx: str = Depends(verify_api_key),  # dependency for side effects
-    principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
-    _current_user: User = Depends(get_request_user),  # dependency for side effects
+    principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
+    _current_user: Annotated[User, Depends(get_request_user)],  # dependency for side effects
 ):
     """Admin-only: purge stale idempotency keys in Evaluations DBs on-demand.
 
@@ -396,15 +396,18 @@ async def delete_embeddings_abtest(
 
 @router.get(
     "/embeddings/abtest/{test_id}/export",
-    dependencies=[Depends(require_roles("admin"))],
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(rbac_rate_limit("evals.abtest.export")),
+    ],
 )
 async def export_embeddings_abtest(
     test_id: str,
     format: str = Query("json", pattern="^(json|csv)$"),
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
-    principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
-    current_user: User = Depends(get_request_user),
+    principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
+    current_user: Annotated[User, Depends(get_request_user)],
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
     """Export AB test results (JSON or CSV). Admin-only."""

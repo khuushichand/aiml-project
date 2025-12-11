@@ -40,11 +40,12 @@ def get_job_manager() -> JobManager:
     When JOBS_DB_URL is a Postgres DSN, use the Postgres backend; otherwise
     fall back to JobManager's default backend resolution (typically SQLite).
     """
-    db_url = os.getenv("JOBS_DB_URL")
+    db_url = (os.getenv("JOBS_DB_URL") or "").strip()
     if not db_url:
-        # Fail fast with a clear message; the dependency layer will surface
-        # this as a 500 to the client.
-        raise RuntimeError("JOBS_DB_URL is not set; cannot initialize JobManager")
+        # Backwards-compatible default: rely on JobManager's internal selection
+        # (typically a local SQLite database) when JOBS_DB_URL is not provided.
+        logger.debug("JOBS_DB_URL not set; using JobManager default backend (likely SQLite).")
+        return JobManager()
 
     backend = "postgres" if db_url.startswith("postgres") else None
     return JobManager(backend=backend, db_url=db_url)

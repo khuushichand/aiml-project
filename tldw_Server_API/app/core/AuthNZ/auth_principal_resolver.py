@@ -180,9 +180,9 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             ctx = getattr(request.state, "auth", None)
             if isinstance(ctx, AuthContext):
                 return ctx.principal
-        except Exception:
+        except Exception as exc:
             # Fall back to rebuilding principal if state is missing/misconfigured.
-            pass
+            logger.debug("Could not access request.state.auth after JWT validation: {}", exc)
 
         principal = _build_principal_from_user(
             user=user,
@@ -219,8 +219,8 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             ctx = getattr(request.state, "auth", None)
             if isinstance(ctx, AuthContext):
                 return ctx.principal
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Could not access request.state.auth after API key validation: {}", exc)
 
         api_key_id: Optional[int] = None
         try:

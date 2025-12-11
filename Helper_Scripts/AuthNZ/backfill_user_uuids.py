@@ -22,7 +22,7 @@ from uuid import UUID, uuid4
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
@@ -89,6 +89,7 @@ async def backfill_user_uuids(*, dry_run: bool = False) -> int:
     """
     settings = get_settings()
     pool = await get_db_pool()
+    is_postgres = await is_postgres_backend()
     logger.info(
         "AuthNZ UUID backfill: AUTH_MODE=%s DATABASE_URL=REDACTED (dry_run=%s)",
         settings.AUTH_MODE,
@@ -139,24 +140,40 @@ async def backfill_user_uuids(*, dry_run: bool = False) -> int:
         for user_id, new_uuid in updates.items():
             logger.info("DRY-RUN: would set users.id=%s uuid=%s", user_id, new_uuid)
     else:
-        # Batch updates in a single transaction per backend for better performance
-        if getattr(pool, "pool", None):
-            # PostgreSQL: use $-style placeholders
+        # Batch updates in a single transaction per backend for better performance.
+        if is_postgres:
+            # PostgreSQL: use array unnest for efficient bulk update.
+            user_ids = list(updates.keys())
+            uuids = list(updates.values())
             async with pool.transaction() as conn:
-                for user_id, new_uuid in updates.items():
-                    await conn.execute(
-                        "UPDATE users SET uuid = $1 WHERE id = $2",
-                        new_uuid,
-                        user_id,
-                    )
+                await conn.execute(
+                    """
+                    UPDATE users
+                    SET uuid = data.new_uuid
+                    FROM (
+                        SELECT unnest($1::int[]) AS id,
+                               unnest($2::text[]) AS new_uuid
+                    ) AS data
+                    WHERE users.id = data.id
+                    """,
+                    user_ids,
+                    uuids,
+                )
         else:
-            # SQLite: use positional ? placeholders
+            # SQLite: use executemany when available to reduce round-trips.
             async with pool.transaction() as conn:
-                for user_id, new_uuid in updates.items():
-                    await conn.execute(
+                params = [(new_uuid, user_id) for user_id, new_uuid in updates.items()]
+                if hasattr(conn, "executemany"):
+                    await conn.executemany(
                         "UPDATE users SET uuid = ? WHERE id = ?",
-                        (new_uuid, user_id),
+                        params,
                     )
+                else:
+                    for new_uuid, user_id in params:
+                        await conn.execute(
+                            "UPDATE users SET uuid = ? WHERE id = ?",
+                            (new_uuid, user_id),
+                        )
 
     if not dry_run:
         remaining = await pool.fetchval(

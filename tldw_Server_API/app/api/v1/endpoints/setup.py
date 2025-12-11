@@ -50,7 +50,7 @@ class AssistantQuestion(BaseModel):
 
 
 async def require_admin_and_system_configure(
-    principal: AuthPrincipal = Depends(get_auth_principal),
+    principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
 ) -> AuthPrincipal:
     """
     Combined dependency that enforces an admin-style principal and reuses the
@@ -198,7 +198,7 @@ async def reset_setup_flags(
     """
     try:
         setup_manager.reset_setup_flags()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("Failed to reset setup flags")
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -235,8 +235,11 @@ async def setup_self_verify(
     raw_id = current_user.get("id")
     try:
         user_id = int(raw_id)
-    except (TypeError, ValueError):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid user context")
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Invalid user context",
+        ) from exc
     if user_id <= 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid user context")
 

@@ -56,6 +56,7 @@ function TTSSection() {
   const [text, setText] = useState('Hello from TLDW Server');
   const [loading, setLoading] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const blobUrlRef = useRef<string | null>(null);
   const [respInfo, setRespInfo] = useState<any>(null);
 
   const fetchVoices = async () => {
@@ -68,6 +69,12 @@ function TTSSection() {
     } catch {}
   };
   useEffect(() => { fetchVoices(); }, []);
+
+  useEffect(() => {
+    return () => {
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+    };
+  }, []);
 
   const speak = async () => {
     setLoading(true);
@@ -85,7 +92,9 @@ function TTSSection() {
       }
       const buf = await resp.arrayBuffer();
       const blob = new Blob([buf], { type: resp.headers.get('Content-Type') || 'audio/mpeg' });
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
       const urlBlob = URL.createObjectURL(blob);
+      blobUrlRef.current = urlBlob;
       if (audioRef.current) {
         audioRef.current.src = urlBlob;
         await audioRef.current.play();
@@ -147,6 +156,10 @@ function StreamingSTTSection() {
   const [autoStop, setAutoStop] = useState(true);
   const autoStoppedRef = useRef<boolean>(false);
   const [autoStopOnFinal, setAutoStopOnFinal] = useState(true);
+  const recordingRef = useRef(false);
+  const streamRef = useRef<MediaStream | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const procRef = useRef<ScriptProcessorNode | null>(null);
 
   const addDebug = (s: string) => {
     const line = `${new Date().toLocaleTimeString()} ${s}`;
@@ -208,10 +221,13 @@ function StreamingSTTSection() {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { show({title:'Not connected',variant:'warning'}); return; }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+      streamRef.current = stream;
       const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
       ctxRef.current = ctx;
       const source = ctx.createMediaStreamSource(stream);
+      sourceRef.current = source;
       const proc = ctx.createScriptProcessor(16384, 1, 1);
+      procRef.current = proc;
       source.connect(proc); proc.connect(ctx.destination);
       // Setup analyser for visualization
       const analyser = ctx.createAnalyser(); analyser.fftSize = 2048;
@@ -245,7 +261,7 @@ function StreamingSTTSection() {
       startTimeRef.current = Date.now();
       const targetSamples = sampleRate * (model === 'whisper' ? 5 : 2);
       proc.onaudioprocess = (ev: AudioProcessingEvent) => {
-        if (!recording) return;
+        if (!recordingRef.current) return;
         const input = ev.inputBuffer.getChannelData(0);
         // Resample if needed (naive interpolation)
         let data = input;
@@ -294,6 +310,7 @@ function StreamingSTTSection() {
           wsRef.current?.send(JSON.stringify({ type: 'audio', data: b64 }));
         }
       };
+      recordingRef.current = true;
       setRecording(true);
       show({ title: 'Recording started', variant: 'success' });
     } catch (e: any) {
@@ -302,7 +319,11 @@ function StreamingSTTSection() {
   };
 
   const stop = () => {
+    recordingRef.current = false;
     setRecording(false);
+    if (procRef.current) { try { procRef.current.disconnect(); } catch {} procRef.current = null; }
+    if (sourceRef.current) { try { sourceRef.current.disconnect(); } catch {} sourceRef.current = null; }
+    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     if (ctxRef.current) { try { ctxRef.current.close(); } catch {} ctxRef.current = null; }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: 'commit' }));
     if (animTimer.current) { cancelAnimationFrame(animTimer.current); animTimer.current = null; }
@@ -650,7 +671,18 @@ function VoiceChatStreamSection() {
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Input label="STT Model" value={sttModel} onChange={(e)=>setSttModel(e.target.value as any)} />
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">STT Model</label>
+          <select
+            className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+            value={sttModel}
+            onChange={(e)=>setSttModel(e.target.value as any)}
+          >
+            <option value="whisper">Whisper</option>
+            <option value="parakeet">Parakeet</option>
+            <option value="canary">Canary</option>
+          </select>
+        </div>
         <Input label="Session ID (optional)" value={sessionId} onChange={(e)=>setSessionId(e.target.value)} />
         <Input label="LLM Provider" value={llmProvider} onChange={(e)=>setLlmProvider(e.target.value)} />
         <Input label="LLM Model" value={llmModel} onChange={(e)=>setLlmModel(e.target.value)} />

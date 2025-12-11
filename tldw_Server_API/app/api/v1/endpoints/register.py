@@ -141,7 +141,7 @@ class UserCreateRequest(BaseModel):
 #
 # Shared registration guards
 
-def _get_registration_settings(request: Request):
+def _get_registration_settings(request: Request) -> Any:
     """
     Return settings after enforcing registration/profile invariants.
 
@@ -454,14 +454,18 @@ async def check_availability(
 
     try:
         if username:
-            # Validate username format
-            validator = UserCreateRequest.__fields__['username'].validator
+            # Validate username format using model validation (Pydantic v2 compatible)
             try:
-                validator(username)
-            except ValueError as e:
+                UserCreateRequest.model_validate({
+                    'username': username,
+                    'email': 'placeholder@example.com',
+                    'password': 'placeholder123',
+                    'confirm_password': 'placeholder123'
+                })
+            except Exception as e:
                 return MessageResponse(
                     success=False,
-                    message=str(e)
+                    message=f"Invalid username: {e}"
                 )
 
             existing = await db.fetchone(

@@ -6,8 +6,6 @@ Topic Monitoring API (Phase 1)
 Admin endpoints to manage watchlists and view alerts.
 """
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
 import os
@@ -62,9 +60,9 @@ async def upsert_watchlist(payload: Watchlist) -> WatchlistUpsertResponse:
         svc = get_topic_monitoring_service()
         wl = svc.upsert_watchlist(payload)
         return WatchlistUpsertResponse(watchlist=wl, status="ok")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - defensive: surface unexpected watchlist errors as 400
         logger.error(f"Failed to upsert watchlist: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
 
 @router.delete(
@@ -105,8 +103,8 @@ async def reload_watchlists() -> WatchlistsReloadResponse:
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 async def list_alerts(
-    user_id: Optional[str] = Query(None, description="Filter by user id"),
-    since: Optional[str] = Query(None, description="ISO 8601 timestamp inclusive lower bound"),
+    user_id: str | None = Query(None, description="Filter by user id"),
+    since: str | None = Query(None, description="ISO 8601 timestamp inclusive lower bound"),
     unread_only: bool = Query(False, description="Only unread alerts"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -122,7 +120,7 @@ async def list_alerts(
         if isinstance(meta, str) and meta:
             try:
                 r["metadata"] = json.loads(meta)
-            except Exception as e:
+            except (TypeError, json.JSONDecodeError) as e:
                 logger.debug(f"monitoring: failed to parse alert metadata JSON: {e}")
         items.append(AlertItem(**r))
     return AlertsListResponse(items=items)
@@ -201,9 +199,9 @@ async def send_test_notification(payload: NotificationTestRequest) -> dict[str, 
     )
     try:
         notifier.notify(alert)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - defensive: notification failures should surface as 500
         logger.error(f"monitoring: failed to send test notification: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     return {"status": "ok"}
 
 
@@ -227,7 +225,7 @@ async def get_recent_notifications(
         # Simple bounded tail: read last N lines without loading entire file into memory
         from collections import deque
 
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             lines = deque(f, maxlen=limit)
         for ln in lines:
             ln = ln.strip()
@@ -235,13 +233,14 @@ async def get_recent_notifications(
                 continue
             try:
                 items.append(json.loads(ln))
-            except Exception as e:
+            except (TypeError, json.JSONDecodeError) as e:
                 logger.debug(f"monitoring: failed to parse recent notification JSONL line: {e}")
                 items.append({"raw": ln})
-        return {"items": items}
     except Exception as e:
         logger.error(f"monitoring: failed to read recent notifications from {path}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to read recent notifications",
         ) from e
+    else:
+        return {"items": items}

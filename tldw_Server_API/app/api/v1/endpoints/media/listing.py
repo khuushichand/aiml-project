@@ -150,7 +150,11 @@ async def list_media_endpoint(
                 }
             )
 
-        # Optionally fetch keywords for all media items on this page in a single batch
+        # Optionally fetch keywords for all media items on this page in a single batch.
+        # keywords_available has three states:
+        #   None  -> keywords not requested (omitted from response)
+        #   True  -> keywords successfully retrieved or no items to fetch
+        #   False -> keyword retrieval failed (graceful degradation)
         keywords_map: Dict[int, List[str]] = {}
         keywords_available: Optional[bool] = None
         if include_keywords and media_ids:

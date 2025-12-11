@@ -405,7 +405,7 @@ This pattern (principal-first logic, gated by a dedicated env flag and validated
 **Goal**: Route all AuthNZ guardrails (LLM budgets, login lockouts, AuthNZ-level rate limits) through `AuthGovernor` / `ResourceGovernor` using `AuthPrincipal`, and remove duplicated guardrail logic.
 
 **Success Criteria**:
-- The `AuthGovernor` façade is implemented as an AuthNZ-focused façade over `ResourceGovernor` with support for:
+- The `AuthGovernor` facade is implemented as an AuthNZ-focused facade over `ResourceGovernor` with support for:
   - Rate limits (requests/minute, burst).
   - LLM budgets (tokens/day, tokens/month, USD/day, USD/month).
   - Login lockouts and suspicious-activity metrics.

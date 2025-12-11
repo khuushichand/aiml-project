@@ -229,7 +229,16 @@ async def mint_self_virtual_key(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to mint self virtual key: {e}")
+        if settings.PII_REDACT_LOGS:
+            logger.exception("Failed to mint self virtual key [redacted]")
+        else:
+            logger.exception(
+                "Failed to mint self virtual key for user_id={} scope={} ttl_minutes={} error_type={}",
+                current_user.get("id"),
+                body.scope,
+                body.ttl_minutes,
+                type(e).__name__,
+            )
         raise HTTPException(status_code=500, detail="Failed to mint token")
 
 @router.post("/login", response_model=TokenResponse, dependencies=[Depends(check_auth_rate_limit)])
@@ -903,15 +912,19 @@ async def register(
     """
     start_time = time.perf_counter()
     log_counter("auth_register_attempt")
+    settings = get_settings()
     try:
         # Hard constraint for local-single-user profile: do not allow
         # registration of additional users beyond the bootstrapped admin.
         profile = get_profile()
         if isinstance(profile, str) and profile.strip().lower() in {"local-single-user", "single_user"}:
-            logger.warning(
-                "Registration attempt rejected in local-single-user profile for username=%s",
-                request.username,
-            )
+            if getattr(settings, "PII_REDACT_LOGS", False):
+                logger.warning("Registration attempt rejected in local-single-user profile [redacted]")
+            else:
+                logger.warning(
+                    "Registration attempt rejected in local-single-user profile for username=%s",
+                    request.username,
+                )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User registration is not allowed in local-single-user profile",
@@ -930,7 +943,6 @@ async def register(
         # If using SQLite for AuthNZ, generate a per-user API key so UI can present it
         api_key_value = None
         try:
-            settings = get_settings()
             if isinstance(settings.DATABASE_URL, str) and settings.DATABASE_URL.startswith("sqlite"):
                 api_mgr = await get_api_key_manager()
                 key_result = await api_mgr.create_api_key(

@@ -537,7 +537,7 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                     # Log at warning level with context so repeated failures surface operationally
                     logger.warning(
                         "Single-user admin role assignment skipped in ensure_single_user_rbac_seed_if_needed "
-                        "(AUTH_MODE=%s, db_url=%s): %s",
+                        "(AUTH_MODE={}, db_url={}): {}",
                         settings.AUTH_MODE,
                         getattr(settings, "DATABASE_URL", "unset"),
                         role_assign_err,
@@ -657,10 +657,11 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
         # Non-fatal but important for observability: surface failures at warning level
         logger.warning(
             "Single-user RBAC seed ensure skipped or failed in ensure_single_user_rbac_seed_if_needed "
-            "(AUTH_MODE=%s, db_url=%s): %s",
+            "(AUTH_MODE={}, db_url={}): {}",
             settings.AUTH_MODE,
             getattr(settings, "DATABASE_URL", "unset"),
             e,
+            exc_info=True,
         )
 
 async def create_admin_user():

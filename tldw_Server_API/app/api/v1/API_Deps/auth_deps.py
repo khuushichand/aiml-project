@@ -4,6 +4,7 @@
 # Imports
 from typing import Optional, Dict, Any, List, Callable, Awaitable
 from collections.abc import Mapping
+import asyncio
 import re
 import os
 #
@@ -45,6 +46,7 @@ from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
+_TEST_SESSION_LOCK: asyncio.Lock = asyncio.Lock()
 
 #######################################################################################################################
 #
@@ -109,6 +111,9 @@ async def get_db_transaction():
         conn_cm = db_pool.acquire()
         conn = await conn_cm.__aenter__()
 
+        # NOTE: This adapter normalizes asyncpg-style ($1, fetch*) and SQLite-style
+        # query/return semantics for tests. If other modules need similar behavior,
+        # it can be extracted into the DB_Management layer.
         class _ConnAdapter:
             def __init__(self, _conn):
                 self._conn = _conn
@@ -236,23 +241,24 @@ async def get_session_manager_dep() -> SessionManager:
                     ip_address: str = "",
                     user_agent: str = "",
                 ):
-                    _TEST_SESSION_STATE["sid"] += 1
-                    sid = _TEST_SESSION_STATE["sid"]
-                    now = datetime.utcnow()
-                    sess = {
-                        "id": sid,
-                        "session_id": sid,
-                        "user_id": user_id,
-                        "ip_address": ip_address,
-                        "user_agent": user_agent,
-                        "created_at": now,
-                        "last_activity": now,
-                        "expires_at": now,
-                        "is_active": True,
-                        "is_revoked": False,
-                    }
-                    _TEST_SESSION_STATE["sessions"][sid] = sess
-                    return sess
+                    async with _TEST_SESSION_LOCK:
+                        _TEST_SESSION_STATE["sid"] += 1
+                        sid = _TEST_SESSION_STATE["sid"]
+                        now = datetime.utcnow()
+                        sess = {
+                            "id": sid,
+                            "session_id": sid,
+                            "user_id": user_id,
+                            "ip_address": ip_address,
+                            "user_agent": user_agent,
+                            "created_at": now,
+                            "last_activity": now,
+                            "expires_at": now,
+                            "is_active": True,
+                            "is_revoked": False,
+                        }
+                        _TEST_SESSION_STATE["sessions"][sid] = sess
+                        return sess
 
                 async def update_session_tokens(self, session_id: int, access_token: str, refresh_token: str):
                     # No-op in stub
@@ -266,23 +272,30 @@ async def get_session_manager_dep() -> SessionManager:
                     }
 
                 async def get_user_sessions(self, user_id: int):
-                    return [s for s in _TEST_SESSION_STATE["sessions"].values() if s.get("user_id") == user_id]
+                    async with _TEST_SESSION_LOCK:
+                        return [
+                            s
+                            for s in _TEST_SESSION_STATE["sessions"].values()
+                            if s.get("user_id") == user_id
+                        ]
 
                 async def revoke_session(self, session_id: int, *args, **kwargs):
-                    if session_id in _TEST_SESSION_STATE["sessions"]:
-                        _TEST_SESSION_STATE["sessions"][session_id]["is_revoked"] = True
-                        _TEST_SESSION_STATE["sessions"][session_id]["is_active"] = False
-                        return True
-                    return False
+                    async with _TEST_SESSION_LOCK:
+                        if session_id in _TEST_SESSION_STATE["sessions"]:
+                            _TEST_SESSION_STATE["sessions"][session_id]["is_revoked"] = True
+                            _TEST_SESSION_STATE["sessions"][session_id]["is_active"] = False
+                            return True
+                        return False
 
                 async def revoke_all_user_sessions(self, user_id: int):
-                    changed = 0
-                    for s in _TEST_SESSION_STATE["sessions"].values():
-                        if s.get("user_id") == user_id:
-                            s["is_revoked"] = True
-                            s["is_active"] = False
-                            changed += 1
-                    return changed
+                    async with _TEST_SESSION_LOCK:
+                        changed = 0
+                        for s in _TEST_SESSION_STATE["sessions"].values():
+                            if s.get("user_id") == user_id:
+                                s["is_revoked"] = True
+                                s["is_active"] = False
+                                changed += 1
+                        return changed
 
             return _StubSessionManager()  # type: ignore[return-value]
     except Exception as exc:
