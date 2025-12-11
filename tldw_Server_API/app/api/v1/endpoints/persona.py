@@ -148,7 +148,7 @@ async def persona_stream(
             return {"steps": steps}
 
         while True:
-            raw = await ws.receive_text()
+            raw = await stream.receive_text()
             try:
                 msg = json.loads(raw)
             except Exception:

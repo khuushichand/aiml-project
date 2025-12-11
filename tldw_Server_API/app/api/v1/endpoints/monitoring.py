@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
 import os
 import json
+import asyncio
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_permissions
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
@@ -246,7 +247,7 @@ def _tail_jsonl_file(path: str, limit: int) -> list[str]:
                     break
                 line = buffer[newline_pos + 1 :]
                 buffer = buffer[:newline_pos]
-                if line or buffer:
+                if line:
                     lines.append(line)
                 if len(lines) >= limit:
                     break
@@ -278,7 +279,8 @@ async def get_recent_notifications(
     if not path or not os.path.exists(path):
         return {"items": []}
     try:
-        lines = _tail_jsonl_file(path, limit)
+        # Offload blocking file I/O to a worker thread to keep the event loop responsive.
+        lines = await asyncio.to_thread(_tail_jsonl_file, path, limit)
         for ln in lines:
             ln = ln.strip()
             if not ln:

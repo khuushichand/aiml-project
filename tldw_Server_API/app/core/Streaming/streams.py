@@ -353,6 +353,24 @@ class WebSocketStream:
     def mark_activity(self) -> None:
         self._last_activity = time.monotonic()
 
+    async def receive_text(self) -> str:
+        """Receive a text frame and mark activity for idle tracking."""
+        text = await maybe_await(self.ws.receive_text())
+        try:
+            self.mark_activity()
+        except Exception:
+            pass
+        return text
+
+    async def receive_json(self) -> Any:
+        """Receive a JSON frame and mark activity for idle tracking."""
+        data = await maybe_await(self.ws.receive_json())
+        try:
+            self.mark_activity()
+        except Exception:
+            pass
+        return data
+
     async def send_event(self, event: str, data: Any | None = None) -> None:
         # Optional WS event frame
         payload = {"type": "event", "event": event}

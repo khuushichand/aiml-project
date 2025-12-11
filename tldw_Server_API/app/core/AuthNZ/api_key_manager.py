@@ -6,7 +6,7 @@ import secrets
 import hashlib
 import hmac
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from enum import Enum
 #
@@ -224,7 +224,7 @@ class APIKeyManager:
         # Calculate expiration
         expires_at = None
         if expires_in_days:
-            expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
+            expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
 
         try:
             repo = self._get_repo()
@@ -256,7 +256,7 @@ class APIKeyManager:
                 "name": name,
                 "scope": scope,
                 "expires_at": expires_at.isoformat() if expires_at else None,
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
                 "message": "Store this key securely - it will not be shown again"
             }
         except Exception as e:
@@ -296,7 +296,7 @@ class APIKeyManager:
         key_prefix = full_key[:10] + "..."
         expires_at = None
         if expires_in_days:
-            expires_at = datetime.utcnow() + timedelta(days=expires_in_days)
+            expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
 
         try:
             repo = self._get_repo()
@@ -340,7 +340,7 @@ class APIKeyManager:
                 "name": name,
                 "scope": 'read',
                 "expires_at": expires_at.isoformat() if expires_at else None,
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
                 "message": "Store this key securely - it will not be shown again"
             }
 
@@ -386,8 +386,16 @@ class APIKeyManager:
 
             # Check expiration
             if key_info['expires_at']:
-                expires_at = datetime.fromisoformat(key_info['expires_at']) if isinstance(key_info['expires_at'], str) else key_info['expires_at']
-                if expires_at < datetime.utcnow():
+                expires_at_raw = key_info['expires_at']
+                expires_at = (
+                    datetime.fromisoformat(expires_at_raw)
+                    if isinstance(expires_at_raw, str)
+                    else expires_at_raw
+                )
+                if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                now_utc = datetime.now(timezone.utc)
+                if isinstance(expires_at, datetime) and expires_at < now_utc:
                     await self._mark_expired(key_info['id'])
                     return None
 
@@ -507,7 +515,7 @@ class APIKeyManager:
                 new_key_id=new_key_result["id"],
                 rotated_status=APIKeyStatus.ROTATED.value,
                 reason="Key rotation",
-                revoked_at=datetime.utcnow(),
+                revoked_at=datetime.now(timezone.utc),
             )
 
             # Log the rotation
@@ -552,7 +560,7 @@ class APIKeyManager:
                 revoked_status=APIKeyStatus.REVOKED.value,
                 active_status=APIKeyStatus.ACTIVE.value,
                 reason=reason or "Manual revocation",
-                revoked_at=datetime.utcnow(),
+                revoked_at=datetime.now(timezone.utc),
             )
 
             if success:
@@ -612,7 +620,7 @@ class APIKeyManager:
         try:
             repo = self._get_repo()
             updated = await repo.expire_keys_before(
-                now=datetime.utcnow(),
+                now=datetime.now(timezone.utc),
                 expired_status=APIKeyStatus.EXPIRED.value,
                 active_status=APIKeyStatus.ACTIVE.value,
             )
