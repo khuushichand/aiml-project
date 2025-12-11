@@ -239,7 +239,7 @@ async def mint_self_virtual_key(
                 body.ttl_minutes,
                 type(e).__name__,
             )
-        raise HTTPException(status_code=500, detail="Failed to mint token")
+        raise HTTPException(status_code=500, detail="Failed to mint token") from e
 
 @router.post("/login", response_model=TokenResponse, dependencies=[Depends(check_auth_rate_limit)])
 async def login(

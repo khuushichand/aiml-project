@@ -979,7 +979,8 @@ async def ttl_sweep_endpoint(
             raw = await request.json()
         except Exception:
             raw = {}
-        domain_val = (raw or {}).get("domain")
+        raw_domain = (raw or {}).get("domain")
+        domain_val = str(raw_domain or "").strip() or None
         admin_user = _enforce_domain_scope_unified(principal, domain_val)
         # Confirm header for destructive action (check before model validation for consistent 400s)
         hdr = str(request.headers.get("x-confirm", "")).lower()
@@ -998,7 +999,7 @@ async def ttl_sweep_endpoint(
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         if backend == "postgres":
-            _set_pg_rls_for_user(admin_user, (raw or {}).get("domain"))
+            _set_pg_rls_for_user(admin_user, domain_val)
         jm = JobManager(backend=backend, db_url=db_url)
         # Now validate the request model
         req = TTLSweepRequest(**(raw or {}))

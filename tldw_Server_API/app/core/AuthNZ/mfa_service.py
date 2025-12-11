@@ -38,6 +38,8 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 )
 from tldw_Server_API.app.core.AuthNZ.repos.mfa_repo import AuthnzMfaRepo
 
+_DB_POOL_NOT_INITIALIZED = "MFAService database pool not initialized"
+
 #######################################################################################################################
 #
 # MFA Service Class
@@ -93,7 +95,7 @@ class MFAService:
     def _ensure_db_pool(self) -> DatabasePool:
         """Ensure database pool is initialized, raising DatabaseError if not."""
         if not self.db_pool:
-            raise DatabaseError("MFAService database pool not initialized")
+            raise DatabaseError(_DB_POOL_NOT_INITIALIZED)
         return self.db_pool
 
     def _get_repo(self) -> AuthnzMfaRepo:
@@ -413,7 +415,7 @@ class MFAService:
                     "method": "totp" if enabled else None,
                 }
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - fail safe fallback for dashboard views
             logger.error(f"Failed to get MFA status: {e}")
             # This method is used for read-only status introspection. On
             # unexpected failures we intentionally fall back to a "MFA
@@ -470,6 +472,7 @@ class MFAService:
                 # backup codes as plain-text strings. Compare normalized values
                 # here and then re-save remaining codes as hashes below. This
                 # path can be removed once all users have migrated.
+                # TODO: Track migration progress and remove this fallback in a future release.
                 for candidate in list(backup_codes):
                     if not isinstance(candidate, str):
                         continue

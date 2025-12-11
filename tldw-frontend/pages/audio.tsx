@@ -161,6 +161,36 @@ function StreamingSTTSection() {
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const procRef = useRef<ScriptProcessorNode | null>(null);
 
+  const cleanupAudio = () => {
+    recordingRef.current = false;
+    if (procRef.current) {
+      try {
+        procRef.current.disconnect();
+      } catch {}
+      procRef.current = null;
+    }
+    if (sourceRef.current) {
+      try {
+        sourceRef.current.disconnect();
+      } catch {}
+      sourceRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (ctxRef.current) {
+      try {
+        ctxRef.current.close();
+      } catch {}
+      ctxRef.current = null;
+    }
+    if (animTimer.current) {
+      cancelAnimationFrame(animTimer.current);
+      animTimer.current = null;
+    }
+  };
+
   const addDebug = (s: string) => {
     const line = `${new Date().toLocaleTimeString()} ${s}`;
     debugRef.current.push(line);
@@ -210,8 +240,14 @@ function StreamingSTTSection() {
           else if (msg.type === 'error') { show({ title: 'STT error', description: msg.message || 'Error', variant: 'danger' }); addDebug(`Error: ${msg.message}`); }
         } catch { addDebug(`RX: ${String(ev.data).slice(0,100)}`); }
       };
-      ws.onerror = (e) => { addDebug('WebSocket error'); };
-      ws.onclose = () => { setConnected(false); setRecording(false); addDebug('WebSocket closed'); };
+	      ws.onerror = (e) => { addDebug('WebSocket error'); };
+	      ws.onclose = () => {
+          cleanupAudio();
+          recordingRef.current = false;
+          setConnected(false);
+          setRecording(false);
+          addDebug('WebSocket closed');
+        };
     } catch (e: any) {
       show({ title: 'Connect failed', description: e?.message || 'Failed', variant: 'danger' });
     }
@@ -260,8 +296,8 @@ function StreamingSTTSection() {
       bufferRef.current = [];
       startTimeRef.current = Date.now();
       const targetSamples = sampleRate * (model === 'whisper' ? 5 : 2);
-      proc.onaudioprocess = (ev: AudioProcessingEvent) => {
-        if (!recordingRef.current) return;
+	      proc.onaudioprocess = (ev: AudioProcessingEvent) => {
+	        if (!recordingRef.current) return;
         const input = ev.inputBuffer.getChannelData(0);
         // Resample if needed (naive interpolation)
         let data = input;
@@ -291,8 +327,10 @@ function StreamingSTTSection() {
             const now = Date.now();
           if (rms < vadThreshold) {
             // silence chunk
-            if (autoCommit && lastActiveRef.current && (now - lastActiveRef.current) > silenceMs) {
-              wsRef.current?.send(JSON.stringify({ type: 'commit' }));
+	            if (autoCommit && lastActiveRef.current && (now - lastActiveRef.current) > silenceMs) {
+	              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                  wsRef.current.send(JSON.stringify({ type: 'commit' }));
+                }
               addDebug(`Auto-commit after ${silenceMs}ms silence`);
               lastActiveRef.current = now; // prevent repeated commits
             }
@@ -305,9 +343,11 @@ function StreamingSTTSection() {
             return;
           }
           // voice detected
-          lastActiveRef.current = now;
-          }
-          wsRef.current?.send(JSON.stringify({ type: 'audio', data: b64 }));
+	          lastActiveRef.current = now;
+	          }
+	          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: 'audio', data: b64 }));
+            }
         }
       };
       recordingRef.current = true;
@@ -318,23 +358,25 @@ function StreamingSTTSection() {
     }
   };
 
-  const stop = () => {
-    recordingRef.current = false;
-    setRecording(false);
-    if (procRef.current) { try { procRef.current.disconnect(); } catch {} procRef.current = null; }
-    if (sourceRef.current) { try { sourceRef.current.disconnect(); } catch {} sourceRef.current = null; }
-    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
-    if (ctxRef.current) { try { ctxRef.current.close(); } catch {} ctxRef.current = null; }
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: 'commit' }));
-    if (animTimer.current) { cancelAnimationFrame(animTimer.current); animTimer.current = null; }
-    autoStoppedRef.current = false;
-    show({ title: 'Recording stopped', variant: 'info' });
-  };
+	  const stop = () => {
+	    recordingRef.current = false;
+	    setRecording(false);
+      cleanupAudio();
+	    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'commit' }));
+      }
+	    autoStoppedRef.current = false;
+	    show({ title: 'Recording stopped', variant: 'info' });
+	  };
 
-  const disconnect = () => {
-    try { wsRef.current?.close(); } catch {}
-    wsRef.current = null; setConnected(false); setRecording(false);
-  };
+	  const disconnect = () => {
+      cleanupAudio();
+	    try { wsRef.current?.close(); } catch {}
+	    wsRef.current = null;
+      setConnected(false);
+      setRecording(false);
+      recordingRef.current = false;
+	  };
 
   return (
     <div className="space-y-3">

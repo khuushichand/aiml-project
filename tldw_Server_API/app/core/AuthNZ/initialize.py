@@ -655,13 +655,12 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                 pass
     except Exception as e:
         # Non-fatal but important for observability: surface failures at warning level
-        logger.warning(
+        logger.opt(exception=True).warning(
             "Single-user RBAC seed ensure skipped or failed in ensure_single_user_rbac_seed_if_needed "
             "(AUTH_MODE={}, db_url={}): {}",
             settings.AUTH_MODE,
             getattr(settings, "DATABASE_URL", "unset"),
             e,
-            exc_info=True,
         )
 
 async def create_admin_user():

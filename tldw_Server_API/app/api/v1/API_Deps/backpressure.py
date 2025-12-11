@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 
 from fastapi import Depends, HTTPException
 from fastapi import Request, Response
+from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode
@@ -97,16 +98,29 @@ def _should_enforce_ingest_tenant_rps(request: Request, current_user: User) -> b
     try:
         ctx = getattr(request.state, "auth", None)
         principal: Optional[AuthPrincipal] = ctx.principal if isinstance(ctx, AuthContext) else None
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to extract principal from request.state.auth: {}", exc)
         principal = None
+
+    # Prefer principal admin flag when available, but fall back to the
+    # current_user model when principal context is missing.
+    is_admin = False
+    if principal is not None:
+        is_admin = bool(getattr(principal, "is_admin", False))
+    else:
+        try:
+            is_admin = bool(getattr(current_user, "is_admin", False))
+        except Exception as exc:
+            logger.debug("Failed to determine admin status from current_user: {}", exc)
 
     try:
         single_profile = is_single_user_profile_mode()
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to determine single-user profile mode: {}", exc)
         single_profile = False
 
     # Local single-user-style profiles: never enforce tenant quotas for admin principals.
-    if principal is not None and principal.is_admin and single_profile:
+    if is_admin and single_profile:
         return False
 
     # If we lack principal context entirely, treat local single-user-style profiles

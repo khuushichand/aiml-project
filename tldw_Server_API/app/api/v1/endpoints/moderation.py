@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Response
 from loguru import logger
 
@@ -41,13 +41,13 @@ router = APIRouter(
 
 
 @router.get("/moderation/users", response_model=ModerationUserOverridesResponse, summary="List all per-user moderation overrides", tags=["moderation"])
-async def list_user_overrides():
+async def list_user_overrides() -> ModerationUserOverridesResponse:
     svc = get_moderation_service()
     return {"overrides": svc.list_user_overrides()}
 
 
 @router.get("/moderation/users/{user_id}", response_model=dict, summary="Get per-user moderation override", tags=["moderation"])
-async def get_user_override(user_id: str):
+async def get_user_override(user_id: str) -> dict[str, Any]:
     svc = get_moderation_service()
     data = svc.list_user_overrides().get(str(user_id))
     if data is None:
@@ -56,7 +56,7 @@ async def get_user_override(user_id: str):
 
 
 @router.put("/moderation/users/{user_id}", response_model=dict, summary="Set per-user moderation override", tags=["moderation"])
-async def set_user_override(user_id: str, override: ModerationUserOverride):
+async def set_user_override(user_id: str, override: ModerationUserOverride) -> dict[str, Any]:
     svc = get_moderation_service()
     status_info = svc.set_user_override(user_id, override.model_dump(exclude_none=True))
     if not status_info or not status_info.get("ok"):
@@ -69,7 +69,7 @@ async def set_user_override(user_id: str, override: ModerationUserOverride):
 
 
 @router.delete("/moderation/users/{user_id}", summary="Delete per-user moderation override", tags=["moderation"])
-async def delete_user_override(user_id: str):
+async def delete_user_override(user_id: str) -> dict[str, Any]:
     svc = get_moderation_service()
     status_info = svc.delete_user_override(user_id)
     if not status_info or not status_info.get("ok"):
@@ -80,13 +80,13 @@ async def delete_user_override(user_id: str):
 
 
 @router.get("/moderation/blocklist", response_model=list, summary="Get current blocklist lines", tags=["moderation"])
-async def get_blocklist():
+async def get_blocklist() -> list[str]:
     svc = get_moderation_service()
     return svc.get_blocklist_lines()
 
 
 @router.put("/moderation/blocklist", summary="Replace blocklist with provided lines", tags=["moderation"])
-async def update_blocklist(data: ModerationBlocklistUpdate):
+async def update_blocklist(data: ModerationBlocklistUpdate) -> dict[str, Any]:
     svc = get_moderation_service()
     ok = svc.set_blocklist_lines(data.lines or [])
     if not ok:
@@ -99,7 +99,7 @@ async def update_blocklist(data: ModerationBlocklistUpdate):
     summary="Inspect effective moderation policy for a user",
     tags=["moderation"],
 )
-async def get_effective_policy(user_id: Optional[str] = Query(None, description="User ID to compute effective policy; optional")):
+async def get_effective_policy(user_id: Optional[str] = Query(None, description="User ID to compute effective policy; optional")) -> dict[str, Any]:
     svc = get_moderation_service()
     try:
         snapshot = svc.effective_policy_snapshot(user_id)
@@ -118,7 +118,7 @@ async def get_effective_policy(user_id: Optional[str] = Query(None, description=
     summary="Reload moderation configuration from disk",
     tags=["moderation"],
 )
-async def reload_moderation():
+async def reload_moderation() -> dict[str, Any]:
     svc = get_moderation_service()
     try:
         svc.reload()
@@ -138,7 +138,7 @@ async def reload_moderation():
     summary="Get runtime moderation settings and effective state",
     tags=["moderation"],
 )
-async def get_moderation_settings():
+async def get_moderation_settings() -> ModerationSettingsResponse:
     svc = get_moderation_service()
     try:
         data = svc.get_settings()
@@ -158,7 +158,7 @@ async def get_moderation_settings():
     summary="Update runtime moderation settings (non-persistent)",
     tags=["moderation"],
 )
-async def update_moderation_settings(body: ModerationSettingsUpdate):
+async def update_moderation_settings(body: ModerationSettingsUpdate) -> ModerationSettingsResponse:
     svc = get_moderation_service()
     try:
         data = svc.update_settings(pii_enabled=body.pii_enabled, categories_enabled=body.categories_enabled, persist=bool(body.persist))
@@ -178,7 +178,7 @@ async def update_moderation_settings(body: ModerationSettingsUpdate):
     summary="Managed blocklist listing with version",
     tags=["moderation"],
 )
-async def get_blocklist_managed(response: Response):
+async def get_blocklist_managed(response: Response) -> BlocklistManagedResponse:
     svc = get_moderation_service()
     state = svc.get_blocklist_state()
     # Set ETag header for clients to use with If-Match
@@ -197,7 +197,7 @@ async def append_blocklist_line(
     payload: BlocklistAppendRequest,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
-):
+) -> BlocklistAppendResponse:
     if not if_match:
         raise HTTPException(status_code=428, detail="If-Match header is required")
     svc = get_moderation_service()
@@ -224,7 +224,7 @@ async def delete_blocklist_item(
     item_id: int,
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
-):
+) -> BlocklistDeleteResponse:
     if not if_match:
         raise HTTPException(status_code=428, detail="If-Match header is required")
     svc = get_moderation_service()
@@ -249,7 +249,7 @@ async def delete_blocklist_item(
 )
 async def lint_blocklist(
     payload: BlocklistLintRequest,
-):
+) -> BlocklistLintResponse:
     svc = get_moderation_service()
     lines = []
     if payload.lines:
@@ -281,7 +281,7 @@ async def lint_blocklist(
     summary="Test moderation against sample text for a user",
     tags=["moderation"],
 )
-async def test_moderation(payload: ModerationTestRequest):
+async def test_moderation(payload: ModerationTestRequest) -> ModerationTestResponse:
     svc = get_moderation_service()
     eff = svc.get_effective_policy(payload.user_id)
 

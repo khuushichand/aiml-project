@@ -167,7 +167,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
         except HTTPException:
             # Propagate explicit HTTP errors (401/400/etc.) unchanged
             raise
-        except Exception as exc:  # noqa: BLE001 - defensive: unexpected JWT errors -> 401
+        except Exception as exc:
             logger.exception("Error resolving principal from JWT: {}", exc)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -180,7 +180,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             ctx = getattr(request.state, "auth", None)
             if isinstance(ctx, AuthContext):
                 return ctx.principal
-        except Exception as exc:
+        except (AttributeError, TypeError) as exc:
             # Fall back to rebuilding principal if state is missing/misconfigured.
             logger.debug("Could not access request.state.auth after JWT validation: {}", exc)
 
@@ -207,7 +207,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             user = await User_DB_Handling.authenticate_api_key_user(request, api_key)
         except HTTPException:
             raise
-        except Exception as exc:  # noqa: BLE001 - defensive: unexpected API key errors -> 401
+        except Exception as exc:
             logger.exception("Error resolving principal from API key: {}", exc)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -219,7 +219,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
             ctx = getattr(request.state, "auth", None)
             if isinstance(ctx, AuthContext):
                 return ctx.principal
-        except Exception as exc:
+        except (AttributeError, TypeError) as exc:
             logger.debug("Could not access request.state.auth after API key validation: {}", exc)
 
         api_key_id: Optional[int] = None

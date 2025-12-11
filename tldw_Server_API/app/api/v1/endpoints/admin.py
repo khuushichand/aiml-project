@@ -1093,7 +1093,7 @@ async def get_user_details(
         user_id: User ID
 
     Returns:
-        User details including all fields
+        User details excluding sensitive fields (e.g., password_hash)
     """
     try:
         repo = await AuthnzUsersRepo.from_pool()

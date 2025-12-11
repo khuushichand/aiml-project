@@ -60,7 +60,7 @@ async def upsert_watchlist(payload: Watchlist) -> WatchlistUpsertResponse:
         svc = get_topic_monitoring_service()
         wl = svc.upsert_watchlist(payload)
         return WatchlistUpsertResponse(watchlist=wl, status="ok")
-    except Exception as e:  # noqa: BLE001 - defensive: surface unexpected watchlist errors as 400
+    except Exception as e:
         logger.error(f"Failed to upsert watchlist: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
@@ -199,7 +199,7 @@ async def send_test_notification(payload: NotificationTestRequest) -> dict[str, 
     )
     try:
         notifier.notify(alert)
-    except Exception as e:  # noqa: BLE001 - defensive: notification failures should surface as 500
+    except Exception as e:
         logger.error(f"monitoring: failed to send test notification: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     return {"status": "ok"}

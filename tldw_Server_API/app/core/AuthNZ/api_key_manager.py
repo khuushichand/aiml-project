@@ -617,7 +617,7 @@ class APIKeyManager:
                 expired_status=APIKeyStatus.EXPIRED.value,
                 active_status=APIKeyStatus.ACTIVE.value,
             )
-            logger.debug("Cleaned up expired API keys (updated={})", updated)
+            logger.debug(f"Cleaned up expired API keys (updated={updated})")
         except Exception as e:
             logger.error(f"Failed to cleanup expired keys: {e}")
 

@@ -41,7 +41,11 @@ def _extract_row(row: Any) -> Tuple[int, Any]:
 
 
 def _normalize_existing_uuids(rows: Iterable[Any]) -> Tuple[Dict[int, str | None], set[str]]:
-    """Normalize existing uuid cells and return (by_id, valid_uuid_set)."""
+    """Normalize existing uuid cells and return (by_id, valid_uuid_set).
+
+    Invalid or unparsable UUID values are logged and treated as missing
+    (stored as ``None`` in the by_id mapping).
+    """
     by_id: Dict[int, str | None] = {}
     seen: set[str] = set()
 
@@ -55,7 +59,7 @@ def _normalize_existing_uuids(rows: Iterable[Any]) -> Tuple[Dict[int, str | None
                 value = str(raw).strip() or None
             except Exception as exc:
                 logger.warning(
-                    "Unable to normalize existing UUID value for user_id=%s: raw=%r (error=%r)",
+                    "Unable to normalize existing UUID value for user_id={}: raw={!r} (error={!r})",
                     user_id,
                     raw,
                     exc,
@@ -70,12 +74,14 @@ def _normalize_existing_uuids(rows: Iterable[Any]) -> Tuple[Dict[int, str | None
                 by_id[user_id] = parsed
             except Exception as exc:
                 logger.debug(
-                    "Existing UUID value for user_id=%s is not a valid UUID and will be backfilled: value=%r (error=%r)",
+                    "Existing UUID value for user_id={} is not a valid UUID and will be backfilled: "
+                    "value={!r} (error={!r})",
                     user_id,
                     value,
                     exc,
                 )
-                # Leave as-is; will be backfilled
+                # Treat invalid UUID as missing so the backfill path can handle it uniformly.
+                by_id[user_id] = None
                 continue
 
     return by_id, seen
@@ -91,7 +97,7 @@ async def backfill_user_uuids(*, dry_run: bool = False) -> int:
     pool = await get_db_pool()
     is_postgres = await is_postgres_backend()
     logger.info(
-        "AuthNZ UUID backfill: AUTH_MODE=%s DATABASE_URL=REDACTED (dry_run=%s)",
+        "AuthNZ UUID backfill: AUTH_MODE={} DATABASE_URL=REDACTED (dry_run={})",
         settings.AUTH_MODE,
         dry_run,
     )
@@ -106,39 +112,22 @@ async def backfill_user_uuids(*, dry_run: bool = False) -> int:
     updates: Dict[int, str] = {}
     for user_id, current in by_id.items():
         if current is None:
-            # Missing UUID entirely
+            # Missing or invalid UUID - generate a new one
             new_uuid = str(uuid4())
             while new_uuid in seen:
                 new_uuid = str(uuid4())
             seen.add(new_uuid)
             updates[user_id] = new_uuid
-        else:
-            # Present but may have been invalid; normalize step above already
-            # skipped invalid values, so treat them as missing.
-            try:
-                UUID(current)
-            except Exception as exc:
-                logger.debug(
-                    "Existing UUID for user_id=%s is invalid and will be replaced: value=%r (error=%r)",
-                    user_id,
-                    current,
-                    exc,
-                )
-                new_uuid = str(uuid4())
-                while new_uuid in seen:
-                    new_uuid = str(uuid4())
-                seen.add(new_uuid)
-                updates[user_id] = new_uuid
 
     if not updates:
         logger.info("All users already have valid UUIDs; nothing to do.")
         return 0
 
-    logger.info("Prepared UUID backfill for %d user(s)", len(updates))
+    logger.info("Prepared UUID backfill for {} user(s)", len(updates))
 
     if dry_run:
         for user_id, new_uuid in updates.items():
-            logger.info("DRY-RUN: would set users.id=%s uuid=%s", user_id, new_uuid)
+            logger.info("DRY-RUN: would set users.id={} uuid={}", user_id, new_uuid)
     else:
         # Batch updates in a single transaction per backend for better performance.
         if is_postgres:
@@ -179,7 +168,10 @@ async def backfill_user_uuids(*, dry_run: bool = False) -> int:
         remaining = await pool.fetchval(
             "SELECT COUNT(1) FROM users WHERE uuid IS NULL OR TRIM(uuid) = ''"
         )
-        logger.info("UUID backfill complete; remaining rows without UUID: %s", int(remaining or 0))
+        logger.info(
+            "UUID backfill complete; remaining rows without UUID: {}",
+            int(remaining or 0),
+        )
 
     return len(updates)
 
@@ -202,10 +194,10 @@ def main() -> int:
         logger.warning("UUID backfill interrupted by user.")
         return 1
     except Exception as exc:  # pragma: no cover - CLI surface
-        logger.error(f"UUID backfill failed: {exc}")
+        logger.error("UUID backfill failed: {}", exc)
         return 2
 
-    logger.info("UUID backfill finished (planned/updated rows=%d)", updated)
+    logger.info("UUID backfill finished (planned/updated rows={})", updated)
     return 0
 
 

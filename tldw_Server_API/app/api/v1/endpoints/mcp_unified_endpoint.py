@@ -127,6 +127,11 @@ def _should_use_single_user_api_key_compat() -> bool:
     try:
         return is_single_user_profile_mode()
     except Exception:
+        logger.debug(
+            "MCP unified: single-user profile detection failed; defaulting compat shim to False",
+            extra={"auth_method": "single_user_compat_shim"},
+            exc_info=True,
+        )
         return False
 
 
@@ -336,6 +341,11 @@ async def _attach_api_key_metadata(
 
     Prefers any API key info already attached to the auth context and falls back
     to validating the raw API key when needed.
+
+    Re-validation can trigger usage and audit side effects via the API key
+    manager (for example, incrementing usage counters or emitting audit logs),
+    so this helper intentionally avoids re-validating when cached API key info
+    is already available on the auth context.
     """
     metadata: Dict[str, Any] = {}
     api_key_info: Optional[Dict[str, Any]] = None

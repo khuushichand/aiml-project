@@ -1084,9 +1084,9 @@ async def run_compactor_once(
     try:
         # Lazy import to avoid heavy imports on module import
         from tldw_Server_API.app.core.Embeddings.services.vector_compactor import compact_once as _compact_once  # type: ignore
-    except Exception:
+    except Exception as exc:
         logger.exception("Compactor module import failed")
-        raise HTTPException(status_code=503, detail="Compactor unavailable")
+        raise HTTPException(status_code=503, detail="Compactor unavailable") from exc
     uid = str(req.user_id or current_user.id)
     try:
         touched = await _compact_once(uid, db_path=req.media_db_path or None)
@@ -1099,7 +1099,7 @@ async def run_compactor_once(
             uid,
             bool(req.media_db_path),
         )
-        raise HTTPException(status_code=500, detail="Compactor run failed")
+        raise HTTPException(status_code=500, detail="Compactor run failed") from e
 
 # ============================================================================
 # Token-array handling and dimension adjustment helpers
@@ -2458,15 +2458,27 @@ async def bump_job_priority(
     except Exception:
         # Logging must not interfere with admin operations
         pass
+    client: Optional[aioredis.Redis] = None
     try:
         client = await _get_redis_client()
         key = f"embeddings:priority:override:{req.job_id}"
         await client.set(key, pr)
         await client.expire(key, int(req.ttl_seconds or 600))
-        await ensure_async_client_closed(client)
-        return {"status": "ok", "job_id": req.job_id, "priority": pr, "ttl_seconds": int(req.ttl_seconds or 600)}
+        return {
+            "status": "ok",
+            "job_id": req.job_id,
+            "priority": pr,
+            "ttl_seconds": int(req.ttl_seconds or 600),
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to set priority override: {e}")
+    finally:
+        try:
+            if client is not None:
+                await ensure_async_client_closed(client)
+        except Exception:
+            # Connection cleanup must never interfere with HTTP error semantics
+            pass
 
 
 class ModelActionRequest(BaseModel):
@@ -2966,6 +2978,7 @@ async def list_dlq_items(
     _current_user is included to enforce authentication via dependencies.
     """
     stream = _dlq_stream_name(stage)
+    client: Optional[aioredis.Redis] = None
     try:
         client = await _get_redis_client()
         # Reverse range: most recent first
@@ -3011,12 +3024,18 @@ async def list_dlq_items(
                 dlq_state=dlq_state,
                 operator_note=operator_note,
             ))
-        await ensure_async_client_closed(client)
         return {"stream": stream, "count": len(items), "items": [i.model_dump() for i in items]}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list DLQ items: {e}")
+    finally:
+        try:
+            if client is not None:
+                await ensure_async_client_closed(client)
+        except Exception:
+            # Connection cleanup must never interfere with HTTP error semantics
+            pass
 
 
 class DLQRequeueRequest(BaseModel):

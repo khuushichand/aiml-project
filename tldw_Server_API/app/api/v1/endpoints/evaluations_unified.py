@@ -143,11 +143,11 @@ def get_db_for_user(user_id: int):
     dependencies=[Depends(require_roles("admin"))],
 )
 async def admin_cleanup_idempotency(
+    principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
+    _current_user: Annotated[User, Depends(get_request_user)],  # dependency for side effects
     ttl_hours: int = Query(72, ge=1, le=720, description="Delete idempotency keys older than this TTL (hours)"),
     target_user_id: Optional[int] = Query(None, description="If provided, only clean this user's evaluations DB"),
     _user_ctx: str = Depends(verify_api_key),  # dependency for side effects
-    principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
-    _current_user: Annotated[User, Depends(get_request_user)],  # dependency for side effects
 ):
     """Admin-only: purge stale idempotency keys in Evaluations DBs on-demand.
 
@@ -403,11 +403,11 @@ async def delete_embeddings_abtest(
 )
 async def export_embeddings_abtest(
     test_id: str,
+    principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
+    current_user: Annotated[User, Depends(get_request_user)],
     format: str = Query("json", pattern="^(json|csv)$"),
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
-    principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
-    current_user: Annotated[User, Depends(get_request_user)],
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
     """Export AB test results (JSON or CSV). Admin-only."""
@@ -928,8 +928,6 @@ async def delete_evaluation(
 
 
 # ============= Run Management Endpoints =============
-
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 
 
 @router.post(

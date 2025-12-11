@@ -514,7 +514,10 @@ async def get_current_user(
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"API key authentication error: {e}")
+            logger.error(
+                "API key authentication error in get_current_user (type=%s)",
+                type(e).__name__,
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate API key"

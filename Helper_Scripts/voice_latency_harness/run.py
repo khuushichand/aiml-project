@@ -101,15 +101,37 @@ def _fetch_metrics(base_url: str, api_key: Optional[str]) -> Dict[str, Any]:
         data = r.json()
         if isinstance(data, dict):
             return data.get("metrics", data)
-        # Non-dict JSON is unexpected for this harness; wrap the payload so callers
-        # can still treat the result as a mapping without special-casing lists.
-        return {"raw": data}
+        else:
+            # Non-dict JSON is unexpected for this harness; wrap the payload so callers
+            # can still treat the result as a mapping without special-casing lists.
+            return {"raw": data}
     except ValueError:
         return _parse_prometheus_histograms(r.text, target_names=HISTOGRAM_METRIC_NAMES)
 
 
 def _percentiles(values: Sequence[float], pcts: Sequence[int] = (50, 90)) -> Dict[str, float]:
-    """Compute percentile map for a numeric sequence."""
+    """
+    Compute percentile statistics for a numeric sequence.
+
+    Args:
+        values: Sequence of numeric samples (typically latency values in seconds);
+            an empty sequence returns an empty dict.
+        pcts: Percentiles to compute as integer percentages between 0 and 100,
+            for example (50, 90) to obtain p50 and p90. Defaults to (50, 90).
+
+    Returns:
+        A mapping from percentile labels (e.g., "p50", "p90") to float values
+        computed via ``numpy.percentile`` on the input sequence.
+
+    Behavior:
+        - If ``values`` is empty, returns an empty dict.
+        - ``pcts`` values should be in the inclusive range [0, 100]; values
+          outside this range may cause ``numpy.percentile`` to raise.
+
+    Example:
+        >>> _percentiles([0.1, 0.2, 0.3, 0.4], pcts=(50, 90))
+        {'p50': 0.25, 'p90': 0.37}
+    """
     if len(values) == 0:
         return {}
     arr = np.array(values, dtype=float)
@@ -205,7 +227,27 @@ def _parse_prometheus_histograms(prom_text: str, target_names: Optional[Iterable
 
 
 def _extract_histogram_percentiles(metrics: Dict[str, Any], name: str) -> Dict[str, float]:
-    """Extract histogram-style metrics into percentile summaries."""
+    """
+    Extract percentile summaries from histogram-style latency metrics.
+
+    The metrics input may contain the target series in several forms:
+    - As a top-level mapping at `metrics[name]` with either:
+      - a `"values"` key containing a sequence of numeric samples
+      - a `"buckets"` key representing a Prometheus-style cumulative histogram
+    - Nested under a `"metrics"` mapping (e.g., `metrics["metrics"][name]`)
+    - As a plain list of numeric samples at `metrics[name]`.
+
+    For value sequences, this helper computes percentiles via `_percentiles`. For
+    histogram buckets, it delegates to `_histogram_percentiles_from_buckets`.
+
+    Args:
+        metrics: Mapping of metric names to series definitions or nested `"metrics"` mapping.
+        name: Metric name to extract percentiles for (e.g., "audio_chat_latency_seconds").
+
+    Returns:
+        Mapping from percentile label (for example, "p50", "p90") to float values in seconds.
+        Returns an empty dict when the target series is missing, empty, or in an unsupported format.
+    """
     series = metrics.get(name)
     if series is None and isinstance(metrics.get("metrics"), dict):
         series = metrics["metrics"].get(name)
@@ -260,6 +302,7 @@ def run_full_turn(
     metrics = _fetch_metrics(base_url, api_key)
     audio_chat_p = _extract_histogram_percentiles(metrics, "audio_chat_latency_seconds")
     if not audio_chat_p:
+        logger.debug(f"No histogram for audio_chat_latency_seconds; using measured latency: {latency:.3f}s")
         audio_chat_p = {"p50": latency, "p90": latency}
     return HarnessResult(
         stt_final_latency_seconds=_extract_histogram_percentiles(metrics, "stt_final_latency_seconds"),

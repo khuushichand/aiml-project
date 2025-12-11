@@ -1182,7 +1182,7 @@ async def create_chat_completion(
                                 estimated_tokens=int(estimated_tokens or 0),
                                 legacy_allowed=bool(allowed),
                             )
-                        except Exception as exc:
+                        except Exception as exc:  # noqa: BLE001 - defensive: RG shadow must not affect rate limiting
                             # Shadow path must never affect primary rate-limiting behavior.
                             logger.debug(
                                 "RG shadow helper failed; ignoring and continuing: {}",

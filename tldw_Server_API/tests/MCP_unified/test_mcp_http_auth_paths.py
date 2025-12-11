@@ -260,3 +260,222 @@ async def test_mcp_single_user_api_key_flag_disabled_uses_api_key_manager(monkey
     # TokenData from manager path should carry api_client role.
     assert "roles" in server.last_metadata
     assert server.last_metadata["roles"] == ["api_client"]
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_authnz_jwt_failure_falls_back_to_mcp_jwt(monkeypatch):
+    """
+    If AuthNZ JWT decode fails but an MCP JWT is valid, get_current_user should
+    return the MCP TokenData instead of raising or propagating a 500-style error.
+    """
+    from fastapi.security.http import HTTPAuthorizationCredentials
+
+    # Simulate invalid AuthNZ JWT: decode_access_token raises.
+    class _FailingJwtService:
+        def decode_access_token(self, token: str):
+            raise RuntimeError("invalid access token")
+
+    monkeypatch.setattr(mcp_ep, "get_jwt_service", lambda: _FailingJwtService())
+
+    # Provide a successful MCP JWT verification path.
+    expected = mcp_ep.TokenData(
+        sub="mcp-user-123",
+        username="mcp-user",
+        roles=["mcp_role"],
+        permissions=["tools.execute:sample"],
+        token_type="access",
+    )
+
+    class _DummyJwtManager:
+        def verify_token(self, token: str):
+            assert token == "mcp.jwt.token"
+            return expected
+
+    monkeypatch.setattr(mcp_ep, "get_jwt_manager", lambda: _DummyJwtManager())
+
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="mcp.jwt.token")
+
+    user = await mcp_ep.get_current_user(credentials=creds, x_api_key=None, request=None)
+
+    assert isinstance(user, mcp_ep.TokenData)
+    assert user.sub == expected.sub
+    assert user.roles == expected.roles
+    assert user.permissions == expected.permissions
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_authnz_and_mcp_failure_use_api_key_and_set_state(monkeypatch):
+    """
+    When both AuthNZ JWT and MCP JWT fail, get_current_user should fall back to
+    the multi-user API key path, returning a TokenData and attaching API key
+    metadata to request.state.mcp_api_key_info.
+    """
+    from fastapi.security.http import HTTPAuthorizationCredentials
+    from starlette.requests import Request
+
+    # AuthNZ JWT decode always fails.
+    class _FailingJwtService:
+        def decode_access_token(self, token: str):
+            raise RuntimeError("invalid access token")
+
+    monkeypatch.setattr(mcp_ep, "get_jwt_service", lambda: _FailingJwtService())
+
+    # MCP JWT verify also fails to force API key fallback.
+    class _FailingJwtManager:
+        def verify_token(self, token: str):
+            raise RuntimeError("invalid MCP token")
+
+    monkeypatch.setattr(mcp_ep, "get_jwt_manager", lambda: _FailingJwtManager())
+
+    # Force multi-user API key path (no single-user compat shim).
+    monkeypatch.setenv("MCP_SINGLE_USER_COMPAT_SHIM", "0")
+    monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: False)
+
+    # Dummy API key manager that returns metadata for the key.
+    calls: list[dict[str, Any]] = []
+
+    class _DummyApiManager:
+        async def validate_api_key(self, key: str, ip_address: Optional[str] = None) -> Dict[str, Any]:
+            calls.append({"key": key, "ip": ip_address})
+            return {"user_id": "42", "org_id": 99, "team_id": 7}
+
+    async def _fake_get_api_key_manager():
+        return _DummyApiManager()
+
+    monkeypatch.setattr(mcp_ep, "get_api_key_manager", _fake_get_api_key_manager)
+
+    scope = {"type": "http", "client": ("203.0.113.1", 12345)}
+    request = Request(scope)
+
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="bad.jwt")
+
+    user = await mcp_ep.get_current_user(credentials=creds, x_api_key="api-key-xyz", request=request)
+
+    assert isinstance(user, mcp_ep.TokenData)
+    assert user.sub == "42"
+    assert user.roles == ["api_client"]
+    assert user.permissions == []
+
+    # API key should have been validated exactly once.
+    assert len(calls) == 1
+    assert calls[0]["key"] == "api-key-xyz"
+    # Request state should carry the resolved API key metadata.
+    assert getattr(request.state, "mcp_api_key_info", None) == {"user_id": "42", "org_id": 99, "team_id": 7}
+
+
+@pytest.mark.asyncio
+async def test_single_user_test_api_key_allowed_in_test_mode_dev_context(monkeypatch):
+    """
+    In TEST_MODE with a clear dev/test context, SINGLE_USER_TEST_API_KEY should
+    be accepted via the single-user compat shim and produce an admin-style TokenData.
+    """
+    from starlette.requests import Request
+
+    test_key = "test-key-dev-123"
+
+    # Enable compat shim and single-user profile.
+    monkeypatch.delenv("MCP_SINGLE_USER_COMPAT_SHIM", raising=False)
+    monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: True)
+
+    # TEST_MODE enabled and explicit test key configured.
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("SINGLE_USER_TEST_API_KEY", test_key)
+
+    # Dev-like config: debug_mode True.
+    class _Cfg:
+        debug_mode = True
+
+    monkeypatch.setattr(mcp_ep, "get_config", lambda: _Cfg())
+
+    # Single-user settings.
+    class _Settings:
+        SINGLE_USER_API_KEY = "real-single-user-key"
+        SINGLE_USER_FIXED_ID = 999
+
+    monkeypatch.setattr(mcp_ep, "get_settings", lambda: _Settings())
+
+    # Guard that multi-user API key manager is not used in this path.
+    async def _fail_get_api_key_manager():
+        raise AssertionError("API key manager should not be used for SINGLE_USER_TEST_API_KEY in dev TEST_MODE")
+
+    monkeypatch.setattr(mcp_ep, "get_api_key_manager", _fail_get_api_key_manager)
+
+    scope = {"type": "http", "client": ("127.0.0.1", 8000)}
+    request = Request(scope)
+
+    user = await mcp_ep.get_current_user(credentials=None, x_api_key=test_key, request=request)
+
+    assert isinstance(user, mcp_ep.TokenData)
+    assert user.sub == str(_Settings.SINGLE_USER_FIXED_ID)
+    assert user.username == "single_user"
+    # Admin-style role and wildcard permissions in TEST_MODE.
+    assert user.roles == [UserRole.ADMIN.value]
+    assert user.permissions == ["*"]
+
+
+@pytest.mark.asyncio
+async def test_single_user_test_api_key_uses_api_key_manager_outside_dev_context(monkeypatch):
+    """
+    When TEST_MODE is enabled but the environment is non-dev/prod-like, the
+    SINGLE_USER_TEST_API_KEY should not be accepted via the single-user compat
+    shim; instead it should flow through the multi-user API key manager path.
+    """
+    from starlette.requests import Request
+    import sys as _sys
+
+    test_key = "test-key-prod-456"
+
+    # Enable compat shim and single-user profile.
+    monkeypatch.delenv("MCP_SINGLE_USER_COMPAT_SHIM", raising=False)
+    monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: True)
+
+    # TEST_MODE enabled but environment marked as production-like.
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("SINGLE_USER_TEST_API_KEY", test_key)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("ENV", raising=False)
+    # Prevent the dev/test shortcuts that key off pytest internals.
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delitem(_sys.modules, "pytest", raising=False)
+
+    # Config with debug_mode False to emulate production.
+    class _Cfg:
+        debug_mode = False
+
+    monkeypatch.setattr(mcp_ep, "get_config", lambda: _Cfg())
+
+    # Single-user settings (real admin API key is different from test key).
+    class _Settings:
+        SINGLE_USER_API_KEY = "real-single-user-key"
+        SINGLE_USER_FIXED_ID = 999
+
+    monkeypatch.setattr(mcp_ep, "get_settings", lambda: _Settings())
+
+    # Multi-user API key manager should be used for the test key in this context.
+    calls: list[dict[str, Any]] = []
+
+    class _DummyApiManager:
+        async def validate_api_key(self, key: str, ip_address: Optional[str] = None) -> Dict[str, Any]:
+            calls.append({"key": key, "ip": ip_address})
+            return {"user_id": "777", "org_id": 1, "team_id": 2}
+
+    async def _fake_get_api_key_manager():
+        return _DummyApiManager()
+
+    monkeypatch.setattr(mcp_ep, "get_api_key_manager", _fake_get_api_key_manager)
+
+    scope = {"type": "http", "client": ("198.51.100.5", 9000)}
+    request = Request(scope)
+
+    user = await mcp_ep.get_current_user(credentials=None, x_api_key=test_key, request=request)
+
+    # The test key should not yield the single-user admin; it should be treated
+    # as a regular multi-user API key.
+    assert isinstance(user, mcp_ep.TokenData)
+    assert user.sub == "777"
+    assert user.roles == ["api_client"]
+    assert user.permissions == []
+
+    assert len(calls) == 1
+    assert calls[0]["key"] == test_key
