@@ -103,13 +103,14 @@ async def persona_stream(
         if api_key:
             try:
                 api_mgr = await get_api_key_manager()
-                client_ip = ws.client.host if getattr(ws, "client", None) else None
+                client = getattr(ws, "client", None)
+                client_ip = getattr(client, "host", None) if client is not None else None
                 info = await api_mgr.validate_api_key(api_key, ip_address=client_ip)
                 if info and info.get("user_id") is not None:
                     user_id = str(info["user_id"])
             except (DatabaseError, InvalidTokenError) as exc:
                 logger.debug(f"persona stream: failed to resolve user from api_key: {exc}")
-            except Exception:
+            except Exception:  # noqa: BLE001 - keep stream alive, fall back to anonymous
                 logger.exception("persona stream: unexpected error resolving user from api_key")
         # Basic RBAC policy from settings
         from tldw_Server_API.app.core.config import settings as _app_settings

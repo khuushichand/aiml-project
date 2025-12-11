@@ -257,10 +257,7 @@ def _tail_jsonl_file(path: str, limit: int) -> list[str]:
     # lines are collected from the end; reverse to restore chronological order
     decoded: list[str] = []
     for raw in reversed(lines[:limit]):
-        try:
-            decoded.append(raw.decode("utf-8", errors="replace").rstrip("\n"))
-        except Exception:
-            decoded.append("")
+        decoded.append(raw.decode("utf-8", errors="replace").rstrip("\n"))
     return decoded
 
 

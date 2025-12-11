@@ -46,7 +46,22 @@ from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
-_TEST_SESSION_LOCK: asyncio.Lock = asyncio.Lock()
+_TEST_SESSION_LOCK: Optional[asyncio.Lock] = None
+
+
+def _get_test_session_lock() -> asyncio.Lock:
+    """
+    Lazily initialize and return the test session lock.
+
+    The lock is created on first use within the currently running event loop
+    instead of at module import time to avoid binding it to the wrong loop
+    in test environments.
+    """
+    global _TEST_SESSION_LOCK
+    if _TEST_SESSION_LOCK is not None:
+        return _TEST_SESSION_LOCK
+    _TEST_SESSION_LOCK = asyncio.Lock()
+    return _TEST_SESSION_LOCK
 
 #######################################################################################################################
 #
@@ -239,7 +254,7 @@ async def get_session_manager_dep() -> SessionManager:
                     ip_address: str = "",
                     user_agent: str = "",
                 ):
-                    async with _TEST_SESSION_LOCK:
+                    async with _get_test_session_lock():
                         _TEST_SESSION_STATE["sid"] += 1
                         sid = _TEST_SESSION_STATE["sid"]
                         now = datetime.utcnow()
@@ -270,7 +285,7 @@ async def get_session_manager_dep() -> SessionManager:
                     }
 
                 async def get_user_sessions(self, user_id: int):
-                    async with _TEST_SESSION_LOCK:
+                    async with _get_test_session_lock():
                         return [
                             s
                             for s in _TEST_SESSION_STATE["sessions"].values()
@@ -278,7 +293,7 @@ async def get_session_manager_dep() -> SessionManager:
                         ]
 
                 async def revoke_session(self, session_id: int, *args, **kwargs):
-                    async with _TEST_SESSION_LOCK:
+                    async with _get_test_session_lock():
                         if session_id in _TEST_SESSION_STATE["sessions"]:
                             _TEST_SESSION_STATE["sessions"][session_id]["is_revoked"] = True
                             _TEST_SESSION_STATE["sessions"][session_id]["is_active"] = False
@@ -286,7 +301,7 @@ async def get_session_manager_dep() -> SessionManager:
                         return False
 
                 async def revoke_all_user_sessions(self, user_id: int):
-                    async with _TEST_SESSION_LOCK:
+                    async with _get_test_session_lock():
                         changed = 0
                         for s in _TEST_SESSION_STATE["sessions"].values():
                             if s.get("user_id") == user_id:
@@ -370,46 +385,48 @@ async def get_current_user(
         cached_user = getattr(request.state, "_auth_user", None)
         if isinstance(existing_ctx, AuthContext) and cached_user is not None:
             logger.debug("get_current_user: Reusing cached AuthPrincipal/_auth_user from request.state.")
-            # Normalize to a plain dict to preserve existing return shape
-            if isinstance(cached_user, Mapping):
-                user_dict: Dict[str, Any] = dict(cached_user)
-            elif hasattr(cached_user, "dict"):
-                user_dict = dict(cached_user.dict())
-            else:
+            # Validate cached user type before processing; if it is not a mapping or
+            # Pydantic-style model, fall through to standard auth.
+            if not (isinstance(cached_user, Mapping) or hasattr(cached_user, "dict")):
                 logger.debug(
                     "get_current_user: cached _auth_user is not a mapping/Pydantic model; "
                     "skipping fast-path reuse."
                 )
-                raise TypeError("_auth_user is not a mapping")
-            # Ensure request.state.user_id is populated for downstream consumers
-            try:
-                uid = user_dict.get("id")
-                if uid is not None:
-                    request.state.user_id = int(uid)
-            except Exception as exc:
-                logger.debug(
-                    "Fast-path: unable to attach user_id to request.state: {}",
-                    exc,
-                )
-            # Scope context should already be set by upstream auth, but be defensive.
-            # Prefer org/team ids from the existing principal, with request.state as fallback.
-            try:
-                principal = getattr(existing_ctx, "principal", None)
-                org_ids = getattr(principal, "org_ids", None) if principal is not None else None
-                team_ids = getattr(principal, "team_ids", None) if principal is not None else None
-                _activate_scope_context(
-                    request,
-                    user_id=getattr(principal, "user_id", None),
-                    org_ids=org_ids if org_ids is not None else getattr(request.state, "org_ids", None),
-                    team_ids=team_ids if team_ids is not None else getattr(request.state, "team_ids", None),
-                    is_admin=bool(getattr(principal, "is_admin", False)),
-                )
-            except Exception as exc:
-                logger.debug(
-                    "Fast-path: unable to (re)establish content scope context: {}",
-                    exc,
-                )
-            return user_dict
+            else:
+                # Normalize to a plain dict to preserve existing return shape
+                if isinstance(cached_user, Mapping):
+                    user_dict: Dict[str, Any] = dict(cached_user)
+                else:
+                    user_dict = dict(cached_user.dict())
+                # Ensure request.state.user_id is populated for downstream consumers
+                try:
+                    uid = user_dict.get("id")
+                    if uid is not None:
+                        request.state.user_id = int(uid)
+                except Exception as exc:
+                    logger.debug(
+                        "Fast-path: unable to attach user_id to request.state: {}",
+                        exc,
+                    )
+                # Scope context should already be set by upstream auth, but be defensive.
+                # Prefer org/team ids from the existing principal, with request.state as fallback.
+                try:
+                    principal = getattr(existing_ctx, "principal", None)
+                    org_ids = getattr(principal, "org_ids", None) if principal is not None else None
+                    team_ids = getattr(principal, "team_ids", None) if principal is not None else None
+                    _activate_scope_context(
+                        request,
+                        user_id=getattr(principal, "user_id", None),
+                        org_ids=org_ids if org_ids is not None else getattr(request.state, "org_ids", None),
+                        team_ids=team_ids if team_ids is not None else getattr(request.state, "team_ids", None),
+                        is_admin=bool(getattr(principal, "is_admin", False)),
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "Fast-path: unable to (re)establish content scope context: {}",
+                        exc,
+                    )
+                return user_dict
     except Exception as exc:
         # Fall through to standard auth behavior if any issue occurs
         logger.debug(

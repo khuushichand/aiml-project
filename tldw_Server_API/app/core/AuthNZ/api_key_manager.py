@@ -81,9 +81,9 @@ class APIKeyManager:
             auth_mode = getattr(self.settings, "AUTH_MODE", None)
             db_url = getattr(self.settings, "DATABASE_URL", None)
             db_url_set = bool(db_url)
-            return f"(AUTH_MODE={auth_mode}, DATABASE_URL_set={db_url_set})"
-        except Exception:
+        except (AttributeError, TypeError):
             return "(AuthNZ settings unavailable)"
+        return f"(AUTH_MODE={auth_mode}, DATABASE_URL_set={db_url_set})"
 
     def _get_repo(self) -> "AuthnzApiKeysRepo":
         """
@@ -244,7 +244,7 @@ class APIKeyManager:
             # Log the creation (audit rows are still written here)
             await self._log_action(key_id, "created", user_id)
 
-            if get_settings().PII_REDACT_LOGS:
+            if self.settings.PII_REDACT_LOGS:
                 logger.info("Created API key for authenticated user (details redacted)")
             else:
                 logger.info(f"Created API key {key_id} for user {user_id}")
@@ -447,7 +447,7 @@ class APIKeyManager:
 
             return key_info
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - validation failures degrade to 'no key'
             logger.error(f"Failed to validate API key: {e}")
             return None
 
@@ -639,7 +639,7 @@ class APIKeyManager:
         try:
             repo = self._get_repo()
             await repo.increment_usage(key_id=key_id, ip_address=ip_address)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - usage updates must not break requests
             logger.error(f"Failed to update usage: {e}")
 
     async def _mark_expired(self, key_id: int):
