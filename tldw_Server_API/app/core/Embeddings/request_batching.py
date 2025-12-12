@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from tldw_Server_API.app.core.Embeddings.simplified_config import get_config, ProviderConfig
 from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
 from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limiter
+from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens
 
 
 @dataclass
@@ -106,7 +107,14 @@ class RequestBatcher:
             user_id
             and getattr(self.config.security, "enable_rate_limiting", False)
         ):
-            allowed, retry_after = await self.rate_limiter.check_rate_limit_async(user_id)
+            try:
+                tokens_units = int(_count_tokens(text))
+            except Exception:
+                tokens_units = 0
+            allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
+                user_id,
+                tokens_units=tokens_units,
+            )
             if not allowed:
                 tier = "free"
                 limiter = getattr(self.rate_limiter, "rate_limiter", None)

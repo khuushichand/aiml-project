@@ -99,3 +99,14 @@ class NotificationTestRequest(BaseModel):
     severity: str = Field("critical")
     message: str = Field("Test notification from admin panel")
     user_id: Optional[str] = None
+
+
+class NotificationTestResponse(BaseModel):
+    status: str = Field("ok", description="Result of the test notification request")
+
+
+class RecentNotificationsResponse(BaseModel):
+    items: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Recent notification events from the JSONL log",
+    )

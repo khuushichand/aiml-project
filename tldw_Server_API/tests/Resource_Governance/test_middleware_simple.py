@@ -103,3 +103,24 @@ async def test_middleware_allows_when_policy_allows():
         # Success-path rate-limit headers present
         assert r.headers.get("X-RateLimit-Limit") == "2"
         assert r.headers.get("X-RateLimit-Remaining") == "1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path, pattern, policy_id",
+    [
+        ("/api/v1/research/websearch", "/api/v1/research/*", "deny.research"),
+        ("/api/v1/workflows/definitions", "/api/v1/workflows/*", "deny.workflows"),
+        ("/api/v1/scheduler/workflows/status", "/api/v1/scheduler/workflows/*", "deny.workflows"),
+        ("/api/v1/prompt-studio/projects", "/api/v1/prompt-studio/*", "deny.prompt_studio"),
+        ("/api/v1/rag/search", "/api/v1/rag/*", "deny.rag"),
+        ("/api/v1/media/process-videos", "/api/v1/media/*", "deny.media"),
+    ],
+)
+async def test_middleware_resolves_new_domain_paths(path: str, pattern: str, policy_id: str):
+    route_map = {"by_path": {pattern: policy_id}}
+    app = _make_app(route_map)
+    with TestClient(app) as c:
+        r = c.get(path)
+        assert r.status_code == 429
+        assert r.json().get("policy_id") == policy_id

@@ -643,7 +643,7 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                     if test_api_key:
                         from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
 
-                        api_manager = APIKeyManager()
+                        api_manager = APIKeyManager(db_pool=conn)
                         key_hash = api_manager.hash_api_key(test_api_key)
                         key_prefix = (test_api_key[:10] + "...") if len(test_api_key) > 10 else test_api_key
                         await conn.execute(

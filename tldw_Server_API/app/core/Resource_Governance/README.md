@@ -11,7 +11,7 @@ Centralized rate limiting and concurrency control with policy-based configuratio
 - When adding new API endpoints, first wire authentication/authorization via `get_auth_principal` together with `require_permissions(...)` / `require_roles(...)` (and `require_service_principal()` for service-only routes). Authorization should be claim-first; do not gate new behavior on `AUTH_MODE` or `is_single_user_mode()` / `is_multi_user_mode()` checks.
 - For endpoints that are latency/cost-sensitive or user-facing (chat, audio, embeddings, evaluations, MCP, workflows, tools, media ingestion, etc.), decide whether they should be governed by Resource Governor:
   - If yes, add or reuse a policy in the RG policy store (`resource_governor_policies.yaml` or DB-backed `rg_policies`) and ensure there is a corresponding `route_map` entry keyed by path/tag (for example `/api/v1/chat/* → chat.default`).
-  - Where feasible, add or extend tests so RG-enforced behavior is covered at the HTTP level (200/429 behavior, `Retry-After` and `X-RateLimit-*` headers, token/stream caps, and any RG-primary toggles like `RG_CHAT_ENFORCE_PRIMARY`).
+  - Where feasible, add or extend tests so RG-enforced behavior is covered at the HTTP level (200/429 behavior, `Retry-After` and `X-RateLimit-*` headers, and token/stream caps).
 
 ## Policy Store Selection (env)
 - `RG_POLICY_STORE`: `file` (default) or `db`
@@ -103,18 +103,19 @@ route_map:
 
 Notes
 - When `RG_POLICY_STORE=db` is active, the loader merges the file’s `route_map` into the snapshot containing DB policies. File `route_map` takes precedence on conflicts.
+- Durable daily caps can be specified with `daily_cap` under any category and are enforced via `ResourceDailyLedger` (e.g., `tokens.daily_cap`, `workflows_runs.daily_cap`).
 - Proxy/IP scoping (env):
   - `RG_TRUSTED_PROXIES`: comma-separated CIDRs of reverse proxies
   - `RG_CLIENT_IP_HEADER`: trusted header name (e.g., `X-Forwarded-For` or `CF-Connecting-IP`)
 - Metrics cardinality (env): `RG_METRICS_ENTITY_LABEL`: `true|false` (default `false`)
 - Test mode precedence: `RG_TEST_BYPASS` overrides Resource Governor behavior when set; otherwise falls back to `TLDW_TEST_MODE`
 
-## Simple Middleware (opt‑in)
+## Simple Middleware (default‑on)
 
 - Resolution order: path-based mapping (`route_map.by_path`) first, then tag-based mapping (`route_map.by_tag`). Wildcards like `/api/v1/chat/*` match by prefix.
 - Entity derivation: prefers authenticated user (`user:{id}`), then API key id/hash (`api_key:{id|hash}`), then trusted proxy IP header via `RG_CLIENT_IP_HEADER` when `RG_TRUSTED_PROXIES` contains the peer; otherwise falls back to `request.client.host`.
 - Behavior: performs a pre-check/reserve for the `requests` category before calling the endpoint and commits afterwards. On denial, sets `Retry-After` and `X-RateLimit-*` headers. On success, injects accurate `X-RateLimit-*` headers using a governor `peek` when available.
-- Enable: set `RG_ENABLE_SIMPLE_MIDDLEWARE=true`. It only guards `requests` in this minimal form; streaming/tokens categories require explicit endpoint reserve/commit plumbing.
+- Enabled automatically whenever `RG_ENABLED=1` unless forced off via `RG_ENABLE_SIMPLE_MIDDLEWARE=0`. The legacy enable flags (`RG_ENABLE_SIMPLE_MIDDLEWARE=1` / `RG_ENABLE_SLOWAPI=1`) remain as compatibility aliases. It only guards `requests` in this minimal form; streaming/tokens categories require explicit endpoint reserve/commit plumbing.
 
 Headers on success/deny:
 - Deny (429): `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining=0`, `X-RateLimit-Reset` (seconds until retry).
@@ -154,7 +155,7 @@ Headers on success/deny:
   - `RG_POLICY_STORE=file`
   - `RG_POLICY_PATH=tldw_Server_API/Config_Files/resource_governor_policies.yaml`
   - `RG_BACKEND=memory`
-  - `RG_ENABLE_SIMPLE_MIDDLEWARE=1` (or `RG_ENABLE_SLOWAPI=1`) to guard representative `/api/v1/chat/*` and `/api/v1/audio/*` routes using the default `route_map`.
+  - `RGSimpleMiddleware` is attached automatically on startup (set `RG_ENABLE_SIMPLE_MIDDLEWARE=0` only if you need to force-disable for debugging).
 - Production with DB policy store + Redis:
   - `RG_ENABLED=1`
   - `RG_POLICY_STORE=db` (AuthNZ `rg_policies` as source of truth)
@@ -163,4 +164,4 @@ Headers on success/deny:
   - `RG_REDIS_FAIL_MODE=fail_closed` for strict ingress enforcement, or `fallback_memory` to prefer availability on non-critical paths.
 - Route-map driven ingress:
   - Keep `route_map.by_path` in `resource_governor_policies.yaml` aligned with your primary ingress routes (for example `/api/v1/chat/* → chat.default`, `/api/v1/embeddings* → embeddings.default`).
-  - Enable `RG_ENABLED=1` and `RG_ENABLE_SLOWAPI=1` (or `RG_ENABLE_SIMPLE_MIDDLEWARE=1`) so `RGSimpleMiddleware` resolves `policy_id` from the route map and emits standard `Retry-After` / `X-RateLimit-*` headers on 429 responses.
+  - Enable `RG_ENABLED=1` so `RGSimpleMiddleware` resolves `policy_id` from the route map and emits standard `Retry-After` / `X-RateLimit-*` headers on 429 responses.

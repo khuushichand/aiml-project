@@ -49,6 +49,15 @@ from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditEventCategory, AuditSeverity, AuditContext
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
+from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
+from tldw_Server_API.app.core.Resource_Governance.daily_caps import check_daily_cap
+from tldw_Server_API.app.core.Workflows.daily_ledger import (
+    get_workflows_daily_ledger,
+    backfill_legacy_runs_to_ledger,
+    record_workflow_run,
+    workflows_ledger_category,
+)
 
 
 def _utcnow_iso() -> str:
@@ -401,6 +410,146 @@ def _build_rate_limit_headers(limit: int, remaining: int, reset_epoch: int) -> D
     return headers
 
 
+async def _enforce_workflows_daily_cap(
+    *,
+    request: Optional[Request],
+    current_user: User,
+    db: WorkflowsDatabase,
+) -> None:
+    """
+    Enforce workflows daily run caps via ResourceDailyLedger/RG.
+
+    Preference order:
+      1) workflows_runs.daily_cap from the active RG policy
+      2) Legacy WORKFLOWS_QUOTA_DAILY_PER_USER env as fallback alias
+
+    Raises HTTPException(429) with legacy-compatible headers on denial.
+    """
+    if request is None:
+        return
+    try:
+        if os.getenv("WORKFLOWS_DISABLE_QUOTAS", "").lower() in {"1", "true", "yes", "on"}:
+            return
+    except Exception:
+        pass
+
+    # Derive RG entity key to align ledger accounting with middleware.
+    try:
+        entity = derive_entity_key(request)
+    except Exception:
+        entity = f"user:{getattr(current_user, 'id', '1')}"
+    try:
+        entity_scope, entity_value = entity.split(":", 1)
+    except Exception:
+        entity_scope, entity_value = "user", str(getattr(current_user, "id", "1"))
+
+    policy_id = None
+    try:
+        policy_id = str(getattr(request.state, "rg_policy_id", None) or "workflows.default")
+    except Exception:
+        policy_id = "workflows.default"
+
+    daily_cap_policy = 0
+    try:
+        loader = getattr(request.app.state, "rg_policy_loader", None)
+        if loader is not None and policy_id:
+            pol = loader.get_policy(policy_id) or {}
+            daily_cap_policy = int((pol.get(workflows_ledger_category()) or {}).get("daily_cap") or 0)
+    except Exception:
+        daily_cap_policy = 0
+
+    daily_cap_env = 0
+    if daily_cap_policy <= 0:
+        try:
+            daily_cap_env = int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000") or 0)
+        except Exception:
+            daily_cap_env = 0
+
+    daily_cap = daily_cap_policy if daily_cap_policy > 0 else daily_cap_env
+    if daily_cap <= 0:
+        return
+
+    # One-time best-effort backfill of today's legacy counts into ledger.
+    try:
+        ledger = await get_workflows_daily_ledger()
+        if ledger is not None:
+            await backfill_legacy_runs_to_ledger(
+                ledger=ledger,
+                db=db,
+                tenant_id=str(getattr(current_user, "tenant_id", "default")),
+                user_id=str(getattr(current_user, "id", "")),
+                entity_scope=entity_scope,
+                entity_value=entity_value,
+            )
+    except Exception:
+        pass
+
+    # Prefer governor check when the policy defines the cap (single-source RG).
+    if daily_cap_policy > 0:
+        try:
+            gov = getattr(request.app.state, "rg_governor", None)
+            if gov is not None:
+                dec = await gov.check(
+                    RGRequest(
+                        entity=entity,
+                        categories={workflows_ledger_category(): {"units": 1}},
+                        tags={"policy_id": policy_id, "endpoint": request.url.path},
+                    )
+                )
+                if not bool(getattr(dec, "allowed", False)):
+                    cats = (dec.details or {}).get("categories") or {}
+                    cat_det = cats.get(workflows_ledger_category()) or {}
+                    remaining = int(cat_det.get("daily_remaining") or cat_det.get("remaining") or 0)
+                    retry_after = int(getattr(dec, "retry_after", None) or cat_det.get("retry_after") or 1)
+                    reset_epoch = int(time.time()) + retry_after
+                    headers = _build_rate_limit_headers(daily_cap, remaining, reset_epoch)
+                    raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
+                return
+        except HTTPException:
+            raise
+        except Exception:
+            # Fall back to direct check below.
+            pass
+
+    # Fallback direct check using computed cap (env alias).
+    allowed, ra, det = await check_daily_cap(
+        entity_scope=entity_scope,
+        entity_value=entity_value,
+        category=workflows_ledger_category(),
+        daily_cap=daily_cap,
+        units=1,
+    )
+    if not allowed:
+        remaining = int((det or {}).get("daily_remaining") or 0)
+        retry_after = int(ra or 1)
+        reset_epoch = int(time.time()) + retry_after
+        headers = _build_rate_limit_headers(daily_cap, remaining, reset_epoch)
+        raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
+
+
+async def _record_workflow_run_usage(
+    *,
+    request: Optional[Request],
+    current_user: User,
+    run_id: str,
+) -> None:
+    """Best-effort shadow-write a workflow run into the daily ledger."""
+    try:
+        if request is not None:
+            entity = derive_entity_key(request)
+        else:
+            entity = f"user:{getattr(current_user, 'id', '1')}"
+        entity_scope, entity_value = entity.split(":", 1)
+        await record_workflow_run(
+            entity_scope=entity_scope,
+            entity_value=entity_value,
+            run_id=str(run_id),
+            units=1,
+        )
+    except Exception:
+        return
+
+
 @router.post("", response_model=WorkflowDefinitionResponse, status_code=201)
 async def create_definition(
     body: WorkflowDefinitionCreate,
@@ -705,40 +854,8 @@ async def run_saved(
                 error=existing.error,
                 definition_version=existing.definition_version,
             )
-    # Quotas (disable in tests via env)
-    try:
-        import os, datetime as _dt
-        _disable_quotas = (
-            os.getenv("WORKFLOWS_DISABLE_QUOTAS", "").lower() in {"1", "true", "yes", "on"}
-            or os.getenv("PYTEST_CURRENT_TEST") is not None
-            or os.getenv("TLDW_TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-            or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-        )
-        if not _disable_quotas:
-            # Per-user burst per minute
-            now = _dt.datetime.utcnow()
-            minute_ago = (now - _dt.timedelta(seconds=60)).replace(tzinfo=_dt.timezone.utc).isoformat()
-            midnight = _dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=_dt.timezone.utc).isoformat()
-            daily_limit = int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000"))
-            burst_limit = int(os.getenv("WORKFLOWS_QUOTA_BURST_PER_MIN", "60"))
-            tenant_id = str(getattr(current_user, "tenant_id", "default"))
-            uid = str(current_user.id)
-            c_min = db.count_runs_for_user_window(tenant_id=tenant_id, user_id=uid, window_start_iso=minute_ago)
-            c_day = db.count_runs_for_user_window(tenant_id=tenant_id, user_id=uid, window_start_iso=midnight)
-            if c_min >= burst_limit:
-                reset = int((now.replace(second=0, microsecond=0) + _dt.timedelta(minutes=1)).timestamp())
-                headers = _build_rate_limit_headers(burst_limit, 0, reset)
-                raise HTTPException(status_code=429, detail="Burst quota exceeded", headers=headers)
-            if c_day >= daily_limit:
-                # Reset at next UTC midnight (use UTC-aware datetime for correct epoch)
-                tomorrow = (now + _dt.timedelta(days=1)).date()
-                reset_dt = _dt.datetime.combine(tomorrow, _dt.time(0, 0, 0, tzinfo=_dt.timezone.utc))
-                headers = _build_rate_limit_headers(daily_limit, 0, int(reset_dt.timestamp()))
-                raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.debug(f"Workflows audit(run_adhoc) failed: {e}")
+    # Daily runs quota is enforced via RG + ResourceDailyLedger.
+    await _enforce_workflows_daily_cap(request=request, current_user=current_user, db=db)
 
     run_id = str(uuid4())
     db.create_run(
@@ -753,6 +870,7 @@ async def run_saved(
         session_id=body.session_id if body else None,
         validation_mode=(body.validation_mode if body and getattr(body, "validation_mode", None) else "block"),
     )
+    await _record_workflow_run_usage(request=request, current_user=current_user, run_id=run_id)
     # Special-case: if first step is prompt with force_error or template='bad', mark run failed immediately
     try:
         snap = json.loads(d.definition_json or "{}")
@@ -1185,38 +1303,8 @@ async def run_adhoc(
                 definition_version=existing.definition_version,
             )
 
-    # Quotas (disable in tests via env)
-    try:
-        import os, datetime as _dt
-        _disable_quotas = (
-            os.getenv("WORKFLOWS_DISABLE_QUOTAS", "").lower() in {"1", "true", "yes", "on"}
-            or os.getenv("PYTEST_CURRENT_TEST") is not None
-            or os.getenv("TLDW_TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-            or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-        )
-        if not _disable_quotas:
-            now = _dt.datetime.utcnow()
-            minute_ago = (now - _dt.timedelta(seconds=60)).replace(tzinfo=_dt.timezone.utc).isoformat()
-            midnight = _dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=_dt.timezone.utc).isoformat()
-            daily_limit = int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000"))
-            burst_limit = int(os.getenv("WORKFLOWS_QUOTA_BURST_PER_MIN", "60"))
-            tenant_id = str(getattr(current_user, "tenant_id", "default"))
-            uid = str(current_user.id)
-            c_min = db.count_runs_for_user_window(tenant_id=tenant_id, user_id=uid, window_start_iso=minute_ago)
-            c_day = db.count_runs_for_user_window(tenant_id=tenant_id, user_id=uid, window_start_iso=midnight)
-            if c_min >= burst_limit:
-                reset = int((now.replace(second=0, microsecond=0) + _dt.timedelta(minutes=1)).timestamp())
-                headers = _build_rate_limit_headers(burst_limit, 0, reset)
-                raise HTTPException(status_code=429, detail="Burst quota exceeded", headers=headers)
-            if c_day >= daily_limit:
-                tomorrow = (now + _dt.timedelta(days=1)).date()
-                reset_dt = _dt.datetime.combine(tomorrow, _dt.time(0, 0, 0, tzinfo=_dt.timezone.utc))
-                headers = _build_rate_limit_headers(daily_limit, 0, int(reset_dt.timestamp()))
-                raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
-    except HTTPException:
-        raise
-    except Exception:
-        pass
+    # Daily runs quota is enforced via RG + ResourceDailyLedger.
+    await _enforce_workflows_daily_cap(request=request, current_user=current_user, db=db)
 
     # Persist a snapshot-less run
     run_id = str(uuid4())
@@ -1232,6 +1320,7 @@ async def run_adhoc(
         session_id=body.session_id,
         validation_mode=(body.validation_mode if getattr(body, "validation_mode", None) else "block"),
     )
+    await _record_workflow_run_usage(request=request, current_user=current_user, run_id=run_id)
     engine = WorkflowEngine(db)
     try:
         if body and getattr(body, "secrets", None):

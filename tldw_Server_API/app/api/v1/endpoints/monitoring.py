@@ -26,13 +26,17 @@ from tldw_Server_API.app.api.v1.schemas.monitoring_schemas import (
     NotificationSettings,
     NotificationSettingsUpdate,
     NotificationTestRequest,
+    NotificationTestResponse,
+    RecentNotificationsResponse,
 )
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicMonitoringDB, TopicAlert
 from tldw_Server_API.app.core.Monitoring.notification_service import get_notification_service
 
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 
 
 @router.get(
@@ -40,7 +44,6 @@ router = APIRouter()
     response_model=WatchlistListResponse,
     tags=["monitoring"],
     summary="List all watchlists",
-    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 async def list_watchlists() -> WatchlistListResponse:
     """List all configured topic monitoring watchlists."""
@@ -53,7 +56,6 @@ async def list_watchlists() -> WatchlistListResponse:
     response_model=WatchlistUpsertResponse,
     tags=["monitoring"],
     summary="Create or update a watchlist",
-    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 async def upsert_watchlist(payload: Watchlist) -> WatchlistUpsertResponse:
     """Create a new watchlist or update an existing one."""
@@ -61,10 +63,13 @@ async def upsert_watchlist(payload: Watchlist) -> WatchlistUpsertResponse:
         svc = get_topic_monitoring_service()
         wl = svc.upsert_watchlist(payload)
         return WatchlistUpsertResponse(watchlist=wl, status="ok")
+    except HTTPException:
+        # Propagate existing HTTP errors without masking them
+        raise
     except Exception as e:
         logger.exception("Failed to upsert watchlist")
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to upsert watchlist",
         ) from e
 
@@ -74,7 +79,6 @@ async def upsert_watchlist(payload: Watchlist) -> WatchlistUpsertResponse:
     response_model=WatchlistDeleteResponse,
     tags=["monitoring"],
     summary="Delete a watchlist",
-    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 async def delete_watchlist(watchlist_id: str) -> WatchlistDeleteResponse:
     """Delete a watchlist by ID and return the deletion status."""
@@ -90,7 +94,6 @@ async def delete_watchlist(watchlist_id: str) -> WatchlistDeleteResponse:
     response_model=WatchlistsReloadResponse,
     tags=["monitoring"],
     summary="Reload watchlists from file",
-    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 async def reload_watchlists() -> WatchlistsReloadResponse:
     """Reload watchlist definitions from the backing configuration source."""
@@ -104,7 +107,6 @@ async def reload_watchlists() -> WatchlistsReloadResponse:
     response_model=AlertsListResponse,
     tags=["monitoring"],
     summary="List monitoring alerts",
-    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 async def list_alerts(
     user_id: str | None = Query(None, description="Filter by user id"),
@@ -135,7 +137,6 @@ async def list_alerts(
     response_model=MarkReadResponse,
     tags=["monitoring"],
     summary="Mark an alert as read",
-    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 async def mark_alert_read(alert_id: int) -> MarkReadResponse:
     """Mark a single alert as read by ID."""
@@ -152,7 +153,6 @@ async def mark_alert_read(alert_id: int) -> MarkReadResponse:
     response_model=NotificationSettings,
     tags=["monitoring"],
     summary="Get notification settings",
-    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 async def get_notifications_settings() -> NotificationSettings:
     """Return the current in-memory notification settings."""
@@ -166,7 +166,6 @@ async def get_notifications_settings() -> NotificationSettings:
     response_model=NotificationSettings,
     tags=["monitoring"],
     summary="Update notification settings (runtime only)",
-    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 async def update_notifications_settings(
     payload: NotificationSettingsUpdate,
@@ -181,11 +180,11 @@ async def update_notifications_settings(
 
 @router.post(
     "/monitoring/notifications/test",
+    response_model=NotificationTestResponse,
     tags=["monitoring"],
     summary="Send a test notification (critical by default)",
-    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def send_test_notification(payload: NotificationTestRequest) -> dict[str, str]:
+async def send_test_notification(payload: NotificationTestRequest) -> NotificationTestResponse:
     """Send a synthetic test notification using the current settings."""
 
     notifier = get_notification_service()
@@ -202,14 +201,15 @@ async def send_test_notification(payload: NotificationTestRequest) -> dict[str, 
         metadata={"source": "admin_panel"},
     )
     try:
-        notifier.notify(alert)
+        # notifier.notify performs file I/O; offload to a thread to keep the event loop responsive.
+        await asyncio.to_thread(notifier.notify, alert)
     except Exception as e:
         logger.exception("monitoring: failed to send test notification")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to send test notification",
         ) from e
-    return {"status": "ok"}
+    return NotificationTestResponse(status="ok")
 
 
 def _tail_jsonl_file(path: str, limit: int) -> list[str]:
@@ -264,20 +264,20 @@ def _tail_jsonl_file(path: str, limit: int) -> list[str]:
 
 @router.get(
     "/monitoring/notifications/recent",
+    response_model=RecentNotificationsResponse,
     tags=["monitoring"],
     summary="Tail recent notifications from file (JSONL)",
-    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 async def get_recent_notifications(
     limit: int = Query(50, ge=1, le=500),
-) -> dict[str, list[dict]]:
+) -> RecentNotificationsResponse:
     """Return a bounded tail of recent notification events from the JSONL log file."""
 
     svc = get_notification_service()
     path = getattr(svc, 'file_path', None)
     items: list[dict] = []
     if not path or not os.path.exists(path):
-        return {"items": []}
+        return RecentNotificationsResponse(items=[])
     try:
         # Offload blocking file I/O to a worker thread to keep the event loop responsive.
         lines = await asyncio.to_thread(_tail_jsonl_file, path, limit)
@@ -297,4 +297,4 @@ async def get_recent_notifications(
             detail="Failed to read recent notifications",
         ) from e
     else:
-        return {"items": items}
+        return RecentNotificationsResponse(items=items)

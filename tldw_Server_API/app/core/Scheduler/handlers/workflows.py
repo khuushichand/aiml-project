@@ -20,6 +20,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_workflows_database,
     get_content_backend_instance,
 )
+from tldw_Server_API.app.core.Workflows.daily_ledger import record_workflow_run
 
 
 def _get_wf_db() -> WorkflowsDatabase:
@@ -80,6 +81,13 @@ async def workflow_run(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"workflow_run: failed to create run: {e}")
         raise
+
+    # Shadow-write this run into the daily ledger so RG daily caps account for
+    # scheduled runs as well. Fail open if ledger unavailable.
+    try:
+        await record_workflow_run(entity_scope="user", entity_value=str(user_id), run_id=run_id, units=1)
+    except Exception:
+        pass
 
     # Inject secrets ephemerally
     secrets = payload.get("secrets")

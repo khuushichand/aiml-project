@@ -50,6 +50,16 @@ except Exception:  # pragma: no cover - safe fallback when RG not installed
     default_policy_loader = None  # type: ignore
     rg_enabled = None  # type: ignore
 
+# Optional generic daily ledger integration (v1.1 shadow + enforcement)
+try:  # pragma: no cover - ledger is optional during upgrades/tests
+    from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import (  # type: ignore
+        LedgerEntry,
+        ResourceDailyLedger,
+    )
+except Exception:  # pragma: no cover - safe fallback
+    LedgerEntry = None  # type: ignore
+    ResourceDailyLedger = None  # type: ignore
+
 # Import connection pool
 # from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection  # unused
 
@@ -260,6 +270,24 @@ class UserRateLimiter:
         )
         if rg_decision is not None and not rg_decision["allowed"]:
             # ResourceGovernor denials take precedence over legacy limits.
+            try:
+                # Shadow comparison for observability: if legacy would allow, record mismatch.
+                legacy_allowed = True
+                config = await self._get_user_config(user_id)
+                minute_ok, _ = await self._check_minute_limit(user_id, endpoint, is_batch, config)
+                daily_ok, _ = await self._check_daily_limits(user_id, tokens_requested, estimated_cost, config)
+                legacy_allowed = bool(minute_ok and daily_ok)
+                if legacy_allowed and record_shadow_mismatch is not None:
+                    record_shadow_mismatch(
+                        module="evaluations",
+                        route=str(endpoint),
+                        policy_id=str(rg_decision.get("policy_id", "evals.default")),
+                        legacy="allow",
+                        rg="deny",
+                    )
+            except Exception:
+                # Best-effort only; never block denial path.
+                pass
             retry_after = rg_decision.get("retry_after") or 1
             return False, {
                 "error": "Rate limit exceeded (ResourceGovernor)",
@@ -274,11 +302,33 @@ class UserRateLimiter:
         # Check per-minute limits
         minute_check = await self._check_minute_limit(user_id, endpoint, is_batch, config)
         if not minute_check[0]:
+            if rg_decision is not None and record_shadow_mismatch is not None:
+                try:
+                    record_shadow_mismatch(
+                        module="evaluations",
+                        route=str(endpoint),
+                        policy_id=str(rg_decision.get("policy_id", "evals.default")),
+                        legacy="deny",
+                        rg="allow",
+                    )
+                except Exception:
+                    pass
             return minute_check
 
         # Check daily limits
         daily_check = await self._check_daily_limits(user_id, tokens_requested, estimated_cost, config)
         if not daily_check[0]:
+            if rg_decision is not None and record_shadow_mismatch is not None:
+                try:
+                    record_shadow_mismatch(
+                        module="evaluations",
+                        route=str(endpoint),
+                        policy_id=str(rg_decision.get("policy_id", "evals.default")),
+                        legacy="deny",
+                        rg="allow",
+                    )
+                except Exception:
+                    pass
             return daily_check
 
         # Record the request
@@ -383,6 +433,91 @@ class UserRateLimiter:
 
         return config
 
+    async def _get_daily_ledger(self, user_id: str) -> Optional["ResourceDailyLedger"]:
+        """
+        Lazily initialize the shared ResourceDailyLedger and backfill today's
+        legacy daily_usage totals for this user once per process.
+
+        The ledger is used as the canonical store for daily evaluations/tokens
+        caps when available. Failures are best-effort and never block callers.
+        """
+        global _evals_daily_ledger
+        if ResourceDailyLedger is None or LedgerEntry is None:
+            return None
+        if _evals_daily_ledger is None:
+            async with _evals_daily_ledger_lock:
+                if _evals_daily_ledger is None:
+                    try:
+                        ledger = ResourceDailyLedger()  # type: ignore[call-arg]
+                        await ledger.initialize()
+                        _evals_daily_ledger = ledger
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.debug(f"Evaluations: ResourceDailyLedger init failed; using legacy daily_usage: {exc}")
+                        _evals_daily_ledger = None
+                        return None
+        ledger = _evals_daily_ledger
+
+        # Best-effort one-time backfill for today's legacy totals.
+        try:
+            day = datetime.now(timezone.utc).date().isoformat()
+            if user_id not in _evals_legacy_backfill_done:
+                await self._backfill_legacy_daily_usage_to_ledger(ledger, user_id=user_id, day_utc=day)
+                _evals_legacy_backfill_done.add(user_id)
+        except Exception:
+            pass
+        return ledger
+
+    async def _backfill_legacy_daily_usage_to_ledger(
+        self,
+        ledger: "ResourceDailyLedger",
+        *,
+        user_id: str,
+        day_utc: str,
+    ) -> None:
+        """
+        Mirror today's legacy daily_usage totals into ResourceDailyLedger.
+
+        This preserves in-progress daily caps after upgrades. The backfill is
+        idempotent via deterministic op_id values.
+        """
+        if LedgerEntry is None:
+            return
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT total_evaluations, total_tokens FROM daily_usage WHERE user_id = ? AND date = ?",
+                    (user_id, str(day_utc)),
+                )
+                row = cursor.fetchone()
+            if not row:
+                return
+            total_evaluations = int(row[0] or 0)
+            total_tokens = int(row[1] or 0)
+            ts = datetime.now(timezone.utc)
+            if total_evaluations > 0:
+                entry = LedgerEntry(  # type: ignore[call-arg]
+                    entity_scope="user",
+                    entity_value=str(user_id),
+                    category="evaluations",
+                    units=total_evaluations,
+                    op_id=f"evals-legacy:{user_id}:{day_utc}",
+                    occurred_at=ts,
+                )
+                await ledger.add(entry)
+            if total_tokens > 0:
+                entry = LedgerEntry(  # type: ignore[call-arg]
+                    entity_scope="user",
+                    entity_value=str(user_id),
+                    category="tokens",
+                    units=total_tokens,
+                    op_id=f"evals-legacy-tokens:{user_id}:{day_utc}",
+                    occurred_at=ts,
+                )
+                await ledger.add(entry)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"Evaluations: legacy daily_usage backfill skipped: {exc}")
+
     async def _check_minute_limit(
         self,
         user_id: str,
@@ -454,23 +589,61 @@ class UserRateLimiter:
     ) -> Tuple[bool, Dict[str, Any]]:
         """Check daily usage limits."""
         today = datetime.now(timezone.utc).date()
+        day_str = str(today)
+
+        total_evaluations = 0
+        total_tokens = 0
+        total_cost: float = 0.0
+
+        ledger: Optional["ResourceDailyLedger"] = None
+        try:
+            ledger = await self._get_daily_ledger(user_id)
+        except Exception:
+            ledger = None
+
+        if ledger is not None:
+            try:
+                total_evaluations = await ledger.total_for_day(
+                    entity_scope="user",
+                    entity_value=str(user_id),
+                    category="evaluations",
+                    day_utc=day_str,
+                )
+                total_tokens = await ledger.total_for_day(
+                    entity_scope="user",
+                    entity_value=str(user_id),
+                    category="tokens",
+                    day_utc=day_str,
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug(f"Evaluations: ledger daily totals failed; falling back to legacy: {exc}")
+                ledger = None
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-
-            # Get today's usage
-            cursor.execute("""
-                SELECT total_evaluations, total_tokens, total_cost
-                FROM daily_usage
-                WHERE user_id = ? AND date = ?
-            """, (user_id, str(today)))
-
-            row = cursor.fetchone()
-
-            if row:
-                total_evaluations, total_tokens, total_cost = row
+            if ledger is None:
+                # Legacy per-user DB totals
+                cursor.execute(
+                    """
+                    SELECT total_evaluations, total_tokens, total_cost
+                    FROM daily_usage
+                    WHERE user_id = ? AND date = ?
+                    """,
+                    (user_id, day_str),
+                )
+                row = cursor.fetchone()
+                if row:
+                    total_evaluations, total_tokens, total_cost = row
+                else:
+                    total_evaluations = total_tokens = total_cost = 0
             else:
-                total_evaluations = total_tokens = total_cost = 0
+                # Ledger owns evaluations/tokens caps; keep legacy for cost-only.
+                cursor.execute(
+                    "SELECT total_cost FROM daily_usage WHERE user_id = ? AND date = ?",
+                    (user_id, day_str),
+                )
+                row = cursor.fetchone()
+                total_cost = float(row[0] or 0.0) if row else 0.0
 
             # Check limits
             if total_evaluations >= config.evaluations_per_day:
@@ -534,6 +707,40 @@ class UserRateLimiter:
             """, (user_id, str(today), tokens_used, cost, tokens_used, cost))
 
             conn.commit()
+
+        # Shadow-write daily usage into the shared ResourceDailyLedger so RG can
+        # enforce tokens/evaluations caps cross-module in v1.1.
+        try:
+            ledger = await self._get_daily_ledger(user_id)
+            if ledger is not None and LedgerEntry is not None:
+                base_oid = f"evals:{user_id}:{endpoint}:{int(now.timestamp())}:{time.time_ns()}"
+                try:
+                    entry_eval = LedgerEntry(  # type: ignore[call-arg]
+                        entity_scope="user",
+                        entity_value=str(user_id),
+                        category="evaluations",
+                        units=1,
+                        op_id=f"{base_oid}:eval",
+                        occurred_at=now,
+                    )
+                    await ledger.add(entry_eval)
+                except Exception:
+                    pass
+                if int(tokens_used or 0) > 0:
+                    try:
+                        entry_tokens = LedgerEntry(  # type: ignore[call-arg]
+                            entity_scope="user",
+                            entity_value=str(user_id),
+                            category="tokens",
+                            units=int(tokens_used),
+                            op_id=f"{base_oid}:tokens",
+                            occurred_at=now,
+                        )
+                        await ledger.add(entry_tokens)
+                    except Exception:
+                        pass
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"Evaluations: ResourceDailyLedger shadow write failed; ignoring: {exc}")
 
     def _generate_rate_limit_headers(
         self,
@@ -762,6 +969,12 @@ def get_user_rate_limiter_for_user(user_id: int) -> UserRateLimiter:
 _rg_evals_governor = None
 _rg_evals_loader = None
 _rg_evals_lock = asyncio.Lock()
+
+# --- Generic daily ledger plumbing (optional) ------------------------------
+_evals_daily_ledger: Optional["ResourceDailyLedger"] = None  # type: ignore[name-defined]
+_evals_daily_ledger_lock = asyncio.Lock()
+# Track per-user backfill attempts for today's legacy daily_usage
+_evals_legacy_backfill_done: set[str] = set()
 
 
 def _rg_evaluations_enabled() -> bool:

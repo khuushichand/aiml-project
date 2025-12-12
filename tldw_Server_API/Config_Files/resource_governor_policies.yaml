@@ -62,6 +62,33 @@ policies:
     requests: { rpm: 30, burst: 1.0 }
     scopes: [user]
 
+  # Research / websearch endpoints
+  research.default:
+    requests: { rpm: 30, burst: 1.0 }
+    scopes: [user]
+
+  # Workflows (ad-hoc runs, schedules, admin)
+  workflows.default:
+    requests: { rpm: 60, burst: 1.0 }
+    workflows_runs: { daily_cap: 1000 }
+    scopes: [user]
+
+  # Prompt Studio API (projects/prompts/tests/optimization)
+  prompt_studio.default:
+    # Keep high to avoid interfering with per-operation AuthNZ limits.
+    requests: { rpm: 300, burst: 2.0 }
+    scopes: [user]
+
+  # RAG unified/health endpoints
+  rag.default:
+    requests: { rpm: 120, burst: 1.2 }
+    scopes: [user]
+
+  # Media ingestion/processing endpoints
+  media.default:
+    requests: { rpm: 60, burst: 1.2 }
+    scopes: [user]
+
 # Route/tag mapping helpers. Middleware may use these to resolve policy_id.
 route_map:
   by_tag:
@@ -71,20 +98,23 @@ route_map:
     audio: audio.default
     evals: evals.default
     slowapi: slowapi.default
+    research: research.default
+    workflows: workflows.default
+    prompt_studio: prompt_studio.default
+    rag: rag.default
+    media: media.default
   by_path:
     "/api/v1/chat/*": chat.default
     "/api/v1/mcp/*": mcp.ingestion
     "/api/v1/embeddings*": embeddings.default
     "/api/v1/audio/*": audio.default
     "/api/v1/evaluations/*": evals.default
-    # The following high-level domains currently rely on module-specific
-    # limiters and/or LLM budget guards rather than RG ingress and are
-    # intentionally not mapped here in v1.0:
-    #   /api/v1/research/* (websearch + research tools)
-    #   /api/v1/workflows/* and /api/v1/scheduler/workflows/*
-    #   /api/v1/prompt-studio/* (Prompt Studio)
-    #   /api/v1/rag/* (RAG health/unified endpoints)
-    #   /api/v1/media/* (media ingestion/processing)
+    "/api/v1/research/*": research.default
+    "/api/v1/workflows/*": workflows.default
+    "/api/v1/scheduler/workflows/*": workflows.default
+    "/api/v1/prompt-studio/*": prompt_studio.default
+    "/api/v1/rag/*": rag.default
+    "/api/v1/media/*": media.default
 
 # Observability note: Do not include entity label in metrics by default.
 # Use RG_METRICS_ENTITY_LABEL=true to enable hashed entity label if necessary.

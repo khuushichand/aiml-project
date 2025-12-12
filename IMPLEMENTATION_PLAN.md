@@ -72,7 +72,7 @@
 **Remaining Work (tracked in PRDs)**:
 - **Resource_Governor_PRD.md**:
   - Retire documented legacy limiters once RG parity is validated (Chat `ConversationRateLimiter`, Embeddings `UserRateLimiter`, Evaluations/AuthNZ/Character Chat/Web Scraping shims, legacy SlowAPI counters, and non-RG audio concurrency counters).
-  - Decide on RG ingress coverage for currently RG-free routes (for example `/api/v1/research/*`, `/api/v1/workflows/*`, `/api/v1/prompt-studio/*`, `/api/v1/rag/*`, `/api/v1/media/*`) and either wire them through `route_map` policies or document their exclusion as intentional.
+  - Remaining RG-free ingress routes should be explicitly documented and either mapped through `route_map` policies or kept out-of-scope with rationale. (Research, workflows, prompt‑studio, RAG, and media ingress are now covered by default policies and route_map entries.)
 - **User-Auth-Deps-PRD.md**:
   - Migrate remaining legacy `require_admin` helpers in evaluations, embeddings v5, and MCP endpoints to `get_auth_principal` + `require_roles("admin")` / `require_permissions(...)`, keeping shims only where explicitly documented as compatibility paths.
   - Audit and gradually remove any new authorization checks that still branch on `is_single_user_mode()` instead of principal claims, in line with the PRD’s “Remaining adoption checklist”.
@@ -83,3 +83,40 @@
 For a focused breakdown of the remaining work across these three AuthNZ PRDs (including RG alignment), see `Docs/Product/AuthNZ-PRDs_IMPLEMENTATION_PLAN.md`.
 
 **Status**: Mostly complete — core RG backends, middleware, and admin/diagnostic endpoints match the Resource_Governor PRD; claim-first auth deps and the initial AuthNZ repository layer are the default path, with remaining work limited to the long‑tail items summarized above and the PRDs’ “Remaining adoption checklist” sections.
+
+## Stage 7: RG v1.1 — Daily Tokens Ledger (Chat + Embeddings)
+**Goal**: Generalize daily token budgeting under ResourceGovernor using `ResourceDailyLedger`, and shadow‑/hard‑enforce tokens‑per‑day for chat and embeddings without breaking legacy behavior.
+**Success Criteria**:
+- A shared daily ledger category (`tokens`) is used for all LLM token budgets across modules.
+- Chat writes daily token usage to `ResourceDailyLedger` after completions (real usage, idempotent op_id), with a one‑time “today so far” backfill from legacy usage tables on upgrade.
+- Embeddings writes daily token usage to the same ledger (or explicitly stays request‑only with docs), with backfill on upgrade where applicable.
+- RG policy DSL supports a daily cap for tokens (e.g., `tokens.daily_cap`) and the governor enforces it via the ledger on reserve/check.
+- Legacy per‑module daily token guards are bypassed on RG‑governed routes once parity is proven.
+**Tests**:
+- Unit tests for chat/embeddings ledger shadow‑writes + backfill idempotency.
+- Resource_Governance integration tests hitting `/api/v1/chat/*` and `/api/v1/embeddings*` under a tiny `tokens.daily_cap`, asserting 200 then 429 with correct `Retry‑After`/`X‑RateLimit-*` parity.
+**Status**: Not Started
+
+## Stage 8: RG v1.1 — Workflows Daily Ledger Cutover
+**Goal**: Move workflows daily run quotas from inline per‑module logic to RG + `ResourceDailyLedger`, making RG the single source for daily caps.
+**Success Criteria**:
+- A dedicated ledger category (e.g., `workflows_runs`) and matching RG policy field exist and are documented.
+- `endpoints/workflows.py` no longer performs inline daily quota checks; instead it consults the ledger for remaining runs and denies via RG semantics/headers.
+- Each workflow run records a deterministic ledger entry with stable op_id (workflow/run id), and upgrades backfill any existing “today” legacy counters.
+- Legacy daily quota env knobs remain as short‑window aliases but do not change enforcement when RG is enabled.
+**Tests**:
+- Unit tests for ledger writes/backfill around workflow runs.
+- Resource_Governance e2e tests on `/api/v1/workflows/*` under a tiny daily cap, asserting deny parity and headers.
+**Status**: Not Started
+
+## Stage 9: RG v1.1 — Legacy Limiter Retirement
+**Goal**: Safely retire remaining legacy limiters/shims once RG parity is verified, leaving ResourceGovernor as the sole enforcer.
+**Success Criteria**:
+- Per‑module shadow mismatch metrics show near‑zero drift for ≥1 release window on representative traffic.
+- All mapped routes return stable 429/Retry‑After/`X‑RateLimit-*` headers under both memory and Redis backends.
+- Legacy limiters are demoted to diagnostics‑only shims (no counters) with deprecation warnings, then removed after one stable release.
+- Unused RG_ENABLE_* aliases and legacy flags are deleted post‑release and docs/examples reference RG policies/envs only.
+**Tests**:
+- For each module (chat, embeddings, authnz, evals, character‑chat, web‑scraping, audio, workflows), keep/extend parity tests and remove legacy‑path assertions only after flip.
+- Regression suite to ensure no route double‑enforces after shim removal.
+**Status**: Not Started

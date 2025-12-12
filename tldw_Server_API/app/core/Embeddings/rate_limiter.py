@@ -414,7 +414,8 @@ class AsyncRateLimiter:
         self,
         user_id: str,
         cost: int = 1,
-        ip_address: Optional[str] = None
+        ip_address: Optional[str] = None,
+        tokens_units: int = 0,
     ) -> tuple[bool, Optional[int]]:
         """
         Async version of check_rate_limit.
@@ -428,7 +429,11 @@ class AsyncRateLimiter:
             Tuple of (allowed, retry_after_seconds)
         """
         # Prefer Resource Governor when configured; fallback to legacy limiter otherwise.
-        rg_decision = await _maybe_enforce_with_rg(user_id=user_id, cost=cost)
+        rg_decision = await _maybe_enforce_with_rg(
+            user_id=user_id,
+            cost=cost,
+            tokens_units=int(tokens_units or 0),
+        )
 
         # Always evaluate legacy limiter for shadow metrics and fallback.
         loop = asyncio.get_running_loop()
@@ -536,7 +541,11 @@ async def _get_embeddings_rg_governor():
             return None
 
 
-async def _maybe_enforce_with_rg(user_id: str, cost: int) -> Optional[Dict[str, object]]:
+async def _maybe_enforce_with_rg(
+    user_id: str,
+    cost: int,
+    tokens_units: int = 0,
+) -> Optional[Dict[str, object]]:
     """
     Attempt to enforce embeddings request limits via Resource Governor.
 
@@ -548,10 +557,18 @@ async def _maybe_enforce_with_rg(user_id: str, cost: int) -> Optional[Dict[str, 
     policy_id = os.getenv("RG_EMBEDDINGS_POLICY_ID", "embeddings.default")
     op_id = f"emb-{user_id}-{time.time_ns()}"
     try:
+        categories: Dict[str, Dict[str, int]] = {"requests": {"units": cost}}
+        try:
+            tu = int(tokens_units or 0)
+        except Exception:
+            tu = 0
+        if tu > 0:
+            categories["tokens"] = {"units": tu}
+
         decision, handle = await gov.reserve(
             RGRequest(
                 entity=f"user:{user_id}",
-                categories={"requests": {"units": cost}},
+                categories=categories,
                 tags={"policy_id": policy_id, "module": "embeddings"},
             ),
             op_id=op_id,

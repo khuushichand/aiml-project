@@ -2806,8 +2806,9 @@ import os as _os  # noqa: E402
 
 try:
     # Determine whether to enable RGSimpleMiddleware.
-    # - Explicit RG_ENABLE_SIMPLE_MIDDLEWARE=1 always enables.
-    # - Otherwise, require global RG_ENABLED together with RG_ENABLE_SLOWAPI=1.
+    # - Explicit RG_ENABLE_SIMPLE_MIDDLEWARE=1 or RG_ENABLE_SLOWAPI=1 forces enable.
+    # - When global RG is enabled (RG_ENABLED / config), ingress enforcement is on by default.
+    # - Explicit RG_ENABLE_SIMPLE_MIDDLEWARE=0 forces disable.
     # - MINIMAL_TEST_APP keeps existing behavior and enables middleware for test apps.
     from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag  # noqa: E402
 
@@ -2816,9 +2817,13 @@ try:
     except Exception:
         _rg_global_enabled = False
 
-    _rg_simple_flag = (_os.getenv("RG_ENABLE_SIMPLE_MIDDLEWARE") or "").strip().lower() in {"1", "true", "yes"}
-    _rg_slowapi_flag = (_os.getenv("RG_ENABLE_SLOWAPI") or "").strip().lower() in {"1", "true", "yes"}
-    _rg_env_enabled = _rg_simple_flag or (_rg_global_enabled and _rg_slowapi_flag)
+    _rg_simple_env = (_os.getenv("RG_ENABLE_SIMPLE_MIDDLEWARE") or "").strip().lower()
+    _rg_simple_force_on = _rg_simple_env in {"1", "true", "yes", "on"}
+    _rg_simple_force_off = _rg_simple_env in {"0", "false", "no", "off"}
+    _rg_slowapi_flag = (_os.getenv("RG_ENABLE_SLOWAPI") or "").strip().lower() in {"1", "true", "yes", "on"}
+    _rg_env_enabled = (not _rg_simple_force_off) and (
+        _rg_simple_force_on or _rg_slowapi_flag or _rg_global_enabled
+    )
 
     # Only enable RGSimpleMiddleware when explicitly requested via env, or when running the
     # minimal test app mode. Do not enable solely due to pytest detection to avoid unintended

@@ -251,12 +251,13 @@ Real Redis can occasionally report window counts near boundaries that admit a re
 - Entity labels are excluded by default to avoid high cardinality; enable only for targeted debugging with `RG_METRICS_ENTITY_LABEL=true` and prefer sampled logs for per‑entity traces.
   - `RG_POLICY_DB_CACHE_TTL_SEC`: TTL for DB policy cache (default 10s) when `RG_POLICY_STORE=db`.
 
-### Middleware Options (opt-in)
+### Middleware Options (default-on)
 
-- `RG_ENABLE_SIMPLE_MIDDLEWARE`: enable minimal pre-check middleware (requests category) using `route_map` resolution.
+- `RGSimpleMiddleware` is attached automatically whenever `RG_ENABLED=true` and performs a minimal pre-check for the `requests` category using `route_map` resolution.
+- `RG_ENABLE_SIMPLE_MIDDLEWARE=0` force-disables the middleware for compatibility/debugging; `RG_ENABLE_SIMPLE_MIDDLEWARE=1` and `RG_ENABLE_SLOWAPI=1` remain as explicit enable aliases for older configs/tests.
 - `RG_MIDDLEWARE_ENFORCE_TOKENS`: when true, include `tokens` in middleware reserve/deny path and expose precise success headers + per-minute deny headers.
 - `RG_MIDDLEWARE_ENFORCE_STREAMS`: when true, include `streams` in middleware reserve/deny path; on deny, return 429 with `Retry-After`.
-- Middleware options apply only when the corresponding module integration (for example, `RG_ENABLE_SLOWAPI`) is enabled and `RG_ENABLED=true`; otherwise they are inert.
+- Middleware options apply only when `RG_ENABLED=true`; otherwise they are inert.
 
 ### Testing (integration)
 
@@ -619,9 +620,9 @@ Notes:
 
 | Domain           | Flag                        | Default / Status                         | Notes / Coverage                                                                                                    |
 |------------------|-----------------------------|------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
-| Chat (OpenAI)    | `RG_ENABLE_CHAT`, `RG_CHAT_ENFORCE_PRIMARY` | Off by default (`RG_CHAT_ENFORCE_PRIMARY=0`) | When `RG_ENABLE_CHAT=1`, the internal `ConversationRateLimiter.check_rate_limit` consults ResourceGovernor (`chat.default`) alongside the legacy limiter; when `RG_CHAT_ENFORCE_PRIMARY=1` and a governor decision is present, the RG decision becomes canonical and the in-process limiter is treated as a legacy shim for diagnostics and tests. |
+| Chat (OpenAI)    | `RG_ENABLE_CHAT`, `RG_CHAT_ENFORCE_PRIMARY` | Inherits `RG_ENABLED` (RG-primary by default) | When RG is enabled (`RG_ENABLED=true`, or explicitly via `RG_ENABLE_CHAT=1`), the internal `ConversationRateLimiter.check_rate_limit` consults ResourceGovernor (`chat.default`) alongside the legacy limiter; a governor decision is canonical by default, and the in-process limiter is treated as a legacy shim for diagnostics and tests (set `RG_CHAT_ENFORCE_PRIMARY=0` only to force legacy-primary during short compat windows). |
 | MCP Unified      | `RG_ENABLE_MCP`             | Off by default                           | When enabled, MCP `RateLimiter.check_rate_limit` enforces via RG (`mcp.*` policies); see `test_rg_cutover_embeddings_mcp.py`. |
-| SlowAPI ingress  | `RG_ENABLE_SLOWAPI`         | Off by default                           | When enabled (or `RG_ENABLE_SIMPLE_MIDDLEWARE=1`), `RGSimpleMiddleware` guards selected ingress paths.              |
+| SlowAPI ingress  | `RG_ENABLE_SLOWAPI`         | Inherits `RG_ENABLED`                    | `RGSimpleMiddleware` is attached automatically when RG is enabled and guards ingress paths via `route_map`; `RG_ENABLE_SLOWAPI=1` remains a compatibility alias and `RG_ENABLE_SIMPLE_MIDDLEWARE=0` force-disables. |
 | Audio (TTS/STT)  | `RG_ENABLE_AUDIO`           | Off by default                           | Enables streams/jobs concurrency via RG (`audio.default`). Daily minutes quotas are enforced via `ResourceDailyLedger` when available, with `audio_usage_daily` retained only as compatibility/backfill state when the ledger is unavailable or during upgrades. |
 | Embeddings       | `RG_ENABLE_EMBEDDINGS`      | Off by default                           | Async embeddings limiter delegates to RG (`embeddings.default`); headers/429 behavior covered by e2e embeddings tests. |
 | Evaluations      | `RG_ENABLE_EVALUATIONS`     | Off by default                           | `UserRateLimiter` consults RG (`evals.default`); see cutover + e2e tests for `/api/v1/evaluations/rate-limits`.     |
@@ -653,7 +654,7 @@ Notes:
 - SlowAPI (examples):
   - `SLOWAPI_GLOBAL_RPM` → policy `ingress.default.requests.rpm`
   - `SLOWAPI_GLOBAL_BURST` → policy `ingress.default.requests.burst`
-  - Decorator strings remain as config carriers; when `RGSimpleMiddleware` is attached (via `RG_ENABLE_SLOWAPI` or `RG_ENABLE_SIMPLE_MIDDLEWARE`), the global SlowAPI limiter’s key function returns `None` so enforcement is handled by ResourceGovernor while decorators provide metadata only.
+  - Decorator strings remain as config carriers; when `RGSimpleMiddleware` is attached (automatically when `RG_ENABLED=true`, unless forced off), the global SlowAPI limiter’s key function returns `None` so enforcement is handled by ResourceGovernor while decorators provide metadata only.
 
 - Audio (examples):
   - `AUDIO_DAILY_MINUTES_CAP` → policy `audio.default.minutes.daily_cap`
@@ -677,7 +678,7 @@ Notes:
   - Derives the effective entity (auth scopes preferred; IP fallback with trusted-proxy rules).
   - Calls the governor’s `reserve` API before handler for enforcement; on deny, returns 429 with headers; on allow, sets `X-RateLimit-*` headers and proceeds. `check` is used only for diagnostics and shadow-mode comparisons.
   - On completion, performs `commit/refund` as applicable; handles streaming by renewing/releasing leases.
-  - When `RG_ENABLE_SLOWAPI=false`, middleware is disabled and legacy SlowAPI behavior remains.
+  - When `RG_ENABLED=false` (or `RG_ENABLE_SIMPLE_MIDDLEWARE=0`), middleware is disabled and legacy SlowAPI behavior remains.
 
 ## Risks & Mitigations
 
@@ -720,12 +721,12 @@ Notes:
   - Memory + Redis backends are implemented with `reserve/check/commit/refund/renew/release` semantics, metrics (`rg_decisions_total`, `rg_denials_total`, `rg_refunds_total`, `rg_concurrency_active`, `rg_wait_seconds`), and Redis fail modes driven by `RG_REDIS_FAIL_MODE`.
   - File and DB policy stores are wired via `rg_policy_store`/`rg_policy_path`, with the default YAML at `tldw_Server_API/Config_Files/resource_governor_policies.yaml` and AuthNZ-backed `rg_policies` support.
 - Ingress middleware:
-  - `RGSimpleMiddleware` is available and can be enabled for representative routes via `RG_ENABLED`+`RG_ENABLE_SLOWAPI` or directly via `RG_ENABLE_SIMPLE_MIDDLEWARE` (tests use the latter).
+  - `RGSimpleMiddleware` is attached automatically whenever `RG_ENABLED=true` (unless forced off via `RG_ENABLE_SIMPLE_MIDDLEWARE=0`). The legacy enable flags (`RG_ENABLE_SIMPLE_MIDDLEWARE=1` / `RG_ENABLE_SLOWAPI=1`) remain as explicit enable aliases for older configs/tests.
   - route-map-based resolution is in place for `/api/v1/chat/*`, `/api/v1/audio/*`, `/api/v1/embeddings*`, `/api/v1/mcp/*`, and `/api/v1/evaluations/*`, with standard `Retry-After` / `X-RateLimit-*` headers on deny and success.
 - Chat:
   - Endpoint-level token reservation can be enabled with `RG_ENDPOINT_ENFORCE_TOKENS`, using `chat.default` policy and `derive_entity_key` for entities; RGSimpleMiddleware enforces `requests` on `/api/v1/chat/*` when enabled.
-  - When `RG_ENABLE_CHAT=1`, the internal `ConversationRateLimiter.check_rate_limit` in `tldw_Server_API/app/core/Chat/rate_limiter.py` consults the shared ResourceGovernor helper (`_maybe_enforce_with_rg_chat`, issuing `RGRequest(entity="user:{id}", categories={"requests": {"units": 1}, "tokens": {"units": estimated_tokens}})`) alongside the legacy in-process buckets.
-  - Legacy bucket evaluation is always performed for compatibility and observability; when a governor decision is available and `RG_CHAT_ENFORCE_PRIMARY=1`, the RG decision is treated as the canonical source of truth for chat rate limiting, with the legacy limiter reduced to a shim for diagnostics and tests.
+  - When ResourceGovernor is enabled (`RG_ENABLED=true`, or explicitly via `RG_ENABLE_CHAT=1`), the internal `ConversationRateLimiter.check_rate_limit` in `tldw_Server_API/app/core/Chat/rate_limiter.py` consults the shared ResourceGovernor helper (`_maybe_enforce_with_rg_chat`, issuing `RGRequest(entity="user:{id}", categories={"requests": {"units": 1}, "tokens": {"units": estimated_tokens}})`) alongside the legacy in-process buckets.
+  - Legacy bucket evaluation is still performed for compatibility and observability; when a governor decision is available and RG is enabled, the RG decision is treated as canonical by default (set `RG_CHAT_ENFORCE_PRIMARY=0` only to force legacy-primary during a short compat window).
   - A shadow-mode helper (`RG_SHADOW_CHAT=1`) compares the legacy `ConversationRateLimiter` decision with a governor decision for chat completions and emits `rg_shadow_decision_mismatch_total{module=\"chat\",route=\"/api/v1/chat/completions\",policy_id,...}` when they differ; unit tests in `tldw_Server_API/tests/Resource_Governance/test_chat_rg_limiter_cutover.py` cover allow/deny parity and mismatch-emission scenarios.
 - Audio:
   - Streams/jobs concurrency is enforced via the governor (`audio.default` policy, `streams`/`jobs` categories) when `RG_ENABLE_AUDIO` is enabled, with Redis/in-process counters retained as a fail-open fallback.
@@ -738,7 +739,7 @@ Notes:
   - MCP unified `RateLimiter.check_rate_limit` now enforces via the ResourceGovernor when `RG_ENABLE_MCP=1`, reserving against `mcp.{category}` policies (`entity="client:{key}"`, `categories={"requests": {"units": 1}}`) and raising `RateLimitExceeded` based on RG decisions; the in-memory/Redis limiter is retained as a shadow/fail-open compatibility path when RG is disabled or errors, with cutover behavior locked in by `tldw_Server_API/tests/Resource_Governance/test_rg_cutover_embeddings_mcp.py`.
   - SlowAPI-decorated routes now treat the global limiter as a configuration carrier when `RGSimpleMiddleware` is attached: the key function returns `None` in that case so enforcement is handled by ResourceGovernor, and end-to-end tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_chat_audio_headers.py` assert RG-style headers on representative chat, MCP, audio, and embeddings routes.
 - Evaluations:
-  - The per-user `UserRateLimiter.check_rate_limit` in `tldw_Server_API/app/core/Evaluations/user_rate_limiter.py` consults the ResourceGovernor when `RG_ENABLE_EVALUATIONS=1` (via `_maybe_enforce_with_rg_evaluations`, using `entity="user:{user_id}"` and the `evals.default` policy); on RG denial, it returns a `(False, meta)` result with `retry_after`, `policy_id`, and `rate_limit_source="resource_governor"`, while the existing per-minute/daily counters remain as a compatibility shim when RG is disabled or unavailable.
+  - The per-user `UserRateLimiter.check_rate_limit` in `tldw_Server_API/app/core/Evaluations/user_rate_limiter.py` consults the ResourceGovernor when `RG_ENABLE_EVALUATIONS=1` (via `_maybe_enforce_with_rg_evaluations`, using `entity="user:{user_id}"` and the `evals.default` policy); on RG denial, it returns a `(False, meta)` result with `retry_after`, `policy_id`, and `rate_limit_source="resource_governor"`. Per-minute counters remain legacy for now, while daily evaluations/tokens caps consult the shared `ResourceDailyLedger` when available (with `daily_usage` retained for cost and upgrade backfill).
   - End-to-end tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_evals_authnz_character_headers.py` hit `/api/v1/evaluations/rate-limits` under a small `evals.*` policy and assert a first-success / second-429 (or 503 in fail modes) pattern with `Retry-After` and `X-RateLimit-*` headers driven by `RGSimpleMiddleware` and the route-map entry for `/api/v1/evaluations/*`.
 - AuthNZ:
   - The AuthNZ `RateLimiter.check_rate_limit` in `tldw_Server_API/app/core/AuthNZ/rate_limiter.py` now checks the ResourceGovernor first when `RG_ENABLE_AUTHNZ=1`, reserving against `authnz.default` (or an override via `RG_AUTHNZ_POLICY_ID`) with `RGRequest(entity=identifier, categories={"requests": {"units": 1}})`; on RG denial it returns a `(False, meta)` result with `retry_after`, `policy_id`, and `rate_limit_source="resource_governor"`, and falls back to the legacy DB/Redis limiter only when RG is disabled or unavailable.
@@ -869,8 +870,42 @@ Stage 6 — Admin API, Observability & Rollout
 Post v1.0 (Planned v1.1)
 - Generic `ResourceDailyLedger` for tokens-per-day and future categories; extend the existing audio minutes use of the ledger to additional daily quotas (for example, evaluations or web-scraping budgets).
 - Cross-category “cost unit” modeling for analytics and optional budgets (no enforcement changes in v1.1 unless explicitly enabled via policies).
-- Gradual cutover for remaining RG domains currently running “behind flags + legacy shims” (especially SlowAPI ingress and the legacy chat rate limiter paths) so that, once metrics/tests show parity, ResourceGovernor becomes the primary enforcer and the old limiters can be safely retired.
+- Gradual cutover for remaining RG domains currently running “behind flags + legacy shims” so that, once metrics/tests show parity, ResourceGovernor becomes the primary enforcer and the old limiters can be safely retired.
 - Additional providers/integrations as needed.
+
+### v1.1 Remaining Checklist (AuthNZ Cutover Follow‑ups)
+
+1. **Daily ledger for tokens‑per‑day (Chat + Embeddings)**
+   - Decide the canonical daily category naming. Recommended: reuse `category="tokens"` in `ResourceDailyLedger` for all LLM token budgets so caps are cross‑module.
+   - Add ledger shadow‑writes:
+     - Chat: after a completion finishes and real token usage is known, write `LedgerEntry(scope="user", value=user_id, category="tokens", units=total_tokens, op_id="chat:{request_id}")`.
+     - Embeddings: on each embeddings call, write `LedgerEntry(..., category="tokens", units=input_tokens_or_cost_units, op_id="emb:{request_id}")` (or keep as `requests` only if embeddings budgets stay request‑based).
+     - Include a one‑time backfill for “today so far” from legacy per‑module usage tables during upgrade (same pattern as audio/evals).
+   - Add enforcement:
+     - Extend RG policy DSL with an optional `tokens.daily_cap` (or a dedicated `tokens_per_day` field) and document it.
+     - In RG reserve/check for `tokens`, consult `ResourceDailyLedger.remaining_for_day(...)` when a daily cap is present; deny with `Retry‑After` until next UTC day boundary.
+   - Tests:
+     - Unit: ledger shadow‑write idempotency and backfill.
+     - Integration: two requests that exceed `tokens.daily_cap` return 429 with RG headers, and legacy daily token guards are bypassed on RG‑governed routes.
+
+2. **Workflows daily caps via ledger**
+   - Pick a ledger category (e.g., `category="workflows_runs"` or reuse `jobs` if generalized) and a policy field (e.g., `workflows.daily_cap` or `requests.daily_cap` scoped to workflows).
+   - Replace the remaining inline “daily quota” checks in `endpoints/workflows.py` with:
+     - `remaining = ledger.remaining_for_day("user", user_id, category, daily_cap)`
+     - Deny when remaining <= 0, mirroring legacy 429/headers.
+   - Shadow‑write each workflow run into the ledger with deterministic `op_id` based on workflow/run id.
+   - Tests:
+     - Resource_Governance e2e parity on `/api/v1/workflows/*` under a tiny daily cap.
+
+3. **Legacy limiter retirement criteria + steps**
+   - Criteria to flip a module to RG‑only:
+     - Route is mapped in `route_map` and enforced by middleware.
+     - Shadow mismatches (`rg_shadow_decision_mismatch_total{module=...}`) are near‑zero for ≥1 release window under representative load.
+     - 429/Retry‑After and `X‑RateLimit-*` headers match legacy semantics in both memory and Redis backends.
+   - Steps per module (chat, embeddings, authnz, evals, character‑chat, web‑scraping, audio, workflows):
+     1) Keep legacy limiter evaluating only for shadow metrics; enforce via RG.
+     2) Demote legacy limiter to a thin shim (no counters) and emit a deprecation warning on any direct use.
+     3) After one stable release, remove shim + delete unused env aliases/tests.
 
 ## Engineering Implementation Plan (Concrete Steps)
 
@@ -1054,7 +1089,7 @@ Use this checklist to track when modules move from “RG + legacy limiter” to 
 | Domain        | Primary legacy limiter/module                                           | RG integration toggle(s)                         | Status (v1.0)                      | Next action for RG-only                                                                 |
 |--------------|-------------------------------------------------------------------------|--------------------------------------------------|------------------------------------|----------------------------------------------------------------------------------------|
 | AuthNZ       | `tldw_Server_API/app/core/AuthNZ/rate_limiter.py::RateLimiter`         | `RG_ENABLE_AUTHNZ`, `rg_enabled`                 | RG + legacy (shadow/partial)       | Decide whether to route all AuthNZ rate limits through RG and slim DB/Redis logic down |
-| Chat         | `tldw_Server_API/app/core/Chat/rate_limiter.py::ConversationRateLimiter` | `RG_ENABLE_CHAT`, `RG_CHAT_POLICY_ID`, `RG_CHAT_ENFORCE_PRIMARY` | RG + legacy (shadow comparisons; RG-primary opt-in) | Continue validating parity under `RG_CHAT_ENFORCE_PRIMARY=1` and, once stable, keep `ConversationRateLimiter` as a minimal shim only for diagnostics/tests. |
+| Chat         | `tldw_Server_API/app/core/Chat/rate_limiter.py::ConversationRateLimiter` | `RG_ENABLE_CHAT`, `RG_CHAT_POLICY_ID`, `RG_CHAT_ENFORCE_PRIMARY` | RG + legacy (shadow comparisons; RG-primary default) | Continue validating parity; once stable, keep `ConversationRateLimiter` as a minimal shim only for diagnostics/tests (set `RG_CHAT_ENFORCE_PRIMARY=0` only for short compat windows). |
 | Embeddings   | `tldw_Server_API/app/core/Embeddings/rate_limiter.py::UserRateLimiter` | `RG_ENABLE_EMBEDDINGS`, `RG_EMBEDDINGS_POLICY_ID` | RG + legacy (shadow comparisons)   | Promote RG decisions to primary, keep only minimal legacy path for diagnostics if needed|
 | Embeddings server | `tldw_Server_API/app/core/Embeddings/Embeddings_Server/Embeddings_Create.py::TokenBucketLimiter` | `RG_ENABLE_EMBEDDINGS_SERVER`, `RG_EMBEDDINGS_SERVER_POLICY_ID` | RG + legacy (fallback)             | Treat RG as authoritative, shrink TokenBucket limiter to internal shim or remove       |
 | Character Chat | `tldw_Server_API/app/core/Character_Chat/character_rate_limiter.py::CharacterRateLimiter` | `RG_ENABLE_CHARACTER_CHAT`, `RG_CHARACTER_CHAT_POLICY_ID` | RG + legacy (shadow/fallback)      | Confirm RG coverage and convert legacy limiter to a thin shim or retire it             |
@@ -1074,17 +1109,17 @@ Use this checklist to track when modules move from “RG + legacy limiter” to 
   - Rate limiting shims in `auth_deps.check_rate_limit` / `check_auth_rate_limit` may bypass AuthNZ-level rate limits for the configured single-user API key in local/dev scenarios; RG-based ingress controls should be preferred for new rate limits and, over time, these shims can be revisited or simplified.
 
 - Legacy limiters and RG parity:
-  - Chat: continue to validate parity between `ConversationRateLimiter` and RG decisions under `RG_ENABLE_CHAT=1` and `RG_CHAT_ENFORCE_PRIMARY=1` using `tldw_Server_API/tests/Resource_Governance/test_chat_rg_limiter_cutover.py` and chat HTTP-level tests; once shadow mismatches are rare and headers align, `ConversationRateLimiter` can remain as a minimal diagnostics shim only.
+  - Chat: continue to validate parity between `ConversationRateLimiter` and RG decisions under `RG_ENABLED=true` (or `RG_ENABLE_CHAT=1`) using `tldw_Server_API/tests/Resource_Governance/test_chat_rg_limiter_cutover.py` and chat HTTP-level tests; RG is primary by default when enabled (set `RG_CHAT_ENFORCE_PRIMARY=0` only for short compat windows). Once shadow mismatches are rare and headers align, `ConversationRateLimiter` can remain as a minimal diagnostics shim only.
   - Embeddings API and embeddings server: the primary embeddings v5 API and the standalone embeddings server both consult RG when `RG_ENABLE_EMBEDDINGS` / `RG_ENABLE_EMBEDDINGS_SERVER` are enabled; legacy `UserRateLimiter` and `TokenBucketLimiter` implementations remain as compatibility shims for admin/maintenance endpoints and non-RG deployments and are explicitly treated as such in this phase.
-  - Evaluations: `UserRateLimiter.check_rate_limit` consults RG first when `RG_ENABLE_EVALUATIONS=1`; per-minute/daily counters in the SQLite `user_rate_limits` / `rate_limit_tracking` / `daily_usage` tables are retained as a secondary enforcement layer when RG is disabled or unavailable. Cutover behavior and RG metadata (`policy_id`, `retry_after`, `rate_limit_source`) are locked in by `test_rg_cutover_evals_authnz_character_web.py::test_evaluations_rg_denies` and HTTP-level headers/tests in `test_e2e_evals_authnz_character_headers.py`.
+  - Evaluations: `UserRateLimiter.check_rate_limit` consults RG first when `RG_ENABLE_EVALUATIONS=1`; per-minute counters in the SQLite `user_rate_limits` / `rate_limit_tracking` tables remain as a secondary enforcement layer when RG is disabled or unavailable. Daily evaluations/tokens caps consult `ResourceDailyLedger` when available (with `daily_usage` retained for cost and backfill). Cutover behavior and RG metadata (`policy_id`, `retry_after`, `rate_limit_source`) are locked in by `test_rg_cutover_evals_authnz_character_web.py::test_evaluations_rg_denies` and HTTP-level headers/tests in `test_e2e_evals_authnz_character_headers.py`.
   - AuthNZ: the AuthNZ `RateLimiter` consults RG when `RG_ENABLE_AUTHNZ=1` and falls back to the existing DB/Redis-backed limiter when RG is disabled or fails; AuthNZ’s legacy limiter remains intentionally in place for installations that do not enable RG and is explicitly documented here as a compatibility shim rather than a migration target for this phase.
   - Character Chat: `CharacterRateLimiter.check_rate_limit` uses RG when `RG_ENABLE_CHARACTER_CHAT=1` and raises 429 on RG denial; the internal Redis/in-memory limiter is kept as a fallback path when RG is disabled or unavailable. This limiter is now framed as a legacy shim, with RG decisions treated as primary whenever the flag is enabled.
   - Web Scraping: the enhanced web scraping `RateLimiter.acquire` uses RG for backoff when `RG_ENABLE_WEB_SCRAPING=1`, but HTTP semantics for the scraping endpoints remain unchanged (no direct 429 mapping). The in-process rate limiter is retained as the primary guard, with RG modeled as an additional safety rail; this is an intentional design choice for this phase and is documented here as such.
   - Audio: RG-backed concurrency for streams/jobs exists behind `RG_ENABLE_AUDIO`, while daily minutes are enforced via `ResourceDailyLedger` (with `audio_usage_daily` used only for backfill and fallback). The remaining non-RG concurrency counters are explicitly treated as legacy shims for environments that do not enable RG audio integration.
 
-- Known RG-free ingress routes (intentional opt-outs in v1.0):
-  - `/api/v1/research/*` (websearch and research tools) – guarded today by module-level controls and provider quotas; RG integration for these endpoints is deferred.
-  - `/api/v1/workflows/*` and `/api/v1/scheduler/workflows/*` – workflows admin/control surfaces currently rely on AuthNZ claims, internal queue semantics, and per-module limits; ingress RG mapping is intentionally not applied yet.
-  - `/api/v1/prompt-studio/*` – Prompt Studio routes are claim-first and cost-aware via downstream services; RG ingress is a possible future enhancement but not required for the current rollout.
-  - `/api/v1/rag/*` – RAG health/unified endpoints are primarily diagnostic/coordination surfaces; they are kept RG-free at ingress in this phase.
-  - `/api/v1/media/*` – media ingestion and processing routes use existing throughput safeguards (ingest backpressure, audio quotas, LLM budgets). They are intentionally not routed through RGSimpleMiddleware or a dedicated route-map policy in v1.0.
+- Previously RG-free ingress routes now governed in v1.1:
+  - `/api/v1/research/*` → `research.default`
+  - `/api/v1/workflows/*` and `/api/v1/scheduler/workflows/*` → `workflows.default`
+  - `/api/v1/prompt-studio/*` → `prompt_studio.default`
+  - `/api/v1/rag/*` → `rag.default`
+  - `/api/v1/media/*` → `media.default`

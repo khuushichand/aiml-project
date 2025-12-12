@@ -195,6 +195,12 @@ class RGSimpleMiddleware:
         if not policy_id:
             await self.app(scope, receive, send)
             return
+        # Attach policy_id to request.state so downstream dependencies can
+        # detect RG-governed routes and avoid double-enforcement.
+        try:
+            request.state.rg_policy_id = policy_id
+        except Exception:
+            pass
 
         # Build RG request. Always include 'requests'. Optionally include tokens/streams
         entity = self._derive_entity(request)

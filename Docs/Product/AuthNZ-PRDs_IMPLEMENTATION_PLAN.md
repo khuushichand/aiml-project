@@ -43,7 +43,7 @@ It is intentionally incremental and aligned with `Docs/Design/AuthNZ-Refactor-Im
   - `/api/v1/mcp/*` → `mcp.ingestion`
   - `/api/v1/evaluations/*` → `evals.default`
 - Chat rate limiting:
-  - `ConversationRateLimiter.check_rate_limit` consults ResourceGovernor via `_maybe_enforce_with_rg_chat`; when `RG_CHAT_ENFORCE_PRIMARY=1` the RG decision is canonical, with the legacy limiter retained as a diagnostics shim. Behavior is covered by `tldw_Server_API/tests/Resource_Governance/test_chat_rg_limiter_cutover.py` and `/api/v1/chat/completions` HTTP tests in `tests/Chat/integration/test_chat_endpoint_simplified.py`.
+  - `ConversationRateLimiter.check_rate_limit` consults ResourceGovernor via `_maybe_enforce_with_rg_chat`; when RG is enabled a governor decision is canonical by default, with the legacy limiter retained as a diagnostics shim (set `RG_CHAT_ENFORCE_PRIMARY=0` only to force legacy-primary during short compat windows). Behavior is covered by `tldw_Server_API/tests/Resource_Governance/test_chat_rg_limiter_cutover.py` and `/api/v1/chat/completions` HTTP tests in `tests/Chat/integration/test_chat_endpoint_simplified.py`.
 - Embeddings and MCP rate limiting:
   - Embeddings `AsyncRateLimiter.check_rate_limit_async` consults RG when `RG_ENABLE_EMBEDDINGS=1`, with per-user sliding-window `UserRateLimiter` as a shadow/fallback shim; RG cutover is exercised in `tldw_Server_API/tests/Resource_Governance/test_rg_cutover_embeddings_mcp.py`.
   - MCP HTTP limiters use RG when `RG_ENABLE_MCP=1`, with cutover tests in the same module.
@@ -58,7 +58,9 @@ It is intentionally incremental and aligned with `Docs/Design/AuthNZ-Refactor-Im
   - Global SlowAPI middleware uses a test-aware key function (`get_test_aware_remote_address`) that:
     - Bypasses limits when `TEST_MODE`/`TLDW_TEST_MODE` is set.
     - Returns `None` when `RGSimpleMiddleware` is attached, so ingress enforcement is handled by ResourceGovernor while SlowAPI decorators act purely as config carriers. This behavior is validated by `tldw_Server_API/tests/RateLimiting/test_slowapi_rg_key_func.py` and the RG ingress e2e tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_chat_audio_headers.py`.
-- High-value domains intentionally outside RG ingress for v0.1 (for example, `/api/v1/research/*`, `/api/v1/workflows/*`, `/api/v1/prompt-studio/*`, `/api/v1/rag/*`, `/api/v1/media/*`) are annotated in the stub policy file and documented in `Docs/Product/Resource_Governor_PRD.md` as relying on module-specific limiters/backpressure and LLM budget guards rather than RG ingress in this iteration.
+- High-value domains that were RG-free in v0.1 are now governed at ingress in v1.1:
+  - Default policies and `route_map.by_path` entries exist for `/api/v1/research/*`, `/api/v1/workflows/*` (and `/api/v1/scheduler/workflows/*`), `/api/v1/prompt-studio/*`, `/api/v1/rag/*`, and `/api/v1/media/*`.
+  - Legacy ingress limiters are bypassed on RG-governed routes so ResourceGovernor is the single source for request-rate enforcement.
 
 ---
 

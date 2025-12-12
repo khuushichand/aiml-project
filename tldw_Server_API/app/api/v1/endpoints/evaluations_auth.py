@@ -8,6 +8,7 @@ This module centralizes:
 """
 
 import os
+import warnings
 from typing import Optional, Dict, Any
 from fastapi import Depends, Header, HTTPException, Request, Response, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -263,6 +264,12 @@ def require_admin(user: User) -> None:
     for tests and for any remaining legacy callsites that have not yet
     been migrated.
     """
+    warnings.warn(
+        "evaluations_auth.require_admin is deprecated; use enforce_heavy_evaluations_admin(principal) "
+        "with claim-first dependencies instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in ("true", "1", "yes"):
         return
     is_admin_flag = bool(

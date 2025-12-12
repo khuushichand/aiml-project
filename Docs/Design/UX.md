@@ -89,17 +89,15 @@ https://medium.com/@ryan.almeida86/5-micro-interactions-to-make-any-product-feel
 https://daleenrabe.substack.com/p/the-product-designers-lens
 https://nurxmedov.medium.com/stop-overthinking-every-design-decision-use-these-7-rules-instead-70be04705392
 https://www.nngroup.com/articles/designing-use-case-prompt-suggestions/
-
+https://arxiv.org/pdf/2309.14459
 https://uxplanet.org/16-ui-design-tips-ba2e7524d203
+https://creativecommons.org/2006/02/14/yahoodesignpatternlibrary/
+https://component.gallery/
+https://medium.com/@alphadesignglobal/8-tiny-ui-fixes-that-will-make-your-product-feel-10x-smarter-afffb1a61a6b
 
 
 
-
-
-
-
-
-
+www.aiuxplayground.com/pattern/chat-artifact
 https://savolai.net/ux/the-why-and-the-how-usability-testing/
 https://medium.com/design-bootcamp/10-ui-ux-cheat-codes-for-instantly-better-designs-2c6f6b4312c8
 https://medium.com/ai-ux-designers/37-ai-patterns-for-product-teams-e04c953270b3

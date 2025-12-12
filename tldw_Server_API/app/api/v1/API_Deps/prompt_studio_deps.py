@@ -182,6 +182,7 @@ async def get_prompt_studio_user(
             # Tests treat single-user as admin for convenience
             "is_admin": True,
             "permissions": ["all"],
+            "rg_policy_id": getattr(request.state, "rg_policy_id", None),
         }
         request.state.user_context = user_context
         return user_context
@@ -198,6 +199,7 @@ async def get_prompt_studio_user(
                 "is_authenticated": True,
                 "is_admin": True,
                 "permissions": ["all"],
+                "rg_policy_id": getattr(request.state, "rg_policy_id", None),
             }
             request.state.user_context = user_context
             return user_context
@@ -229,6 +231,7 @@ async def get_prompt_studio_user(
                 "is_authenticated": True,
                 "is_admin": True,
                 "permissions": ["all"],
+                "rg_policy_id": getattr(request.state, "rg_policy_id", None),
             }
             request.state.user_context = user_context
             return user_context
@@ -240,6 +243,7 @@ async def get_prompt_studio_user(
                 "is_authenticated": True,
                 "is_admin": True,
                 "permissions": ["all"],
+                "rg_policy_id": getattr(request.state, "rg_policy_id", None),
             }
             request.state.user_context = user_context
             return user_context
@@ -251,6 +255,7 @@ async def get_prompt_studio_user(
                 "is_authenticated": True,
                 "is_admin": True,
                 "permissions": ["all"],
+                "rg_policy_id": getattr(request.state, "rg_policy_id", None),
             }
             request.state.user_context = user_context
             return user_context
@@ -304,6 +309,7 @@ async def get_prompt_studio_user(
         "is_authenticated": True,
         "is_admin": is_admin,
         "permissions": list(perms),
+        "rg_policy_id": getattr(request.state, "rg_policy_id", None),
     }
 
     # Store in request state for downstream use
@@ -456,6 +462,14 @@ async def check_rate_limit(
         return True
     if not security_config.enable_rate_limiting:
         return True
+
+    # If RG ingress already enforced this route, skip Prompt Studio's
+    # per-operation legacy limiter to keep RG single-source.
+    try:
+        if user_context.get("rg_policy_id"):
+            return True
+    except Exception:
+        pass
 
     user_id = str(user_context.get("user_id", "anonymous"))
 

@@ -25,6 +25,18 @@ from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
 
+
+def _compute_hmac_fingerprint(settings) -> str:
+    """Compute fingerprint of HMAC key material for cache invalidation."""
+    try:
+        key_material = (
+            (settings.JWT_SECRET_KEY or "")
+            or (settings.API_KEY_PEPPER or "")
+        ) or "tldw_default_api_key_hmac"
+        return key_material[:32]
+    except Exception:
+        return ""
+
 #######################################################################################################################
 #
 # Enums and Constants
@@ -61,14 +73,7 @@ class APIKeyManager:
         self.key_prefix = "tldw_"  # Prefix for identifying our API keys
         self.key_length = 32  # Length of random part
         # Fingerprint the HMAC key material to detect settings changes (e.g., JWT_SECRET_KEY)
-        try:
-            key_material = (
-                (self.settings.JWT_SECRET_KEY or "")
-                or (self.settings.API_KEY_PEPPER or "")
-            ) or "tldw_default_api_key_hmac"
-            self._hmac_key_fingerprint = (key_material[:32])
-        except Exception:
-            self._hmac_key_fingerprint = ""
+        self._hmac_key_fingerprint = _compute_hmac_fingerprint(self.settings)
 
     def _db_context_hint(self) -> str:
         """
@@ -104,6 +109,21 @@ class APIKeyManager:
         if self._repo is None or getattr(self._repo, "db_pool", None) is not self.db_pool:
             self._repo = AuthnzApiKeysRepo(self.db_pool)
         return self._repo
+
+    @staticmethod
+    def _coerce_json_field(value: Any) -> Optional[Any]:
+        """
+        Normalize stored JSON/JSONB fields that may be parsed or serialized.
+
+        Preserves previous behavior by raising JSON decode errors to callers.
+        """
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return value
+        if isinstance(value, str) and value.strip():
+            return json.loads(value)
+        return None
 
     async def initialize(self):
         """Initialize database connection and ensure tables exist"""
@@ -487,16 +507,6 @@ class APIKeyManager:
             if not old_key:
                 raise ValueError("API key not found or unauthorized")
 
-            # Normalize stored JSON/JSONB fields that may already be parsed by the driver
-            def _coerce_json_field(value):
-                if value is None:
-                    return None
-                if isinstance(value, (dict, list)):
-                    return value
-                if isinstance(value, str) and value.strip():
-                    return json.loads(value)
-                return None
-
             # Create new key with same settings
             new_key_result = await self.create_api_key(
                 user_id=user_id,
@@ -505,8 +515,8 @@ class APIKeyManager:
                 scope=old_key['scope'],
                 expires_in_days=expires_in_days,
                 rate_limit=old_key['rate_limit'],
-                allowed_ips=_coerce_json_field(old_key.get('allowed_ips')),
-                metadata=_coerce_json_field(old_key.get('metadata'))
+                allowed_ips=self._coerce_json_field(old_key.get('allowed_ips')),
+                metadata=self._coerce_json_field(old_key.get('metadata'))
             )
 
             # Update rotation references via repository
@@ -692,11 +702,7 @@ async def get_api_key_manager() -> APIKeyManager:
     # If an instance exists but the HMAC key material has changed (env/settings), recreate it
     try:
         current_settings = get_settings()
-        current_material = (
-            (current_settings.JWT_SECRET_KEY or "")
-            or (current_settings.API_KEY_PEPPER or "")
-        ) or "tldw_default_api_key_hmac"
-        current_fp = (current_material[:32])
+        current_fp = _compute_hmac_fingerprint(current_settings)
     except Exception:
         current_fp = ""
 

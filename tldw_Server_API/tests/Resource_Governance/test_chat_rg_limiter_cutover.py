@@ -18,6 +18,8 @@ async def test_chat_rg_shadow_mismatch_records_metric(monkeypatch):
     When ResourceGovernor denies but the legacy limiter allows, a shadow
     mismatch metric should be recorded.
     """
+    # Ensure legacy-primary shadow semantics for this test.
+    monkeypatch.setenv("RG_CHAT_ENFORCE_PRIMARY", "0")
 
     calls: List[Dict[str, str]] = []
 
@@ -87,6 +89,7 @@ async def test_chat_rg_shadow_alignment_no_metric(monkeypatch):
     When ResourceGovernor and legacy limiter agree on allow/deny, no
     mismatch metric should be emitted.
     """
+    monkeypatch.setenv("RG_CHAT_ENFORCE_PRIMARY", "0")
 
     calls: List[Dict[str, str]] = []
 
@@ -199,12 +202,12 @@ async def test_chat_rg_primary_enforces_rg_decision(monkeypatch):
     [
         # Generous limits: legacy allows; RG denies → mismatch
         (100, 100, 0, False, True, True),
-        # Tight per-user limit: legacy denies; RG allows → mismatch
-        (100, 1, 0, True, False, True),
+        # Tight per-user limit still allows first call; RG allows → alignment
+        (100, 1, 0, True, True, False),
         # Both allow → no mismatch
         (100, 100, 0, True, True, False),
-        # Both deny (legacy via tight per-user RPM, RG deny) → no mismatch
-        (1, 1, 0, False, False, False),
+        # Low RPMs allow first call; RG denies → mismatch
+        (1, 1, 0, False, True, True),
     ],
 )
 async def test_chat_rg_shadow_matrix_matches_expectations(
@@ -224,6 +227,7 @@ async def test_chat_rg_shadow_matrix_matches_expectations(
     This focuses on the comparison logic and labels without relying on
     actual governor configuration or token-bucket timing.
     """
+    monkeypatch.setenv("RG_CHAT_ENFORCE_PRIMARY", "0")
 
     calls: List[Dict[str, str]] = []
 

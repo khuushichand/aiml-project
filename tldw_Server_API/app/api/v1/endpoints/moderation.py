@@ -59,12 +59,16 @@ async def get_user_override(user_id: str) -> dict[str, Any]:
 async def set_user_override(user_id: str, override: ModerationUserOverride) -> dict[str, Any]:
     svc = get_moderation_service()
     status_info = svc.set_user_override(user_id, override.model_dump(exclude_none=True))
-    if not status_info or not status_info.get("ok"):
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=status_info.get("error", "Failed to persist override"))
+    status_dict = status_info if isinstance(status_info, dict) else {}
+    if not status_dict.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=status_dict.get("error", "Failed to persist override"),
+        )
     data = svc.list_user_overrides().get(str(user_id), {})
     # Surface whether the change was persisted
     if isinstance(data, dict):
-        data = {**data, "persisted": bool(status_info.get("persisted", False))}
+        data = {**data, "persisted": bool(status_dict.get("persisted", False))}
     return data
 
 
@@ -72,11 +76,16 @@ async def set_user_override(user_id: str, override: ModerationUserOverride) -> d
 async def delete_user_override(user_id: str) -> dict[str, Any]:
     svc = get_moderation_service()
     status_info = svc.delete_user_override(user_id)
-    if not status_info or not status_info.get("ok"):
-        detail = status_info.get("error", "Override not found or failed to delete")
-        code = status.HTTP_404_NOT_FOUND if status_info.get("error") == "not found" else status.HTTP_500_INTERNAL_SERVER_ERROR
+    status_dict = status_info if isinstance(status_info, dict) else {}
+    if not status_dict.get("ok"):
+        detail = status_dict.get("error", "Override not found or failed to delete")
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if status_dict.get("error") == "not found"
+            else status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
         raise HTTPException(status_code=code, detail=detail)
-    return {"status": "deleted", "persisted": bool(status_info.get("persisted", False))}
+    return {"status": "deleted", "persisted": bool(status_dict.get("persisted", False))}
 
 
 @router.get("/moderation/blocklist", response_model=list, summary="Get current blocklist lines", tags=["moderation"])

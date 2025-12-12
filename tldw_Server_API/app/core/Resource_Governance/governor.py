@@ -26,6 +26,7 @@ from loguru import logger
 
 from .metrics_rg import ensure_rg_metrics_registered, _labels, rg_metrics_entity_label_enabled
 from .tenant import hash_entity
+from .daily_caps import check_daily_cap
 
 try:
     # Metrics are optional during early startup
@@ -275,7 +276,17 @@ class MemoryResourceGovernor(ResourceGovernor):
             effective_limit = int(per_min)
 
         if refill_per_sec <= 0 or capacity <= 0:
-            # Policy disabled or zero → deny with large retry
+            # Missing/zero config disables this category. For tokens, treat as
+            # unbounded unless a durable daily_cap denies later.
+            if category == "tokens":
+                return True, 0, {
+                    "limit": 0,
+                    "burst": float(burst),
+                    "remaining": 10**9,
+                    "retry_after": None,
+                    "unbounded": True,
+                }
+            # Requests without config are denied by default.
             return False, 60, {"limit": 0, "used": 0, "remaining": 0}
 
         # Evaluate strictest across scopes: global + entity scope
@@ -386,6 +397,43 @@ class MemoryResourceGovernor(ResourceGovernor):
             else:
                 # Minutes and other ledgers are not enforced in memory; allow by default here
                 allowed, retry_after, details = True, 0, {"remaining": 10**9}
+
+            # Optional durable daily caps (v1.1) backed by ResourceDailyLedger.
+            try:
+                cat_cfg = self._category_limits(pol, category)
+                daily_cap = int(cat_cfg.get("daily_cap") or 0)
+            except Exception:
+                daily_cap = 0
+            if daily_cap > 0:
+                daily_allowed, daily_ra, daily_details = await check_daily_cap(
+                    entity_scope=entity_scope,
+                    entity_value=entity_value,
+                    category=category,
+                    daily_cap=daily_cap,
+                    units=units,
+                )
+                if not daily_allowed:
+                    allowed = False
+                retry_after = max(int(retry_after or 0), int(daily_ra or 0))
+                try:
+                    details.update(daily_details or {})
+                except Exception:
+                    pass
+                # Provide limit/remaining for daily-only categories
+                try:
+                    if not int(details.get("limit") or 0):
+                        details["limit"] = int(daily_cap)
+                except Exception:
+                    details["limit"] = int(daily_cap)
+                try:
+                    if details.get("remaining") is None:
+                        details["remaining"] = int((daily_details or {}).get("daily_remaining") or 0)
+                except Exception:
+                    pass
+                try:
+                    details["retry_after"] = int(retry_after or 0)
+                except Exception:
+                    pass
 
             per_category[category] = {"allowed": bool(allowed), **details}
             overall_allowed = overall_allowed and allowed

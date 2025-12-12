@@ -97,8 +97,9 @@ https://arxiv.org/abs/2506.20869
 https://github.com/ahnjaewoo/FlashAdventure
 https://arize.com/docs/phoenix/evaluation/running-pre-tested-evals/summarization-eval
 https://archive.is/egrIG
-
-
+https://github.com/huggingface/evaluation-guidebook/blob/main/yearly_dives/2025-evaluations-for-useful-models.md
+https://arxiv.org/abs/2509.26495
+https://github.com/databricks/officeqa/tree/main
 
 https://humanebench.ai/whitepaper
 https://github.com/microsoft/SecRL

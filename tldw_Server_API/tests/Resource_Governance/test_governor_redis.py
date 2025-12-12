@@ -93,6 +93,30 @@ async def test_tokens_lua_script_retry_after():
 
 
 @pytest.mark.asyncio
+async def test_tokens_per_min_zero_is_unbounded_in_reserve():
+    class _Loader:
+        def get_policy(self, pid):
+            return {"tokens": {"per_min": 0}, "scopes": ["global", "user"]}
+
+    ft = FakeTime(0.0)
+    ns = "rg_t_tok_unbounded"
+    rg = RedisResourceGovernor(policy_loader=_Loader(), time_source=ft, ns=ns)
+    client = await rg._client_get()
+    try:
+        for pat in (f"{ns}:win:punb:tokens*", f"{ns}:win:punb:*"):
+            _cur, keys = await client.scan(match=pat)
+            for k in keys:
+                await client.delete(k)
+    except Exception:
+        pass
+
+    req = RGRequest(entity="user:unb", categories={"tokens": {"units": 50}}, tags={"policy_id": "punb"})
+    for i in range(3):
+        d, h = await rg.reserve(req, op_id=f"unb{i}")
+        assert d.allowed and h
+
+
+@pytest.mark.asyncio
 async def test_concurrency_leases_with_zrem_capability():
     class _Loader:
         def get_policy(self, pid):

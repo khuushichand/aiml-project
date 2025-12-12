@@ -1084,6 +1084,14 @@ async def check_rate_limit(
     if _is_test_mode():
         return  # Skip enforcement in test environments
 
+    # If ResourceGovernor ingress has already governed this route, avoid
+    # double-enforcement via legacy AuthNZ rate limiter.
+    try:
+        if getattr(request.state, "rg_policy_id", None):
+            return
+    except Exception:
+        pass
+
     # Additional bypass: in local single-user-style profiles, allow admin principals
     # to skip global IP rate limits. This relies on AuthPrincipal claims and
     # profile hints instead of AUTH_MODE.

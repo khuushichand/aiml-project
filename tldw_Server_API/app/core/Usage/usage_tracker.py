@@ -11,13 +11,47 @@ import asyncio
 import os
 import time
 from typing import Optional
+from datetime import datetime, timezone
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
 from .pricing_catalog import get_pricing_catalog
 from tldw_Server_API.app.core.Metrics import increment_counter
+
+try:  # pragma: no cover - ledger optional during upgrades/tests
+    from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import (  # type: ignore
+        LedgerEntry,
+        ResourceDailyLedger,
+    )
+except Exception:  # pragma: no cover - safe fallback
+    LedgerEntry = None  # type: ignore
+    ResourceDailyLedger = None  # type: ignore
+
+_tokens_daily_ledger: Optional["ResourceDailyLedger"] = None  # type: ignore[name-defined]
+_tokens_daily_ledger_lock = asyncio.Lock()
+
+
+async def _get_tokens_daily_ledger() -> Optional["ResourceDailyLedger"]:
+    global _tokens_daily_ledger
+    if ResourceDailyLedger is None or LedgerEntry is None:
+        return None
+    if _tokens_daily_ledger is not None:
+        return _tokens_daily_ledger
+    async with _tokens_daily_ledger_lock:
+        if _tokens_daily_ledger is not None:
+            return _tokens_daily_ledger
+        try:
+            ledger = ResourceDailyLedger()  # type: ignore[call-arg]
+            await ledger.initialize()
+            _tokens_daily_ledger = ledger
+            return ledger
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"LLM usage: ResourceDailyLedger init failed; tokens/day caps disabled: {exc}")
+            _tokens_daily_ledger = None
+            return None
 
 
 def _enabled() -> bool:
@@ -169,76 +203,64 @@ async def log_llm_usage(
             pass
 
         db_pool: DatabasePool = await get_db_pool()
-        if db_pool.pool:
-            # PostgreSQL ($1, $2... params)
-            query = (
-                """
-                INSERT INTO llm_usage_log (
-                    ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms,
-                    prompt_tokens, completion_tokens, total_tokens,
-                    prompt_cost_usd, completion_cost_usd, total_cost_usd, currency, estimated, request_id
-                ) VALUES (
-                    CURRENT_TIMESTAMP, $1, $2, $3, $4, $5, $6, $7, $8,
-                    $9, $10, $11,
-                    $12, $13, $14, $15, $16, $17
-                )
-                """
-            )
-            await db_pool.execute(
-                query,
-                user_id,
-                key_id,
-                endpoint,
-                operation,
-                provider,
-                model,
-                int(status),
-                int(latency_ms),
-                pt,
-                ct,
-                tt,
-                float(p_cost),
-                float(c_cost),
-                float(t_cost),
-                currency,
-                bool(estimated),
-                request_id,
-            )
-        else:
-            # SQLite ('?' params)
-            query = (
-                """
-                INSERT INTO llm_usage_log (
-                    ts, user_id, key_id, endpoint, operation, provider, model, status, latency_ms,
-                    prompt_tokens, completion_tokens, total_tokens,
-                    prompt_cost_usd, completion_cost_usd, total_cost_usd, currency, estimated, request_id
-                ) VALUES (
-                    CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?
-                )
-                """
-            )
-            await db_pool.execute(
-                query,
-                user_id,
-                key_id,
-                endpoint,
-                operation,
-                provider,
-                model,
-                int(status),
-                int(latency_ms),
-                pt,
-                ct,
-                tt,
-                float(p_cost),
-                float(c_cost),
-                float(t_cost),
-                currency,
-                1 if estimated else 0,
-                request_id,
-            )
+        repo = AuthnzUsageRepo(db_pool)
+        await repo.insert_llm_usage_log(
+            user_id=user_id,
+            key_id=key_id,
+            endpoint=endpoint,
+            operation=operation,
+            provider=provider,
+            model=model,
+            status=int(status),
+            latency_ms=int(latency_ms),
+            prompt_tokens=pt,
+            completion_tokens=ct,
+            total_tokens=tt,
+            prompt_cost_usd=float(p_cost),
+            completion_cost_usd=float(c_cost),
+            total_cost_usd=float(t_cost),
+            currency=currency,
+            estimated=bool(estimated),
+            request_id=request_id,
+        )
+
+        # Shadow-write daily token usage into the shared ResourceDailyLedger so
+        # ResourceGovernor can enforce tokens-per-day caps cross-module.
+        try:
+            if tt > 0:
+                ledger = await _get_tokens_daily_ledger()
+                if ledger is not None and LedgerEntry is not None:
+                    entity_scope = None
+                    entity_value = None
+                    try:
+                        if user_id is not None:
+                            entity_scope = "user"
+                            entity_value = str(int(user_id))
+                        elif key_id is not None:
+                            entity_scope = "api_key"
+                            entity_value = str(int(key_id))
+                    except Exception:
+                        entity_scope = None
+                        entity_value = None
+
+                    if entity_scope and entity_value:
+                        rid = str(request_id or "").strip()
+                        if rid:
+                            op_id = f"llm:{rid}:{operation}:{provider}:{model}:{pt}:{ct}:{tt}"
+                        else:
+                            op_id = f"llm:{operation}:{provider}:{model}:{int(time.time())}:{pt}:{ct}:{tt}"
+                        entry = LedgerEntry(  # type: ignore[call-arg]
+                            entity_scope=entity_scope,
+                            entity_value=entity_value,
+                            category="tokens",
+                            units=int(tt),
+                            op_id=str(op_id),
+                            occurred_at=datetime.now(timezone.utc),
+                        )
+                        await ledger.add(entry)
+        except Exception:
+            # Ledger writes must never affect request flow
+            pass
     except Exception as e:
         # Never break request processing due to logging errors
         logger.debug(f"LLM usage logging skipped/failed: {e}")

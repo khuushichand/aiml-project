@@ -566,17 +566,22 @@ def _rg_chat_primary_enabled() -> bool:
     Return True when ResourceGovernor should be treated as the primary
     source of truth for chat rate limiting decisions.
 
-    This is controlled via RG_CHAT_ENFORCE_PRIMARY to allow a staged
-    rollout: shadow comparisons with the legacy limiter by default, with
-    an explicit opt-in to RG-only enforcement.
+    Resolution order:
+      1) Explicit env RG_CHAT_ENFORCE_PRIMARY (allows opt-out for compat)
+      2) Global rg_enabled flag (RG-first default)
     """
     try:
         flag = os.getenv("RG_CHAT_ENFORCE_PRIMARY")
-        if flag is None:
-            return False
-        return flag.strip().lower() in {"1", "true", "yes", "on"}
+        if flag is not None:
+            return flag.strip().lower() in {"1", "true", "yes", "on"}
     except Exception:
-        return False
+        flag = None
+    if rg_enabled is not None:
+        try:
+            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+        except Exception:
+            return False
+    return False
 
 
 async def _get_chat_rg_governor():

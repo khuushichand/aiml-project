@@ -192,7 +192,7 @@ async def test_submit_request_enforces_rate_limits(monkeypatch):
         def __init__(self):
             self.rate_limiter = SimpleNamespace(user_tiers={"user-1": "free"})
 
-        async def check_rate_limit_async(self, user_id, cost=1, ip_address=None):
+        async def check_rate_limit_async(self, user_id, cost=1, ip_address=None, tokens_units=0):
             limiter_calls.append((user_id, cost))
             return False, 7
 
@@ -252,7 +252,7 @@ async def test_submit_request_respects_rate_limit_when_batching_disabled(monkeyp
         def __init__(self):
             self.rate_limiter = SimpleNamespace(user_tiers={"user-1": "free"})
 
-        async def check_rate_limit_async(self, user_id, cost=1, ip_address=None):
+        async def check_rate_limit_async(self, user_id, cost=1, ip_address=None, tokens_units=0):
             calls.append(user_id)
             if len(calls) == 1:
                 return True, None
