@@ -20,7 +20,7 @@
 **Tests**: 
 - Unit tests for the harness configuration/runner (using a tiny synthetic dataset).
 - Smoke-style test that calls the runner in a constrained mode to ensure it doesn’t regress.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Multi-Tenant Isolation Story
 **Goal**: Clarify and, where needed, tighten multi-tenant isolation across DBs, caches, exemplars, and telemetry for the RAG pipeline.

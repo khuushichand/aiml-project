@@ -28,6 +28,13 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
         await ensure_authnz_schema_ready_once()
     except Exception:
         pass
+    # Reset cached RG daily ledger between tests when DATABASE_URL changes.
+    try:
+        import tldw_Server_API.app.core.Resource_Governance.daily_caps as _dc
+
+        _dc._daily_ledger = None  # type: ignore[attr-defined]
+    except Exception:
+        pass
     # Reset cached ledger inside workflows daily_ledger between tests.
     try:
         import tldw_Server_API.app.core.Workflows.daily_ledger as _dl
@@ -90,4 +97,3 @@ async def test_record_workflow_run_is_idempotent(tmp_path, monkeypatch):
 
     after = await ledger.total_for_day("user", "1", "workflows_runs")
     assert after == before + 1
-

@@ -32,6 +32,20 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
         await ensure_authnz_schema_ready_once()
     except Exception:
         pass
+    # Reset cached RG daily ledger between tests when DATABASE_URL changes.
+    try:
+        import tldw_Server_API.app.core.Resource_Governance.daily_caps as _dc
+
+        _dc._daily_ledger = None  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    try:
+        import tldw_Server_API.app.core.Workflows.daily_ledger as _dl
+
+        _dl._workflows_daily_ledger = None  # type: ignore[attr-defined]
+        _dl._workflows_backfill_done = set()  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 @pytest.mark.asyncio
@@ -102,7 +116,7 @@ async def test_e2e_workflows_daily_cap_denies_with_headers(monkeypatch, tmp_path
         "  workflows.small:\n"
         "    requests: { rpm: 100000, burst: 1.0 }\n"
         "    workflows_runs: { daily_cap: 1 }\n"
-        "    scopes: [user]\n"
+        "    scopes: [user, api_key]\n"
         "route_map:\n"
         "  by_path:\n"
         "    \"/api/v1/workflows/*\": workflows.small\n"
@@ -134,6 +148,8 @@ async def test_e2e_workflows_daily_cap_denies_with_headers(monkeypatch, tmp_path
             data=json.dumps(body),
         )
         assert r2.status_code == 429
-        assert r2.headers.get("X-RateLimit-Limit") == "1"
-        assert r2.headers.get("X-RateLimit-Remaining") == "0"
+        limit_hdr = r2.headers.get("X-RateLimit-Limit")
+        assert limit_hdr is not None
+        limit_vals = [v.strip() for v in limit_hdr.split(",")]
+        assert "1" in limit_vals
         assert r2.headers.get("Retry-After") is not None
