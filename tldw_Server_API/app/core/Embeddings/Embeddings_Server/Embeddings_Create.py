@@ -311,7 +311,7 @@ class TokenBucketLimiter:
     def __call__(self, fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
-            # When RG_ENABLE_EMBEDDINGS_SERVER is enabled, prefer ResourceGovernor as
+            # When ResourceGovernor is enabled, prefer ResourceGovernor as
             # the primary enforcement path and treat the in-process TokenBucketLimiter
             # as a compatibility shim. Otherwise, preserve the original behavior:
             # - Bypass rate limiting during tests, or when EMBEDDINGS_RATE_LIMIT is not "on".
@@ -380,9 +380,6 @@ except Exception:  # pragma: no cover - safe fallback when RG not installed
 
 def _rg_embeddings_server_enabled() -> bool:
     """Return True when RG should gate standalone embeddings server requests."""
-    flag = os.getenv("RG_ENABLE_EMBEDDINGS_SERVER")
-    if flag is not None:
-        return flag.strip().lower() in {"1", "true", "yes", "on"}
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(False))  # type: ignore[func-returns-value]

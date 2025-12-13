@@ -11,7 +11,7 @@ import asyncio
 import os
 import time
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from loguru import logger
 
@@ -32,6 +32,7 @@ except Exception:  # pragma: no cover - safe fallback
 
 _tokens_daily_ledger: Optional["ResourceDailyLedger"] = None  # type: ignore[name-defined]
 _tokens_daily_ledger_lock = asyncio.Lock()
+_tokens_legacy_backfill_done: set[str] = set()
 
 
 async def _get_tokens_daily_ledger() -> Optional["ResourceDailyLedger"]:
@@ -52,6 +53,85 @@ async def _get_tokens_daily_ledger() -> Optional["ResourceDailyLedger"]:
             logger.debug(f"LLM usage: ResourceDailyLedger init failed; tokens/day caps disabled: {exc}")
             _tokens_daily_ledger = None
             return None
+
+
+async def backfill_legacy_tokens_to_ledger(
+    *,
+    entity_scope: str,
+    entity_value: str,
+    day_utc: Optional[str] = None,
+) -> None:
+    """
+    Best-effort migration helper: mirror today's tokens usage from ``llm_usage_log``
+    into the shared ResourceDailyLedger once per process/entity/day.
+
+    This preserves in-progress daily token caps when upgrading from versions
+    that only wrote to ``llm_usage_log`` (and not the ledger).
+
+    This function is fail-open and never raises.
+    """
+    if ResourceDailyLedger is None or LedgerEntry is None:
+        return
+
+    scope = str(entity_scope or "").strip()
+    value = str(entity_value or "").strip()
+    if scope not in {"user", "api_key"} or not value:
+        return
+
+    # Only numeric api_key ids map to llm_usage_log.key_id.
+    if scope == "api_key":
+        try:
+            int(value)
+        except Exception:
+            return
+
+    day = day_utc or datetime.now(timezone.utc).date().isoformat()
+    key = f"{scope}:{value}:{day}"
+    if key in _tokens_legacy_backfill_done:
+        return
+
+    try:
+        ledger = await _get_tokens_daily_ledger()
+        if ledger is None:
+            _tokens_legacy_backfill_done.add(key)
+            return
+
+        used = await ledger.total_for_day(
+            entity_scope=scope,
+            entity_value=value,
+            category="tokens",
+            day_utc=day,
+        )
+        used_int = int(used or 0)
+
+        try:
+            day_val = date.fromisoformat(day)
+        except Exception:
+            day_val = datetime.now(timezone.utc).date()
+
+        pool: DatabasePool = await get_db_pool()
+        repo = AuthnzUsageRepo(pool)
+        legacy_total = 0
+        if scope == "user":
+            legacy_total = int((await repo.summarize_user_day(user_id=int(value), day=day_val)).get("tokens") or 0)
+        else:
+            legacy_total = int((await repo.summarize_key_day(key_id=int(value), day=day_val)).get("tokens") or 0)
+
+        delta = int(legacy_total) - int(used_int)
+        if delta > 0:
+            entry = LedgerEntry(  # type: ignore[call-arg]
+                entity_scope=scope,
+                entity_value=value,
+                category="tokens",
+                units=int(delta),
+                op_id=f"tokens-legacy:{scope}:{value}:{day}",
+                occurred_at=datetime.now(timezone.utc),
+            )
+            await ledger.add(entry)
+    except Exception:
+        return
+    finally:
+        _tokens_legacy_backfill_done.add(key)
 
 
 def _enabled() -> bool:

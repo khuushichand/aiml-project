@@ -1,5 +1,3 @@
-import os
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -24,21 +22,72 @@ def _reset_rg_state(app):
             continue
 
 
+async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    try:
+        from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+        await reset_db_pool()
+        reset_settings()
+    except Exception:
+        pass
+    try:
+        from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
+
+        await ensure_authnz_schema_ready_once()
+    except Exception:
+        pass
+
+
+async def _create_user_and_key(*, username: str, email: str) -> tuple[int, str]:
+    from uuid import uuid4
+
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB
+
+    pool = await get_db_pool()
+    users_db = UsersDB(pool)
+    await users_db.initialize()
+    created_user = await users_db.create_user(
+        username=username,
+        email=email,
+        password_hash="x",
+        role="user",
+        is_active=True,
+        is_superuser=False,
+        storage_quota_mb=5120,
+        uuid_value=uuid4(),
+    )
+    user_id = int(created_user["id"])
+    mgr = APIKeyManager(pool)
+    await mgr.initialize()
+    key_rec = await mgr.create_api_key(user_id=user_id, name=f"{username}-key")
+    return user_id, str(key_rec["key"])
+
+
 @pytest.mark.asyncio
 async def test_e2e_evaluations_deny_headers_retry_after(monkeypatch, tmp_path):
+    db_path = tmp_path / "authnz_evals_e2e.db"
+    await _init_authnz_sqlite(db_path, monkeypatch)
+    _user_id, api_key = await _create_user_and_key(username="evals-user", email="evals-user@example.com")
+
     # Minimal app with RG middleware; enforce requests-only deny semantics for a
     # representative Evaluations endpoint via route_map.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "1")
-    monkeypatch.setenv("RG_MIDDLEWARE_ENFORCE_TOKENS", "0")
+    monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_STORE", "file")
 
     policy = (
-        "version: 1\n"
+        "schema_version: 1\n"
         "policies:\n"
         "  evals.small:\n"
         "    requests: { rpm: 1 }\n"
+        "    scopes: [user, api_key]\n"
         "route_map:\n"
         "  by_path:\n"
         "    /api/v1/evaluations/rate-limits: evals.small\n"
@@ -49,10 +98,6 @@ async def test_e2e_evaluations_deny_headers_retry_after(monkeypatch, tmp_path):
     monkeypatch.setenv("RG_POLICY_PATH", str(p))
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
 
-    # Single-user auth for minimal app
-    monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key")
-
     from tldw_Server_API.app.main import app
 
     _reset_rg_state(app)
@@ -62,14 +107,14 @@ async def test_e2e_evaluations_deny_headers_retry_after(monkeypatch, tmp_path):
         # from downstream Evaluations plumbing as long as RG does not deny.
         r1 = client.get(
             "/api/v1/evaluations/rate-limits",
-            headers={"X-API-KEY": "test-api-key"},
+            headers={"X-API-KEY": api_key},
         )
         assert r1.status_code != 429
 
         # Second request should be governed by RG via route_map.
         r2 = client.get(
             "/api/v1/evaluations/rate-limits",
-            headers={"X-API-KEY": "test-api-key"},
+            headers={"X-API-KEY": api_key},
         )
 
     assert r2.status_code in (429, 503)
@@ -88,15 +133,15 @@ async def test_e2e_authnz_debug_deny_headers_retry_after(monkeypatch, tmp_path):
     # lightweight AuthNZ debug endpoint that does not require full login flow.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "1")
-    monkeypatch.setenv("RG_MIDDLEWARE_ENFORCE_TOKENS", "0")
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_STORE", "file")
 
     policy = (
-        "version: 1\n"
+        "schema_version: 1\n"
         "policies:\n"
         "  authnz.small:\n"
         "    requests: { rpm: 1 }\n"
+        "    scopes: [ip]\n"
         "route_map:\n"
         "  by_path:\n"
         "    /api/v1/authnz/debug/api-key-id: authnz.small\n"
@@ -107,10 +152,7 @@ async def test_e2e_authnz_debug_deny_headers_retry_after(monkeypatch, tmp_path):
     monkeypatch.setenv("RG_POLICY_PATH", str(p))
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
 
-    # Auth mode does not matter for this debug route, but keep a predictable
-    # configuration for consistency with other RG tests.
-    monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key")
+    monkeypatch.setenv("RG_ENABLED", "1")
 
     # Stub out heavy AuthNZ budget helpers so the debug endpoint does not hit DBs.
     import tldw_Server_API.app.api.v1.endpoints.authnz_debug as authnz_debug_ep
@@ -163,19 +205,24 @@ async def test_e2e_authnz_debug_deny_headers_retry_after(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_e2e_character_chat_deny_headers_retry_after(monkeypatch, tmp_path):
+    db_path = tmp_path / "authnz_character_e2e.db"
+    await _init_authnz_sqlite(db_path, monkeypatch)
+    user_id, api_key = await _create_user_and_key(username="character-user", email="character-user@example.com")
+
     # Minimal app with RG middleware; enforce requests-only deny semantics for
     # the legacy character chat completion endpoint used in tests.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "1")
-    monkeypatch.setenv("RG_MIDDLEWARE_ENFORCE_TOKENS", "0")
+    monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_STORE", "file")
 
     policy = (
-        "version: 1\n"
+        "schema_version: 1\n"
         "policies:\n"
         "  character.small:\n"
         "    requests: { rpm: 1 }\n"
+        "    scopes: [user, api_key]\n"
         "route_map:\n"
         "  by_path:\n"
         "    /api/v1/chats/*: character.small\n"
@@ -185,11 +232,6 @@ async def test_e2e_character_chat_deny_headers_retry_after(monkeypatch, tmp_path
 
     monkeypatch.setenv("RG_POLICY_PATH", str(p))
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
-
-    # Single-user auth for minimal app; character chat sessions depend on
-    # get_request_user which uses this configuration.
-    monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key")
 
     from tldw_Server_API.app.main import app
 
@@ -203,7 +245,7 @@ async def test_e2e_character_chat_deny_headers_retry_after(monkeypatch, tmp_path
         def get_conversation_by_id(self, chat_id: str):
             # Provide a minimal conversation owned by user id 1 so the endpoint
             # proceeds past ownership checks.
-            return {"id": chat_id, "client_id": "1"}
+            return {"id": chat_id, "client_id": str(user_id)}
 
     async def _stub_get_db(current_user=None):  # noqa: ARG001
         return _StubChaChaDB()
@@ -217,11 +259,11 @@ async def test_e2e_character_chat_deny_headers_retry_after(monkeypatch, tmp_path
 
             # First request should not be rate-limited by RG; allow downstream
             # errors as long as RG does not immediately return 429.
-            r1 = client.post(url, headers={"X-API-KEY": "test-api-key"})
+            r1 = client.post(url, headers={"X-API-KEY": api_key})
             assert r1.status_code != 429
 
             # Second request should be governed by RG policy via middleware.
-            r2 = client.post(url, headers={"X-API-KEY": "test-api-key"})
+            r2 = client.post(url, headers={"X-API-KEY": api_key})
     finally:
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
 
@@ -233,4 +275,3 @@ async def test_e2e_character_chat_deny_headers_retry_after(monkeypatch, tmp_path
         assert r2.headers.get("X-RateLimit-Remaining") == "0"
         reset = r2.headers.get("X-RateLimit-Reset")
         assert reset is not None and int(reset) >= 1
-

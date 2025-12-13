@@ -172,3 +172,83 @@ async def test_authnz_usage_repo_rollup_usage_daily_postgres(test_db_pool):
     assert int(row["bytes_total"]) == 300
     assert int(row.get("bytes_in_total") or 0) == 75
 
+
+@pytest.mark.asyncio
+async def test_authnz_usage_repo_summarize_user_and_key_day_postgres(test_db_pool):
+    from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
+
+    pool = test_db_pool
+    repo = AuthnzUsageRepo(pool)
+
+    # Seed a user and API key to satisfy FKs.
+    async with pool.acquire() as conn:
+        user_id = await conn.fetchval(
+            """
+            INSERT INTO users (
+                uuid, username, email, password_hash, role,
+                is_active, is_verified, storage_quota_mb, storage_used_mb
+            )
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, TRUE, TRUE, 5120, 0.0)
+            RETURNING id
+            """,
+            "pg-usage-summarize-user",
+            "pg-usage-summarize-user@example.com",
+            "hashed",
+            "user",
+        )
+        key_id = await conn.fetchval(
+            """
+            INSERT INTO api_keys (user_id, key_hash, key_prefix, status)
+            VALUES ($1, $2, $3, 'active')
+            RETURNING id
+            """,
+            int(user_id),
+            "pg-usage-summarize-key-hash",
+            "pg-usage-summarize-prefix",
+        )
+
+    await repo.insert_llm_usage_log(
+        user_id=int(user_id),
+        key_id=int(key_id),
+        endpoint="POST:/chat/completions",
+        operation="chat",
+        provider="openai",
+        model="gpt-test",
+        status=200,
+        latency_ms=10,
+        prompt_tokens=5,
+        completion_tokens=5,
+        total_tokens=10,
+        prompt_cost_usd=0.0,
+        completion_cost_usd=0.0,
+        total_cost_usd=0.0,
+        currency="USD",
+        estimated=False,
+        request_id="pg-sum-u-k-1",
+    )
+    await repo.insert_llm_usage_log(
+        user_id=int(user_id),
+        key_id=None,
+        endpoint="POST:/chat/completions",
+        operation="chat",
+        provider="openai",
+        model="gpt-test",
+        status=200,
+        latency_ms=10,
+        prompt_tokens=15,
+        completion_tokens=15,
+        total_tokens=30,
+        prompt_cost_usd=0.0,
+        completion_cost_usd=0.0,
+        total_cost_usd=0.0,
+        currency="USD",
+        estimated=False,
+        request_id="pg-sum-u-none-2",
+    )
+
+    day_val = datetime.now(timezone.utc).date()
+    user_summary = await repo.summarize_user_day(user_id=int(user_id), day=day_val)
+    assert int(user_summary.get("tokens") or 0) == 40
+
+    key_summary = await repo.summarize_key_day(key_id=int(key_id), day=day_val)
+    assert int(key_summary.get("tokens") or 0) == 10

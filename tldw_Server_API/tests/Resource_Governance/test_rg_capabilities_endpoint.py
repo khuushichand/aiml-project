@@ -1,4 +1,3 @@
-import os
 import pytest
 from fastapi.testclient import TestClient
 
@@ -6,11 +5,60 @@ from fastapi.testclient import TestClient
 pytestmark = pytest.mark.rate_limit
 
 
-def test_rg_capabilities_endpoint_admin(monkeypatch):
+async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    try:
+        from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+        await reset_db_pool()
+        reset_settings()
+    except Exception:
+        pass
+    try:
+        from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
+
+        await ensure_authnz_schema_ready_once()
+    except Exception:
+        pass
+
+
+async def _create_admin_user_and_key(*, username: str, email: str) -> str:
+    from uuid import uuid4
+
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB
+
+    pool = await get_db_pool()
+    users_db = UsersDB(pool)
+    await users_db.initialize()
+    created_user = await users_db.create_user(
+        username=username,
+        email=email,
+        password_hash="x",
+        role="admin",
+        is_active=True,
+        is_superuser=True,
+        storage_quota_mb=5120,
+        uuid_value=uuid4(),
+    )
+    user_id = int(created_user["id"])
+    mgr = APIKeyManager(pool)
+    await mgr.initialize()
+    key_rec = await mgr.create_api_key(user_id=user_id, name=f"{username}-key")
+    return str(key_rec["key"])
+
+
+@pytest.mark.asyncio
+async def test_rg_capabilities_endpoint_admin(monkeypatch, tmp_path):
+    db_path = tmp_path / "authnz_rg_caps_admin.db"
+    await _init_authnz_sqlite(db_path, monkeypatch)
+    api_key = await _create_admin_user_and_key(username="rg-caps-admin", email="rg-caps-admin@example.com")
+
     # Ensure lightweight app behavior in tests and memory backend
     monkeypatch.setenv("TEST_MODE", "1")
-    monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-12345")
     monkeypatch.setenv("RG_BACKEND", "memory")
 
     from tldw_Server_API.app.main import app
@@ -24,7 +72,7 @@ def test_rg_capabilities_endpoint_admin(monkeypatch):
         pass
 
     with TestClient(app) as c:
-        headers = {"X-API-KEY": "test-api-key-12345"}
+        headers = {"X-API-KEY": api_key}
         r = c.get("/api/v1/resource-governor/diag/capabilities", headers=headers)
         assert r.status_code == 200
         body = r.json()
@@ -33,11 +81,14 @@ def test_rg_capabilities_endpoint_admin(monkeypatch):
         assert isinstance(caps, dict) and "backend" in caps
 
 
-def test_rg_capabilities_endpoint_redis_stub(monkeypatch):
+@pytest.mark.asyncio
+async def test_rg_capabilities_endpoint_redis_stub(monkeypatch, tmp_path):
+    db_path = tmp_path / "authnz_rg_caps_redis.db"
+    await _init_authnz_sqlite(db_path, monkeypatch)
+    api_key = await _create_admin_user_and_key(username="rg-caps-redis", email="rg-caps-redis@example.com")
+
     # Keep lightweight app; we will inject a Redis governor stub instance
     monkeypatch.setenv("TEST_MODE", "1")
-    monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-12345")
     # Ensure we use the in-memory Redis stub
     monkeypatch.delenv("REDIS_URL", raising=False)
     monkeypatch.delenv("RG_REAL_REDIS_URL", raising=False)
@@ -54,14 +105,12 @@ def test_rg_capabilities_endpoint_redis_stub(monkeypatch):
     gov = RedisResourceGovernor(policy_loader=_DummyLoader())
 
     # Preload tokens Lua so capabilities reflect loaded state
-    import asyncio
-
-    asyncio.run(gov._ensure_tokens_lua())  # type: ignore[attr-defined]
+    await gov._ensure_tokens_lua()  # type: ignore[attr-defined]
 
     with TestClient(app) as c:
         # Override any startup-initialized governor with our Redis instance
         app.state.rg_governor = gov
-        headers = {"X-API-KEY": "test-api-key-12345"}
+        headers = {"X-API-KEY": api_key}
         r = c.get("/api/v1/resource-governor/diag/capabilities", headers=headers)
         assert r.status_code == 200
         caps = (r.json().get("capabilities") or {})

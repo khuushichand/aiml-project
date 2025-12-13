@@ -64,7 +64,7 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import (
     log_gauge,
 )
 
-# Optional Resource Governor integration (gated by RG_ENABLE_WEB_SCRAPING)
+# Optional Resource Governor integration (gated by global RG_ENABLED/config)
 try:  # pragma: no cover - RG is optional
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
         MemoryResourceGovernor,
@@ -209,9 +209,6 @@ _rg_web_lock = asyncio.Lock()
 
 def _rg_web_scraping_enabled() -> bool:
     """Return True when RG should gate web scraping requests."""
-    flag = os.getenv("RG_ENABLE_WEB_SCRAPING")
-    if flag is not None:
-        return flag.strip().lower() in {"1", "true", "yes", "on"}
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(False))  # type: ignore[func-returns-value]

@@ -1659,6 +1659,18 @@ def rg_enabled(default: bool = False) -> bool:
     """
     v = os.getenv("RG_ENABLED")
     if v is None:
+        # In test environments, avoid enabling RG solely due to config.txt so
+        # unit/integration tests don't unexpectedly start receiving 429s when
+        # importing the main app. Tests that want RG should set RG_ENABLED=1.
+        try:
+            import sys as _sys
+
+            _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+            _pytest_active = bool(os.getenv("PYTEST_CURRENT_TEST")) or ("pytest" in _sys.modules)
+            if _test_mode or _pytest_active:
+                return bool(default)
+        except Exception:
+            pass
         try:
             cp = load_comprehensive_config()
         except (FileNotFoundError, configparser.Error) as exc:

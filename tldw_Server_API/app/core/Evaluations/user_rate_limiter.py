@@ -24,7 +24,7 @@ from tldw_Server_API.app.core.Evaluations.config_manager import (
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
-# Optional Resource Governor integration (gated by RG_ENABLE_EVALUATIONS)
+# Optional Resource Governor integration (gated by global RG_ENABLED/config)
 try:  # pragma: no cover - RG is optional
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
         MemoryResourceGovernor,
@@ -267,34 +267,79 @@ class UserRateLimiter:
         rg_decision = await _maybe_enforce_with_rg_evaluations(
             user_id=user_id,
             endpoint=endpoint,
+            is_batch=is_batch,
+            tokens_requested=tokens_requested,
+            estimated_cost=estimated_cost,
         )
-        if rg_decision is not None and not rg_decision["allowed"]:
-            # ResourceGovernor denials take precedence over legacy limits.
+        if rg_decision is not None:
+            if not rg_decision["allowed"]:
+                # ResourceGovernor denials take precedence over legacy limits.
+                try:
+                    # Shadow comparison for observability: if legacy would allow, record mismatch.
+                    legacy_allowed = True
+                    config = await self._get_user_config(user_id)
+                    minute_ok, _ = await self._check_minute_limit(user_id, endpoint, is_batch, config)
+                    daily_ok, _ = await self._check_daily_limits(user_id, tokens_requested, estimated_cost, config)
+                    legacy_allowed = bool(minute_ok and daily_ok)
+                    if legacy_allowed and record_shadow_mismatch is not None:
+                        record_shadow_mismatch(
+                            module="evaluations",
+                            route=str(endpoint),
+                            policy_id=str(rg_decision.get("policy_id", "evals.default")),
+                            legacy="allow",
+                            rg="deny",
+                        )
+                except Exception:
+                    # Best-effort only; never block denial path.
+                    pass
+                retry_after = rg_decision.get("retry_after") or 1
+                return False, {
+                    "error": "Rate limit exceeded (ResourceGovernor)",
+                    "policy_id": rg_decision.get("policy_id", "evals.default"),
+                    "retry_after": retry_after,
+                    "rate_limit_source": "resource_governor",
+                }
+
+            # RG allowed → RG is the sole enforcer. Legacy checks are best-effort
+            # shadow signals only (for drift metrics and legacy-style headers).
+            config = None
+            minute_meta: Dict[str, Any] = {}
+            daily_meta: Dict[str, Any] = {}
             try:
-                # Shadow comparison for observability: if legacy would allow, record mismatch.
-                legacy_allowed = True
                 config = await self._get_user_config(user_id)
-                minute_ok, _ = await self._check_minute_limit(user_id, endpoint, is_batch, config)
-                daily_ok, _ = await self._check_daily_limits(user_id, tokens_requested, estimated_cost, config)
-                legacy_allowed = bool(minute_ok and daily_ok)
-                if legacy_allowed and record_shadow_mismatch is not None:
+                minute_ok, minute_meta = await self._check_minute_limit(user_id, endpoint, is_batch, config)
+                daily_ok, daily_meta = await self._check_daily_limits(user_id, tokens_requested, estimated_cost, config)
+                if not (minute_ok and daily_ok) and record_shadow_mismatch is not None:
                     record_shadow_mismatch(
                         module="evaluations",
                         route=str(endpoint),
                         policy_id=str(rg_decision.get("policy_id", "evals.default")),
-                        legacy="allow",
-                        rg="deny",
+                        legacy="deny",
+                        rg="allow",
                     )
             except Exception:
-                # Best-effort only; never block denial path.
+                config = None
+
+            # Record the request (usage + ledger shadow writes).
+            try:
+                await self._record_request(user_id, endpoint, tokens_requested, estimated_cost)
+            except Exception:
+                # Best-effort only; never block allow path.
                 pass
-            retry_after = rg_decision.get("retry_after") or 1
-            return False, {
-                "error": "Rate limit exceeded (ResourceGovernor)",
-                "policy_id": rg_decision.get("policy_id", "evals.default"),
-                "retry_after": retry_after,
-                "rate_limit_source": "resource_governor",
-            }
+
+            # Preserve legacy header shape where possible, but always annotate
+            # the response as RG-governed.
+            if config is not None:
+                metadata = self._generate_rate_limit_headers(user_id, config, minute_meta, daily_meta)
+            else:
+                metadata = {}
+            try:
+                metadata = dict(metadata or {})
+                metadata.setdefault("policy_id", rg_decision.get("policy_id", "evals.default"))
+                metadata.setdefault("rate_limit_source", "resource_governor")
+            except Exception:
+                pass
+            return True, metadata
 
         # Get user's rate limit configuration
         config = await self._get_user_config(user_id)
@@ -979,9 +1024,6 @@ _evals_legacy_backfill_done: set[str] = set()
 
 def _rg_evaluations_enabled() -> bool:
     """Return True when RG should gate Evaluations requests."""
-    flag = os.getenv("RG_ENABLE_EVALUATIONS")
-    if flag is not None:
-        return flag.strip().lower() in {"1", "true", "yes", "on"}
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(False))  # type: ignore[func-returns-value]
@@ -1038,6 +1080,9 @@ async def _get_evaluations_rg_governor():
 async def _maybe_enforce_with_rg_evaluations(
     user_id: str,
     endpoint: str,
+    is_batch: bool,
+    tokens_requested: int,
+    estimated_cost: float,
 ) -> Optional[Dict[str, object]]:
     """
     Optionally enforce Evaluations request limits via ResourceGovernor.
@@ -1051,14 +1096,30 @@ async def _maybe_enforce_with_rg_evaluations(
     policy_id = os.getenv("RG_EVALUATIONS_POLICY_ID", "evals.default")
     op_id = f"evals-{user_id}-{time.time_ns()}"
     try:
+        categories: Dict[str, Dict[str, int]] = {
+            "evaluations": {"units": 1},
+        }
+        try:
+            tu = int(tokens_requested or 0)
+        except Exception:
+            tu = 0
+        if tu > 0:
+            categories["tokens"] = {"units": tu}
+        # Cost/day caps remain legacy-only (and unified eval endpoints currently
+        # pass estimated_cost=0.0). RG-first enforcement covers evaluations/tokens;
+        # keep estimated_cost in tags for observability only.
+
         decision, handle = await gov.reserve(
             RGRequest(
                 entity=f"user:{user_id}",
-                categories={"requests": {"units": 1}},
+                categories=categories,
                 tags={
                     "policy_id": policy_id,
                     "module": "evaluations",
                     "endpoint": endpoint,
+                    "is_batch": str(bool(is_batch)).lower(),
+                    "tokens_est": str(int(tu)),
+                    "cost_est": str(float(estimated_cost or 0.0)),
                 },
             ),
             op_id=op_id,
@@ -1069,7 +1130,18 @@ async def _maybe_enforce_with_rg_evaluations(
                     await gov.commit(handle, None, op_id=op_id)
                 except Exception:
                     logger.debug("Evaluations RG commit failed", exc_info=True)
-            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
+            # Expose decision details for callers that want legacy-style headers.
+            details = {}
+            try:
+                details = dict(getattr(decision, "details", {}) or {})
+            except Exception:
+                details = {}
+            return {
+                "allowed": True,
+                "retry_after": None,
+                "policy_id": policy_id,
+                "details": details,
+            }
         return {
             "allowed": False,
             "retry_after": decision.retry_after or 1,

@@ -94,6 +94,78 @@ class AuthnzUsageRepo:
             logger.error(f"AuthnzUsageRepo.summarize_key_day failed: {exc}")
             raise
 
+    async def summarize_user_day(
+        self,
+        *,
+        user_id: int,
+        day: Optional[date] = None,
+    ) -> Dict[str, Any]:
+        """
+        Summarize token and USD usage for a user over a specific UTC day.
+
+        Returns a dict with:
+        - ``tokens`` (int)
+        - ``usd`` (float)
+        """
+        try:
+            day_val: date
+            if isinstance(day, date):
+                day_val = day
+            else:
+                day_val = datetime.now(timezone.utc).date()
+
+            if getattr(self.db_pool, "pool", None) is not None:
+                total_tokens = await self.db_pool.fetchval(
+                    """
+                    SELECT COALESCE(SUM(total_tokens),0)
+                    FROM llm_usage_log
+                    WHERE date(ts AT TIME ZONE 'UTC') = $1
+                      AND user_id = $2
+                    """,
+                    day_val,
+                    user_id,
+                )
+                total_cost = await self.db_pool.fetchval(
+                    """
+                    SELECT COALESCE(SUM(total_cost_usd),0)
+                    FROM llm_usage_log
+                    WHERE date(ts AT TIME ZONE 'UTC') = $1
+                      AND user_id = $2
+                    """,
+                    day_val,
+                    user_id,
+                )
+            else:
+                day_str = day_val.isoformat()
+                total_tokens = await self.db_pool.fetchval(
+                    """
+                    SELECT COALESCE(SUM(total_tokens),0)
+                    FROM llm_usage_log
+                    WHERE DATE(datetime(ts)) = ?
+                      AND user_id = ?
+                    """,
+                    day_str,
+                    user_id,
+                )
+                total_cost = await self.db_pool.fetchval(
+                    """
+                    SELECT COALESCE(SUM(total_cost_usd),0)
+                    FROM llm_usage_log
+                    WHERE DATE(datetime(ts)) = ?
+                      AND user_id = ?
+                    """,
+                    day_str,
+                    user_id,
+                )
+
+            return {
+                "tokens": int(total_tokens or 0),
+                "usd": float(total_cost or 0.0),
+            }
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzUsageRepo.summarize_user_day failed: {exc}")
+            raise
+
     async def summarize_key_rolling_window(
         self,
         *,

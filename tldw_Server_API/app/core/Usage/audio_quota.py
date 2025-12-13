@@ -37,7 +37,7 @@ except Exception:  # pragma: no cover
     MetricType = None  # type: ignore
 
 try:
-    # Resource Governor (optional, guarded by RG_ENABLE_AUDIO)
+    # Resource Governor (optional, guarded by global RG_ENABLED/config)
     from tldw_Server_API.app.core.Resource_Governance import (
         RGRequest,
         MemoryResourceGovernor,
@@ -120,31 +120,10 @@ def _rg_audio_enabled() -> bool:
     Return True when audio quotas should use the shared Resource Governor for
     streams/jobs concurrency instead of Redis/in-process counters.
 
-    Resolution order:
-      1) Explicit module env flag RG_ENABLE_AUDIO=1|true|yes|on
-      2) [ResourceGovernor] enable_audio in config.txt (bool)
-      3) Global RG_ENABLED flag via config.rg_enabled()
-
-    When all are unset/false or when the governor cannot be initialized,
+    This is controlled by the global ResourceGovernor enablement
+    (`RG_ENABLED` / config.txt). When RG is disabled or unavailable,
     legacy behavior remains in effect.
     """
-    # 1) Env flag wins
-    v = os.getenv("RG_ENABLE_AUDIO")
-    if v is not None:
-        return v.strip().lower() in {"1", "true", "yes", "on"}
-    # 2) Config toggle
-    try:
-        from tldw_Server_API.app.core.config import load_comprehensive_config  # lazy import
-
-        cfg = load_comprehensive_config()
-        if cfg and cfg.has_section("ResourceGovernor") and cfg.has_option("ResourceGovernor", "enable_audio"):
-            try:
-                return cfg.getboolean("ResourceGovernor", "enable_audio", fallback=False)
-            except Exception:
-                logger.debug("Failed to parse ResourceGovernor.enable_audio as boolean")
-    except Exception as e:
-        logger.debug(f"Failed to load config for RG audio check: {e}")
-    # 3) Inherit global flag
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(False))  # type: ignore[func-returns-value]
@@ -826,7 +805,7 @@ async def finish_job(user_id: int) -> None:
             if should_cleanup_lock:
                 await _cleanup_job_handle_lock(user_key)
             # Even when RG is in use, do not touch Redis/in-process counters here
-            # to avoid double-decrement; legacy state is not used when RG_ENABLE_AUDIO=1.
+            # to avoid double-decrement; legacy state is not used when RG is active.
             return
         except Exception as e:
             logger.debug(f"RG error in finish_job; falling back to legacy counters: {e}")

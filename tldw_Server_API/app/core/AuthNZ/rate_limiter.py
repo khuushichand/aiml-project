@@ -21,7 +21,7 @@ from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import RateLimitError
 from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import AuthnzRateLimitsRepo
 
-# Optional Resource Governor integration (gated by RG_ENABLE_AUTHNZ)
+# Optional Resource Governor integration (gated by global RG_ENABLED/config)
 try:  # pragma: no cover - RG is optional
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
         MemoryResourceGovernor,
@@ -42,6 +42,14 @@ except Exception:  # pragma: no cover - safe fallback if RG not installed
     PolicyReloadConfig = None  # type: ignore
     default_policy_loader = None  # type: ignore
     rg_enabled = None  # type: ignore
+
+# Optional metrics helper (shadow mismatch counter)
+try:  # pragma: no cover - optional dependency
+    from tldw_Server_API.app.core.Resource_Governance.metrics_rg import (  # type: ignore
+        record_shadow_mismatch,
+    )
+except Exception:  # pragma: no cover - safe fallback
+    record_shadow_mismatch = None  # type: ignore
 
 #######################################################################################################################
 #
@@ -97,6 +105,62 @@ class RateLimiter:
         self.service_limit = self.settings.SERVICE_ACCOUNT_RATE_LIMIT
 
         self._rate_limits_repo: Optional[AuthnzRateLimitsRepo] = None
+        # Shadow-mode flag for comparing legacy vs RG without consuming counters.
+        self.shadow_enabled = os.getenv("RG_SHADOW_AUTHNZ", "1").lower() in {"1", "true", "yes", "on"}
+
+    async def _peek_legacy_allow_without_side_effects(
+        self,
+        *,
+        identifier: str,
+        endpoint: str,
+        limit: int,
+        burst: int,
+        window_minutes: int,
+    ) -> Optional[bool]:
+        """
+        Best-effort legacy allow/deny simulation without incrementing counters.
+
+        This is used for shadow mismatch metrics when RG is primary.
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            window_start = _compute_window_start(now, window_minutes)
+            prev_window = window_start - timedelta(minutes=window_minutes)
+
+            # If Redis is available, mirror the Redis-based limiter decision.
+            if self.redis_client:
+                key = self._create_key(identifier, endpoint)
+                window_key = f"rate:{key}:{_window_key(window_start)}"
+                prev_window_key = f"rate:{key}:{_window_key(prev_window)}"
+
+                cur_raw = await self.redis_client.get(window_key)
+                prev_raw = await self.redis_client.get(prev_window_key)
+
+                cur_count = int(cur_raw) if cur_raw else 0
+                prev_count = int(prev_raw) if prev_raw else 0
+            else:
+                repo = self._get_rate_limits_repo()
+                cur_count = await repo.get_rate_limit_count(
+                    identifier=identifier,
+                    endpoint=endpoint,
+                    window_start=window_start,
+                )
+                prev_count = await repo.get_rate_limit_count(
+                    identifier=identifier,
+                    endpoint=endpoint,
+                    window_start=prev_window,
+                )
+                cur_count = int(cur_count or 0)
+                prev_count = int(prev_count or 0)
+
+            # The legacy limiter increments first; simulate "after increment".
+            cur_after = cur_count + 1
+            if cur_after > int(limit) - int(burst):
+                if prev_count + cur_after > int(limit) + int(burst):
+                    return False
+            return True
+        except Exception:
+            return None
 
     async def initialize(self):
         """Initialize rate limiter"""
@@ -460,14 +524,52 @@ class RateLimiter:
             endpoint=endpoint,
             limit=limit if limit is not None else self.default_limit,
         )
-        if rg_decision is not None and not rg_decision["allowed"]:
-            retry_after = rg_decision.get("retry_after") or 60
-            return False, {
+        if rg_decision is not None:
+            rg_allowed = bool(rg_decision.get("allowed", False))
+            policy_id = str(rg_decision.get("policy_id", "authnz.default"))
+
+            # Shadow mismatch (best-effort): compare to legacy without consuming counters.
+            if self.shadow_enabled and record_shadow_mismatch is not None and self.enabled:
+                try:
+                    legacy_allowed = await self._peek_legacy_allow_without_side_effects(
+                        identifier=identifier,
+                        endpoint=endpoint,
+                        limit=int(limit if limit is not None else self.default_limit),
+                        burst=int(burst if burst is not None else self.default_burst),
+                        window_minutes=int(window_minutes or 1),
+                    )
+                    if legacy_allowed is not None:
+                        legacy_dec = "allow" if legacy_allowed else "deny"
+                        rg_dec = "allow" if rg_allowed else "deny"
+                        if legacy_dec != rg_dec:
+                            record_shadow_mismatch(
+                                module="authnz",
+                                route=str(endpoint),
+                                policy_id=policy_id,
+                                legacy=legacy_dec,
+                                rg=rg_dec,
+                            )
+                except Exception:
+                    pass
+
+            if not rg_allowed:
+                retry_after = rg_decision.get("retry_after") or 60
+                return False, {
+                    "limit": limit if limit is not None else self.default_limit,
+                    "remaining": 0,
+                    "reset_time": None,
+                    "retry_after": retry_after,
+                    "policy_id": policy_id,
+                    "rate_limit_source": "resource_governor",
+                }
+
+            # RG allow → RG is the sole enforcer. Legacy counters are not consumed.
+            return True, {
                 "limit": limit if limit is not None else self.default_limit,
-                "remaining": 0,
+                "remaining": None,
                 "reset_time": None,
-                "retry_after": retry_after,
-                "policy_id": rg_decision.get("policy_id", "authnz.default"),
+                "retry_after": None,
+                "policy_id": policy_id,
                 "rate_limit_source": "resource_governor",
             }
 
@@ -874,9 +976,6 @@ _rg_authnz_lock = asyncio.Lock()
 
 def _rg_authnz_enabled() -> bool:
     """Return True when RG should gate AuthNZ rate limits."""
-    flag = os.getenv("RG_ENABLE_AUTHNZ")
-    if flag is not None:
-        return flag.strip().lower() in {"1", "true", "yes", "on"}
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(False))  # type: ignore[func-returns-value]

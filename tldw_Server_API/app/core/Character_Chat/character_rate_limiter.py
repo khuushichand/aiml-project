@@ -21,12 +21,15 @@ except Exception:  # ImportError or environment issues
 from fastapi import HTTPException, status
 from loguru import logger
 
-# Optional Resource Governor integration (gated by RG_ENABLE_CHARACTER_CHAT)
+# Optional Resource Governor integration (gated by global RG_ENABLED/config)
 try:  # pragma: no cover - RG is optional
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
         MemoryResourceGovernor,
         RedisResourceGovernor,
         RGRequest,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.metrics_rg import (  # type: ignore
+        record_shadow_mismatch,
     )
     from tldw_Server_API.app.core.Resource_Governance.policy_loader import (  # type: ignore
         PolicyLoader,
@@ -42,6 +45,7 @@ except Exception:  # pragma: no cover - safe fallback when RG not installed
     PolicyReloadConfig = None  # type: ignore
     default_policy_loader = None  # type: ignore
     rg_enabled = None  # type: ignore
+    record_shadow_mismatch = None  # type: ignore
 
 
 class CharacterRateLimiter:
@@ -91,6 +95,7 @@ class CharacterRateLimiter:
         self.max_chat_completions_per_minute = max_chat_completions_per_minute
         self.max_message_sends_per_minute = max_message_sends_per_minute
         self.enabled = bool(enabled)
+        self.shadow_enabled = os.getenv("RG_SHADOW_CHARACTER_CHAT", "1").lower() in {"1", "true", "yes", "on"}
 
         # In-memory fallback storage (always ready for Redis failures)
         self.memory_store: Dict[int, List[float]] = defaultdict(list)
@@ -124,21 +129,58 @@ class CharacterRateLimiter:
             user_id=user_id,
             operation=operation,
         )
-        if rg_decision is not None and not rg_decision["allowed"]:
-            retry_after = rg_decision.get("retry_after") or 60
-            logger.warning(
-                "Character rate limit exceeded by ResourceGovernor for user {}: retry_after={}s",
-                user_id,
-                retry_after,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=(
-                    "Rate limit exceeded. "
-                    f"Policy {rg_decision.get('policy_id', 'character_chat.default')} denied request."
-                ),
-                headers={"Retry-After": str(retry_after)},
-            )
+        if rg_decision is not None:
+            rg_allowed = bool(rg_decision.get("allowed", False))
+            policy_id = str(rg_decision.get("policy_id", "character_chat.default"))
+
+            # Shadow mismatch (best-effort): compare to legacy without consuming counters.
+            if self.shadow_enabled and record_shadow_mismatch is not None:
+                try:
+                    legacy_allowed: Optional[bool]
+                    now = time.time()
+                    window_start = now - float(self.window_seconds)
+                    key = f"rate_limit:character:{user_id}"
+                    if self.redis:
+                        try:
+                            current_count = int(self.redis.zcount(key, window_start, "+inf"))
+                        except Exception:
+                            current_count = 0
+                    else:
+                        # Prune old entries without charging a new operation
+                        self.memory_store[user_id] = [t for t in self.memory_store[user_id] if t > window_start]
+                        current_count = len(self.memory_store[user_id])
+                    legacy_allowed = bool(current_count < int(self.max_operations))
+                    legacy_dec = "allow" if legacy_allowed else "deny"
+                    rg_dec = "allow" if rg_allowed else "deny"
+                    if legacy_dec != rg_dec:
+                        record_shadow_mismatch(
+                            module="character_chat",
+                            route=str(operation),
+                            policy_id=policy_id,
+                            legacy=legacy_dec,
+                            rg=rg_dec,
+                        )
+                except Exception:
+                    pass
+
+            if not rg_allowed:
+                retry_after = rg_decision.get("retry_after") or 60
+                logger.warning(
+                    "Character rate limit exceeded by ResourceGovernor for user {}: retry_after={}s",
+                    user_id,
+                    retry_after,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=(
+                        "Rate limit exceeded. "
+                        f"Policy {policy_id} denied request."
+                    ),
+                    headers={"Retry-After": str(retry_after)},
+                )
+
+            # RG allow → RG is the sole enforcer. Legacy counters are not consumed.
+            return True, self.max_operations
 
         key = f"rate_limit:character:{user_id}"
 
@@ -279,9 +321,6 @@ _rg_char_lock = asyncio.Lock()
 
 def _rg_character_enabled() -> bool:
     """Return True when RG should gate Character Chat operations."""
-    flag = os.getenv("RG_ENABLE_CHARACTER_CHAT")
-    if flag is not None:
-        return flag.strip().lower() in {"1", "true", "yes", "on"}
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(False))  # type: ignore[func-returns-value]

@@ -215,10 +215,11 @@ async def upsert_policy(
 )
 async def delete_policy(
     policy_id: str = Path(..., description="Policy identifier"),
+    version: Optional[int] = Query(None, ge=1, description="Optional expected version for optimistic delete"),
 ):
     try:
         admin = AuthNZPolicyAdmin()
-        deleted = await admin.delete_policy(policy_id)
+        deleted = await admin.delete_policy(policy_id, version=version)
         # Best-effort loader refresh when using DB store
         try:
             _store_mode = getattr(_app.state, "rg_policy_store", None) or os.getenv("RG_POLICY_STORE", "file").lower()
@@ -229,6 +230,17 @@ async def delete_policy(
         except Exception as _ref_e:
             logger.debug(f"Policy delete refresh skipped: {_ref_e}")
         return JSONResponse({"status": "ok", "deleted": int(deleted)})
+    except PolicyVersionConflictError as e:
+        logger.debug(f"delete_policy version conflict for {policy_id}: {e}")
+        return JSONResponse(
+            {
+                "status": "conflict",
+                "error": "version_conflict",
+                "policy_id": policy_id,
+                "detail": str(e),
+            },
+            status_code=409,
+        )
     except Exception as e:
         logger.exception("delete_policy failed")
         return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)

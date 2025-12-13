@@ -132,3 +132,33 @@ def test_flashcards_import_no_overrides_does_not_require_special_permission():
         )
         # Base import remains allowed for regular users
         assert resp.status_code == 200
+
+
+@pytest.mark.unit
+def test_flashcards_import_json_overrides_forbidden_without_permission():
+    principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
+    app = _build_app_with_flashcards(principal)
+
+    payload = b'[{"deck":"D","front":"F","back":"B"}]'
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/flashcards/import/json",
+            params={"max_items": 1},
+            files={"file": ("cards.json", payload, "application/json")},
+        )
+        assert resp.status_code == 403
+
+
+@pytest.mark.unit
+def test_flashcards_import_json_overrides_allowed_with_flashcards_admin_permission():
+    principal = _make_principal(roles=["user"], permissions=[FLASHCARDS_ADMIN], is_admin=False)
+    app = _build_app_with_flashcards(principal)
+
+    payload = b'[{"deck":"D","front":"F","back":"B"}]'
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/flashcards/import/json",
+            params={"max_items": 1},
+            files={"file": ("cards.json", payload, "application/json")},
+        )
+        assert resp.status_code == 200

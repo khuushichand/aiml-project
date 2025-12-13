@@ -43,7 +43,10 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_models import (
     EmbeddingData,
     EmbeddingUsage
 )
-from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
+from tldw_Server_API.app.core.Usage.usage_tracker import (
+    backfill_legacy_tokens_to_ledger,
+    log_llm_usage,
+)
 from pydantic import BaseModel, Field
 
 # Authentication
@@ -92,6 +95,8 @@ from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
 from fnmatch import fnmatch
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
+from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 
 # ============================================================================
 # Embeddings Implementation Import (Safe/Lazy)
@@ -1777,6 +1782,11 @@ async def create_embedding_endpoint(
     start_time = time.time()
 
     user_metadata = _build_user_metadata(current_user)
+    rg_handle_id: Optional[str] = None
+    rg_commit_op_id: Optional[str] = None
+    rg_reserved_units: int = 0
+    rg_actual_units: int = 0
+    rg_governor = None
 
     try:
         # Backpressure and tenant quotas
@@ -1869,10 +1879,15 @@ async def create_embedding_endpoint(
         # Enforce per-model token length limits (fail-fast)
         max_tokens = _get_model_max_tokens(provider, model)
         too_long: List[Tuple[int, int]] = []  # (index, token_count)
+        token_total = 0
         for idx, t in enumerate(texts_to_embed):
             tok = count_tokens(t, model)
+            if not provided_token_arrays:
+                token_total += int(tok or 0)
             if tok > max_tokens:
                 too_long.append((idx, tok))
+        if provided_token_arrays:
+            token_total = int(provided_token_count or 0)
         if too_long:
             # Return top-level JSON error object to match tests (not nested under "detail")
             return JSONResponse(
@@ -1915,6 +1930,90 @@ async def create_embedding_endpoint(
         else:
             if provider.lower() not in IMPLEMENTED_PROVIDERS:
                 raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=f"Provider '{provider}' not implemented")
+
+        # ResourceGovernor tokens enforcement (per-minute + durable tokens/day caps).
+        # Requests are enforced at ingress via RGSimpleMiddleware when enabled; token
+        # accounting needs endpoint-level units.
+        try:
+            rg_governor = getattr(request.app.state, "rg_governor", None)
+            rg_loader = getattr(request.app.state, "rg_policy_loader", None)
+        except Exception:
+            rg_governor = None
+            rg_loader = None
+
+        if rg_governor is not None and rg_loader is not None:
+            try:
+                policy_id = str(getattr(request.state, "rg_policy_id", None) or "embeddings.default")
+                rg_commit_op_id = str(
+                    getattr(request.state, "request_id", None)
+                    or request.headers.get("X-Request-ID")
+                    or uuid.uuid4().hex
+                )
+
+                entity = derive_entity_key(request)
+                try:
+                    entity_scope, entity_value = entity.split(":", 1)
+                except Exception:
+                    entity_scope, entity_value = "user", str(getattr(current_user, "id", "1"))
+
+                daily_cap = 0
+                try:
+                    pol = rg_loader.get_policy(policy_id) or {}
+                    daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
+                except Exception:
+                    daily_cap = 0
+                if daily_cap > 0:
+                    await backfill_legacy_tokens_to_ledger(
+                        entity_scope=str(entity_scope),
+                        entity_value=str(entity_value),
+                    )
+
+                rg_reserved_units = max(1, int(token_total or 0))
+                rg_actual_units = int(rg_reserved_units)
+                dec, hid = await rg_governor.reserve(
+                    RGRequest(
+                        entity=entity,
+                        categories={"tokens": {"units": int(rg_reserved_units)}},
+                        tags={"policy_id": policy_id, "endpoint": request.url.path},
+                    ),
+                    op_id=rg_commit_op_id,
+                )
+                if not bool(getattr(dec, "allowed", False)):
+                    retry_after = int(getattr(dec, "retry_after", None) or 1)
+                    headers = {"Retry-After": str(retry_after)}
+                    try:
+                        pol = rg_loader.get_policy(policy_id) or {}
+                        per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
+                        limit_val = per_min or int((pol.get("tokens") or {}).get("daily_cap") or 0)
+                        if limit_val:
+                            headers.update(
+                                {
+                                    "X-RateLimit-Limit": str(limit_val),
+                                    "X-RateLimit-Remaining": "0",
+                                    "X-RateLimit-Reset": str(retry_after),
+                                }
+                            )
+                            if per_min > 0:
+                                headers.update(
+                                    {
+                                        "X-RateLimit-PerMinute-Limit": str(per_min),
+                                        "X-RateLimit-PerMinute-Remaining": "0",
+                                        "X-RateLimit-Tokens-Remaining": "0",
+                                    }
+                                )
+                    except Exception:
+                        pass
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail="Rate limit exceeded",
+                        headers=headers,
+                    )
+                rg_handle_id = hid
+            except HTTPException:
+                raise
+            except Exception as rg_exc:
+                logger.debug(f"RG tokens reserve skipped: {rg_exc}")
+                rg_handle_id = None
 
         # Create embeddings
         # Special-case for OpenAI in test mode: synthesize vectors deterministically
@@ -2111,11 +2210,9 @@ async def create_embedding_endpoint(
                 )
             )
 
-        # Calculate token usage
-        if provided_token_arrays:
-            num_tokens = provided_token_count
-        else:
-            num_tokens = sum(count_tokens(text, model) for text in texts_to_embed)
+        # Calculate token usage (reused for usage logging and RG commit).
+        num_tokens = int(token_total or 0)
+        rg_actual_units = int(num_tokens)
 
         # Track metrics
         duration = time.time() - start_time
@@ -2163,7 +2260,7 @@ async def create_embedding_endpoint(
                 prompt_tokens=int(num_tokens or 0),
                 completion_tokens=0,
                 total_tokens=int(num_tokens or 0),
-                request_id=request.headers.get('X-Request-ID') if request else None,
+                request_id=getattr(getattr(request, "state", None), "request_id", None) or request.headers.get('X-Request-ID'),
             )
         except Exception:
             pass
@@ -2187,6 +2284,17 @@ async def create_embedding_endpoint(
         )
 
     finally:
+        try:
+            if rg_governor is not None and rg_handle_id:
+                actual = int(rg_actual_units or rg_reserved_units or 0)
+                actual = max(0, actual)
+                await rg_governor.commit(
+                    rg_handle_id,
+                    actuals={"tokens": int(actual)},
+                    op_id=rg_commit_op_id,
+                )
+        except Exception as rg_commit_exc:
+            logger.debug(f"RG tokens commit skipped/failed: {rg_commit_exc}")
         active_embedding_requests.dec()
 
 class EmbeddingsBatchRequest(BaseModel):

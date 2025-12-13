@@ -443,7 +443,7 @@ agentic_cache_ttl_sec = 600
 
 [ResourceGovernor]
 # Global Resource Governor enable flag (env: RG_ENABLED)
-enabled = false
+enabled = true
 # Policy store: file-backed YAML or AuthNZ DB (env: RG_POLICY_STORE)
 policy_store = file
 # Backend implementation: memory | redis (env: RG_BACKEND)
@@ -454,8 +454,8 @@ redis_fail_mode = fallback_memory
 # The RG_POLICY_PATH environment variable overrides this when set; in containerized deployments,
 # ensure the policy file path is mounted into the container (e.g., under /app/tldw_Server_API/Config_Files).
 policy_path = tldw_Server_API/Config_Files/resource_governor_policies.yaml
-# Module feature flags may inherit from RG_ENABLED when unset; explicit entries
-# here override that inheritance. Audio RG integration is opt-in by default.
+# Deprecated: per-module RG enable flags were removed in v1.1; integrations are
+# controlled by the global `enabled` flag. Kept for config compatibility only.
 enable_audio = false
 
 [Diarization]

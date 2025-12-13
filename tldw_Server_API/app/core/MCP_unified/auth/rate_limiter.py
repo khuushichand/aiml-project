@@ -133,6 +133,30 @@ class TokenBucketRateLimiter(BaseRateLimiter):
             self.allowance[key] -= 1.0
             return (True, 0)
 
+    async def peek_allowed(self, key: str) -> tuple[bool, int]:
+        """Check if request is allowed without consuming a token."""
+        async with self._lock:
+            current = time.time()
+
+            if key not in self.allowance:
+                self.allowance[key] = self.burst
+                self.last_check[key] = current
+                return (True, 0)
+
+            time_passed = current - self.last_check[key]
+            self.last_check[key] = current
+
+            self.allowance[key] += time_passed * (self.rate / self.per)
+            if self.allowance[key] > self.burst:
+                self.allowance[key] = self.burst
+
+            if self.allowance[key] < 1.0:
+                tokens_needed = 1.0 - self.allowance[key]
+                retry_after = int(tokens_needed * (self.per / self.rate)) + 1
+                return (False, retry_after)
+
+            return (True, 0)
+
     async def reset(self, key: str):
         """Reset rate limit for a key"""
         async with self._lock:
@@ -208,6 +232,22 @@ class SlidingWindowRateLimiter(BaseRateLimiter):
 
             # Add current timestamp
             timestamps.append(current)
+            return (True, 0)
+
+    async def peek_allowed(self, key: str) -> tuple[bool, int]:
+        """Check if request is allowed without recording a request."""
+        async with self._lock:
+            current = time.time()
+            window_start = current - self.window
+
+            timestamps = self.requests[key]
+            while timestamps and timestamps[0] < window_start:
+                timestamps.popleft()
+
+            if len(timestamps) >= self.rate:
+                retry_after = int(timestamps[0] + self.window - current) + 1
+                return (False, retry_after)
+
             return (True, 0)
 
     async def reset(self, key: str):
@@ -415,6 +455,21 @@ class DistributedRateLimiter(BaseRateLimiter):
             logger.error(f"Redis rate limit error: {e}; falling back to in-memory limiter")
             return await self._use_fallback(key)
 
+    async def peek_allowed(self, key: str) -> tuple[bool, int]:
+        """Best-effort allow/deny check without recording a request in Redis."""
+        try:
+            usage = await self.get_usage(key)
+            remaining = usage.get("remaining")
+            if remaining is None:
+                remaining = usage.get("tokens_remaining")
+            if remaining is None:
+                return (True, 0)
+            if int(remaining) > 0:
+                return (True, 0)
+            return (False, int(self.window or 1))
+        except Exception:
+            return (True, 0)
+
     async def reset(self, key: str):
         """Reset rate limit for a key in Redis"""
         has_redis = await self._ensure_redis()
@@ -584,30 +639,41 @@ class RateLimiter:
         limiter = limiter or self.default_limiter
         category = _derive_category(limiter, self)
 
-        # Prefer Resource Governor when enabled; shadow legacy for comparison.
+        # Prefer Resource Governor when enabled; use legacy limiter only as
+        # a fallback when RG is unavailable.
         rg_decision = await _maybe_enforce_with_rg_mcp(key=key, category=category)
-
-        allowed, retry_after = await limiter.is_allowed(key)
-
-        # Shadow comparison (best-effort)
-        if rg_decision is not None and record_shadow_mismatch is not None:
-            try:
-                if bool(allowed) != bool(rg_decision["allowed"]):
-                    record_shadow_mismatch(
-                        module="mcp",
-                        route=f"/api/v1/mcp/{category}",
-                        policy_id=rg_decision.get("policy_id", f"mcp.{category}"),
-                        legacy="allow" if allowed else "deny",
-                        rg="allow" if rg_decision["allowed"] else "deny",
-                    )
-            except Exception:
-                logger.debug("MCP RG shadow metric failed", exc_info=True)
-
-        # Enforce RG decision if present, otherwise use legacy result
         if rg_decision is not None:
+            # Shadow-mode comparison (best-effort): evaluate the legacy limiter
+            # alongside the governor and record mismatches. Enforcement remains RG.
+            try:
+                if record_shadow_mismatch is not None:
+                    rg_allowed = bool(rg_decision.get("allowed", False))
+                    legacy_allowed = None
+                    if rg_allowed:
+                        legacy_allowed, _legacy_retry = await limiter.is_allowed(key)
+                    else:
+                        peek_fn = getattr(limiter, "peek_allowed", None)
+                        if callable(peek_fn):
+                            legacy_allowed, _legacy_retry = await peek_fn(key)
+                    if isinstance(legacy_allowed, bool):
+                        legacy_dec = "allow" if legacy_allowed else "deny"
+                        rg_dec = "allow" if rg_allowed else "deny"
+                        if legacy_dec != rg_dec:
+                            record_shadow_mismatch(
+                                module="mcp",
+                                route=f"mcp:{category}",
+                                policy_id=str(rg_decision.get("policy_id", f"mcp.{category}")),
+                                legacy=legacy_dec,
+                                rg=rg_dec,
+                            )
+            except Exception:
+                # Observability only; never affect enforcement.
+                pass
             if not rg_decision["allowed"]:
                 raise RateLimitExceeded(rg_decision.get("retry_after") or 1)
             return
+
+        allowed, retry_after = await limiter.is_allowed(key)
 
         if not allowed:
             logger.warning(f"Rate limit exceeded for key: {key}")
@@ -694,9 +760,6 @@ _rg_mcp_lock = asyncio.Lock()
 
 
 def _rg_mcp_enabled() -> bool:
-    flag = os.getenv("RG_ENABLE_MCP")
-    if flag is not None:
-        return flag.strip().lower() in {"1", "true", "yes", "on"}
     if rg_enabled:
         try:
             return bool(rg_enabled(False))  # type: ignore[func-returns-value]

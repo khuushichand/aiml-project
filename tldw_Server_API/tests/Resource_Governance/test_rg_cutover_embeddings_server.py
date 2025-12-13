@@ -11,13 +11,13 @@ class _SentinelError(Exception):
 
 def test_embeddings_server_rg_allows_and_skips_token_bucket(monkeypatch):
     """
-    When RG_ENABLE_EMBEDDINGS_SERVER=1 and the governor allows, the
+    When ResourceGovernor is enabled and the governor allows, the
     TokenBucketLimiter wrapper should:
       - Call the RG helper once.
       - Call the wrapped function.
       - Not invoke the legacy _acquire() token-bucket path.
     """
-    monkeypatch.setenv("RG_ENABLE_EMBEDDINGS_SERVER", "1")
+    monkeypatch.setenv("RG_ENABLED", "1")
 
     calls = []
     rg_calls = []
@@ -58,7 +58,7 @@ def test_embeddings_server_rg_unavailable_falls_back_to_token_bucket(monkeypatch
     runtime), the wrapper should fall back to the legacy token-bucket
     _acquire() path and still call the wrapped function exactly once.
     """
-    monkeypatch.setenv("RG_ENABLE_EMBEDDINGS_SERVER", "1")
+    monkeypatch.setenv("RG_ENABLED", "1")
 
     calls = []
     acquire_calls = []
@@ -86,4 +86,3 @@ def test_embeddings_server_rg_unavailable_falls_back_to_token_bucket(monkeypatch
     assert result == "ok"
     assert calls == ["called"]
     assert acquire_calls == [True]
-

@@ -175,6 +175,14 @@ async def check_evaluation_rate_limit(
     rate_limiter = Depends(get_rate_limiter_dep),
 ):
     """Simple IP/path based limiter for high-level guarding (per-minute)."""
+    # If ResourceGovernor ingress has already governed this route, avoid
+    # double-enforcement via legacy AuthNZ rate limiter.
+    try:
+        if getattr(request.state, "rg_policy_id", None):
+            return
+    except Exception:
+        pass
+
     client_ip = request.client.host if request.client else "unknown"
     path = request.url.path
     if "batch" in path:

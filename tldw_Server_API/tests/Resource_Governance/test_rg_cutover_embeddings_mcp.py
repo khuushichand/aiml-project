@@ -35,25 +35,25 @@ class _FakeGovernor:
 
 @pytest.mark.asyncio
 async def test_embeddings_rg_enforced_and_commits(monkeypatch):
-    monkeypatch.setenv("RG_ENABLE_EMBEDDINGS", "1")
+    monkeypatch.setenv("RG_ENABLED", "1")
     fake = _FakeGovernor(allowed=True)
     monkeypatch.setattr(emb_rl, "_rg_embeddings_governor", fake)
     monkeypatch.setattr(emb_rl, "_rg_embeddings_loader", None)
 
     limiter = emb_rl.AsyncRateLimiter(rate_limiter=emb_rl.UserRateLimiter(default_limit=2, window_seconds=60))
-    allowed, retry_after = await limiter.check_rate_limit_async("u123")
+    allowed, retry_after = await limiter.check_rate_limit_async("u123", tokens_units=7)
 
     assert allowed is True
     assert retry_after is None
     assert fake.reserved and fake.commits
     entity, categories, _ = fake.reserved[-1]
     assert entity == "user:u123"
-    assert categories == {"requests": {"units": 1}}
+    assert categories == {"tokens": {"units": 7}}
 
 
 @pytest.mark.asyncio
 async def test_mcp_rg_denies(monkeypatch):
-    monkeypatch.setenv("RG_ENABLE_MCP", "1")
+    monkeypatch.setenv("RG_ENABLED", "1")
     fake = _FakeGovernor(allowed=False, retry_after=3)
     monkeypatch.setattr(mcp_rl, "_rg_mcp_governor", fake)
     monkeypatch.setattr(mcp_rl, "_rg_mcp_loader", None)

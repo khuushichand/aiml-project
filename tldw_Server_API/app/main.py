@@ -2995,20 +2995,37 @@ import os as _os_mod
 
 # Skip global rate limiter when running tests: honor either TESTING=true or TEST_MODE=true
 if _os_mod.getenv("TESTING", "").lower() != "true" and _os_mod.getenv("TEST_MODE", "").lower() != "true":
+    # If ResourceGovernor ingress middleware is present, keep SlowAPI off.
+    # SlowAPI decorators remain as legacy config carriers for non-RG deployments.
+    _rg_simple_present = False
     try:
-        from slowapi import _rate_limit_exceeded_handler
-        from slowapi.errors import RateLimitExceeded
-        from slowapi.middleware import SlowAPIMiddleware
+        from tldw_Server_API.app.core.Resource_Governance.middleware_simple import (  # noqa: E402
+            RGSimpleMiddleware as _RGMw,
+        )
 
-        # Use the central limiter instance so decorators and middleware share the same limiter
-        from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter as _global_limiter
+        _rg_simple_present = any(
+            getattr(m, "cls", None) is _RGMw for m in getattr(app, "user_middleware", [])
+        )
+    except Exception:
+        _rg_simple_present = False
 
-        app.state.limiter = _global_limiter
-        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-        app.add_middleware(SlowAPIMiddleware)
-        logger.info("Global rate limiter initialized (SlowAPI)")
-    except Exception as _e:
-        logger.warning(f"Global rate limiter not initialized: {_e}")
+    if _rg_simple_present:
+        logger.info("RGSimpleMiddleware present: skipping global SlowAPI middleware")
+    else:
+        try:
+            from slowapi import _rate_limit_exceeded_handler
+            from slowapi.errors import RateLimitExceeded
+            from slowapi.middleware import SlowAPIMiddleware
+
+            # Use the central limiter instance so decorators and middleware share the same limiter
+            from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter as _global_limiter
+
+            app.state.limiter = _global_limiter
+            app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+            app.add_middleware(SlowAPIMiddleware)
+            logger.info("Global rate limiter initialized (SlowAPI)")
+        except Exception as _e:
+            logger.warning(f"Global rate limiter not initialized: {_e}")
 else:
     logger.info("Test mode detected: Skipping global rate limiter initialization (TESTING/TEST_MODE)")
 

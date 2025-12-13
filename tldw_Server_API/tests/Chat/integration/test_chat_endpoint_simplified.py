@@ -292,7 +292,7 @@ def test_chat_completion_rg_primary_deny(
     monkeypatch,
 ):
     """
-    When RG_CHAT_ENFORCE_PRIMARY is enabled and the RG gate denies,
+    When ResourceGovernor is enabled and the RG gate denies,
     the chat endpoint should surface a 429 with a policy-aware message.
     """
 
@@ -306,7 +306,7 @@ def test_chat_completion_rg_primary_deny(
         ],
     )
 
-    monkeypatch.setenv("RG_CHAT_ENFORCE_PRIMARY", "1")
+    monkeypatch.setenv("RG_ENABLED", "1")
 
     async def fake_rg_chat(
         *,
@@ -360,12 +360,8 @@ def test_chat_completion_rg_shadow_vs_primary_behaviour(
     monkeypatch,
 ):
     """
-    Exercise /api/v1/chat/completions under RG shadow (legacy primary)
-    and RG-primary modes to validate 200/429 behavior and rate-limit
-    headers.
-
-    This test stubs the RG gate to allow in shadow mode and deny in
-    primary mode while keeping the legacy limiter permissive.
+    Exercise /api/v1/chat/completions under RG allow/deny decisions to
+    validate 200/429 behavior.
     """
 
     from tldw_Server_API.app.core.Chat import rate_limiter as chat_rl
@@ -378,15 +374,8 @@ def test_chat_completion_rg_shadow_vs_primary_behaviour(
         ],
     )
 
-    # Keep legacy limiter permissive via generous RPMs
     monkeypatch.setenv("TEST_MODE", "true")
-    monkeypatch.setenv("TEST_CHAT_GLOBAL_RPM", "1000")
-    monkeypatch.setenv("TEST_CHAT_PER_USER_RPM", "1000")
-    monkeypatch.setenv("TEST_CHAT_PER_CONVERSATION_RPM", "1000")
-    monkeypatch.setenv("TEST_CHAT_TOKENS_PER_MINUTE", "100000")
-
-    # Enable RG for chat so the internal governor path is considered.
-    monkeypatch.setenv("RG_ENABLE_CHAT", "1")
+    monkeypatch.setenv("RG_ENABLED", "1")
 
     # Stub RG gate: first call path (shadow) allowed, second (primary) denied.
     async def fake_rg_chat_allow(
@@ -429,8 +418,6 @@ def test_chat_completion_rg_shadow_vs_primary_behaviour(
             ],
         }
 
-        # Shadow mode: RG consulted but legacy limiter remains source of truth
-        monkeypatch.setenv("RG_CHAT_ENFORCE_PRIMARY", "0")
         monkeypatch.setattr(
             chat_rl,
             "_maybe_enforce_with_rg_chat",
@@ -443,12 +430,8 @@ def test_chat_completion_rg_shadow_vs_primary_behaviour(
             json=request_data.model_dump(),
         )
         assert shadow_resp.status_code == status.HTTP_200_OK
-        # In shadow mode, headers should reflect legacy limiter (which we
-        # keep permissive); we do not assert specific header values here,
-        # only that no 429 is returned.
 
-        # Primary mode: RG decision is canonical and denies
-        monkeypatch.setenv("RG_CHAT_ENFORCE_PRIMARY", "1")
+        # Deny path: RG decision is canonical and denies
         monkeypatch.setattr(
             chat_rl,
             "_maybe_enforce_with_rg_chat",

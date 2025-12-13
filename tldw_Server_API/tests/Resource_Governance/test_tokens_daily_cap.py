@@ -14,6 +14,9 @@ pytestmark = pytest.mark.rate_limit
 async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("AUTH_MODE", "multi_user")
+    # Ensure usage logging is on; some suites toggle this off globally and
+    # the tokens/day ledger tests require log_llm_usage to write entries.
+    monkeypatch.setenv("LLM_USAGE_ENABLED", "1")
     try:
         from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
@@ -26,10 +29,18 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
         await ensure_authnz_schema_ready_once()
     except Exception:
         pass
+    # Reset cached daily-ledger singleton so daily-cap checks consult this DB.
+    try:
+        import tldw_Server_API.app.core.Resource_Governance.daily_caps as _dc
+
+        _dc._daily_ledger = None  # type: ignore[attr-defined]
+    except Exception:
+        pass
     # Reset cached ledger inside usage_tracker between tests.
     try:
         import tldw_Server_API.app.core.Usage.usage_tracker as _ut
         _ut._tokens_daily_ledger = None  # type: ignore[attr-defined]
+        _ut._tokens_legacy_backfill_done = set()  # type: ignore[attr-defined]
     except Exception:
         pass
 
@@ -140,3 +151,46 @@ async def test_log_llm_usage_writes_tokens_to_ledger_idempotent(tmp_path, monkey
     after = await ledger.total_for_day("user", "1", "tokens")
     assert after == before + 5
 
+
+@pytest.mark.asyncio
+async def test_backfill_legacy_tokens_to_ledger_idempotent(tmp_path, monkeypatch):
+    db_path = tmp_path / "authnz_tokens_backfill.db"
+    await _init_authnz_sqlite(db_path, monkeypatch)
+
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
+    from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import ResourceDailyLedger
+    from tldw_Server_API.app.core.Usage.usage_tracker import backfill_legacy_tokens_to_ledger
+
+    pool = await get_db_pool()
+    repo = AuthnzUsageRepo(pool)
+    await repo.insert_llm_usage_log(
+        user_id=1,
+        key_id=None,
+        endpoint="POST:/api/v1/chat/completions",
+        operation="chat",
+        provider="test",
+        model="test-model",
+        status=200,
+        latency_ms=1,
+        prompt_tokens=7,
+        completion_tokens=0,
+        total_tokens=7,
+        prompt_cost_usd=0.0,
+        completion_cost_usd=0.0,
+        total_cost_usd=0.0,
+        currency="USD",
+        estimated=False,
+        request_id="rid-legacy",
+    )
+
+    ledger = ResourceDailyLedger()
+    await ledger.initialize()
+    assert await ledger.total_for_day("user", "1", "tokens") == 0
+
+    await backfill_legacy_tokens_to_ledger(entity_scope="user", entity_value="1")
+    assert await ledger.total_for_day("user", "1", "tokens") == 7
+
+    # Second backfill is a no-op (per process/entity/day).
+    await backfill_legacy_tokens_to_ledger(entity_scope="user", entity_value="1")
+    assert await ledger.total_for_day("user", "1", "tokens") == 7

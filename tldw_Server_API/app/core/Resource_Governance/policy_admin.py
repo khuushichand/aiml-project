@@ -235,18 +235,42 @@ class AuthNZPolicyAdmin:
             logger.error(f"AuthNZPolicyAdmin.list_policies failed: {e}")
             raise
 
-    async def delete_policy(self, policy_id: str) -> int:
+    async def delete_policy(self, policy_id: str, version: Optional[int] = None) -> int:
         if not self._initialized:
             await self.initialize()
         try:
+            if version is not None:
+                expected = int(version)
+                res = await self.db_pool.execute(
+                    "DELETE FROM rg_policies WHERE id = ? AND version = ?",
+                    policy_id,
+                    expected,
+                )
+                # asyncpg returns 'DELETE <n>' string; SQLite returns cursor
+                if isinstance(res, str) and res.startswith("DELETE"):
+                    deleted = int((res.split(" ")[1] if len(res.split(" ")) > 1 else 0) or 0)
+                else:
+                    deleted = int(getattr(res, "rowcount", 0) or 0)
+                    if deleted < 0:
+                        deleted = 0
+                if deleted:
+                    return deleted
+
+                # Not deleted — distinguish not-found from version conflict.
+                row = await self.db_pool.fetchone("SELECT version FROM rg_policies WHERE id = ?", policy_id)
+                if row is None:
+                    return 0
+                current = int(row.get("version") if isinstance(row, dict) else row[0] or 0)
+                raise PolicyVersionConflictError(policy_id, expected=expected, actual=current)
+
             res = await self.db_pool.execute("DELETE FROM rg_policies WHERE id = ?", policy_id)
-            # asyncpg returns 'DELETE <n>' string; SQLite returns cursor
             if isinstance(res, str) and res.startswith("DELETE"):
                 try:
                     return int(res.split(" ")[1])
                 except Exception:
                     return 0
-            return 0
+            deleted = int(getattr(res, "rowcount", 0) or 0)
+            return max(0, deleted)
         except Exception as e:
             logger.error(f"AuthNZPolicyAdmin.delete_policy failed: {e}")
             raise

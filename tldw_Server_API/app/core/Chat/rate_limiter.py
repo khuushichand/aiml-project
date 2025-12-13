@@ -123,9 +123,9 @@ class ConversationRateLimiter:
     """
     Rate limiter with per-conversation, per-user, and global limits.
 
-    Legacy shim – new chat rate limiting work should prefer the shared
-    ResourceGovernor integration (via `_maybe_enforce_with_rg_chat` and
-    `RG_CHAT_ENFORCE_PRIMARY`) over direct use of this in-process limiter.
+    Legacy shim – when ResourceGovernor is enabled, chat ingress should be
+    governed via RG and this in-process limiter should be treated as a
+    fallback-only compatibility path.
     """
 
     def __init__(self, config: RateLimitConfig):
@@ -272,8 +272,8 @@ class ConversationRateLimiter:
         Returns:
             Tuple of (allowed, error_message)
         """
-        # Prefer ResourceGovernor when enabled; always evaluate the legacy
-        # in-process limiter for parity metrics and as a fallback.
+        # Prefer ResourceGovernor when enabled; use the legacy in-process
+        # limiter only as a fallback when RG is unavailable.
         try:
             rg_decision = await _maybe_enforce_with_rg_chat(  # type: ignore[name-defined]
                 user_id=user_id,
@@ -286,43 +286,6 @@ class ConversationRateLimiter:
             logger.debug("Chat RG enforcement failed; falling back to legacy limiter: {}", exc)
             rg_decision = None
 
-        # Evaluate legacy limiter (primary when RG is disabled or shadow-only).
-        legacy_allowed, legacy_error = await self._check_legacy_rate_limit(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            estimated_tokens=estimated_tokens,
-        )
-
-        # Shadow comparison (best-effort)
-        if rg_decision is not None:
-            try:
-                from tldw_Server_API.app.core.Resource_Governance.metrics_rg import (  # type: ignore
-                    record_shadow_mismatch,
-                )
-            except Exception:  # pragma: no cover - optional metrics path
-                record_shadow_mismatch = None  # type: ignore
-
-            if record_shadow_mismatch is not None:
-                try:
-                    if bool(legacy_allowed) != bool(rg_decision.get("allowed", False)):
-                        record_shadow_mismatch(
-                            module="chat",
-                            route="/api/v1/chat/completions",
-                            policy_id=str(
-                                rg_decision.get("policy_id", "chat.default")
-                            ),
-                            legacy="allow" if legacy_allowed else "deny",
-                            rg="allow"
-                            if rg_decision.get("allowed", False)
-                            else "deny",
-                        )
-                except Exception:
-                    logger.debug("Chat RG shadow metric failed", exc_info=True)
-
-        # When RG_CHAT_ENFORCE_PRIMARY is enabled and a governor decision is
-        # available, treat the ResourceGovernor as the source of truth for
-        # chat rate limiting. Otherwise, fall back to the legacy limiter's
-        # decision (with RG used purely for diagnostics/metrics).
         if rg_decision is not None and _rg_chat_primary_enabled():
             if not rg_decision.get("allowed", False):
                 policy_id = rg_decision.get("policy_id", "chat.default")
@@ -333,7 +296,12 @@ class ConversationRateLimiter:
                 return False, base_msg
             return True, None
 
-        return legacy_allowed, legacy_error
+        # Legacy limiter (fallback when RG is disabled/unavailable).
+        return await self._check_legacy_rate_limit(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            estimated_tokens=estimated_tokens,
+        )
 
     async def wait_for_capacity(
         self,
@@ -550,9 +518,6 @@ except Exception:  # pragma: no cover - safe fallback when RG not installed
 
 def _rg_chat_enabled() -> bool:
     """Return True when RG should gate chat requests."""
-    flag = os.getenv("RG_ENABLE_CHAT")
-    if flag is not None:
-        return flag.strip().lower() in {"1", "true", "yes", "on"}
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(False))  # type: ignore[func-returns-value]
@@ -565,23 +530,8 @@ def _rg_chat_primary_enabled() -> bool:
     """
     Return True when ResourceGovernor should be treated as the primary
     source of truth for chat rate limiting decisions.
-
-    Resolution order:
-      1) Explicit env RG_CHAT_ENFORCE_PRIMARY (allows opt-out for compat)
-      2) Global rg_enabled flag (RG-first default)
     """
-    try:
-        flag = os.getenv("RG_CHAT_ENFORCE_PRIMARY")
-        if flag is not None:
-            return flag.strip().lower() in {"1", "true", "yes", "on"}
-    except Exception:
-        flag = None
-    if rg_enabled is not None:
-        try:
-            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
-        except Exception:
-            return False
-    return False
+    return _rg_chat_enabled()
 
 
 async def _get_chat_rg_governor():
@@ -637,10 +587,14 @@ async def _maybe_enforce_with_rg_chat(
     estimated_tokens: int,
 ) -> Optional[Dict[str, object]]:
     """
-    Optionally enforce Chat request limits via ResourceGovernor.
+    Optionally enforce Chat limits via ResourceGovernor.
 
-    Returns a decision dict when RG is used, or None when RG is
-    unavailable or disabled.
+    Requests are enforced at ingress via `RGSimpleMiddleware`. This helper is
+    used for token accounting (and legacy fallback) and MUST NOT reserve
+    `requests` to avoid double-enforcement on RG-governed routes.
+
+    Returns a decision dict when RG is used, or None when RG is unavailable or
+    disabled.
     """
     gov = await _get_chat_rg_governor()
     if gov is None:
@@ -654,9 +608,13 @@ async def _maybe_enforce_with_rg_chat(
             tokens_units = 0
         tokens_units = max(0, tokens_units)
 
-        categories: Dict[str, Dict[str, int]] = {"requests": {"units": 1}}
+        # Only enforce token budgets here; request-rate limiting happens at ingress.
+        categories: Dict[str, Dict[str, int]] = {}
         if tokens_units > 0:
             categories["tokens"] = {"units": tokens_units}
+        else:
+            # No token units to enforce; allow and bypass legacy limiter.
+            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
 
         decision, handle = await gov.reserve(
             RGRequest(
@@ -675,7 +633,7 @@ async def _maybe_enforce_with_rg_chat(
                 try:
                     # Treat reserve as consumption; commit with the same units
                     # to keep semantics simple for now.
-                    actuals: Dict[str, int] = {"requests": 1}
+                    actuals: Dict[str, int] = {}
                     if tokens_units > 0:
                         actuals["tokens"] = tokens_units
                     await gov.commit(handle, actuals=actuals, op_id=op_id)

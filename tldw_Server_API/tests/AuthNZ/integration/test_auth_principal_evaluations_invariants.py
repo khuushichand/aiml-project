@@ -94,8 +94,6 @@ def test_evaluations_list_jwt_principal_and_state_alignment(
 
     # Disable ResourceGovernor for this invariant; we want to exercise
     # principal/state alignment without RG-driven 429s on evals/AuthNZ routes.
-    monkeypatch.setenv("RG_ENABLE_EVALUATIONS", "0")
-    monkeypatch.setenv("RG_ENABLE_AUTHNZ", "0")
     monkeypatch.setenv("RG_ENABLED", "0")
 
     # 1. Register and log in via real auth endpoints.
@@ -212,8 +210,6 @@ def test_evaluations_admin_cleanup_jwt_principal_and_state_alignment(
     # and avoids hitting real per-user policies during invariants.
     monkeypatch.setenv("TESTING", "true")
     # Disable ResourceGovernor for this invariant to avoid RG-level 429s.
-    monkeypatch.setenv("RG_ENABLE_EVALUATIONS", "0")
-    monkeypatch.setenv("RG_ENABLE_AUTHNZ", "0")
     monkeypatch.setenv("RG_ENABLED", "0")
 
     # Ensure RBAC enrichment exposes an admin-style principal for this test so
@@ -360,8 +356,6 @@ def test_evaluations_admin_cleanup_api_key_principal_and_state_alignment(
     monkeypatch.setenv("TESTING", "true")
     # Disable ResourceGovernor so that RG-backed evals/AuthNZ limits do not interfere
     # with this principal/state alignment invariant.
-    monkeypatch.setenv("RG_ENABLE_EVALUATIONS", "0")
-    monkeypatch.setenv("RG_ENABLE_AUTHNZ", "0")
     monkeypatch.setenv("RG_ENABLED", "0")
 
     # Ensure RBAC enrichment exposes an admin-style principal for this test so

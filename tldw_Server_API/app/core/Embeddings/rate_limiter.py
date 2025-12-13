@@ -198,6 +198,74 @@ class UserRateLimiter:
 
             return True, None
 
+    def peek_rate_limit(
+        self,
+        user_id: str,
+        cost: int = 1,
+    ) -> tuple[bool, Optional[int]]:
+        """
+        Side-effect-light rate limit check (no consumption).
+
+        This is intended for RG shadow comparisons where we want to know whether
+        the legacy limiter *would* allow a request without counting it.
+        """
+        with self._lock:
+            current_time = time.time()
+            window_start = current_time - self.window_seconds
+
+            user_queue = self.user_requests[user_id]
+            while user_queue and user_queue[0] < window_start:
+                user_queue.popleft()
+
+            limit = self.get_user_limit(user_id)
+            burst_limit = int(limit * self.burst_allowance)
+            current_count = len(user_queue)
+
+            if current_count + cost > burst_limit:
+                if user_queue:
+                    retry_after = int(user_queue[0] + self.window_seconds - current_time) + 1
+                else:
+                    retry_after = 1
+                return False, retry_after
+
+            return True, None
+
+    def shadow_check_rate_limit(
+        self,
+        user_id: str,
+        cost: int = 1,
+    ) -> tuple[bool, Optional[int]]:
+        """
+        Legacy limiter evaluation intended for RG shadow comparisons.
+
+        This mirrors ``check_rate_limit`` without emitting audit/log noise or
+        updating global stats counters, while still updating in-memory state so
+        repeated calls reflect the traffic pattern being simulated.
+        """
+        with self._lock:
+            current_time = time.time()
+            window_start = current_time - self.window_seconds
+
+            user_queue = self.user_requests[user_id]
+            while user_queue and user_queue[0] < window_start:
+                user_queue.popleft()
+
+            limit = self.get_user_limit(user_id)
+            burst_limit = int(limit * self.burst_allowance)
+            current_count = len(user_queue)
+
+            if current_count + cost > burst_limit:
+                if user_queue:
+                    retry_after = int(user_queue[0] + self.window_seconds - current_time) + 1
+                else:
+                    retry_after = 1
+                return False, retry_after
+
+            for _ in range(cost):
+                user_queue.append(current_time)
+
+            return True, None
+
     def get_user_usage(self, user_id: str) -> Dict[str, any]:
         """
         Get current usage statistics for a user.
@@ -428,14 +496,53 @@ class AsyncRateLimiter:
         Returns:
             Tuple of (allowed, retry_after_seconds)
         """
-        # Prefer Resource Governor when configured; fallback to legacy limiter otherwise.
+        # Prefer Resource Governor when configured; use the legacy limiter only
+        # as a fallback when RG is unavailable.
         rg_decision = await _maybe_enforce_with_rg(
             user_id=user_id,
             cost=cost,
             tokens_units=int(tokens_units or 0),
         )
 
-        # Always evaluate legacy limiter for shadow metrics and fallback.
+        if rg_decision is not None:
+            rg_allowed = bool(rg_decision.get("allowed", False))
+
+            # Shadow comparison (best-effort): simulate legacy decision and record
+            # mismatches between legacy allow/deny and RG allow/deny.
+            if self.shadow_enabled and record_shadow_mismatch is not None:
+                try:
+                    loop = asyncio.get_running_loop()
+                    if rg_allowed:
+                        legacy_allowed, _legacy_retry = await loop.run_in_executor(
+                            self.executor,
+                            self.rate_limiter.shadow_check_rate_limit,
+                            user_id,
+                            cost,
+                        )
+                    else:
+                        legacy_allowed, _legacy_retry = await loop.run_in_executor(
+                            self.executor,
+                            self.rate_limiter.peek_rate_limit,
+                            user_id,
+                            cost,
+                        )
+
+                    legacy_dec = "allow" if legacy_allowed else "deny"
+                    rg_dec = "allow" if rg_allowed else "deny"
+                    if legacy_dec != rg_dec:
+                        record_shadow_mismatch(
+                            module="embeddings",
+                            route="/api/v1/embeddings",
+                            policy_id=str(rg_decision.get("policy_id", "embeddings.default")),
+                            legacy=legacy_dec,
+                            rg=rg_dec,
+                        )
+                except Exception:
+                    # Observability only: never affect enforcement path.
+                    pass
+
+            return rg_allowed, rg_decision.get("retry_after")
+
         loop = asyncio.get_running_loop()
         legacy_allowed, legacy_retry = await loop.run_in_executor(
             self.executor,
@@ -444,25 +551,7 @@ class AsyncRateLimiter:
             cost,
             ip_address,
         )
-
-        if rg_decision is None:
-            return legacy_allowed, legacy_retry
-
-        # Shadow comparison (best-effort)
-        if self.shadow_enabled and record_shadow_mismatch is not None:
-            try:
-                if bool(legacy_allowed) != bool(rg_decision["allowed"]):
-                    record_shadow_mismatch(
-                        module="embeddings",
-                        route="/api/v1/embeddings",
-                        policy_id=rg_decision.get("policy_id", "embeddings.default"),
-                        legacy="allow" if legacy_allowed else "deny",
-                        rg="allow" if rg_decision["allowed"] else "deny",
-                    )
-            except Exception:
-                logger.debug("Embeddings RG shadow metric failed", exc_info=True)
-
-        return rg_decision["allowed"], rg_decision.get("retry_after")
+        return legacy_allowed, legacy_retry
 
     async def record_usage_async(self, user_id: str, cost: int = 1):
         """Record usage asynchronously (for post-processing)"""
@@ -498,10 +587,6 @@ _rg_embeddings_lock = asyncio.Lock()
 
 
 def _rg_embeddings_enabled() -> bool:
-    # Env wins; otherwise inherit global RG flag when present
-    flag = os.getenv("RG_ENABLE_EMBEDDINGS")
-    if flag is not None:
-        return flag.strip().lower() in {"1", "true", "yes", "on"}
     if rg_enabled:
         try:
             return bool(rg_enabled(False))  # type: ignore[func-returns-value]
@@ -547,7 +632,11 @@ async def _maybe_enforce_with_rg(
     tokens_units: int = 0,
 ) -> Optional[Dict[str, object]]:
     """
-    Attempt to enforce embeddings request limits via Resource Governor.
+    Attempt to enforce embeddings limits via Resource Governor.
+
+    Requests are enforced at ingress via `RGSimpleMiddleware`. This helper is
+    used for token accounting (and legacy fallback) and MUST NOT reserve
+    `requests` to avoid double-enforcement on RG-governed routes.
 
     Returns a decision dict when RG is used, or None when RG is unavailable/disabled.
     """
@@ -557,13 +646,19 @@ async def _maybe_enforce_with_rg(
     policy_id = os.getenv("RG_EMBEDDINGS_POLICY_ID", "embeddings.default")
     op_id = f"emb-{user_id}-{time.time_ns()}"
     try:
-        categories: Dict[str, Dict[str, int]] = {"requests": {"units": cost}}
         try:
             tu = int(tokens_units or 0)
         except Exception:
             tu = 0
+        tu = max(0, tu)
+
+        # Only enforce token budgets here; request-rate limiting happens at ingress.
+        categories: Dict[str, Dict[str, int]] = {}
         if tu > 0:
             categories["tokens"] = {"units": tu}
+        else:
+            # No token units to enforce; allow and bypass legacy limiter.
+            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
 
         decision, handle = await gov.reserve(
             RGRequest(

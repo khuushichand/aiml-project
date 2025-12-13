@@ -1,4 +1,3 @@
-import os
 import pytest
 from fastapi.testclient import TestClient
 
@@ -11,11 +10,56 @@ pytestmark = pytest.mark.rate_limit
 
 @pytest.mark.asyncio
 async def test_diag_peek_with_policy_id(monkeypatch, tmp_path):
-    # Run app in minimal mode and single_user to bypass heavy AuthNZ
+    async def _init_authnz_sqlite(db_path) -> None:
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        monkeypatch.setenv("AUTH_MODE", "multi_user")
+        try:
+            from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+            from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+            await reset_db_pool()
+            reset_settings()
+        except Exception:
+            pass
+        try:
+            from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
+
+            await ensure_authnz_schema_ready_once()
+        except Exception:
+            pass
+
+    async def _create_admin_user_and_key(*, username: str, email: str) -> str:
+        from uuid import uuid4
+
+        from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+        from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB
+
+        pool = await get_db_pool()
+        users_db = UsersDB(pool)
+        await users_db.initialize()
+        created_user = await users_db.create_user(
+            username=username,
+            email=email,
+            password_hash="x",
+            role="admin",
+            is_active=True,
+            is_superuser=True,
+            storage_quota_mb=5120,
+            uuid_value=uuid4(),
+        )
+        user_id = int(created_user["id"])
+        mgr = APIKeyManager(pool)
+        await mgr.initialize()
+        key_rec = await mgr.create_api_key(user_id=user_id, name=f"{username}-key")
+        return str(key_rec["key"])
+
+    db_path = tmp_path / "authnz_rg_diag_peek.db"
+    await _init_authnz_sqlite(db_path)
+    api_key = await _create_admin_user_and_key(username="rg-diag-admin", email="rg-diag-admin@example.com")
+
+    # Run app in minimal mode.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
-    monkeypatch.setenv("AUTH_MODE", "single_user")
-    # Use deterministic single-user API key for auth
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-1234567890")
 
     # Minimal policy file (not strictly required for this test)
     yaml_path = tmp_path / "rg.yaml"
@@ -44,7 +88,7 @@ async def test_diag_peek_with_policy_id(monkeypatch, tmp_path):
         r = c.get(
             "/api/v1/resource-governor/diag/peek",
             params={"entity": "user:diag", "categories": "requests,tokens", "policy_id": "chat.default"},
-            headers={"X-API-KEY": "test-api-key-1234567890"},
+            headers={"X-API-KEY": api_key},
         )
         assert r.status_code == 200
         data = r.json()

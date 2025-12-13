@@ -20,8 +20,9 @@ class FakeTime:
 async def test_atomic_multi_category_rollback_on_denial():
     class _Loader:
         def get_policy(self, pid):
-            # requests allow 1 per minute; tokens deny (0) -> overall must deny and requests should not be incremented
-            return {"requests": {"rpm": 1}, "tokens": {"per_min": 0}, "scopes": ["global", "user"]}
+            # requests allow 1 per minute; tokens allow 1 per minute.
+            # We pre-consume the tokens budget, then attempt a combined reserve.
+            return {"requests": {"rpm": 1}, "tokens": {"per_min": 1}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
     ns = "rg_t_atomic"
@@ -36,6 +37,10 @@ async def test_atomic_multi_category_rollback_on_denial():
                 await client.delete(k)
         except Exception:
             pass
+
+    # Pre-consume the tokens window so the combined reserve will be denied.
+    d0, h0 = await rg.reserve(RGRequest(entity="user:1", categories={"tokens": {"units": 1}}, tags={"policy_id": "p"}))
+    assert d0.allowed and h0
 
     req = RGRequest(entity="user:1", categories={"requests": {"units": 1}, "tokens": {"units": 1}}, tags={"policy_id": "p"})
     dec, hid = await rg.reserve(req)

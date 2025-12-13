@@ -49,6 +49,15 @@ asyncio.run(main())
 PY
 ```
 
+Option A2 — Seed DB from YAML (no HTTP):
+```
+# Seeds missing policy_ids referenced by route_map (default)
+python -m tldw_Server_API.app.core.Resource_Governance.seed_db_from_yaml
+
+# Seed all YAML policies
+python -m tldw_Server_API.app.core.Resource_Governance.seed_db_from_yaml --all
+```
+
 Option B — Admin API (HTTP):
 1) Obtain an admin JWT (login as admin in multi-user mode).
 2) Upsert policies via API:
@@ -103,6 +112,7 @@ route_map:
 
 Notes
 - When `RG_POLICY_STORE=db` is active, the loader merges the file’s `route_map` into the snapshot containing DB policies. File `route_map` takes precedence on conflicts.
+- IMPORTANT: When `RG_POLICY_STORE=db` is active, YAML `policies:` are not used at runtime. Every `policy_id` referenced by `route_map` must exist in the DB store (`rg_policies`) or ingress enforcement will fail closed for that route (because missing request limits default to deny).
 - Durable daily caps can be specified with `daily_cap` under any category and are enforced via `ResourceDailyLedger` (e.g., `tokens.daily_cap`, `workflows_runs.daily_cap`).
 - Proxy/IP scoping (env):
   - `RG_TRUSTED_PROXIES`: comma-separated CIDRs of reverse proxies
@@ -115,12 +125,12 @@ Notes
 - Resolution order: path-based mapping (`route_map.by_path`) first, then tag-based mapping (`route_map.by_tag`). Wildcards like `/api/v1/chat/*` match by prefix.
 - Entity derivation: prefers authenticated user (`user:{id}`), then API key id/hash (`api_key:{id|hash}`), then trusted proxy IP header via `RG_CLIENT_IP_HEADER` when `RG_TRUSTED_PROXIES` contains the peer; otherwise falls back to `request.client.host`.
 - Behavior: performs a pre-check/reserve for the `requests` category before calling the endpoint and commits afterwards. On denial, sets `Retry-After` and `X-RateLimit-*` headers. On success, injects accurate `X-RateLimit-*` headers using a governor `peek` when available.
-- Enabled automatically whenever `RG_ENABLED=1` unless forced off via `RG_ENABLE_SIMPLE_MIDDLEWARE=0`. The legacy enable flags (`RG_ENABLE_SIMPLE_MIDDLEWARE=1` / `RG_ENABLE_SLOWAPI=1`) remain as compatibility aliases. It only guards `requests` in this minimal form; streaming/tokens categories require explicit endpoint reserve/commit plumbing.
+- Scope: this middleware enforces **requests only**. Categories such as `tokens`, `streams`, `jobs`, and `minutes` require explicit endpoint-level RG reserve/commit plumbing (for example chat/embeddings tokens, audio streaming concurrency).
+- Enabled automatically whenever `RG_ENABLED=1` unless forced off via `RG_ENABLE_SIMPLE_MIDDLEWARE=0`. The legacy enable flags (`RG_ENABLE_SIMPLE_MIDDLEWARE=1` / `RG_ENABLE_SLOWAPI=1`) remain as compatibility aliases.
 
 Headers on success/deny:
 - Deny (429): `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining=0`, `X-RateLimit-Reset` (seconds until retry).
-- Success: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` computed via peek. When a tokens policy exists and is peek‑able, the middleware also sets `X-RateLimit-Tokens-Remaining` and, if `tokens.per_min` is defined, `X-RateLimit-PerMinute-Limit`/`X-RateLimit-PerMinute-Remaining`.
-- When denial is caused by a category other than `requests` (e.g., `tokens`), the middleware maps `X-RateLimit-*` to that denying category’s effective limit and retry.
+- Success: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` computed via peek for the `requests` category.
 
 ## Diagnostics
 
@@ -141,8 +151,6 @@ Headers on success/deny:
 - Middleware tests run against tiny stub FastAPI apps and don’t require full server startup.
 - Useful env toggles during manual experiments:
   - `RG_ENABLE_SIMPLE_MIDDLEWARE=1`
-  - `RG_MIDDLEWARE_ENFORCE_TOKENS=1`
-  - `RG_MIDDLEWARE_ENFORCE_STREAMS=1`
 - Tests:
   - `pytest -q tldw_Server_API/tests/Resource_Governance/test_middleware_simple.py`
   - `pytest -q tldw_Server_API/tests/Resource_Governance/test_middleware_tokens_headers.py`
