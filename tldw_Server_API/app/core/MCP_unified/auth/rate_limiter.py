@@ -134,24 +134,29 @@ class TokenBucketRateLimiter(BaseRateLimiter):
             return (True, 0)
 
     async def peek_allowed(self, key: str) -> tuple[bool, int]:
-        """Check if request is allowed without consuming a token."""
+        """Check if request is allowed without consuming tokens or mutating state."""
         async with self._lock:
             current = time.time()
-
-            if key not in self.allowance:
-                self.allowance[key] = self.burst
-                self.last_check[key] = current
+            if self.rate <= 0 or self.per <= 0:
                 return (True, 0)
 
-            time_passed = current - self.last_check[key]
-            self.last_check[key] = current
+            allowance = self.allowance.get(key)
+            if allowance is None:
+                # No prior history means a fresh bucket would allow a request.
+                return (True, 0)
 
-            self.allowance[key] += time_passed * (self.rate / self.per)
-            if self.allowance[key] > self.burst:
-                self.allowance[key] = self.burst
+            last_check = self.last_check.get(key)
+            if last_check is None:
+                # Defensive: treat as freshly checked.
+                last_check = current
 
-            if self.allowance[key] < 1.0:
-                tokens_needed = 1.0 - self.allowance[key]
+            time_passed = current - last_check
+            allowance = allowance + time_passed * (self.rate / self.per)
+            if allowance > self.burst:
+                allowance = float(self.burst)
+
+            if allowance < 1.0:
+                tokens_needed = 1.0 - allowance
                 retry_after = int(tokens_needed * (self.per / self.rate)) + 1
                 return (False, retry_after)
 
@@ -240,7 +245,11 @@ class SlidingWindowRateLimiter(BaseRateLimiter):
             current = time.time()
             window_start = current - self.window
 
-            timestamps = self.requests[key]
+            timestamps = self.requests.get(key)
+            if not timestamps:
+                return (True, 0)
+
+            # Prune old timestamps outside the window (no request is recorded).
             while timestamps and timestamps[0] < window_start:
                 timestamps.popleft()
 
@@ -649,12 +658,13 @@ class RateLimiter:
                 if record_shadow_mismatch is not None:
                     rg_allowed = bool(rg_decision.get("allowed", False))
                     legacy_allowed = None
-                    if rg_allowed:
-                        legacy_allowed, _legacy_retry = await limiter.is_allowed(key)
-                    else:
-                        peek_fn = getattr(limiter, "peek_allowed", None)
-                        if callable(peek_fn):
-                            legacy_allowed, _legacy_retry = await peek_fn(key)
+                    peek_fn = getattr(limiter, "peek_allowed", None)
+                    if callable(peek_fn):
+                        maybe_result = peek_fn(key)
+                        if inspect.isawaitable(maybe_result):
+                            legacy_allowed, _legacy_retry = await maybe_result
+                        else:
+                            legacy_allowed, _legacy_retry = maybe_result
                     if isinstance(legacy_allowed, bool):
                         legacy_dec = "allow" if legacy_allowed else "deny"
                         rg_dec = "allow" if rg_allowed else "deny"
