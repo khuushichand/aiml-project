@@ -470,9 +470,29 @@ async def list_chat_commands(
     try:
         # Access registry for permission metadata (conventionally private, stable enough for internal use)
         reg = getattr(command_router, "_registry", {})
+        # Prefer claim-first checks when current_user exposes permissions to avoid DB hits.
+        perms_claim = set(getattr(current_user, "permissions", []) or [])
         for name, spec in reg.items():  # type: ignore
             perm = getattr(spec, "required_permission", None)
-            if not perm or user_has_permission(int(getattr(current_user, "id", 0) or 0), perm):
+            if not perm:
+                items.append(
+                    ChatCommandInfo(
+                        name=name,
+                        description=getattr(spec, "description", name),
+                        required_permission=perm,
+                    )
+                )
+                continue
+
+            has_perm_claim = perm in perms_claim
+            has_perm_db = False
+            if not has_perm_claim:
+                try:
+                    has_perm_db = user_has_permission(int(getattr(current_user, "id", 0) or 0), perm)
+                except Exception:
+                    has_perm_db = False
+
+            if has_perm_claim or has_perm_db:
                 items.append(
                     ChatCommandInfo(
                         name=name,

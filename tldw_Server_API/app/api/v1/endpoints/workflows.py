@@ -821,8 +821,8 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 @limit_run_saved
 async def run_saved(
     workflow_id: int,
+    request: Request,
     mode: str = Query("async", description="Execution mode: async|sync"),
-    request: Request = None,
     body: RunRequest = Body(...),
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
@@ -1272,8 +1272,8 @@ async def list_runs(
 @router.post("/run", response_model=WorkflowRunResponse)
 @limit_adhoc
 async def run_adhoc(
+    request: Request,
     mode: str = Query("async", description="Execution mode: async|sync"),
-    request: Request = None,
     body: AdhocRunRequest = Body(...),
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),

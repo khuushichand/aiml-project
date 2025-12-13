@@ -441,7 +441,10 @@ async def get_current_user(
                 settings = get_settings()
             except Exception:
                 settings = None
-            allowed_keys = {os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")}
+            allowed_keys: set[str] = set()
+            test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+            if test_key:
+                allowed_keys.add(test_key)
             if settings and settings.SINGLE_USER_API_KEY:
                 allowed_keys.add(settings.SINGLE_USER_API_KEY)
             if x_api_key in allowed_keys:
@@ -727,7 +730,7 @@ def require_permissions(*permissions: str) -> Callable[[AuthPrincipal], Awaitabl
 
     perms = [str(p) for p in permissions if str(p).strip()]
 
-    async def _checker(principal: AuthPrincipal = Depends(get_auth_principal)) -> AuthPrincipal:
+    async def _checker(principal: AuthPrincipal = Depends(get_auth_principal)) -> AuthPrincipal:  # noqa: B008
         if principal.is_admin:
             return principal
         missing = [p for p in perms if p not in principal.permissions]
@@ -752,7 +755,7 @@ def require_roles(*roles: str) -> Callable[[AuthPrincipal], Awaitable[AuthPrinci
 
     role_list = [str(r) for r in roles if str(r).strip()]
 
-    async def _checker(principal: AuthPrincipal = Depends(get_auth_principal)) -> AuthPrincipal:
+    async def _checker(principal: AuthPrincipal = Depends(get_auth_principal)) -> AuthPrincipal:  # noqa: B008
         if principal.is_admin:
             return principal
         if not role_list:
@@ -768,7 +771,7 @@ def require_roles(*roles: str) -> Callable[[AuthPrincipal], Awaitable[AuthPrinci
 
 
 async def require_service_principal(
-    principal: AuthPrincipal = Depends(get_auth_principal),
+    principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
 ) -> AuthPrincipal:
     """
     Dependency that enforces a service principal.

@@ -110,6 +110,7 @@ async def get_resource_governor_policy(
                         await loader.load_once()
                         _app.state.rg_policy_loader = loader
                         _app.state.rg_policy_store = "file"
+                        store = "file"
                 else:
                     # File-based loader
                     if env_path:
@@ -121,6 +122,7 @@ async def get_resource_governor_policy(
                     await loader.load_once()
                     _app.state.rg_policy_loader = loader
                     _app.state.rg_policy_store = "file"
+                    store = "file"
                 # Update snapshot metadata for health/routes that read app.state
                 try:
                     snap_meta = loader.get_snapshot()
@@ -140,6 +142,8 @@ async def get_resource_governor_policy(
             except Exception as _init_exc:
                 logger.exception("Resource governor policy loader init failed: {}", repr(_init_exc))
                 return JSONResponse({"status": "unavailable", "reason": "policy_loader_not_initialized"}, status_code=503)
+        # Ensure response reflects the effective store mode after init/fallback.
+        store = getattr(_app.state, "rg_policy_store", None) or store
         snap = loader.get_snapshot()
         body: Dict[str, Any] = {
             "status": "ok",
@@ -154,12 +158,12 @@ async def get_resource_governor_policy(
             body["policies"] = snap.policies or {}
             body["tenant"] = snap.tenant or {}
         return JSONResponse(body)
-    except Exception as e:
+    except Exception:  # noqa: BLE001 - generic 500 handler
         logger.exception("get_resource_governor_policy failed")
         return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
 
-# --- Admin endpoints (gated) ---
+# --- Policy admin endpoints (gated by require_roles('admin')) ---
 from pydantic import BaseModel, Field
 from tldw_Server_API.app.core.Resource_Governance.policy_admin import (
     AuthNZPolicyAdmin,
@@ -204,7 +208,7 @@ async def upsert_policy(
             },
             status_code=409,
         )
-    except Exception as e:
+    except Exception:  # noqa: BLE001 - generic 500 handler
         logger.exception("upsert_policy failed")
         return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
@@ -241,7 +245,7 @@ async def delete_policy(
             },
             status_code=409,
         )
-    except Exception as e:
+    except Exception:  # noqa: BLE001 - generic 500 handler
         logger.exception("delete_policy failed")
         return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
@@ -255,7 +259,7 @@ async def list_policies():
         admin = AuthNZPolicyAdmin()
         rows = await admin.list_policies()
         return JSONResponse({"status": "ok", "items": rows, "count": len(rows)})
-    except Exception as e:
+    except Exception:  # noqa: BLE001 - generic 500 handler
         logger.exception("list_policies failed")
         return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
@@ -271,7 +275,7 @@ async def get_policy(policy_id: str = Path(..., description="Policy identifier")
         if not rec:
             return JSONResponse({"status": "not_found", "policy_id": policy_id}, status_code=404)
         return JSONResponse({"status": "ok", **rec})
-    except Exception as e:
+    except Exception:  # noqa: BLE001 - generic 500 handler
         logger.exception("get_policy failed")
         return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
@@ -301,7 +305,7 @@ async def rg_diag_peek(
             if inspect.isawaitable(data):
                 data = await data
         return JSONResponse({"status": "ok", "entity": entity, "data": data, "policy_id": policy_id})
-    except Exception as e:
+    except Exception:  # noqa: BLE001 - generic 500 handler
         logger.exception("rg_diag_peek failed")
         return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
@@ -322,7 +326,7 @@ async def rg_diag_query(
         if inspect.isawaitable(data):
             data = await data
         return JSONResponse({"status": "ok", "entity": entity, "category": category, "data": data})
-    except Exception as e:
+    except Exception:  # noqa: BLE001 - generic 500 handler
         logger.exception("rg_diag_query failed")
         return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)
 
@@ -345,6 +349,6 @@ async def rg_diag_capabilities():
         else:
             caps = {"backend": "unknown"}
         return JSONResponse({"status": "ok", "capabilities": caps})
-    except Exception as e:
+    except Exception:  # noqa: BLE001 - generic 500 handler
         logger.exception("rg_diag_capabilities failed")
         return JSONResponse({"status": "error", "error": "internal server error"}, status_code=500)

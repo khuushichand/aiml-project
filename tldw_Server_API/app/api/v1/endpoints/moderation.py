@@ -1,5 +1,6 @@
 # moderation.py
-# Description: Admin endpoints for Moderation settings (per-user overrides and blocklist)
+# Description: Moderation configuration endpoints gated by admin role +
+# SYSTEM_CONFIGURE permission (per-user overrides and blocklist)
 
 from __future__ import annotations
 
@@ -42,12 +43,14 @@ router = APIRouter(
 
 @router.get("/moderation/users", response_model=ModerationUserOverridesResponse, summary="List all per-user moderation overrides", tags=["moderation"])
 async def list_user_overrides() -> ModerationUserOverridesResponse:
+    """List all per-user moderation override entries."""
     svc = get_moderation_service()
     return {"overrides": svc.list_user_overrides()}
 
 
 @router.get("/moderation/users/{user_id}", response_model=dict, summary="Get per-user moderation override", tags=["moderation"])
 async def get_user_override(user_id: str) -> dict[str, Any]:
+    """Return the per-user moderation override for the given user id."""
     svc = get_moderation_service()
     data = svc.list_user_overrides().get(str(user_id))
     if data is None:
@@ -57,6 +60,7 @@ async def get_user_override(user_id: str) -> dict[str, Any]:
 
 @router.put("/moderation/users/{user_id}", response_model=dict, summary="Set per-user moderation override", tags=["moderation"])
 async def set_user_override(user_id: str, override: ModerationUserOverride) -> dict[str, Any]:
+    """Set or replace a per-user moderation override entry."""
     svc = get_moderation_service()
     status_info = svc.set_user_override(user_id, override.model_dump(exclude_none=True))
     status_dict = status_info if isinstance(status_info, dict) else {}
@@ -74,6 +78,7 @@ async def set_user_override(user_id: str, override: ModerationUserOverride) -> d
 
 @router.delete("/moderation/users/{user_id}", summary="Delete per-user moderation override", tags=["moderation"])
 async def delete_user_override(user_id: str) -> dict[str, Any]:
+    """Delete a per-user moderation override entry."""
     svc = get_moderation_service()
     status_info = svc.delete_user_override(user_id)
     status_dict = status_info if isinstance(status_info, dict) else {}
@@ -90,12 +95,14 @@ async def delete_user_override(user_id: str) -> dict[str, Any]:
 
 @router.get("/moderation/blocklist", response_model=list, summary="Get current blocklist lines", tags=["moderation"])
 async def get_blocklist() -> list[str]:
+    """Return the current moderation blocklist lines."""
     svc = get_moderation_service()
     return svc.get_blocklist_lines()
 
 
 @router.put("/moderation/blocklist", summary="Replace blocklist with provided lines", tags=["moderation"])
 async def update_blocklist(data: ModerationBlocklistUpdate) -> dict[str, Any]:
+    """Replace the entire blocklist with the provided lines."""
     svc = get_moderation_service()
     ok = svc.set_blocklist_lines(data.lines or [])
     if not ok:
@@ -109,15 +116,16 @@ async def update_blocklist(data: ModerationBlocklistUpdate) -> dict[str, Any]:
     tags=["moderation"],
 )
 async def get_effective_policy(user_id: Optional[str] = Query(None, description="User ID to compute effective policy; optional")) -> dict[str, Any]:
+    """Return the effective moderation policy snapshot for an optional user."""
     svc = get_moderation_service()
     try:
         snapshot = svc.effective_policy_snapshot(user_id)
-    except Exception as e:
-        logger.error("Failed to compute effective moderation policy: {}", e)
+    except Exception as exc:
+        logger.exception("Failed to compute effective moderation policy")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to compute effective policy: {e}",
-        ) from e
+            detail="Failed to compute effective policy",
+        ) from exc
     else:
         return snapshot
 
@@ -128,15 +136,16 @@ async def get_effective_policy(user_id: Optional[str] = Query(None, description=
     tags=["moderation"],
 )
 async def reload_moderation() -> dict[str, Any]:
+    """Reload moderation configuration from disk."""
     svc = get_moderation_service()
     try:
         svc.reload()
-    except Exception as e:
-        logger.error("Failed to reload moderation configuration: {}", e)
+    except Exception as exc:
+        logger.exception("Failed to reload moderation configuration")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to reload moderation: {e}",
-        ) from e
+            detail="Failed to reload moderation",
+        ) from exc
     else:
         return {"status": "ok"}
 
@@ -148,15 +157,16 @@ async def reload_moderation() -> dict[str, Any]:
     tags=["moderation"],
 )
 async def get_moderation_settings() -> ModerationSettingsResponse:
+    """Return runtime moderation settings and effective state."""
     svc = get_moderation_service()
     try:
         data = svc.get_settings()
-    except Exception as e:
-        logger.error("Failed to get moderation settings: {}", e)
+    except Exception as exc:
+        logger.exception("Failed to get moderation settings")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
-        ) from e
+            detail="Failed to get moderation settings",
+        ) from exc
     else:
         return data
 
@@ -168,15 +178,16 @@ async def get_moderation_settings() -> ModerationSettingsResponse:
     tags=["moderation"],
 )
 async def update_moderation_settings(body: ModerationSettingsUpdate) -> ModerationSettingsResponse:
+    """Update runtime moderation settings without persisting by default."""
     svc = get_moderation_service()
     try:
         data = svc.update_settings(pii_enabled=body.pii_enabled, categories_enabled=body.categories_enabled, persist=bool(body.persist))
-    except Exception as e:
-        logger.error("Failed to update moderation settings: {}", e)
+    except Exception as exc:
+        logger.exception("Failed to update moderation settings")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
-        ) from e
+            detail="Failed to update moderation settings",
+        ) from exc
     else:
         return data
 
@@ -188,6 +199,7 @@ async def update_moderation_settings(body: ModerationSettingsUpdate) -> Moderati
     tags=["moderation"],
 )
 async def get_blocklist_managed(response: Response) -> BlocklistManagedResponse:
+    """Return the managed blocklist with version metadata for concurrency control."""
     svc = get_moderation_service()
     state = svc.get_blocklist_state()
     # Set ETag header for clients to use with If-Match
@@ -207,6 +219,7 @@ async def append_blocklist_line(
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> BlocklistAppendResponse:
+    """Append a blocklist line using optimistic concurrency via If-Match."""
     if not if_match:
         raise HTTPException(status_code=428, detail="If-Match header is required")
     svc = get_moderation_service()
@@ -234,6 +247,7 @@ async def delete_blocklist_item(
     response: Response,
     if_match: Optional[str] = Header(None, alias="If-Match"),
 ) -> BlocklistDeleteResponse:
+    """Delete a blocklist entry by index using optimistic concurrency."""
     if not if_match:
         raise HTTPException(status_code=428, detail="If-Match header is required")
     svc = get_moderation_service()
@@ -259,6 +273,7 @@ async def delete_blocklist_item(
 async def lint_blocklist(
     payload: BlocklistLintRequest,
 ) -> BlocklistLintResponse:
+    """Validate blocklist lines without persisting changes."""
     svc = get_moderation_service()
     lines = []
     if payload.lines:
@@ -270,12 +285,12 @@ async def lint_blocklist(
     try:
         res = svc.lint_blocklist_lines(lines)
         items = [BlocklistLintItem(**it) for it in (res.get("items") or [])]
-    except Exception as e:
-        logger.error("Failed to lint blocklist lines: {}", e)
+    except Exception as exc:
+        logger.exception("Failed to lint blocklist lines")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
-        ) from e
+            detail="Failed to lint blocklist lines",
+        ) from exc
     else:
         return BlocklistLintResponse(
             items=items,
@@ -291,6 +306,7 @@ async def lint_blocklist(
     tags=["moderation"],
 )
 async def test_moderation(payload: ModerationTestRequest) -> ModerationTestResponse:
+    """Evaluate sample text against the effective moderation policy for a user."""
     svc = get_moderation_service()
     eff = svc.get_effective_policy(payload.user_id)
 

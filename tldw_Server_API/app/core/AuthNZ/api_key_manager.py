@@ -16,7 +16,7 @@ from loguru import logger
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
     derive_hmac_key,
     derive_hmac_key_candidates,
@@ -26,15 +26,16 @@ if TYPE_CHECKING:
     from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
 
 
-def _compute_hmac_fingerprint(settings) -> str:
-    """Compute fingerprint of HMAC key material for cache invalidation."""
+def _compute_hmac_fingerprint(settings: Settings) -> str:
+    """Compute a non-reversible fingerprint of HMAC key material for cache invalidation."""
     try:
         key_material = (
             (settings.JWT_SECRET_KEY or "")
             or (settings.API_KEY_PEPPER or "")
         ) or "tldw_default_api_key_hmac"
-        return key_material[:32]
-    except Exception:
+        material_bytes = str(key_material).encode("utf-8", errors="surrogatepass")
+        return hashlib.sha256(material_bytes).hexdigest()
+    except (AttributeError, TypeError):
         return ""
 
 #######################################################################################################################
@@ -66,14 +67,35 @@ class APIKeyManager:
 
     def __init__(self, db_pool: Optional[DatabasePool] = None):
         """Initialize API key manager"""
-        self.db_pool = db_pool
+        self._db_pool: Optional[DatabasePool] = None
         self._repo: Optional["AuthnzApiKeysRepo"] = None
+        # Use the property setter so that any future re-binding of db_pool
+        # explicitly clears the cached repository.
+        self.db_pool = db_pool
         self._initialized = False
         self.settings = get_settings()
         self.key_prefix = "tldw_"  # Prefix for identifying our API keys
         self.key_length = 32  # Length of random part
         # Fingerprint the HMAC key material to detect settings changes (e.g., JWT_SECRET_KEY)
         self._hmac_key_fingerprint = _compute_hmac_fingerprint(self.settings)
+
+    @property
+    def db_pool(self) -> Optional[DatabasePool]:
+        """Current database pool bound to this manager."""
+        return getattr(self, "_db_pool", None)
+
+    @db_pool.setter
+    def db_pool(self, value: Optional[DatabasePool]) -> None:
+        """
+        Bind a database pool and reset the cached repository when it changes.
+
+        This keeps the AuthnzApiKeysRepo lifecycle obvious when tests or
+        callers swap out the underlying DatabasePool.
+        """
+        if getattr(self, "_db_pool", None) is not value:
+            self._db_pool = value
+            if hasattr(self, "_repo"):
+                self._repo = None
 
     def _db_context_hint(self) -> str:
         """
@@ -243,7 +265,7 @@ class APIKeyManager:
 
         # Calculate expiration
         expires_at = None
-        if expires_in_days:
+        if expires_in_days is not None:
             expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
 
         try:
@@ -315,7 +337,7 @@ class APIKeyManager:
         full_key, key_hash = self.generate_api_key()
         key_prefix = full_key[:10] + "..."
         expires_at = None
-        if expires_in_days:
+        if expires_in_days is not None:
             expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
 
         try:
@@ -407,8 +429,13 @@ class APIKeyManager:
             # Check expiration
             if key_info['expires_at']:
                 expires_at_raw = key_info['expires_at']
+                expires_at_str = (
+                    expires_at_raw.replace("Z", "+00:00")
+                    if isinstance(expires_at_raw, str)
+                    else expires_at_raw
+                )
                 expires_at = (
-                    datetime.fromisoformat(expires_at_raw)
+                    datetime.fromisoformat(expires_at_str)
                     if isinstance(expires_at_raw, str)
                     else expires_at_raw
                 )
@@ -458,7 +485,7 @@ class APIKeyManager:
 
             # Check scope
             if required_scope:
-                key_scope = key_info['scope']
+                key_scope = key_info.get("scope")
                 if not self._has_scope(key_scope, required_scope):
                     return None
 
@@ -475,8 +502,14 @@ class APIKeyManager:
 
             return key_info
 
+        except DatabaseError:
+            # Surface explicit database failures so callers can respond with
+            # a clear server-side error instead of silently denying access.
+            raise
         except Exception as e:  # noqa: BLE001 - validation failures degrade to 'no key'
-            logger.error(f"Failed to validate API key: {e}")
+            logger.error(
+                f"Failed to validate API key (ip={ip_address}, scope={required_scope}): {e}"
+            )
             return None
 
     async def rotate_api_key(
@@ -658,7 +691,7 @@ class APIKeyManager:
             repo = self._get_repo()
             await repo.increment_usage(key_id=key_id, ip_address=ip_address)
         except Exception as e:  # noqa: BLE001 - usage updates must not break requests
-            logger.error(f"Failed to update usage: {e}")
+            logger.warning(f"Failed to update API key usage (key_id={key_id}): {e}")
 
     async def _mark_expired(self, key_id: int):
         """Mark a key as expired"""
@@ -666,7 +699,7 @@ class APIKeyManager:
             repo = self._get_repo()
             await repo.mark_key_expired(key_id=key_id, expired_status=APIKeyStatus.EXPIRED.value)
         except Exception as e:
-            logger.error(f"Failed to mark key as expired: {e}")
+            logger.warning(f"Failed to mark API key as expired (key_id={key_id}): {e}")
 
     async def _log_action(
         self,
@@ -674,7 +707,7 @@ class APIKeyManager:
         action: str,
         user_id: Optional[int] = None,
         details: Optional[Dict[str, Any]] = None
-    ):
+        ):
         """Log an action in the audit log"""
         try:
             repo = self._get_repo()
@@ -685,7 +718,9 @@ class APIKeyManager:
                 details=details,
             )
         except Exception as e:
-            logger.error(f"Failed to log action: {e}")
+            logger.warning(
+                f"Failed to write API key audit log (key_id={key_id}, action={action}): {e}"
+            )
 
 
 #######################################################################################################################

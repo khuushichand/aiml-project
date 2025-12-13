@@ -6,10 +6,10 @@ allow_remote_setup_access = false
 
 [Server]
 disable_cors = false
-allow_remote_webui_access = true
+allow_remote_webui_access = false
 # Optional: restrict which remote clients can access /webui
 # Provide CIDR ranges or individual IPs, comma-separated
-webui_ip_allowlist = 192.168.1.0/24, 192.168.5.0/24, 10.0.0.5
+webui_ip_allowlist =
 
 [Audit]
 # Auto-switch audit exports to streaming when max_rows exceeds this threshold to avoid large in-memory buffers.
@@ -828,8 +828,7 @@ default_alltalk_tts_output_format = mp3
 alltalk_api_ip = http://127.0.0.1:7851/v1/audio/speech
 kokoro_model_path = ./App_Function_Libraries/models/kokoro_models/
 default_kokoro_tts_speed = 1.0
-default_kokoro_tts_voice = sky
-default_kokoro_tts_model = pht
+default_kokoro_tts_voice = af_sky
 default_kokoro_tts_output_format = wav
 default_custom_openai_tts_voice = shimmer
 default_custom_openai_tts_speed = 1
@@ -837,6 +836,8 @@ default_custom_openai_tts_model = tts-1-hd
 default_custom_openai_tts_output_format = mp3
 default_custom_openai_api_ip = http://
 default_custom_openai_api_streaming = True
+
+[VibeVoice]
 vibevoice_variant = 1.5B
 vibevoice_model_path = microsoft/VibeVoice-1.5B
 vibevoice_device = auto

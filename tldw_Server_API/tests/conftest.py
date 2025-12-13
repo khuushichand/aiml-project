@@ -31,6 +31,9 @@ except Exception:
     pass
 # Force test-friendly env knobs
 os.environ["MPLBACKEND"] = "Agg"
+# Provide an explicit, deterministic API key for tests that rely on single-user/test-mode shortcuts.
+# Production code no longer assumes a default for SINGLE_USER_TEST_API_KEY.
+os.environ.setdefault("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
 # Disable background schedulers/workers that spawn threads during tests
 os.environ["DISABLE_AUTHNZ_SCHEDULER"] = "1"
 os.environ["AUTHNZ_SCHEDULER_DISABLED"] = "1"

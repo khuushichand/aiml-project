@@ -178,9 +178,14 @@ async def check_evaluation_rate_limit(
     # If ResourceGovernor ingress has already governed this route, avoid
     # double-enforcement via legacy AuthNZ rate limiter.
     try:
-        if getattr(request.state, "rg_policy_id", None):
+        policy_id = getattr(request.state, "rg_policy_id", None)
+        if policy_id:
+            logger.debug(
+                f"Skipping rate limit check; ResourceGovernor policy {policy_id} already applied"
+            )
             return
-    except Exception:
+    except AttributeError:
+        # request.state may not exist in some test scenarios
         pass
 
     client_ip = request.client.host if request.client else "unknown"
@@ -243,6 +248,13 @@ def enforce_heavy_evaluations_admin(principal: Optional[AuthPrincipal]) -> None:
     When EVALS_HEAVY_ADMIN_ONLY is disabled, this is a no-op. Otherwise,
     require an admin-style principal (is_admin or role 'admin') for heavy
     evaluations flows.
+
+    Args:
+        principal: Authenticated principal; None is only allowed when
+                   EVALS_HEAVY_ADMIN_ONLY is disabled.
+
+    Raises:
+        HTTPException: 403 if admin privileges are required but not present.
     """
     if os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in ("true", "1", "yes"):
         return

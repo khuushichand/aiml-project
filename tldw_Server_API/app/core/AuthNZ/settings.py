@@ -643,9 +643,14 @@ class Settings(BaseSettings):
                     logger.info("Using SINGLE_USER_API_KEY from environment for single-user mode")
                 elif in_test_context:
                     # Deterministic key so tests can authenticate reliably.
-                    test_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+                    test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                    if not test_key:
+                        raise ValueError(
+                            "SINGLE_USER_API_KEY is not configured for single-user mode.\n"
+                            "In test contexts, set SINGLE_USER_TEST_API_KEY explicitly (no default is assumed)."
+                        )
                     self.SINGLE_USER_API_KEY = test_key
-                    logger.debug("Using deterministic SINGLE_USER_API_KEY for test context")
+                    logger.debug("Using SINGLE_USER_TEST_API_KEY for deterministic test context")
                 else:
                     raise ValueError(
                         "SINGLE_USER_API_KEY is required for single-user mode but is not configured.\n"
@@ -658,9 +663,10 @@ class Settings(BaseSettings):
             elif in_test_context and (
                 self.SINGLE_USER_API_KEY in {"CHANGE_ME_TO_SECURE_API_KEY", "default-secret-key-for-single-user", "change-me-in-production"}
             ):
-                test_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
-                self.SINGLE_USER_API_KEY = test_key
-                logger.debug("Normalized SINGLE_USER_API_KEY to deterministic test key for pytest context")
+                test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                if test_key:
+                    self.SINGLE_USER_API_KEY = test_key
+                    logger.debug("Normalized SINGLE_USER_API_KEY to SINGLE_USER_TEST_API_KEY for pytest context")
             elif self.SINGLE_USER_API_KEY == "change-me-in-production":
                 raise ValueError(
                     "Default API key detected! Please set SINGLE_USER_API_KEY via environment or .env.\n"

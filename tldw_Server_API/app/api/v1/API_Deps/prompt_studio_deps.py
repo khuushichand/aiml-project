@@ -299,9 +299,11 @@ async def get_prompt_studio_user(
     )
 
     # Build user context from normalized User model using claim-first semantics.
-    roles = getattr(current_user, "roles", []) or []
+    roles_raw = getattr(current_user, "roles", []) or []
+    normalized_roles = {r.lower() for r in roles_raw if isinstance(r, str)}
+    roles = roles_raw if isinstance(roles_raw, list) else list(roles_raw)
     perms = getattr(current_user, "permissions", []) or []
-    is_admin = bool(getattr(current_user, "is_admin", False) or ("admin" in roles))
+    is_admin = bool(getattr(current_user, "is_admin", False) or ("admin" in normalized_roles))
 
     user_context: Dict[str, Any] = {
         "user_id": str(getattr(current_user, "id", "anonymous")),
@@ -468,8 +470,8 @@ async def check_rate_limit(
     try:
         if user_context.get("rg_policy_id"):
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Prompt Studio rate-limit bypass: failed to read rg_policy_id from user_context: {}", exc)
 
     user_id = str(user_context.get("user_id", "anonymous"))
 

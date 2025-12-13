@@ -20,7 +20,7 @@ defaults:
   algorithm:
     requests: token_bucket   # token_bucket | sliding_window
     tokens: token_bucket     # preferred for model tokens
-  scopes_order: [global, tenant, user, conversation, client, ip, service]
+  scopes_order: [global, tenant, user, api_key, conversation, client, ip, service, entity]
 
 policies:
   # Chat API: per-user and per-conversation controls
