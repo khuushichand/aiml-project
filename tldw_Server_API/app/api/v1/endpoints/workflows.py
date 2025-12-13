@@ -63,7 +63,8 @@ from tldw_Server_API.app.core.Workflows.daily_ledger import (
 # Best-effort per-process cache for "did we backfill today" keys.
 # Keep it bounded to avoid unbounded growth in long-lived workers.
 _WORKFLOWS_BACKFILL_CACHE: Set[str] = set()
-_WORKFLOWS_BACKFILL_CACHE_MAX = int(os.getenv("WORKFLOWS_BACKFILL_CACHE_MAX", "50000") or 50000)
+_raw_cache_max = int(os.getenv("WORKFLOWS_BACKFILL_CACHE_MAX", "50000") or 50000)
+_WORKFLOWS_BACKFILL_CACHE_MAX = max(1, _raw_cache_max)
 
 
 def _utcnow_iso() -> str:
@@ -116,6 +117,9 @@ def _optional_limit(rate: str):
             req = kwargs.get("request", None)
             try:
                 from starlette.requests import Request as _StarReq  # type: ignore
+                if not isinstance(req, _StarReq):
+                    # Fallback: try positional args for request.
+                    req = next((a for a in args if isinstance(a, _StarReq)), None)
                 if not isinstance(req, _StarReq):
                     return await func(*args, **kwargs)
             except Exception:
@@ -1567,7 +1571,6 @@ async def get_run_events(
     db: WorkflowsDatabase = Depends(_get_db),
     *,
     response: Response,
-    _request: Request,
 ):
     # Enforce tenant isolation and owner/admin
     run = db.get_run(run_id)
