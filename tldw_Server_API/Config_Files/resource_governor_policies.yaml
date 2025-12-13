@@ -85,35 +85,58 @@ policies:
     tokens: { per_min: 1000000, burst: 1.0, daily_cap: 500000 }
     scopes: [user, api_key]
 
-  # Web scraping service (internal service scope)
+  # Web scraping service (internal service scope).
+  # Used by the research/websearch module to fetch external pages.
+  # Limits are moderate (60 rpm) to avoid hammering upstream sites while
+  # keeping local scrapers responsive. `fail_mode=fallback_memory` keeps
+  # scraping available during RG store outages by falling back to in-memory
+  # limits for this internal-only traffic.
   web_scraping.default:
     requests: { rpm: 60, burst: 1.0 }
     scopes: [service]
     fail_mode: fallback_memory
 
-  # Research / websearch endpoints
+  # Research / websearch endpoints.
+  # Applied at ingress for `/api/v1/research/*` (per-user/api_key). The
+  # 30 rpm default balances responsiveness with protection against abusive
+  # fan‑out across third‑party search/content providers. Tokens are not
+  # accounted here; upstream provider quotas remain the primary guardrail.
   research.default:
     requests: { rpm: 30, burst: 1.0 }
     scopes: [user, api_key]
 
-  # Workflows (ad-hoc runs, schedules, admin)
+  # Workflows (ad-hoc runs, schedules, admin).
+  # Ingress limits bound request rate, while `workflows_runs.daily_cap`
+  # integrates with the Workflows daily ledger/RG helpers to enforce a
+  # durable per-user daily runs cap. The default cap (1000) aligns with
+  # the WORKFLOWS_QUOTA_DAILY_PER_USER env fallback used by the API.
   workflows.default:
     requests: { rpm: 60, burst: 1.0 }
     workflows_runs: { daily_cap: 1000 }
     scopes: [user, api_key]
 
-  # Prompt Studio API (projects/prompts/tests/optimization)
+  # Prompt Studio API (projects/prompts/tests/optimization).
+  # Policies are applied primarily at ingress for `/api/v1/prompt-studio/*`.
+  # Request limits are intentionally high so most safety/abuse controls are
+  # handled by AuthNZ module‑level limits (per‑operation) rather than RG.
   prompt_studio.default:
     # Keep high to avoid interfering with per-operation AuthNZ limits.
     requests: { rpm: 300, burst: 2.0 }
     scopes: [user, api_key]
 
-  # RAG unified/health endpoints
+  # RAG unified/health endpoints.
+  # Covers `/api/v1/rag/*` including unified search and health checks. The
+  # 120 rpm default is tuned for interactive usage and small teams; scale
+  # out by overriding in DB-backed policy stores for larger deployments.
   rag.default:
     requests: { rpm: 120, burst: 1.2 }
     scopes: [user, api_key]
 
-  # Media ingestion/processing endpoints
+  # Media ingestion/processing endpoints.
+  # Applies to `/api/v1/media/*` for uploads, conversions, and analysis.
+  # Media processing is CPU/IO heavy, so limits are slightly conservative
+  # (60 rpm, modest burst) to prevent local saturation while still allowing
+  # concurrent ingestion workflows in development.
   media.default:
     requests: { rpm: 60, burst: 1.2 }
     scopes: [user, api_key]

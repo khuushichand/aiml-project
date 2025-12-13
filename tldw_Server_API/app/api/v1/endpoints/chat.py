@@ -351,6 +351,8 @@ async def _maybe_rg_shadow_chat_decision(
         logger.debug("RG shadow: entity derivation failed, falling back to limiter_user_id: {}", exc)
         entity = f"user:{limiter_user_id}"
 
+    path = request.url.path or "/api/v1/chat/completions"
+
     # Build RG request mirroring chat policy (requests + optional tokens)
     cats: Dict[str, Dict[str, int]] = {"requests": {"units": 1}}
     try:
@@ -368,7 +370,6 @@ async def _maybe_rg_shadow_chat_decision(
             snap = loader.get_snapshot()
             route_map = dict(getattr(snap, "route_map", {}) or {})
             by_path = dict(route_map.get("by_path") or {})
-            path = "/api/v1/chat/completions"
             for pat, pol in by_path.items():
                 s = str(pat)
                 if s.endswith("*"):
@@ -387,7 +388,7 @@ async def _maybe_rg_shadow_chat_decision(
             RGRequest(
                 entity=entity,
                 categories=cats,
-                tags={"policy_id": policy_id, "endpoint": "/api/v1/chat/completions"},
+                tags={"policy_id": policy_id, "endpoint": path},
             )
         )
     except Exception as exc:  # noqa: BLE001 - defensive
@@ -403,7 +404,7 @@ async def _maybe_rg_shadow_chat_decision(
 
             record_shadow_mismatch(
                 module="chat",
-                route="/api/v1/chat/completions",
+                route=path,
                 policy_id=policy_id,
                 legacy=legacy_dec,
                 rg=rg_dec,
@@ -1119,7 +1120,11 @@ async def create_chat_completion(
                 try:
                     rg_gov = getattr(request.app.state, "rg_governor", None)
                     rg_loader = getattr(request.app.state, "rg_policy_loader", None)
-                except Exception:
+                except Exception as exc:
+                    logger.debug(
+                        "Chat RG: governor/policy_loader lookup failed; falling back to legacy limiter only: {}",
+                        exc,
+                    )
                     rg_gov = None
                     rg_loader = None
 
@@ -1143,7 +1148,11 @@ async def create_chat_completion(
                             entity = derive_entity_key(request)
                             try:
                                 entity_scope, entity_value = entity.split(":", 1)
-                            except Exception:
+                            except Exception as exc:
+                                logger.debug(
+                                    "Chat RG: entity split failed, using user fallback: {}",
+                                    exc,
+                                )
                                 entity_scope, entity_value = "user", str(getattr(current_user, "id", "1"))
 
                             # Best-effort backfill: if a tokens.daily_cap is configured,
@@ -1153,13 +1162,29 @@ async def create_chat_completion(
                             try:
                                 pol = rg_loader.get_policy(policy_id) or {}
                                 daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
-                            except Exception:
+                            except Exception as exc:
+                                logger.debug(
+                                    "Chat RG: tokens.daily_cap lookup failed for policy_id={}: {}",
+                                    policy_id,
+                                    exc,
+                                )
                                 daily_cap = 0
                             if daily_cap > 0:
-                                await backfill_legacy_tokens_to_ledger(
-                                    entity_scope=str(entity_scope),
-                                    entity_value=str(entity_value),
-                                )
+                                # Best-effort helper is idempotent and internally guarded
+                                # by a per-process entity/day set, so hot-path overhead is
+                                # minimal after the first backfill.
+                                try:
+                                    await backfill_legacy_tokens_to_ledger(
+                                        entity_scope=str(entity_scope),
+                                        entity_value=str(entity_value),
+                                    )
+                                except Exception as exc:
+                                    logger.debug(
+                                        "Chat RG: legacy tokens backfill failed for entity_scope={} entity_value={}: {}",
+                                        entity_scope,
+                                        entity_value,
+                                        exc,
+                                    )
 
                             completion_budget = 0
                             try:
@@ -1199,8 +1224,12 @@ async def create_chat_completion(
                                                     "X-RateLimit-Tokens-Remaining": "0",
                                                 }
                                             )
-                                except Exception:
-                                    pass
+                                except Exception as exc:
+                                    logger.debug(
+                                        "Chat RG: header enrichment from policy failed for policy_id={}: {}",
+                                        policy_id,
+                                        exc,
+                                    )
                                 raise HTTPException(
                                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                     detail="Rate limit exceeded",

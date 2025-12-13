@@ -66,7 +66,7 @@ async def upsert_watchlist(payload: Watchlist) -> WatchlistUpsertResponse:
     except HTTPException:
         # Propagate existing HTTP errors without masking them
         raise
-    except Exception as e:  # noqa: BLE001 - generic 500 handler
+    except Exception as e:  # Generic 500 handler
         logger.exception("Failed to upsert watchlist")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -203,7 +203,7 @@ async def send_test_notification(payload: NotificationTestRequest) -> Notificati
     try:
         # notifier.notify performs file I/O; offload to a thread to keep the event loop responsive.
         await asyncio.to_thread(notifier.notify, alert)
-    except Exception as e:  # noqa: BLE001 - generic 500 handler
+    except Exception as e:  # Generic 500 handler
         logger.exception("monitoring: failed to send test notification")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -290,7 +290,7 @@ async def get_recent_notifications(
             except (TypeError, json.JSONDecodeError) as e:
                 logger.debug(f"monitoring: failed to parse recent notification JSONL line: {e}")
                 items.append({"raw": ln})
-    except Exception as e:  # noqa: BLE001 - generic 500 handler
+    except Exception as e:  # Generic 500 handler
         logger.error(f"monitoring: failed to read recent notifications from {path}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

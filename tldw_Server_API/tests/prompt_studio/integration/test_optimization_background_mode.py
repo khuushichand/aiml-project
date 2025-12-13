@@ -12,10 +12,14 @@ import asyncio
 from typing import Dict, Any
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app as fastapi_app
-from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_studio_db
+from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
+    get_prompt_studio_db,
+    get_prompt_studio_user,
+)
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 
 
@@ -33,6 +37,16 @@ async def test_background_optimization_spawn_and_complete(tmp_path, monkeypatch)
 
     async def override_db():
         return db
+
+    async def override_user(request: Request):
+        return {
+            "user_id": "test-user",
+            "client_id": "bg-test",
+            "is_authenticated": True,
+            "is_admin": True,
+            "permissions": ["all"],
+            "rg_policy_id": getattr(request.state, "rg_policy_id", None),
+        }
 
     # Patch the async background runner to a fast stub that marks completion
     from tldw_Server_API.app.api.v1.endpoints import prompt_studio_optimization as opt_mod
@@ -54,13 +68,16 @@ async def test_background_optimization_spawn_and_complete(tmp_path, monkeypatch)
 
     _app = fastapi_app
     _app.dependency_overrides[get_prompt_studio_db] = override_db
+    _app.dependency_overrides[get_prompt_studio_user] = override_user
 
     try:
         with TestClient(_app) as client:
+            headers = {"X-API-KEY": "bg-test-key"}
             # Create project
             project = client.post(
                 "/api/v1/prompt-studio/projects/",
                 json={"name": "BG Proj", "description": "", "status": "active", "metadata": {}},
+                headers=headers,
             )
             assert project.status_code in (200, 201), project.text
             pid = project.json()["data"]["id"]
@@ -69,6 +86,7 @@ async def test_background_optimization_spawn_and_complete(tmp_path, monkeypatch)
             prompt = client.post(
                 "/api/v1/prompt-studio/prompts/create",
                 json={"project_id": pid, "name": "BG Prompt", "system_prompt": "S", "user_prompt": "{{q}}"},
+                headers=headers,
             )
             assert prompt.status_code in (200, 201), prompt.text
             prompt_id = prompt.json()["data"]["id"]
@@ -83,6 +101,7 @@ async def test_background_optimization_spawn_and_complete(tmp_path, monkeypatch)
                     "test_case_ids": [],
                     "name": "BG Opt",
                 },
+                headers=headers,
             )
             assert opt.status_code in (200, 201), opt.text
             opt_id = opt.json()["data"]["optimization"]["id"]
@@ -92,7 +111,7 @@ async def test_background_optimization_spawn_and_complete(tmp_path, monkeypatch)
             await asyncio.sleep(0.01)
 
             # Verify completion
-            st = client.get(f"/api/v1/prompt-studio/optimizations/get/{opt_id}")
+            st = client.get(f"/api/v1/prompt-studio/optimizations/get/{opt_id}", headers=headers)
             assert st.status_code == 200, st.text
             status_val = st.json()["data"]["status"]
             assert status_val == "completed"

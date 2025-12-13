@@ -430,23 +430,35 @@ async def _enforce_workflows_daily_cap(
     try:
         if os.getenv("WORKFLOWS_DISABLE_QUOTAS", "").lower() in {"1", "true", "yes", "on"}:
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Workflows quota: WORKFLOWS_DISABLE_QUOTAS check failed: {}", exc)
 
     # Derive RG entity key to align ledger accounting with middleware.
     try:
         entity = derive_entity_key(request)
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "Workflows quota: entity derivation failed, using user fallback: {}",
+            exc,
+        )
         entity = f"user:{getattr(current_user, 'id', '1')}"
     try:
         entity_scope, entity_value = entity.split(":", 1)
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "Workflows quota: entity split failed, using user fallback: {}",
+            exc,
+        )
         entity_scope, entity_value = "user", str(getattr(current_user, "id", "1"))
 
     policy_id = None
     try:
         policy_id = str(getattr(request.state, "rg_policy_id", None) or "workflows.default")
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "Workflows quota: rg_policy_id resolution failed, using default: {}",
+            exc,
+        )
         policy_id = "workflows.default"
 
     daily_cap_policy = 0
@@ -455,14 +467,23 @@ async def _enforce_workflows_daily_cap(
         if loader is not None and policy_id:
             pol = loader.get_policy(policy_id) or {}
             daily_cap_policy = int((pol.get(workflows_ledger_category()) or {}).get("daily_cap") or 0)
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "Workflows quota: RG policy lookup failed for policy_id={}: {}",
+            policy_id,
+            exc,
+        )
         daily_cap_policy = 0
 
     daily_cap_env = 0
     if daily_cap_policy <= 0:
         try:
             daily_cap_env = int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000") or 0)
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "Workflows quota: WORKFLOWS_QUOTA_DAILY_PER_USER parsing failed: {}",
+                exc,
+            )
             daily_cap_env = 0
 
     daily_cap = daily_cap_policy if daily_cap_policy > 0 else daily_cap_env
@@ -481,8 +502,13 @@ async def _enforce_workflows_daily_cap(
                 entity_scope=entity_scope,
                 entity_value=entity_value,
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(
+            "Workflows quota: legacy ledger backfill failed for entity_scope={} entity_value={}: {}",
+            entity_scope,
+            entity_value,
+            exc,
+        )
 
     # Prefer governor check when the policy defines the cap (single-source RG).
     if daily_cap_policy > 0:
@@ -507,9 +533,14 @@ async def _enforce_workflows_daily_cap(
                 return
         except HTTPException:
             raise
-        except Exception:
+        except Exception as exc:
             # Fall back to direct check below.
-            pass
+            logger.debug(
+                "Workflows quota: governor check failed for entity={} policy_id={}: {}",
+                entity,
+                policy_id,
+                exc,
+            )
 
     # Fallback direct check using computed cap (env alias).
     allowed, ra, det = await check_daily_cap(
@@ -546,7 +577,8 @@ async def _record_workflow_run_usage(
             run_id=str(run_id),
             units=1,
         )
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Workflows ledger recording failed for run {run_id}: {e}")
         return
 
 

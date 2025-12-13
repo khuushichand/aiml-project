@@ -101,7 +101,7 @@ def _get_or_create_prompt_studio_db(user_id: str, client_id: str) -> PromptStudi
     with _db_lock:
         # Check cache first
         if cache_key in _db_instances_cache:
-            logger.debug("Using cached PromptStudioDatabase for user %s", user_id)
+            logger.debug("Using cached PromptStudioDatabase for user {}", user_id)
             return _db_instances_cache[cache_key]
 
         # Create new instance
@@ -112,7 +112,7 @@ def _get_or_create_prompt_studio_db(user_id: str, client_id: str) -> PromptStudi
                 backend=backend,
             )
             _db_instances_cache[cache_key] = db_instance
-            logger.info("Created new PromptStudioDatabase instance for user %s", user_id)
+            logger.info("Created new PromptStudioDatabase instance for user {}", user_id)
             return db_instance
         except Exception as e:
             logger.error(f"Failed to create PromptStudioDatabase for user {user_id}: {e}")
@@ -153,7 +153,7 @@ async def get_prompt_studio_user(
     # Debug trace to aid tests
     try:
         logger.debug(
-            "PS get_user path=%s method=%s authz=%s api_key=%s",
+            "PS get_user path={} method={} authz={} api_key={}",
             getattr(request.url, "path", ""),
             getattr(request, "method", ""),
             "yes" if request.headers.get("Authorization") else "no",
@@ -217,14 +217,15 @@ async def get_prompt_studio_user(
     path = (request.url.path or "")
     method = request.method.upper()
     if not authz and not api_key_hdr:
+        test_mode = os.getenv("TEST_MODE", "").lower() == "true"
         # Explicitly require auth for project list endpoint (without trailing slash) to satisfy tests
         if path == "/api/v1/prompt-studio/projects" and method == "GET":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Authentication required"
             )
-        # Allow local test convenience for other project endpoints (create/get/update/delete)
-        if path.startswith("/api/v1/prompt-studio/projects"):
+        # Allow local test convenience only in TEST_MODE
+        if test_mode and path.startswith("/api/v1/prompt-studio/projects"):
             user_context = {
                 "user_id": "test-user",
                 "client_id": x_client_id or "test-client",
@@ -236,7 +237,7 @@ async def get_prompt_studio_user(
             request.state.user_context = user_context
             return user_context
         # Allow optimization endpoints for integration tests without auth headers
-        if path.startswith("/api/v1/prompt-studio/optimizations"):
+        if test_mode and path.startswith("/api/v1/prompt-studio/optimizations"):
             user_context = {
                 "user_id": "test-user",
                 "client_id": x_client_id or "test-client",
@@ -248,7 +249,7 @@ async def get_prompt_studio_user(
             request.state.user_context = user_context
             return user_context
         # Allow prompts endpoints for integration tests without auth headers
-        if path.startswith("/api/v1/prompt-studio/prompts"):
+        if test_mode and path.startswith("/api/v1/prompt-studio/prompts"):
             user_context = {
                 "user_id": "test-user",
                 "client_id": x_client_id or "test-client",
@@ -301,7 +302,6 @@ async def get_prompt_studio_user(
     # Build user context from normalized User model using claim-first semantics.
     roles_raw = getattr(current_user, "roles", []) or []
     normalized_roles = {r.lower() for r in roles_raw if isinstance(r, str)}
-    roles = roles_raw if isinstance(roles_raw, list) else list(roles_raw)
     perms = getattr(current_user, "permissions", []) or []
     is_admin = bool(getattr(current_user, "is_admin", False) or ("admin" in normalized_roles))
 

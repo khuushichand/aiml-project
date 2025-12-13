@@ -65,9 +65,11 @@ async def set_user_override(user_id: str, override: ModerationUserOverride) -> d
     status_info = svc.set_user_override(user_id, override.model_dump(exclude_none=True))
     status_dict = status_info if isinstance(status_info, dict) else {}
     if not status_dict.get("ok"):
+        error_detail = status_dict.get("error", "Failed to persist override")
+        logger.error("Moderation override persist failed for user_id={} error={}", user_id, error_detail)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=status_dict.get("error", "Failed to persist override"),
+            detail="Failed to persist override",
         )
     data = svc.list_user_overrides().get(str(user_id), {})
     # Surface whether the change was persisted

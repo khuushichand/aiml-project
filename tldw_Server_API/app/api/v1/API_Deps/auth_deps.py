@@ -5,8 +5,10 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List, Callable, Awaitable
 from collections.abc import Mapping
 import asyncio
+import threading
 import re
 import os
+from weakref import WeakKeyDictionary
 #
 # 3rd-party imports
 from fastapi import Depends, HTTPException, status, Request, Header, Response
@@ -46,22 +48,25 @@ from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
-_TEST_SESSION_LOCK: Optional[asyncio.Lock] = None
+_TEST_SESSION_LOCKS: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = WeakKeyDictionary()
+_TEST_SESSION_LOCK_GUARD = threading.Lock()
 
 
 def _get_test_session_lock() -> asyncio.Lock:
     """
-    Lazily initialize and return the test session lock.
+    Lazily initialize and return a test session lock scoped to the current event loop.
 
     The lock is created on first use within the currently running event loop
     instead of at module import time to avoid binding it to the wrong loop
     in test environments.
     """
-    global _TEST_SESSION_LOCK
-    if _TEST_SESSION_LOCK is not None:
-        return _TEST_SESSION_LOCK
-    _TEST_SESSION_LOCK = asyncio.Lock()
-    return _TEST_SESSION_LOCK
+    loop = asyncio.get_running_loop()
+    with _TEST_SESSION_LOCK_GUARD:
+        lock = _TEST_SESSION_LOCKS.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            _TEST_SESSION_LOCKS[loop] = lock
+        return lock
 
 #######################################################################################################################
 #
@@ -387,7 +392,7 @@ async def get_current_user(
             logger.debug("get_current_user: Reusing cached AuthPrincipal/_auth_user from request.state.")
             # Validate cached user type before processing; if it is not a mapping or
             # Pydantic-style model, fall through to standard auth.
-            if not (isinstance(cached_user, Mapping) or hasattr(cached_user, "dict")):
+            if not (isinstance(cached_user, Mapping) or hasattr(cached_user, "model_dump") or hasattr(cached_user, "dict")):
                 logger.debug(
                     "get_current_user: cached _auth_user is not a mapping/Pydantic model; "
                     "skipping fast-path reuse."
@@ -397,7 +402,8 @@ async def get_current_user(
                 if isinstance(cached_user, Mapping):
                     user_dict: Dict[str, Any] = dict(cached_user)
                 else:
-                    user_dict = dict(cached_user.dict())
+                    dump = getattr(cached_user, "model_dump", None) or getattr(cached_user, "dict", None)
+                    user_dict = dict(dump())
                 # Ensure request.state.user_id is populated for downstream consumers
                 try:
                     uid = user_dict.get("id")
@@ -988,7 +994,7 @@ async def require_admin(
 
 
 def require_role(role: str):
-    # Legacy shim – do not use in new code.
+    # Legacy shim - do not use in new code.
     # Prefer claim-first helpers (get_auth_principal, require_roles, require_permissions)
     # for new endpoints. This dependency is retained only for existing routes that
     # still rely on get_current_active_user user dicts.
@@ -1031,7 +1037,7 @@ async def get_optional_current_user(
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
 ) -> Optional[Dict[str, Any]]:
     """
-    Legacy shim – do not use in new code.
+    Legacy shim - do not use in new code.
 
     Get current user if authenticated, None otherwise.
 
@@ -1092,8 +1098,8 @@ async def check_rate_limit(
     try:
         if getattr(request.state, "rg_policy_id", None):
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("AuthNZ rate-limit bypass: unable to read request.state.rg_policy_id: {}", exc)
 
     # Additional bypass: in local single-user-style profiles, allow admin principals
     # to skip global IP rate limits. This relies on AuthPrincipal claims and

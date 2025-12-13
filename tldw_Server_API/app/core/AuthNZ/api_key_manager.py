@@ -27,15 +27,24 @@ if TYPE_CHECKING:
 
 
 def _compute_hmac_fingerprint(settings: Settings) -> str:
-    """Compute a non-reversible fingerprint of HMAC key material for cache invalidation."""
+    """
+    Compute a non-reversible fingerprint of HMAC key material for cache invalidation.
+
+    This mirrors the precedence and candidate selection used by
+    derive_hmac_key_candidates so that changes to SINGLE_USER_API_KEY,
+    API_KEY_PEPPER, or JWT secrets/keys all produce a new fingerprint.
+    """
     try:
-        key_material = (
-            (settings.JWT_SECRET_KEY or "")
-            or (settings.API_KEY_PEPPER or "")
-        ) or "tldw_default_api_key_hmac"
-        material_bytes = str(key_material).encode("utf-8", errors="surrogatepass")
-        return hashlib.sha256(material_bytes).hexdigest()
-    except (AttributeError, TypeError):
+        candidates = derive_hmac_key_candidates(settings)
+        if not candidates:
+            return ""
+        # Use the current key candidate (first entry) as fingerprint material.
+        # The candidate is already a 32-byte SHA256 digest; hash once more and
+        # return a hex string to avoid exposing raw key bytes.
+        return hashlib.sha256(candidates[0]).hexdigest()
+    except Exception:
+        # Preserve previous behavior: on any settings/derivation issue, return
+        # an empty string rather than raising during manager initialization.
         return ""
 
 #######################################################################################################################
@@ -146,6 +155,26 @@ class APIKeyManager:
         if isinstance(value, str) and value.strip():
             return json.loads(value)
         return None
+
+    def _parse_expires_at(self, expires_at_raw: Any) -> Optional[datetime]:
+        """Parse and normalize expires_at to a timezone-aware datetime."""
+        if not expires_at_raw:
+            return None
+
+        expires_at_str = (
+            expires_at_raw.replace("Z", "+00:00")
+            if isinstance(expires_at_raw, str)
+            else expires_at_raw
+        )
+        expires_at = (
+            datetime.fromisoformat(expires_at_str)
+            if isinstance(expires_at_raw, str)
+            else expires_at_raw
+        )
+        if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        return expires_at
 
     async def initialize(self):
         """Initialize database connection and ensure tables exist"""
@@ -428,19 +457,7 @@ class APIKeyManager:
 
             # Check expiration
             if key_info['expires_at']:
-                expires_at_raw = key_info['expires_at']
-                expires_at_str = (
-                    expires_at_raw.replace("Z", "+00:00")
-                    if isinstance(expires_at_raw, str)
-                    else expires_at_raw
-                )
-                expires_at = (
-                    datetime.fromisoformat(expires_at_str)
-                    if isinstance(expires_at_raw, str)
-                    else expires_at_raw
-                )
-                if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
-                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                expires_at = self._parse_expires_at(key_info['expires_at'])
                 now_utc = datetime.now(timezone.utc)
                 if isinstance(expires_at, datetime) and expires_at < now_utc:
                     await self._mark_expired(key_info['id'])
@@ -698,7 +715,7 @@ class APIKeyManager:
         try:
             repo = self._get_repo()
             await repo.mark_key_expired(key_id=key_id, expired_status=APIKeyStatus.EXPIRED.value)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - expiration updates must not break requests
             logger.warning(f"Failed to mark API key as expired (key_id={key_id}): {e}")
 
     async def _log_action(
@@ -717,7 +734,7 @@ class APIKeyManager:
                 user_id=user_id,
                 details=details,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - audit logging should not block requests
             logger.warning(
                 f"Failed to write API key audit log (key_id={key_id}, action={action}): {e}"
             )
