@@ -95,6 +95,55 @@ async def test_stub_session_manager_uses_timezone_aware_timestamps(monkeypatch: 
     refreshed = await sm.refresh_session("unused-positional", session_id=1, user_id=1)
     assert str(refreshed["expires_at"]).endswith("+00:00")
 
+@pytest.mark.asyncio
+async def test_get_current_user_fast_path_sanitizes_cached_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_MODE", "0")
+
+    request = _DummyRequest()
+    request.state._auth_user = {
+        "id": 42,
+        "username": "alice",
+        "email": "alice@example.com",
+        "role": "user",
+        "password_hash": "super-secret",
+        "hashed_password": "super-secret",
+        "two_factor_secret": "2fa-secret",
+        "totp_secret": "totp-secret",
+        "backup_codes": "backup-secret",
+        "access_token": "access-secret",
+        "refresh_token": "refresh-secret",
+        "api_key": "api-key-secret",
+        "ssn": "123-45-6789",
+    }
+    request.state.auth = AuthContext(
+        principal=AuthPrincipal(kind="user", user_id=42, is_admin=True),
+    )
+
+    user = await auth_deps.get_current_user(
+        request=request,
+        response=Response(),
+        credentials=None,
+        session_manager=object(),
+        db_pool=object(),
+        x_api_key=None,
+    )
+
+    assert user["id"] == 42
+    assert user["username"] == "alice"
+    assert "password_hash" not in user
+    assert "hashed_password" not in user
+    assert "two_factor_secret" not in user
+    assert "totp_secret" not in user
+    assert "backup_codes" not in user
+    assert "access_token" not in user
+    assert "refresh_token" not in user
+    assert "api_key" not in user
+    assert "ssn" not in user
+
+    cached = request.state._auth_user
+    assert isinstance(cached, dict)
+    assert "password_hash" not in cached
+
 
 @pytest.mark.asyncio
 async def test_api_key_auth_error_logging_does_not_leak_exception_message_outside_test_mode(

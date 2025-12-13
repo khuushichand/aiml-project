@@ -33,6 +33,10 @@ from tldw_Server_API.app.api.v1.schemas.monitoring_schemas import (
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicMonitoringDB, TopicAlert
 from tldw_Server_API.app.core.Monitoring.notification_service import get_notification_service
+from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+
+# Cached TopicMonitoringDB instance (initialized on first use).
+_TOPIC_MONITORING_DB: TopicMonitoringDB | None = None
 
 # All monitoring routes require SYSTEM_LOGS permission via this dependency.
 router = APIRouter(
@@ -53,9 +57,13 @@ def _find_project_root(start: Path) -> Path | None:
             return candidate
     return None
 
-
 def get_topic_monitoring_db() -> TopicMonitoringDB:
     """Return a TopicMonitoringDB instance for alert reads/updates."""
+    global _TOPIC_MONITORING_DB
+    test_mode = _is_test_mode()
+    if _TOPIC_MONITORING_DB is not None and not test_mode:
+        return _TOPIC_MONITORING_DB
+
     raw_db_path = os.getenv("MONITORING_ALERTS_DB", "Databases/monitoring_alerts.db")
     try:
         db_path = Path(raw_db_path)
@@ -65,7 +73,10 @@ def get_topic_monitoring_db() -> TopicMonitoringDB:
         raise RuntimeError(msg) from exc
 
     if db_path.is_absolute():
-        return TopicMonitoringDB(db_path=str(db_path.resolve()))
+        db = TopicMonitoringDB(db_path=str(db_path.resolve()))
+        if not test_mode:
+            _TOPIC_MONITORING_DB = db
+        return db
 
     try:
         from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
@@ -91,7 +102,10 @@ def get_topic_monitoring_db() -> TopicMonitoringDB:
 
     db_path = (root / db_path).resolve()
 
-    return TopicMonitoringDB(db_path=str(db_path))
+    db = TopicMonitoringDB(db_path=str(db_path))
+    if not test_mode:
+        _TOPIC_MONITORING_DB = db
+    return db
 
 
 @router.get(
@@ -102,8 +116,10 @@ def get_topic_monitoring_db() -> TopicMonitoringDB:
 )
 async def list_watchlists() -> WatchlistListResponse:
     """List all configured topic monitoring watchlists."""
-    svc = get_topic_monitoring_service()
-    return WatchlistListResponse(watchlists=svc.list_watchlists())
+    watchlists = await asyncio.to_thread(
+        lambda: get_topic_monitoring_service().list_watchlists()
+    )
+    return WatchlistListResponse(watchlists=watchlists)
 
 
 @router.post(
@@ -115,8 +131,9 @@ async def list_watchlists() -> WatchlistListResponse:
 async def upsert_watchlist(payload: Watchlist) -> WatchlistUpsertResponse:
     """Create a new watchlist or update an existing one."""
     try:
-        svc = get_topic_monitoring_service()
-        wl = svc.upsert_watchlist(payload)
+        wl = await asyncio.to_thread(
+            lambda: get_topic_monitoring_service().upsert_watchlist(payload)
+        )
         return WatchlistUpsertResponse(watchlist=wl, status="ok")
     except HTTPException:
         # Propagate existing HTTP errors without masking them
@@ -137,8 +154,9 @@ async def upsert_watchlist(payload: Watchlist) -> WatchlistUpsertResponse:
 )
 async def delete_watchlist(watchlist_id: str) -> WatchlistDeleteResponse:
     """Delete a watchlist by ID and return the deletion status."""
-    svc = get_topic_monitoring_service()
-    ok = svc.delete_watchlist(watchlist_id)
+    ok = await asyncio.to_thread(
+        lambda: get_topic_monitoring_service().delete_watchlist(watchlist_id)
+    )
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist not found or failed to delete")
     return WatchlistDeleteResponse(status="deleted", id=watchlist_id)
@@ -152,8 +170,7 @@ async def delete_watchlist(watchlist_id: str) -> WatchlistDeleteResponse:
 )
 async def reload_watchlists() -> WatchlistsReloadResponse:
     """Reload watchlist definitions from the backing configuration source."""
-    svc = get_topic_monitoring_service()
-    svc.reload()
+    await asyncio.to_thread(lambda: get_topic_monitoring_service().reload())
     return WatchlistsReloadResponse(status="ok")
 
 
@@ -173,7 +190,14 @@ async def list_alerts(
 ) -> AlertsListResponse:
     """List monitoring alerts with optional filters and pagination."""
 
-    rows = db.list_alerts(user_id=user_id, since_iso=since, unread_only=unread_only, limit=limit, offset=offset)
+    rows = await asyncio.to_thread(
+        db.list_alerts,
+        user_id=user_id,
+        since_iso=since,
+        unread_only=unread_only,
+        limit=limit,
+        offset=offset,
+    )
     items: list[AlertItem] = []
     for r in rows:
         # metadata column may be JSON string
@@ -182,7 +206,10 @@ async def list_alerts(
             try:
                 r["metadata"] = json.loads(meta)
             except (TypeError, json.JSONDecodeError) as e:
-                logger.debug(f"monitoring: failed to parse alert metadata JSON: {e}")
+                logger.debug(
+                    "monitoring: failed to parse alert metadata JSON: {}",
+                    e,
+                )
         items.append(AlertItem(**r))
     return AlertsListResponse(items=items)
 
@@ -199,7 +226,7 @@ async def mark_alert_read(
 ) -> MarkReadResponse:
     """Mark a single alert as read by ID."""
 
-    ok = db.mark_read(alert_id)
+    ok = await asyncio.to_thread(db.mark_read, alert_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
     return MarkReadResponse(status="ok", id=alert_id)
@@ -345,10 +372,17 @@ async def get_recent_notifications(
             try:
                 items.append(json.loads(ln))
             except (TypeError, json.JSONDecodeError) as e:
-                logger.debug(f"monitoring: failed to parse recent notification JSONL line: {e}")
+                logger.debug(
+                    "monitoring: failed to parse recent notification JSONL line: {}",
+                    e,
+                )
                 items.append({"raw": ln})
     except Exception as e:  # Generic 500 handler
-        logger.error(f"monitoring: failed to read recent notifications from {path}: {e}")
+        logger.error(
+            "monitoring: failed to read recent notifications from {}: {}",
+            path,
+            e,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to read recent notifications",

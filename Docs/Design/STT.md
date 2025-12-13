@@ -16,6 +16,12 @@ https://github.com/travisvn/chatterbox-tts-api/
 https://huggingface.co/livekit/turn-detector
 https://github.com/livekit/agents/tree/main/livekit-plugins/livekit-plugins-turn-detector
 https://github.com/senstella/parakeet-mlx
+https://github.com/zai-org/GLM-ASR
+https://github.com/altunenes/parakeet-rs?tab=readme-ov-file
+
+Latice
+    https://github.com/LATICE-AI/inference
+    https://github.com/LATICE-AI
 Benchmark
     https://github.com/dnhkng/GLaDOS/blob/main/src/glados/ASR/asr.py
     https://github.com/SYSTRAN/faster-whisper/blob/master/tests/test_transcribe.py

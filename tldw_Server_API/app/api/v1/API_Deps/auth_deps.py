@@ -56,6 +56,28 @@ _TEST_SESSION_LOCKS: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]
 _TEST_SESSION_LOCK_GUARD = threading.Lock()
 _TEST_SESSION_STATE_GUARD = threading.Lock()
 
+_SENSITIVE_USER_KEY_PATTERN = re.compile(
+    r"(password|secret|token|api[_-]?key|ssn|totp|otp|mfa|backup_codes|recovery_codes)",
+    re.IGNORECASE,
+)
+
+
+def _public_user_dict(user: Mapping[str, Any]) -> Dict[str, Any]:
+    """
+    Return a sanitized shallow copy of a user mapping.
+
+    The AuthNZ stack may temporarily cache full database rows (including secrets)
+    in `request.state._auth_user`. This helper strips common secret-bearing keys
+    (passwords, tokens, secrets, API keys, SSNs) so dependency returns never
+    expose sensitive fields.
+    """
+    safe: Dict[str, Any] = {}
+    for key, value in dict(user).items():
+        if isinstance(key, str) and _SENSITIVE_USER_KEY_PATTERN.search(key):
+            continue
+        safe[key] = value
+    return safe
+
 
 def _get_test_session_lock() -> asyncio.Lock:
     """
@@ -106,7 +128,10 @@ def _activate_scope_context(
         )
         setattr(request.state, "_content_scope_token", token)
     except Exception as exc:
-        logger.debug(f"Unable to establish content scope context: {exc}")
+        logger.debug(
+            "Unable to establish content scope context: {}",
+            exc,
+        )
 
 async def get_db_transaction():
     """Get database connection in transaction mode.
@@ -164,7 +189,10 @@ async def get_db_transaction():
                     try:
                         await self._conn.commit()
                     except Exception as exc:
-                        logger.debug("Test DB adapter: sqlite commit failed: {}", exc)
+                        logger.debug(
+                            "Test DB adapter: sqlite commit failed: {}",
+                            exc,
+                        )
                         raise
                     return cur
 
@@ -213,7 +241,10 @@ async def get_db_transaction():
                     try:
                         await self._conn.commit()
                     except Exception as exc:
-                        logger.debug("Test DB adapter: sqlite commit failed: {}", exc)
+                        logger.debug(
+                            "Test DB adapter: sqlite commit failed: {}",
+                            exc,
+                        )
                         raise
 
         adapter = _ConnAdapter(conn)
@@ -286,7 +317,13 @@ async def get_session_manager_dep() -> SessionManager:
                             _TEST_SESSION_STATE["sessions"][sid] = sess
                             return sess
 
-                async def update_session_tokens(self, session_id: int, access_token: str, refresh_token: str):
+                async def update_session_tokens(
+                    self,
+                    _session_id: int = 0,
+                    _access_token: str = "",
+                    _refresh_token: str = "",
+                    **_kwargs,
+                ):
                     # No-op in stub
                     return True
 
@@ -303,7 +340,7 @@ async def get_session_manager_dep() -> SessionManager:
                             sessions = list(_TEST_SESSION_STATE["sessions"].values())
                         return [s for s in sessions if s.get("user_id") == user_id]
 
-                async def revoke_session(self, session_id: int, *args, **kwargs):
+                async def revoke_session(self, session_id: int, *_args, **_kwargs):
                     async with _get_test_session_lock():
                         with _TEST_SESSION_STATE_GUARD:
                             sess = _TEST_SESSION_STATE["sessions"].get(session_id)
@@ -326,7 +363,10 @@ async def get_session_manager_dep() -> SessionManager:
 
             return _StubSessionManager()  # type: ignore[return-value]
     except Exception as exc:
-        logger.debug("get_session_manager_dep: test stub resolution failed; falling back to real SessionManager: {}", exc)
+        logger.debug(
+            "get_session_manager_dep: test stub resolution failed; falling back to real SessionManager: {}",
+            exc,
+        )
     return await get_session_manager()
 
 
@@ -342,7 +382,10 @@ async def get_rate_limiter_dep() -> RateLimiter:
             return rl
     except Exception as exc:
         # Fall back to normal path if any issue
-        logger.debug("get_rate_limiter_dep: TEST_MODE stub resolution failed; using real RateLimiter: {}", exc)
+        logger.debug(
+            "get_rate_limiter_dep: TEST_MODE stub resolution failed; using real RateLimiter: {}",
+            exc,
+        )
     return await get_rate_limiter()
 
 
@@ -427,9 +470,21 @@ async def get_current_user(
                 else:
                     dump = getattr(cached_user, "model_dump", None) or getattr(cached_user, "dict", None)
                     user_dict = dict(dump())
+                safe_user = _public_user_dict(user_dict)
+                # If the cached user was a full DB row mapping, replace the cache with
+                # the sanitized representation to avoid re-exposing secrets later in
+                # this request.
+                try:
+                    if isinstance(cached_user, Mapping):
+                        request.state._auth_user = safe_user
+                except Exception as exc:
+                    logger.debug(
+                        "Fast-path: unable to update request.state._auth_user with sanitized user: {}",
+                        exc,
+                    )
                 # Ensure request.state.user_id is populated for downstream consumers
                 try:
-                    uid = user_dict.get("id")
+                    uid = safe_user.get("id")
                     if uid is not None:
                         request.state.user_id = int(uid)
                 except Exception as exc:
@@ -455,7 +510,7 @@ async def get_current_user(
                         "Fast-path: unable to (re)establish content scope context: {}",
                         exc,
                     )
-                return user_dict
+                return safe_user
     except Exception as exc:
         # Fall through to standard auth behavior if any issue occurs
         logger.debug(
@@ -497,6 +552,7 @@ async def get_current_user(
                     "is_active": True,
                     "is_verified": True,
                 }
+                user = _public_user_dict(user)
                 try:
                     request.state.user_id = fixed_id
                     request.state.team_ids = []
@@ -567,7 +623,7 @@ async def get_current_user(
                 is_admin=bool(user.get("is_admin") or ("admin" in (user.get("roles") or []))),
             )
 
-            return user
+            return _public_user_dict(user)
         except HTTPException:
             raise
         except Exception as e:
@@ -720,13 +776,14 @@ async def get_current_user(
             )
             # Optional: cache user dict for fast-path reuse in multi-user flows
             try:
-                request.state._auth_user = dict(user)
+                safe_user = _public_user_dict(user)
+                request.state._auth_user = safe_user
             except Exception as cache_exc:
                 logger.debug("Unable to cache _auth_user on request.state: {}", cache_exc)
         except Exception as ctx_exc:
             logger.debug("Unable to populate AuthContext in get_current_user: {}", ctx_exc)
 
-        return user
+        return _public_user_dict(user)
 
     except TokenExpiredError:
         logger.warning("get_current_user: token expired")
@@ -799,7 +856,7 @@ def require_permissions(*permissions: str) -> Callable[[AuthPrincipal], Awaitabl
                 logger.debug("require_permissions denied principal; missing={}", missing)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Permission denied",
+                detail=f"Permission denied: missing {', '.join(missing)}",
             )
         return principal
 
@@ -922,7 +979,10 @@ async def _load_org_policy(db: Any, org_id: int) -> Dict[str, Any]:
     try:
         pol = await get_policy(db, org_id)
     except Exception as exc:
-        logger.exception(f"Failed to load organization policy for org_id={org_id}: {exc}")
+        logger.exception(
+            "Failed to load organization policy for org_id={}",
+            org_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to load organization policy",

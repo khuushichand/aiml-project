@@ -98,6 +98,11 @@ https://medium.com/@alphadesignglobal/8-tiny-ui-fixes-that-will-make-your-produc
 
 
 www.aiuxplayground.com/pattern/chat-artifact
+https://www.8bitcn.com/?ref=sidebar
+https://uxdesign.cc/designing-decisions-behavioral-psychology-that-moves-users-e5fb08e7917a
+https://medium.com/design-bootcamp/top-ui-ux-trends-to-watch-in-2026-379a955ce591
+https://commercialtype.com/about/collections/thorowgood_grotesque
+https://uxdesign.cc/locksmith-stickers-are-annoying-but-kind-of-genius-85690b7ae045
 https://savolai.net/ux/the-why-and-the-how-usability-testing/
 https://medium.com/design-bootcamp/10-ui-ux-cheat-codes-for-instantly-better-designs-2c6f6b4312c8
 https://medium.com/ai-ux-designers/37-ai-patterns-for-product-teams-e04c953270b3

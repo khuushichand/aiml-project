@@ -6,6 +6,7 @@ import secrets
 import hashlib
 import hmac
 import json
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from enum import Enum
@@ -172,7 +173,8 @@ class APIKeyManager:
             expires_at_str = expires_at_raw.strip()
             if not expires_at_str:
                 return None
-            expires_at_str = expires_at_str.replace("Z", "+00:00")
+            if expires_at_str.endswith("Z"):
+                expires_at_str = expires_at_str[:-1] + "+00:00"
             try:
                 expires_at = datetime.fromisoformat(expires_at_str)
             except ValueError:
@@ -185,7 +187,7 @@ class APIKeyManager:
 
         return expires_at
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """Initialize database connection and ensure tables exist"""
         if self._initialized:
             return
@@ -200,7 +202,7 @@ class APIKeyManager:
         self._initialized = True
         logger.info("APIKeyManager initialized")
 
-    async def _create_tables(self):
+    async def _create_tables(self) -> None:
         """Create API keys and related tables if they don't exist"""
         try:
             repo = self._get_repo()
@@ -470,7 +472,7 @@ class APIKeyManager:
                 expires_at = self._parse_expires_at(expires_at_raw)
                 if expires_at is None:
                     logger.error(
-                        f"API key {key_info['id']} expires_at could not be parsed; denying access"
+                        f"API key {key_info.get('id')} expires_at could not be parsed; denying access"
                     )
                     return None
                 now_utc = datetime.now(timezone.utc)
@@ -491,19 +493,19 @@ class APIKeyManager:
                     allowed_ips = {str(ip).strip() for ip in allowed_ips_raw if str(ip).strip()}
                 except (TypeError, ValueError, json.JSONDecodeError) as decode_error:
                     logger.error(
-                        f"API key {key_info['id']} allowlist could not be decoded; denying access: {decode_error}"
+                        f"API key {key_info.get('id')} allowlist could not be decoded; denying access: {decode_error}"
                     )
                     return None
                 if allowed_ips:
                     normalized_ip = (ip_address or "").strip()
                     if not normalized_ip:
                         logger.warning(
-                            f"API key {key_info['id']} requires client IP but none was supplied; denying access"
+                            f"API key {key_info.get('id')} requires client IP but none was supplied; denying access"
                         )
                         return None
                     if normalized_ip not in allowed_ips:
                         logger.warning(
-                            f"API key {key_info['id']} used from unauthorized IP: {normalized_ip}"
+                            f"API key {key_info.get('id')} used from unauthorized IP: {normalized_ip}"
                         )
                         return None
 
@@ -702,7 +704,7 @@ class APIKeyManager:
                 f"Failed to list user keys {self._db_context_hint()}"
             ) from e
 
-    async def cleanup_expired_keys(self):
+    async def cleanup_expired_keys(self) -> None:
         """Mark expired keys as expired"""
         if not self._initialized:
             await self.initialize()
@@ -715,8 +717,8 @@ class APIKeyManager:
                 active_status=APIKeyStatus.ACTIVE.value,
             )
             logger.debug(f"Cleaned up expired API keys (updated={updated})")
-        except Exception as e:
-            logger.error(f"Failed to cleanup expired keys: {e}")
+        except Exception:  # noqa: BLE001 - best-effort cleanup must not break requests
+            logger.opt(exception=True).error("Failed to cleanup expired keys")
 
     def _has_scope(self, key_scope: str, required_scope: str) -> bool:
         """Check if key scope satisfies required scope"""
@@ -732,21 +734,27 @@ class APIKeyManager:
 
         return key_level >= required_level
 
-    async def _update_usage(self, key_id: int, ip_address: Optional[str] = None):
+    async def _update_usage(self, key_id: int, ip_address: Optional[str] = None) -> None:
         """Update usage statistics for a key"""
         try:
             repo = self._get_repo()
             await repo.increment_usage(key_id=key_id, ip_address=ip_address)
-        except Exception as e:  # noqa: BLE001 - usage updates must not break requests
-            logger.warning(f"Failed to update API key usage (key_id={key_id}): {e}")
+        except Exception:  # noqa: BLE001 - usage updates must not break requests
+            logger.opt(exception=True).warning(
+                "Failed to update API key usage (key_id={})",
+                key_id,
+            )
 
-    async def _mark_expired(self, key_id: int):
+    async def _mark_expired(self, key_id: int) -> None:
         """Mark a key as expired"""
         try:
             repo = self._get_repo()
             await repo.mark_key_expired(key_id=key_id, expired_status=APIKeyStatus.EXPIRED.value)
-        except Exception as e:  # noqa: BLE001 - expiration updates must not break requests
-            logger.warning(f"Failed to mark API key as expired (key_id={key_id}): {e}")
+        except Exception:  # noqa: BLE001 - expiration updates must not break requests
+            logger.opt(exception=True).warning(
+                "Failed to mark API key as expired (key_id={})",
+                key_id,
+            )
 
     async def _log_action(
         self,
@@ -754,7 +762,7 @@ class APIKeyManager:
         action: str,
         user_id: Optional[int] = None,
         details: Optional[Dict[str, Any]] = None
-    ):
+    ) -> None:
         """Log an action in the audit log"""
         try:
             repo = self._get_repo()
@@ -764,9 +772,11 @@ class APIKeyManager:
                 user_id=user_id,
                 details=details,
             )
-        except Exception as e:  # noqa: BLE001 - audit logging should not block requests
-            logger.warning(
-                f"Failed to write API key audit log (key_id={key_id}, action={action}): {e}"
+        except Exception:  # noqa: BLE001 - audit logging should not block requests
+            logger.opt(exception=True).warning(
+                "Failed to write API key audit log (key_id={}, action={})",
+                key_id,
+                action,
             )
 
 
@@ -777,6 +787,7 @@ class APIKeyManager:
 
 # Global instance
 _api_key_manager: Optional[APIKeyManager] = None
+_api_key_manager_lock = asyncio.Lock()
 
 async def get_api_key_manager() -> APIKeyManager:
     """Get APIKeyManager singleton instance"""
@@ -788,23 +799,26 @@ async def get_api_key_manager() -> APIKeyManager:
     except Exception:
         current_fp = ""
 
-    if _api_key_manager is not None:
-        try:
-            if getattr(_api_key_manager, "_hmac_key_fingerprint", None) != current_fp:
+    async with _api_key_manager_lock:
+        if _api_key_manager is not None:
+            try:
+                if getattr(_api_key_manager, "_hmac_key_fingerprint", None) != current_fp:
+                    _api_key_manager = None
+            except Exception:
                 _api_key_manager = None
-        except Exception:
-            _api_key_manager = None
 
-    if not _api_key_manager:
-        _api_key_manager = APIKeyManager()
-        await _api_key_manager.initialize()
-    return _api_key_manager
+        if not _api_key_manager:
+            manager = APIKeyManager()
+            await manager.initialize()
+            _api_key_manager = manager
+        return _api_key_manager
 
 
-async def reset_api_key_manager():
+async def reset_api_key_manager() -> None:
     """Reset the APIKeyManager singleton (mainly for testing)."""
     global _api_key_manager
-    _api_key_manager = None
+    async with _api_key_manager_lock:
+        _api_key_manager = None
 
 #
 # End of api_key_manager.py
