@@ -783,7 +783,7 @@ async def delete_definition(
                 action="delete",
             )
     except Exception as e:
-        logger.debug(f"Workflows audit(run_saved) failed: {e}")
+        logger.debug(f"Workflows audit(delete) failed: {e}")
     return {"ok": True}
 
 
@@ -2413,7 +2413,7 @@ async def control_run(
         # Delegate to retry behavior
         failed_step = db.get_last_failed_step_id(run_id)
         if failed_step:
-            asyncio.get_event_loop().create_task(engine.continue_run(run_id, after_step_id=failed_step, last_outputs=None))
+            asyncio.create_task(engine.continue_run(run_id, after_step_id=failed_step, last_outputs=None))
         else:
             engine.submit(run_id, RunMode.ASYNC)
     else:
@@ -3005,7 +3005,7 @@ async def retry_run(
     # Resume from last failed step if present
     failed_step = db.get_last_failed_step_id(run_id)
     if failed_step:
-        asyncio.get_event_loop().create_task(engine.continue_run(run_id, after_step_id=failed_step, last_outputs=None))
+        asyncio.create_task(engine.continue_run(run_id, after_step_id=failed_step, last_outputs=None))
     else:
         engine.submit(run_id, RunMode.ASYNC)
     return {"ok": True}
@@ -3090,7 +3090,7 @@ async def approve_step(
     engine = WorkflowEngine(db)
     # Pass edited fields as last outputs override
     last_outputs = payload.edited_fields or {}
-    asyncio.get_event_loop().create_task(engine.continue_run(run_id, after_step_id=step_id, last_outputs=last_outputs))
+    asyncio.create_task(engine.continue_run(run_id, after_step_id=step_id, last_outputs=last_outputs))
     return {"ok": True}
 
 
