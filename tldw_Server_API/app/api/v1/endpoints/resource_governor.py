@@ -241,7 +241,7 @@ async def delete_policy(
                 "status": "conflict",
                 "error": "version_conflict",
                 "policy_id": policy_id,
-                "detail": str(e),
+                "detail": "The requested policy version is out of date.",
             },
             status_code=409,
         )

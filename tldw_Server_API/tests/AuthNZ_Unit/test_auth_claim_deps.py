@@ -58,7 +58,7 @@ async def test_require_permissions_denies_when_missing_perm_and_not_admin():
         await dep(principal)  # type: ignore[arg-type]
 
     assert exc_info.value.status_code == 403
-    assert "media.create" in str(exc_info.value.detail)
+    assert "Permission denied" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -79,7 +79,7 @@ async def test_require_roles_denies_when_missing_role_and_not_admin():
         await dep(principal)  # type: ignore[arg-type]
 
     assert exc_info.value.status_code == 403
-    assert "admin" in str(exc_info.value.detail)
+    assert "Access denied" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -89,4 +89,3 @@ async def test_require_roles_allows_admin_even_without_role():
 
     result: Any = await dep(principal)  # type: ignore[arg-type]
     assert result is principal
-

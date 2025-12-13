@@ -838,9 +838,9 @@ async def workflows_virtual_key(
             schedule_id=(str(body.schedule_id) if body.schedule_id else None),
         )
         exp = datetime.utcnow() + timedelta(minutes=int(body.ttl_minutes))
-    except Exception:
+    except Exception as e:
         logger.exception("Failed to mint workflows virtual key")
-        raise HTTPException(status_code=500, detail="Failed to mint token")
+        raise HTTPException(status_code=500, detail="Failed to mint token") from e
     return {
         "token": token,
         "expires_at": exp.isoformat(),
@@ -1552,7 +1552,7 @@ async def get_run_events(
     db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
     *,
     response: Response,
-    request: Request,
+    request: Request,  # noqa: ARG001
 ):
     # Enforce tenant isolation and owner/admin
     run = db.get_run(run_id)
@@ -2901,7 +2901,7 @@ async def list_workflow_template_tags() -> list[str]:
 
 @router.get("/config")
 async def get_workflows_config(
-    current_user: User = Depends(get_request_user),  # noqa: B008
+    current_user: User = Depends(get_request_user),  # noqa: B008, ARG001
     db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     """Return effective Workflows configuration derived from environment and backend (read-only)."""

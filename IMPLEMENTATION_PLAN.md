@@ -139,3 +139,14 @@ For a focused breakdown of the remaining work across these three AuthNZ PRDs (in
 - Deleted a stale legacy backup endpoint file so `rg "require_admin\\("` only hits the intended shims (`tldw_Server_API/app/api/v1/endpoints/embeddings_v5_production.py.backup` removed).
 - Added missing example policies for default module-level `*_POLICY_ID` values (AuthNZ, Character Chat, Web Scraping, Embeddings Server) so enabling RG in file-store mode doesn’t fail closed due to missing policy IDs (`tldw_Server_API/Config_Files/resource_governor_policies.yaml`).
 - Made AuthNZ and Character Chat rate limiters RG-primary (legacy counters are fallback-only) and added shadow mismatch metrics where applicable (`tldw_Server_API/app/core/AuthNZ/rate_limiter.py`, `tldw_Server_API/app/core/Character_Chat/character_rate_limiter.py`).
+
+## Stage 10: Auth Deps Hardening (Logging + RL)
+**Goal**: Address auth_deps review items: fail loud on sqlite commit errors in the test DB adapter, sanitize auth exception logging, and ensure admin rate-limit bypass is gated on canonical AUTH_MODE.
+**Success Criteria**:
+- SQLite commit errors in the test adapter are logged and re-raised.
+- Production logs avoid raw exception messages for API-key/JWT failure paths; full stack traces only in TEST_MODE.
+- Admin rate-limit bypass depends on `AUTH_MODE=single_user` (not PROFILE).
+- Unit tests cover the above.
+**Tests**:
+- `pytest -q tldw_Server_API/tests/AuthNZ_Unit/test_auth_deps_hardening.py`
+**Status**: Complete

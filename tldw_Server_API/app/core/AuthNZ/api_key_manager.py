@@ -42,9 +42,10 @@ def _compute_hmac_fingerprint(settings: Settings) -> str:
         # The candidate is already a 32-byte SHA256 digest; hash once more and
         # return a hex string to avoid exposing raw key bytes.
         return hashlib.sha256(candidates[0]).hexdigest()
-    except Exception:
+    except (TypeError, ValueError, AttributeError) as exc:
         # Preserve previous behavior: on any settings/derivation issue, return
         # an empty string rather than raising during manager initialization.
+        logger.debug("APIKeyManager: HMAC fingerprint derivation failed: {}", exc)
         return ""
 
 #######################################################################################################################
@@ -464,8 +465,9 @@ class APIKeyManager:
             primary_hash = hash_candidates[0]
 
             # Check expiration
-            if key_info["expires_at"]:
-                expires_at = self._parse_expires_at(key_info["expires_at"])
+            expires_at_raw = key_info.get("expires_at")
+            if expires_at_raw:
+                expires_at = self._parse_expires_at(expires_at_raw)
                 if expires_at is None:
                     logger.error(
                         f"API key {key_info['id']} expires_at could not be parsed; denying access"
@@ -477,7 +479,7 @@ class APIKeyManager:
                     return None
 
             # Check IP restrictions
-            if key_info["allowed_ips"]:
+            if key_info.get("allowed_ips"):
                 try:
                     allowed_ips_raw = self._coerce_json_field(key_info.get("allowed_ips"))
                     if allowed_ips_raw is None:

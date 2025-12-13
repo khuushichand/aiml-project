@@ -179,7 +179,6 @@ route_map:
   by_tag:
     chat: chat.default
     mcp.ingestion: mcp.ingestion
-    authnz: authnz.default
     embeddings: embeddings.default
     embeddings_server: embeddings_server.default
     audio: audio.default

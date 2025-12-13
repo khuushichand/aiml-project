@@ -1,7 +1,7 @@
 # auth_deps.py
 # Description: FastAPI dependency injection for authentication services
 #
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Callable, Awaitable
 from collections.abc import Mapping
 import asyncio
@@ -21,7 +21,11 @@ from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService, ge
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal, is_single_user_principal
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService, get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager, get_session_manager
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode, get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import (
+    get_settings,
+    is_single_user_mode,
+    is_single_user_profile_mode,
+)
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_limiter
 from tldw_Server_API.app.services.registration_service import RegistrationService, get_registration_service
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService, get_storage_service
@@ -50,6 +54,7 @@ from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
 _TEST_SESSION_LOCKS: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = WeakKeyDictionary()
 _TEST_SESSION_LOCK_GUARD = threading.Lock()
+_TEST_SESSION_STATE_GUARD = threading.Lock()
 
 
 def _get_test_session_lock() -> asyncio.Lock:
@@ -158,8 +163,9 @@ async def get_db_transaction():
                     cur = await self._conn.execute(q, params)
                     try:
                         await self._conn.commit()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Test DB adapter: sqlite commit failed: {}", exc)
+                        raise
                     return cur
 
             async def fetchval(self, query: str, *args):
@@ -206,8 +212,9 @@ async def get_db_transaction():
                 if self._is_sqlite:
                     try:
                         await self._conn.commit()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Test DB adapter: sqlite commit failed: {}", exc)
+                        raise
 
         adapter = _ConnAdapter(conn)
         try:
@@ -260,60 +267,62 @@ async def get_session_manager_dep() -> SessionManager:
                     user_agent: str = "",
                 ):
                     async with _get_test_session_lock():
-                        _TEST_SESSION_STATE["sid"] += 1
-                        sid = _TEST_SESSION_STATE["sid"]
-                        now = datetime.utcnow()
-                        sess = {
-                            "id": sid,
-                            "session_id": sid,
-                            "user_id": user_id,
-                            "ip_address": ip_address,
-                            "user_agent": user_agent,
-                            "created_at": now,
-                            "last_activity": now,
-                            "expires_at": now,
-                            "is_active": True,
-                            "is_revoked": False,
-                        }
-                        _TEST_SESSION_STATE["sessions"][sid] = sess
-                        return sess
+                        with _TEST_SESSION_STATE_GUARD:
+                            _TEST_SESSION_STATE["sid"] += 1
+                            sid = _TEST_SESSION_STATE["sid"]
+                            now = datetime.now(timezone.utc)
+                            sess = {
+                                "id": sid,
+                                "session_id": sid,
+                                "user_id": user_id,
+                                "ip_address": ip_address,
+                                "user_agent": user_agent,
+                                "created_at": now,
+                                "last_activity": now,
+                                "expires_at": now,
+                                "is_active": True,
+                                "is_revoked": False,
+                            }
+                            _TEST_SESSION_STATE["sessions"][sid] = sess
+                            return sess
 
                 async def update_session_tokens(self, session_id: int, access_token: str, refresh_token: str):
                     # No-op in stub
                     return True
 
-                async def refresh_session(self, *args, **kwargs):
+                async def refresh_session(self, *_args, **kwargs):
                     return {
                         "session_id": kwargs.get("session_id") or 1,
                         "user_id": kwargs.get("user_id") or 1,
-                        "expires_at": datetime.utcnow().isoformat(),
+                        "expires_at": datetime.now(timezone.utc).isoformat(),
                     }
 
                 async def get_user_sessions(self, user_id: int):
                     async with _get_test_session_lock():
-                        return [
-                            s
-                            for s in _TEST_SESSION_STATE["sessions"].values()
-                            if s.get("user_id") == user_id
-                        ]
+                        with _TEST_SESSION_STATE_GUARD:
+                            sessions = list(_TEST_SESSION_STATE["sessions"].values())
+                        return [s for s in sessions if s.get("user_id") == user_id]
 
                 async def revoke_session(self, session_id: int, *args, **kwargs):
                     async with _get_test_session_lock():
-                        if session_id in _TEST_SESSION_STATE["sessions"]:
-                            _TEST_SESSION_STATE["sessions"][session_id]["is_revoked"] = True
-                            _TEST_SESSION_STATE["sessions"][session_id]["is_active"] = False
+                        with _TEST_SESSION_STATE_GUARD:
+                            sess = _TEST_SESSION_STATE["sessions"].get(session_id)
+                            if sess is None:
+                                return False
+                            sess["is_revoked"] = True
+                            sess["is_active"] = False
                             return True
-                        return False
 
                 async def revoke_all_user_sessions(self, user_id: int):
                     async with _get_test_session_lock():
-                        changed = 0
-                        for s in _TEST_SESSION_STATE["sessions"].values():
-                            if s.get("user_id") == user_id:
-                                s["is_revoked"] = True
-                                s["is_active"] = False
-                                changed += 1
-                        return changed
+                        with _TEST_SESSION_STATE_GUARD:
+                            changed = 0
+                            for s in _TEST_SESSION_STATE["sessions"].values():
+                                if s.get("user_id") == user_id:
+                                    s["is_revoked"] = True
+                                    s["is_active"] = False
+                                    changed += 1
+                            return changed
 
             return _StubSessionManager()  # type: ignore[return-value]
     except Exception as exc:
@@ -461,7 +470,7 @@ async def get_current_user(
                         db_path = settings.DATABASE_URL.replace("sqlite:///", "")
                         _ensure_authnz_tables(_Path(db_path))
                 except Exception as _ensure_err:
-                    logger.debug(f"AuthNZ test fallback: ensure_authnz_tables skipped/failed: {_ensure_err}")
+                    logger.debug("AuthNZ test fallback: ensure_authnz_tables skipped/failed: {}", _ensure_err)
                 fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", 1)
                 user = {
                     "id": fixed_id,
@@ -538,11 +547,13 @@ async def get_current_user(
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(
-                "API key authentication error in get_current_user (type={}): {}",
-                type(e).__name__,
-                e,
-            )
+            if _is_test_mode():
+                logger.exception("API key authentication error in get_current_user (TEST_MODE)")
+            else:
+                logger.error(
+                    "API key authentication error in get_current_user (type={})",
+                    type(e).__name__,
+                )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate API key"
@@ -609,9 +620,13 @@ async def get_current_user(
 
         # Session activity is already updated during token validation in session_manager
 
-        # Convert to dict if needed
-        if hasattr(user, 'dict'):
-            user = dict(user)
+        # Normalize to a plain dict for downstream callers and request.state caching.
+        if not isinstance(user, dict):
+            try:
+                user = dict(user)
+            except Exception as exc:
+                logger.debug("JWT path: unable to normalize user record to dict: {}", exc)
+                raise AuthenticationError("Unable to load user record") from exc
 
         # Attach user_id for downstream rate limiting where used
         team_ids: List[int] = []
@@ -672,9 +687,9 @@ async def get_current_user(
             )
             # Optional: cache user dict for fast-path reuse in multi-user flows
             try:
-                request.state._auth_user = user
+                request.state._auth_user = dict(user)
             except Exception as cache_exc:
-                logger.debug(f"Unable to cache _auth_user on request.state: {cache_exc}")
+                logger.debug("Unable to cache _auth_user on request.state: {}", cache_exc)
         except Exception as ctx_exc:
             logger.debug(f"Unable to populate AuthContext in get_current_user: {ctx_exc}")
 
@@ -698,7 +713,13 @@ async def get_current_user(
             headers=extra_headers
         )
     except Exception as e:
-        logger.error(f"Authentication error: {e}")
+        if _is_test_mode():
+            logger.exception("Authentication error in get_current_user (TEST_MODE)")
+        else:
+            logger.error(
+                "Authentication error in get_current_user (type={})",
+                type(e).__name__,
+            )
         extra_headers = {"WWW-Authenticate": "Bearer"}
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
             extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{e}"
@@ -741,9 +762,11 @@ def require_permissions(*permissions: str) -> Callable[[AuthPrincipal], Awaitabl
             return principal
         missing = [p for p in perms if p not in principal.permissions]
         if missing:
+            if _is_test_mode():
+                logger.debug("require_permissions denied principal; missing={}", missing)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission denied. Required: {', '.join(missing)}",
+                detail="Permission denied",
             )
         return principal
 
@@ -767,9 +790,11 @@ def require_roles(*roles: str) -> Callable[[AuthPrincipal], Awaitable[AuthPrinci
         if not role_list:
             return principal
         if not any(r in principal.roles for r in role_list):
+            if _is_test_mode():
+                logger.debug("require_roles denied principal; required_any_of={}", role_list)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied. Required role(s): {', '.join(role_list)}",
+                detail="Access denied",
             )
         return principal
 
@@ -908,9 +933,9 @@ async def get_org_policy_from_principal(
         """
         flag = os.getenv("ORG_POLICY_SINGLE_USER_PRINCIPAL", "").strip().lower()
         if flag in {"0", "false", "off"}:
-            # Explicit compatibility mode: defer to profile-based single-user hints.
+            # Explicit compatibility mode: defer to legacy mode/profile helpers.
             try:
-                return is_single_user_profile_mode()
+                return bool(is_single_user_mode() or is_single_user_profile_mode())
             except Exception:
                 return False
 
@@ -1101,9 +1126,9 @@ async def check_rate_limit(
     except Exception as exc:
         logger.debug("AuthNZ rate-limit bypass: unable to read request.state.rg_policy_id: {}", exc)
 
-    # Additional bypass: in local single-user-style profiles, allow admin principals
-    # to skip global IP rate limits. This relies on AuthPrincipal claims and
-    # profile hints instead of AUTH_MODE.
+    # Additional bypass: in canonical single-user deployments, allow admin principals
+    # to skip global IP rate limits. PROFILE is advisory and must not relax
+    # enforcement relative to AUTH_MODE and claims.
     try:
         ctx = getattr(request.state, "auth", None)
         principal = ctx.principal if isinstance(ctx, AuthContext) else None
@@ -1111,11 +1136,11 @@ async def check_rate_limit(
         principal = None
 
     try:
-        profile_single_user = is_single_user_profile_mode()
+        canonical_single_user = is_single_user_mode()
     except Exception:
-        profile_single_user = False
+        canonical_single_user = False
 
-    if principal is not None and principal.is_admin and profile_single_user:
+    if principal is not None and principal.is_admin and canonical_single_user:
         return
 
     # Get client IP
@@ -1165,8 +1190,9 @@ async def check_auth_rate_limit(
     if _is_test_mode():
         return
 
-    # Additional bypass: in local single-user-style profiles, allow admin principals
-    # to skip auth-specific IP rate limits.
+    # Additional bypass: in canonical single-user deployments, allow admin principals
+    # to skip auth-specific IP rate limits. PROFILE is advisory and must not relax
+    # enforcement relative to AUTH_MODE and claims.
     try:
         ctx = getattr(request.state, "auth", None)
         principal = ctx.principal if isinstance(ctx, AuthContext) else None
@@ -1174,11 +1200,11 @@ async def check_auth_rate_limit(
         principal = None
 
     try:
-        profile_single_user = is_single_user_profile_mode()
+        canonical_single_user = is_single_user_mode()
     except Exception:
-        profile_single_user = False
+        canonical_single_user = False
 
-    if principal is not None and principal.is_admin and profile_single_user:
+    if principal is not None and principal.is_admin and canonical_single_user:
         return
 
     # Get client IP

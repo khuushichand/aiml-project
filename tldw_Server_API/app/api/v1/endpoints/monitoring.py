@@ -11,6 +11,7 @@ from loguru import logger
 import os
 import json
 import asyncio
+from pathlib import Path
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_permissions
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
@@ -38,26 +39,57 @@ router = APIRouter(
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 
+
+def _find_project_root(start: Path) -> Path | None:
+    """Best-effort search for the repository root starting from a file/dir path."""
+    start_dir = start if start.is_dir() else start.parent
+
+    for candidate in (start_dir, *start_dir.parents):
+        if (candidate / "pyproject.toml").is_file():
+            return candidate
+        if (candidate / "AGENTS.md").is_file() and (candidate / "tldw_Server_API").is_dir():
+            return candidate
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
 def get_topic_monitoring_db() -> TopicMonitoringDB:
     """Return a TopicMonitoringDB instance for alert reads/updates."""
     raw_db_path = os.getenv("MONITORING_ALERTS_DB", "Databases/monitoring_alerts.db")
     try:
-        from pathlib import Path as _Path
-        from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+        db_path = Path(raw_db_path)
+    except (TypeError, ValueError) as exc:
+        msg = f"Invalid MONITORING_ALERTS_DB={raw_db_path!r}: {exc}"
+        logger.error(msg)
+        raise RuntimeError(msg) from exc
 
-        root = _Path(_gpr())
-    except Exception:
-        from pathlib import Path as _Path
-
-        root = _Path(__file__).resolve().parents[5]
+    if db_path.is_absolute():
+        return TopicMonitoringDB(db_path=str(db_path.resolve()))
 
     try:
-        db_path = _Path(str(raw_db_path))
-    except Exception:
-        db_path = _Path("Databases/monitoring_alerts.db")
+        from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+    except ImportError as exc:
+        start = Path(__file__).resolve()
+        root = _find_project_root(start)
+        if root is None:
+            msg = (
+                "Unable to resolve monitoring alerts DB path: MONITORING_ALERTS_DB is relative "
+                f"({raw_db_path!r}), and importing get_project_root failed: {exc}. "
+                f"Searched parents of {start} for root markers (pyproject.toml, AGENTS.md, .git) "
+                "but none were found."
+            )
+            logger.error(msg)
+            raise RuntimeError(msg) from exc
+        logger.debug(
+            "monitoring: get_project_root unavailable ({}); using fallback root {}",
+            exc,
+            root,
+        )
+    else:
+        root = Path(_gpr()).resolve()
 
-    if not db_path.is_absolute():
-        db_path = (root / db_path).resolve()
+    db_path = (root / db_path).resolve()
 
     return TopicMonitoringDB(db_path=str(db_path))
 
@@ -137,7 +169,7 @@ async def list_alerts(
     unread_only: bool = Query(False, description="Only unread alerts"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    db: TopicMonitoringDB = Depends(get_topic_monitoring_db),
+    db: TopicMonitoringDB = Depends(get_topic_monitoring_db),  # noqa: B008
 ) -> AlertsListResponse:
     """List monitoring alerts with optional filters and pagination."""
 
@@ -163,7 +195,7 @@ async def list_alerts(
 )
 async def mark_alert_read(
     alert_id: int,
-    db: TopicMonitoringDB = Depends(get_topic_monitoring_db),
+    db: TopicMonitoringDB = Depends(get_topic_monitoring_db),  # noqa: B008
 ) -> MarkReadResponse:
     """Mark a single alert as read by ID."""
 
