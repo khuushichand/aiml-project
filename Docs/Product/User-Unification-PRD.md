@@ -230,19 +230,19 @@ Internally, both share the same code paths; only bootstrap, DB URL, and enabled 
 
 Over time, `AUTH_MODE` may be decomposed into a `PROFILE` plus more granular feature flags (`ENABLE_REGISTRATION`, `ENABLE_MFA`, etc.), but v1 keeps `AUTH_MODE` for compatibility and treats profiles as an interpretation of the existing settings.
 
-### AUTH_MODE → Profiles + Feature Flags (Migration Plan, v1.0)
+### AUTH_MODE → Profiles + Feature Flags (Migration Plan for v1.0 & Beyond)
 
-To make “mode” an implementation detail of a higher-level deployment profile, we will:
+This section is forward-looking (targeting v1.0 or later). To make “mode” an implementation detail of a higher-level deployment profile, we will:
 
 1. **Introduce an explicit profile setting** (backed by code + docs; wired for UX/feature gating in v1.0, no auth‑path behavior change):
    - New setting/env env var: `PROFILE` with allowed values such as:
      - `local-single-user` (or legacy alias `single_user`).
      - `multi-user-postgres`.
      - `multi-user-sqlite` (optional, for small multi-user dev setups).
-   - Initial behavior (v1.0):
+   - Target initial behavior (v1.0):
      - If `PROFILE` is unset, the system behaves exactly as today and infers behavior from `AUTH_MODE` + `DATABASE_URL`.
      - If `PROFILE` is set, helper functions (e.g., `is_single_user_mode`, `is_multi_user_mode`) continue to read `AUTH_MODE` but may log/emit diagnostics when `PROFILE` and `AUTH_MODE` disagree (no hard failures yet).
-   - Status (v1.0):
+   - Target state (v1.0):
      - `tldw_Server_API/app/core/AuthNZ/settings.Settings` exposes a `PROFILE` field (env `PROFILE`) and a helper `get_profile()` which returns either the explicit value or a derived profile string based on `AUTH_MODE` + `DATABASE_URL` (for example, `local-single-user`, `multi-user-postgres`, `multi-user-sqlite`). Callers should treat this primarily as a coordination/UX hint and feature-gating signal (startup logs, WebUI `/webui/config.json` hints, embeddings tenant-quota behavior); all authentication and authorization decisions are **claim-first** and use `AuthPrincipal`-based dependencies (`get_auth_principal`, `require_permissions`, `require_roles`) instead of mode checks. It is acceptable to use `PROFILE` as an additional tightening signal for deployment-specific flows (for example, disabling self-registration in `local-single-user` deployments), but it must never be used to bypass or relax auth decisions or to grant permissions beyond those implied by `AUTH_MODE` and claims.
 
 2. **Add feature flags that clarify UX vs auth semantics**, without changing defaults:
@@ -255,6 +255,7 @@ To make “mode” an implementation detail of a higher-level deployment profile
        - `EMBEDDINGS_TENANT_RPS_PROFILE_AWARE` – controls whether embeddings tenant RPS quotas are enforced based on profile and principals explicitly tagged as single-user (subject `"single_user"` via `is_single_user_principal`) (enabled) or legacy `AUTH_MODE`-based checks (disabled).
        - `MCP_SINGLE_USER_COMPAT_SHIM` – controls whether MCP HTTP endpoints treat `SINGLE_USER_API_KEY` as a bootstrap admin principal in single-user deployments (enabled) or always validate `X-API-KEY` via the multi-user API key manager (disabled).
    - For `v0.1.x`, these flags gate **UX/feature surface** (show/hide endpoints, admin controls, and WebUI affordances) rather than changing core auth semantics. All flags default to values that exactly match today’s behavior.
+   - Registry note: as flags evolve, track canonical definitions (defaults, scope, and migration status) in `tldw_Server_API/app/core/AuthNZ/settings.py` and optionally mirror them in a dedicated doc (e.g., `Docs/Design/Feature-Flags.md`) or an admin diagnostics endpoint.
 
 3. **Gradually rewrite `is_single_user_mode()` callsites to profile/flags**, guided by tests:
    - Classification:
@@ -295,6 +296,7 @@ To make “mode” an implementation detail of a higher-level deployment profile
     - Parts of `virtual_keys` related to key limits.
 
 **Implementation Status (AuthNZ v0.1, internal)**:
+- Note: “Done” below refers to request-time/runtime paths being repo-backed; schema/migrations and bootstrap/DDL backstops may still include inline SQL (tracked as deferred follow-up).
 - Repository introduction (Stage 3) is Done (v0.1):
   - `AuthnzUsersRepo`, `AuthnzApiKeysRepo`, and `AuthnzRbacRepo` are implemented and used by `User_DB_Handling`, `APIKeyManager`, and RBAC helpers.
   - New repositories `AuthnzOrgsTeamsRepo`, `AuthnzUsageRepo`, `AuthnzRateLimitsRepo`, `AuthnzSessionsRepo`, `AuthnzTokenBlacklistRepo`, `AuthnzMfaRepo`, `AuthnzMonitoringRepo`, and `AuthnzRegistrationCodesRepo` encapsulate orgs/teams membership, usage/LLM-usage tables, AuthNZ rate-limiter storage, session persistence, token blacklist storage, MFA persistence, monitoring/audit metrics, and registration-code cleanup respectively, with cross-backend tests where applicable.
@@ -409,7 +411,7 @@ To make “mode” an implementation detail of a higher-level deployment profile
 
 ### Repo Coverage vs Inline SQL (AuthNZ v0.1)
 
-As of the current AuthNZ refactor stage:
+As of the current AuthNZ refactor stage (note: “repo-backed” here refers to runtime read/write operations; migrations and bootstrap/DDL backstops may still be inline):
 
 - Runtime flows for **users**, **RBAC**, **orgs/teams**, **sessions**, **token blacklist**, **MFA**, **monitoring**, and **registration codes** are fully repo-backed; inline SQL for these concerns is limited to migrations and bootstrap helpers.
 - **API keys** and **usage/LLM-usage** are partially repo-backed: validation, listing, aggregation, and pruning use `AuthnzApiKeysRepo` / `AuthnzUsageRepo`, but `APIKeyManager` and `usage_logging_middleware` still contain backend-specific inline SQL for some runtime operations.
@@ -523,21 +525,19 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
 
 ### Mode vs Claims – Coverage Snapshot
 
-- Fully claim-first clusters (authorization decisions driven by claims on `AuthPrincipal` / `User`, not `AUTH_MODE`):
-  - Metrics admin: `POST /api/v1/metrics/reset` → `require_roles("admin")` (which depends on `get_auth_principal`), with HTTP tests in `tldw_Server_API/tests/AuthNZ_Unit/test_metrics_permissions_claims.py`.
-  - Resource-Governor admin/diagnostics: `/api/v1/resource-governor/policy*`, `/api/v1/resource-governor/diag/*` → `get_auth_principal` + `require_roles("admin")`, with tests in `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` and the `Resource_Governance` suite.
-  - Embeddings model management, workflows DLQ, connectors admin, tools admin, and notes graph admin all use `require_permissions` / `require_roles` on top of `get_auth_principal`, with HTTP-level claim tests under `tldw_Server_API/tests/AuthNZ_Unit/` and the respective feature suites.
-  - Chat slash commands:
-    - Discovery endpoint `GET /api/v1/chat/commands` filters commands using `AuthNZ.rbac.user_has_permission` when `CHAT_COMMANDS_REQUIRE_PERMISSIONS` is enabled; no `is_single_user_mode()` bypass is used. Behavior is validated by `tldw_Server_API/tests/Chat_NEW/unit/test_command_router.py` and `tldw_Server_API/tests/Chat_NEW/integration/test_chat_commands_endpoint.py`.
-    - The async slash-command router (`command_router.async_dispatch_command`) enforces per-command permissions via `auth_user_id` and `_user_has_permission(...)`, independent of `AUTH_MODE`.
-  - Prompt Studio:
-    - `get_prompt_studio_user` in `tldw_Server_API/app/api/v1/API_Deps/prompt_studio_deps.py` derives `user_context.is_admin` and `user_context.permissions` from `User.is_admin`, `User.roles`, and `User.permissions` (via `get_request_user`), rather than from `AUTH_MODE`/`is_single_user_mode()`.
-    - Tests in `tldw_Server_API/tests/AuthNZ_Unit/test_prompt_studio_user_claims.py` and `tldw_Server_API/tests/prompt_studio/unit/test_prompt_studio_deps_headers.py` cover claim propagation, header forwarding, and 401 behavior.
-- Remaining mode-based checks:
-  - Coordination/governance only: startup banners, WebUI config (embedding the single-user API key in non-production), ChaChaNotes warm-up, backpressure and tenant-RPS decisions, embedding quota defaults, and several diagnostics paths use `is_single_user_mode()` to choose profile-specific behavior without bypassing authorization.
-- Jobs admin routes: `tldw_Server_API/app/api/v1/endpoints/jobs_admin.py` now adopt claim-first admin gating via `dependencies=[Depends(require_roles("admin"))]` on the router, while still using `require_admin` inside endpoints for legacy checks. Domain-scoped RBAC for jobs remains env-driven (`JOBS_DOMAIN_SCOPED_RBAC`, `JOBS_RBAC_FORCE`, `JOBS_DOMAIN_ALLOWLIST_*`), but all domain-scoped jobs-admin surfaces now have a principal-first domain RBAC path gated by `JOBS_DOMAIN_RBAC_PRINCIPAL`. When this flag is enabled, endpoints call `_enforce_domain_scope_from_principal(principal, domain)` to derive the jobs “admin user” from `AuthPrincipal` before applying the existing env-based allowlist logic; when it is disabled, they fall back to the legacy user-dict path. HTTP-level claim tests in `tldw_Server_API/tests/AuthNZ_Unit/test_jobs_admin_permissions_claims.py` validate 401/403/200 behavior and domain allowlist semantics for queue status/control, prune/reschedule/retry-now, events (list/SSE), and related maintenance endpoints under the principal-driven path. The long-term intent is to make the principal-based path the default and retire the legacy user-dict/env toggles once parity is confirmed in production deployments.
+| Surface | Claim-first status | Flag gate (if any) | Test path |
+|---|---|---|---|
+| Metrics admin (`POST /api/v1/metrics/reset`) | Done | — | `tldw_Server_API/tests/AuthNZ_Unit/test_metrics_permissions_claims.py` |
+| Resource-Governor admin/diagnostics (`/api/v1/resource-governor/policy*`, `/api/v1/resource-governor/diag/*`) | Done | — | `tldw_Server_API/tests/AuthNZ_Unit/test_resource_governor_permissions_claims.py` (+ `Resource_Governance` suite) |
+| Embeddings model management, workflows DLQ, connectors admin, tools admin, notes graph admin | Done | — | Claim tests under `tldw_Server_API/tests/AuthNZ_Unit/` + feature suites |
+| Chat slash commands | Done | `CHAT_COMMANDS_REQUIRE_PERMISSIONS` | `tldw_Server_API/tests/Chat_NEW/unit/test_command_router.py`, `tldw_Server_API/tests/Chat_NEW/integration/test_chat_commands_endpoint.py` |
+| Prompt Studio | Done | — | `tldw_Server_API/tests/AuthNZ_Unit/test_prompt_studio_user_claims.py`, `tldw_Server_API/tests/prompt_studio/unit/test_prompt_studio_deps_headers.py` |
+| Jobs admin routes | Done (principal-first path) | `JOBS_DOMAIN_RBAC_PRINCIPAL` | `tldw_Server_API/tests/AuthNZ_Unit/test_jobs_admin_permissions_claims.py` |
+| Coordination/governance-only checks (startup banners, WebUI config, warm-ups, backpressure/tenant RPS, embedding quota defaults, several diagnostics paths) | Mode-aware allowed (coordination only) | `PROFILE` + feature flags | N/A |
 
 ### Repo vs Inline-SQL Coverage (AuthNZ Tables)
+
+Note: “Repository” here means runtime queries/operations use the repository abstraction; schema changes and initial table creation are handled via migrations and bootstrap helpers.
 
 | Area / Tables                                      | Repository                     | Inline SQL (remaining)                                          | Notes                                                                                 |
 |----------------------------------------------------|--------------------------------|------------------------------------------------------------------|---------------------------------------------------------------------------------------|
@@ -596,9 +596,9 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
 
 ---
 
-## Recommended Next Steps
+### Stage 5: Post-v0.1 Roadmap – Recommended Next Steps
 
-### 1. Inline DDL & Quota Counters → Repos/Migrations
+#### 5.1 Inline DDL & Quota Counters → Repos/Migrations
 
 - **Goal**: Incrementally migrate remaining inline Postgres/SQLite DDL and quota counters into repository helpers or migrations so that backends remain an implementation detail.
 - **AuthNZ bootstrap DDL**:
@@ -608,7 +608,7 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
   - `AuthnzQuotasRepo` (`tldw_Server_API/app/core/AuthNZ/repos/quotas_repo.py`) now owns `vk_jwt_counters` and `vk_api_key_counters`, centralizing dialect-specific DDL/upsert logic for SQLite and Postgres via existing migrations/backstops (`migration_023_create_virtual_key_counters`, `ensure_virtual_key_counters_pg`).
   - `tldw_Server_API/app/core/AuthNZ/quotas.py::increment_and_check_jwt_quota` and `increment_and_check_api_key_quota` delegate to the repo, and new code no longer introduces inline DDL or `hasattr(conn, "fetch*")` branches for these tables; legacy helpers such as `_ensure_tables` have been retired from runtime paths.
 
-### 2. `is_single_user_mode()` → Claim-First Alternatives
+#### 5.2 `is_single_user_mode()` → Claim-First Alternatives
 
 - **Goal**: For each remaining `is_single_user_mode()` in auth-adjacent code, design a claim-first alternative (using `AuthPrincipal` + profile/feature flags) and back it with tests, so that “mode” becomes configuration/UX only.
 - **Audit and classification**:

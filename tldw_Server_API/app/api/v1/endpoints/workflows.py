@@ -63,7 +63,7 @@ from tldw_Server_API.app.core.Workflows.daily_ledger import (
 # Best-effort per-process cache for "did we backfill today" keys.
 # Keep it bounded to avoid unbounded growth in long-lived workers.
 _WORKFLOWS_BACKFILL_CACHE: Set[str] = set()
-_raw_cache_max = int(os.getenv("WORKFLOWS_BACKFILL_CACHE_MAX", "50000") or 50000)
+_raw_cache_max = int(os.getenv("WORKFLOWS_BACKFILL_CACHE_MAX", "50000") or "50000")
 _WORKFLOWS_BACKFILL_CACHE_MAX = max(1, _raw_cache_max)
 
 
