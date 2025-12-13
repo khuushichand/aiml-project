@@ -353,5 +353,4 @@ async def get_recent_notifications(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to read recent notifications",
         ) from e
-    else:
-        return RecentNotificationsResponse(items=items)
+    return RecentNotificationsResponse(items=items)

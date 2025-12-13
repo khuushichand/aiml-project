@@ -207,9 +207,9 @@ class APIKeyManager:
             await repo.ensure_tables()
             logger.debug("API keys tables and indexes created/verified")
         except Exception as e:
-            logger.error(f"Failed to create API keys tables: {e}")
+            logger.exception("Failed to create API keys tables")
             raise DatabaseError(
-                f"Failed to create API keys tables {self._db_context_hint()}: {e}"
+                f"Failed to create API keys tables {self._db_context_hint()}"
             ) from e
 
     def generate_api_key(self) -> tuple[str, str]:
@@ -340,9 +340,9 @@ class APIKeyManager:
                 "message": "Store this key securely - it will not be shown again"
             }
         except Exception as e:
-            logger.error(f"Failed to create API key: {e}")
+            logger.exception("Failed to create API key")
             raise DatabaseError(
-                f"Failed to create API key {self._db_context_hint()}: {e}"
+                f"Failed to create API key {self._db_context_hint()}"
             ) from e
 
     async def create_virtual_key(
@@ -425,9 +425,9 @@ class APIKeyManager:
             }
 
         except Exception as e:
-            logger.error(f"Failed to create virtual API key: {e}")
+            logger.exception("Failed to create virtual API key")
             raise DatabaseError(
-                f"Failed to create virtual API key {self._db_context_hint()}: {e}"
+                f"Failed to create virtual API key {self._db_context_hint()}"
             ) from e
 
     async def validate_api_key(
@@ -483,11 +483,9 @@ class APIKeyManager:
                 try:
                     allowed_ips_raw = self._coerce_json_field(key_info.get("allowed_ips"))
                     if allowed_ips_raw is None:
-                        allowed_ips_value = key_info.get("allowed_ips")
-                        if isinstance(allowed_ips_value, str) and allowed_ips_value.strip():
-                            allowed_ips_raw = []
-                        else:
-                            raise TypeError("API key allowlist must be stored as JSON array")
+                        # Fail closed when an allowlist value is present but
+                        # does not decode into a concrete JSON array.
+                        raise TypeError("API key allowlist must be stored as JSON array")
                     if not isinstance(allowed_ips_raw, list):
                         raise TypeError("API key allowlist must be stored as JSON array")
                     allowed_ips = {str(ip).strip() for ip in allowed_ips_raw if str(ip).strip()}
@@ -576,6 +574,16 @@ class APIKeyManager:
             if not old_key:
                 raise ValueError("API key not found or unauthorized")
 
+            # Decode stored JSON fields in a fail-closed way for security-
+            # sensitive allowlists like allowed_ips.
+            raw_allowed_ips = old_key.get("allowed_ips")
+            allowed_ips: Optional[List[str]] = None
+            if raw_allowed_ips:
+                decoded_allowed_ips = self._coerce_json_field(raw_allowed_ips)
+                if decoded_allowed_ips is None or not isinstance(decoded_allowed_ips, list):
+                    raise TypeError("API key allowlist must be stored as JSON array")
+                allowed_ips = decoded_allowed_ips  # type: ignore[assignment]
+
             # Create new key with same settings
             new_key_result = await self.create_api_key(
                 user_id=user_id,
@@ -584,7 +592,7 @@ class APIKeyManager:
                 scope=old_key['scope'],
                 expires_in_days=expires_in_days,
                 rate_limit=old_key['rate_limit'],
-                allowed_ips=self._coerce_json_field(old_key.get('allowed_ips')),
+                allowed_ips=allowed_ips,
                 metadata=self._coerce_json_field(old_key.get('metadata'))
             )
 
@@ -609,9 +617,9 @@ class APIKeyManager:
             # Preserve auth/not-found semantics; callers map to appropriate 4xx.
             raise
         except Exception as e:
-            logger.error(f"Failed to rotate API key: {e}")
+            logger.exception("Failed to rotate API key")
             raise DatabaseError(
-                f"Failed to rotate API key {self._db_context_hint()}: {e}"
+                f"Failed to rotate API key {self._db_context_hint()}"
             ) from e
 
     async def revoke_api_key(
@@ -652,9 +660,9 @@ class APIKeyManager:
             return success
 
         except Exception as e:
-            logger.error(f"Failed to revoke API key: {e}")
+            logger.exception("Failed to revoke API key")
             raise DatabaseError(
-                f"Failed to revoke API key {self._db_context_hint()}: {e}"
+                f"Failed to revoke API key {self._db_context_hint()}"
             ) from e
 
     async def list_user_keys(
@@ -689,9 +697,9 @@ class APIKeyManager:
             return keys
 
         except Exception as e:
-            logger.error(f"Failed to list user keys: {e}")
+            logger.exception("Failed to list user keys")
             raise DatabaseError(
-                f"Failed to list user keys {self._db_context_hint()}: {e}"
+                f"Failed to list user keys {self._db_context_hint()}"
             ) from e
 
     async def cleanup_expired_keys(self):

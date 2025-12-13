@@ -369,27 +369,41 @@ async def get_current_user(
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
 ) -> Dict[str, Any]:
     """
-    Get current authenticated user from JWT token
+    Resolve and return the current authenticated user.
+
+    Supports both Bearer JWT authentication and `X-API-KEY` authentication. If an
+    upstream dependency already populated `request.state.auth` and
+    `request.state._auth_user`, this function reuses that request-scoped cache to
+    avoid repeating token/API-key validation within a single request.
 
     Args:
-        request: FastAPI request object
-        credentials: Bearer token from Authorization header
-        jwt_service: JWT service instance
-        session_manager: Session manager instance
-        db_pool: Database pool instance
+        request: FastAPI request object.
+        response: FastAPI response object.
+        credentials: Bearer token from Authorization header (if present).
+        session_manager: Session manager instance.
+        db_pool: Database pool instance.
+        x_api_key: API key from `X-API-KEY` header (if present).
 
     Returns:
-        User dictionary with all user information
+        User dictionary with all user information.
 
     Raises:
-        HTTPException: If authentication fails
+        HTTPException: If authentication fails.
     """
     # TEST_MODE diagnostics: log auth header presence
     try:
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
-            logger.info(f"get_current_user: has_bearer={bool(credentials)} has_api_key={bool(x_api_key)} path={request.url.path}")
+            logger.info(
+                "get_current_user: has_bearer={} has_api_key={} path={}",
+                bool(credentials),
+                bool(x_api_key),
+                request.url.path,
+            )
     except Exception as exc:
-        logger.debug(f"get_current_user: TEST_MODE auth header diagnostics failed; continuing without diagnostics: {exc}")
+        logger.debug(
+            "get_current_user: TEST_MODE auth header diagnostics failed; continuing without diagnostics: {}",
+            exc,
+        )
 
     # Fast-path: if an AuthPrincipal/AuthContext has already been resolved for this
     # request (e.g., via get_auth_principal or budget guards), reuse the cached user
@@ -445,7 +459,8 @@ async def get_current_user(
     except Exception as exc:
         # Fall through to standard auth behavior if any issue occurs
         logger.debug(
-            f"get_current_user: Fast-path AuthContext reuse failed, falling back to standard auth: {exc}"
+            "get_current_user: Fast-path AuthContext reuse failed, falling back to standard auth: {}",
+            exc,
         )
 
     # If Authorization is absent but X-API-KEY present, attempt API-key auth (SQLite/Postgres multi-user).
@@ -487,7 +502,10 @@ async def get_current_user(
                     request.state.team_ids = []
                     request.state.org_ids = []
                 except Exception as state_exc:
-                    logger.debug(f"API key test-mode path: unable to attach state context: {state_exc}")
+                    logger.debug(
+                        "API key test-mode path: unable to attach state context: {}",
+                        state_exc,
+                    )
                 return user
         try:
             api_mgr = await get_api_key_manager()
@@ -529,11 +547,17 @@ async def get_current_user(
                     request.state.team_ids = team_ids
                     request.state.org_ids = org_ids
                 except Exception as memberships_exc:
-                    logger.debug(f"API key path: membership lookup failed; defaulting to empty lists: {memberships_exc}")
+                    logger.debug(
+                        "API key path: membership lookup failed; defaulting to empty lists: {}",
+                        memberships_exc,
+                    )
                     request.state.team_ids = []
                     request.state.org_ids = []
             except Exception as state_exc:
-                logger.debug(f"API key path: unable to attach user/team/org state context: {state_exc}")
+                logger.debug(
+                    "API key path: unable to attach user/team/org state context: {}",
+                    state_exc,
+                )
 
             _activate_scope_context(
                 request,
@@ -569,7 +593,10 @@ async def get_current_user(
                 extra_headers["X-TLDW-Auth-Reason"] = "missing-bearer"
                 extra_headers["X-TLDW-Auth-Headers"] = present_headers
             except Exception as exc:
-                logger.debug(f"get_current_user: failed to set TEST_MODE missing-bearer diagnostic headers: {exc}")
+                logger.debug(
+                    "get_current_user: failed to set TEST_MODE missing-bearer diagnostic headers: {}",
+                    exc,
+                )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
@@ -641,11 +668,17 @@ async def get_current_user(
                 request.state.team_ids = team_ids
                 request.state.org_ids = org_ids
             except Exception as memberships_exc:
-                logger.debug(f"JWT path: membership lookup failed; defaulting to empty lists: {memberships_exc}")
+                logger.debug(
+                    "JWT path: membership lookup failed; defaulting to empty lists: {}",
+                    memberships_exc,
+                )
                 request.state.team_ids = []
                 request.state.org_ids = []
         except Exception as state_exc:
-            logger.debug(f"JWT path: unable to attach user/team/org state context: {state_exc}")
+            logger.debug(
+                "JWT path: unable to attach user/team/org state context: {}",
+                state_exc,
+            )
 
         _activate_scope_context(
             request,
@@ -691,7 +724,7 @@ async def get_current_user(
             except Exception as cache_exc:
                 logger.debug("Unable to cache _auth_user on request.state: {}", cache_exc)
         except Exception as ctx_exc:
-            logger.debug(f"Unable to populate AuthContext in get_current_user: {ctx_exc}")
+            logger.debug("Unable to populate AuthContext in get_current_user: {}", ctx_exc)
 
         return user
 
@@ -703,7 +736,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"}
         )
     except InvalidTokenError as e:
-        logger.warning(f"get_current_user: invalid token: {e}")
+        logger.warning("get_current_user: invalid token: {}", e)
         extra_headers = {"WWW-Authenticate": "Bearer"}
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
             extra_headers["X-TLDW-Auth-Reason"] = f"invalid-token:{e}"

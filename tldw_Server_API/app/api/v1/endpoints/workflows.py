@@ -861,8 +861,8 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 async def run_saved(
     workflow_id: int,
     request: Request,
-    mode: str = Query("async", description="Execution mode: async|sync"),
-    body: RunRequest = Body(...),
+    mode: str = Query("async", description="Execution mode: async|sync"),  # noqa: B008
+    body: RunRequest = Body(...),  # noqa: B008
     current_user: User = Depends(get_request_user),  # noqa: B008
     db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
     audit_service=Depends(get_audit_service_for_user),  # noqa: B008
@@ -1313,8 +1313,8 @@ async def list_runs(
 @limit_adhoc
 async def run_adhoc(
     request: Request,
-    mode: str = Query("async", description="Execution mode: async|sync"),
-    body: AdhocRunRequest = Body(...),
+    mode: str = Query("async", description="Execution mode: async|sync"),  # noqa: B008
+    body: AdhocRunRequest = Body(...),  # noqa: B008
     current_user: User = Depends(get_request_user),  # noqa: B008
     db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
     audit_service=Depends(get_audit_service_for_user),  # noqa: B008
@@ -1544,10 +1544,10 @@ async def get_run(
 )
 async def get_run_events(
     run_id: str,
-    since: Optional[int] = Query(None, description="Return events with seq strictly greater than this value"),
-    limit: int = Query(500, ge=1, le=1000),
-    types: Optional[List[str]] = Query(None, description="Filter by event types (repeatable)"),
-    cursor: Optional[str] = Query(None, description="Opaque continuation token (overrides since)"),
+    since: Optional[int] = Query(None, description="Return events with seq strictly greater than this value"),  # noqa: B008
+    limit: int = Query(500, ge=1, le=1000),  # noqa: B008
+    types: Optional[List[str]] = Query(None, description="Filter by event types (repeatable)"),  # noqa: B008
+    cursor: Optional[str] = Query(None, description="Opaque continuation token (overrides since)"),  # noqa: B008
     current_user: User = Depends(get_request_user),  # noqa: B008
     db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
     *,
@@ -3047,7 +3047,7 @@ class HumanReviewPayload(BaseModel):
 async def approve_step(
     run_id: str,
     step_id: str,
-    payload: HumanReviewPayload = Body(default_factory=HumanReviewPayload),
+    payload: HumanReviewPayload = Body(default_factory=HumanReviewPayload),  # noqa: B008
     current_user: User = Depends(get_request_user),  # noqa: B008
     db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
@@ -3084,7 +3084,7 @@ async def approve_step(
 async def reject_step(
     run_id: str,
     step_id: str,
-    payload: HumanReviewPayload = Body(default_factory=HumanReviewPayload),
+    payload: HumanReviewPayload = Body(default_factory=HumanReviewPayload),  # noqa: B008
     current_user: User = Depends(get_request_user),  # noqa: B008
     db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
