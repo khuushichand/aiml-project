@@ -542,9 +542,11 @@ class APIKeyManager:
             # Surface explicit database failures so callers can respond with
             # a clear server-side error instead of silently denying access.
             raise
-        except Exception as e:  # noqa: BLE001 - validation failures degrade to 'no key'
-            logger.error(
-                f"Failed to validate API key (ip={ip_address}, scope={required_scope}): {e}"
+        except Exception:  # noqa: BLE001 - validation failures degrade to 'no key'
+            logger.opt(exception=True).error(
+                "Failed to validate API key (ip={}, scope={})",
+                ip_address,
+                required_scope,
             )
             return None
 

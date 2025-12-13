@@ -59,7 +59,10 @@ from tldw_Server_API.app.core.Workflows.daily_ledger import (
 )
 
 
+# Best-effort per-process cache for "did we backfill today" keys.
+# Keep it bounded to avoid unbounded growth in long-lived workers.
 _WORKFLOWS_BACKFILL_CACHE: Set[str] = set()
+_WORKFLOWS_BACKFILL_CACHE_MAX = int(os.getenv("WORKFLOWS_BACKFILL_CACHE_MAX", "50000") or 50000)
 
 
 def _utcnow_iso() -> str:
@@ -502,6 +505,8 @@ async def _enforce_workflows_daily_cap(
         today = _dt.datetime.utcnow().strftime("%Y-%m-%d")
         backfill_key = f"{tenant_id}:{entity_scope}:{entity_value}:{today}"
         if backfill_key not in _WORKFLOWS_BACKFILL_CACHE:
+            if len(_WORKFLOWS_BACKFILL_CACHE) >= _WORKFLOWS_BACKFILL_CACHE_MAX:
+                _WORKFLOWS_BACKFILL_CACHE.clear()
             _WORKFLOWS_BACKFILL_CACHE.add(backfill_key)
             ledger = await get_workflows_daily_ledger()
             if ledger is not None:
@@ -2911,7 +2916,12 @@ async def list_workflow_template_tags() -> list[str]:
         return []
 
 
-@router.get("/config")
+@router.get(
+    "/config",
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_ADMIN)),
+    ],
+)
 async def get_workflows_config(
     _current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
