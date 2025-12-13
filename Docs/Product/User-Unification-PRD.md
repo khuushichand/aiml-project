@@ -17,9 +17,9 @@ The goal is to reduce special-case handling, make the mental model “always mul
 
 ## Related Documents
 
-- `Docs/Design/Principal-Governance-PRD.md` – principal model (`AuthPrincipal` / `AuthContext`) and AuthNZ guardrails.
-- `Docs/Design/User-Auth-Deps-PRD.md` – unified auth dependencies, claim-first authorization, and FastAPI wiring.
-- `Docs/Design/Resource_Governor_PRD.md` – global, cross-module resource governance (`ResourceGovernor`) used by AuthNZ guardrails.
+- `Docs/Product/Principal-Governance-PRD.md` – principal model (`AuthPrincipal` / `AuthContext`) and AuthNZ guardrails.
+- `Docs/Product/User-Auth-Deps-PRD.md` – unified auth dependencies, claim-first authorization, and FastAPI wiring.
+- `Docs/Product/Resource_Governor_PRD.md` – global, cross-module resource governance (`ResourceGovernor`) used by AuthNZ guardrails.
 
 ---
 
@@ -295,10 +295,10 @@ To make “mode” an implementation detail of a higher-level deployment profile
     - Parts of `virtual_keys` related to key limits.
 
 **Implementation Status (AuthNZ v0.1, internal)**:
-- Repository introduction (Stage 3) is in progress:
+- Repository introduction (Stage 3) is Done (v0.1):
   - `AuthnzUsersRepo`, `AuthnzApiKeysRepo`, and `AuthnzRbacRepo` are implemented and used by `User_DB_Handling`, `APIKeyManager`, and RBAC helpers.
   - New repositories `AuthnzOrgsTeamsRepo`, `AuthnzUsageRepo`, `AuthnzRateLimitsRepo`, `AuthnzSessionsRepo`, `AuthnzTokenBlacklistRepo`, `AuthnzMfaRepo`, `AuthnzMonitoringRepo`, and `AuthnzRegistrationCodesRepo` encapsulate orgs/teams membership, usage/LLM-usage tables, AuthNZ rate-limiter storage, session persistence, token blacklist storage, MFA persistence, monitoring/audit metrics, and registration-code cleanup respectively, with cross-backend tests where applicable.
-- Backend drift reduction (Stage 4) is in progress:
+- Backend drift reduction (Stage 4) is Done (v0.1):
   - `virtual_keys` budget and usage paths delegate to `AuthnzApiKeysRepo` / `AuthnzUsageRepo` instead of embedding dialect-specific SQL.
   - `orgs_teams` is now a thin orchestration layer over `AuthnzOrgsTeamsRepo` for organization, team, and membership operations (including default-team handling).
   - `rate_limiter` uses `AuthnzRateLimitsRepo` for all DB-backed rate-limiter tables (`rate_limits`, `failed_attempts`, `account_lockouts`), and the AuthNZ scheduler prunes usage tables via `AuthnzUsageRepo`.
@@ -405,7 +405,7 @@ To make “mode” an implementation detail of a higher-level deployment profile
 - Identify and refactor 2–3 high-impact modules (e.g., `virtual_keys`, `orgs_teams`, parts of `rate_limiter` that are AuthNZ-specific) to use repositories.
 - Remove duplicated Postgres/SQLite branches that are now redundant.
 
-- **Status (v0.1)**: In Progress — key modules such as `virtual_keys`, `orgs_teams`, and AuthNZ rate-limiter storage already use repos, but remaining backend drift and mode cleanup is tracked as post-v0.1 tech debt in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` and will be addressed incrementally.
+- **Status (v0.1)**: Done — key modules such as `virtual_keys`, `orgs_teams`, and AuthNZ rate-limiter storage use repos; remaining backend drift and mode cleanup is tracked as post-v0.1 tech debt in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md` and is addressed incrementally.
 
 ### Repo Coverage vs Inline SQL (AuthNZ v0.1)
 
@@ -568,7 +568,7 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
 - Failure-path tests for repository methods (uniqueness violations, missing rows) to ensure consistent exception mapping.
 - Existing API-key and RBAC tests pass unchanged.
 
-**Status**: In Progress — core repos are in use; remaining repo migrations are deferred to the next iteration (see `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`).
+**Status**: Done (v0.1) — core repos are in use; remaining repo migrations are deferred to the next iteration (see `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`).
 
 **Notes**:
 - `AuthnzApiKeysRepo` at `tldw_Server_API/app/core/AuthNZ/repos/api_keys_repo.py` now backs all runtime `api_keys` operations with focused methods, including:

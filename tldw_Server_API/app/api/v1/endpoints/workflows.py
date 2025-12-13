@@ -6,6 +6,7 @@ Implements minimal definition CRUD and run lifecycle with a no-op engine.
 
 import asyncio
 import json
+import os
 import time
 from typing import Any, Dict, List, Optional, Set
 from uuid import uuid4
@@ -84,7 +85,6 @@ To keep tests deterministic, rate limits are automatically disabled when
 running under pytest or TEST_MODE/TLDW_TEST_MODE. This check is evaluated at
 call time to avoid import-order issues.
 """
-import os
 import functools
 from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter as _limiter
 
@@ -417,7 +417,7 @@ def _build_rate_limit_headers(limit: int, remaining: int, reset_epoch: int) -> D
 
 async def _enforce_workflows_daily_cap(
     *,
-    request: Optional[Request],
+    request: Request,
     current_user: User,
     db: WorkflowsDatabase,
 ) -> None:
@@ -430,8 +430,6 @@ async def _enforce_workflows_daily_cap(
 
     Raises HTTPException(429) with legacy-compatible headers on denial.
     """
-    if request is None:
-        return
     try:
         if os.getenv("WORKFLOWS_DISABLE_QUOTAS", "").lower() in {"1", "true", "yes", "on"}:
             return
@@ -2924,10 +2922,8 @@ async def list_workflow_template_tags() -> list[str]:
 )
 async def get_workflows_config(
     _current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
 ):
     """Return effective Workflows configuration derived from environment and backend (read-only)."""
-    import os
     def _env_bool(name: str, default: bool = False) -> bool:
         v = os.getenv(name, "")
         if not v:
@@ -2935,11 +2931,9 @@ async def get_workflows_config(
         return v.lower() in {"1", "true", "yes", "y", "on"}
 
     backend_type = "sqlite"
-    try:
-        if getattr(db, "backend", None) and getattr(db.backend, "backend_type", None) == BackendType.POSTGRESQL:
-            backend_type = "postgres"
-    except Exception:
-        pass
+    backend = get_content_backend_instance()
+    if backend is not None and getattr(backend, "backend_type", None) == BackendType.POSTGRESQL:
+        backend_type = "postgres"
 
     def _csv(name: str) -> list[str]:
         raw = os.getenv(name, "")

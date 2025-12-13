@@ -798,7 +798,8 @@ async def get_api_key_manager() -> APIKeyManager:
     try:
         current_settings = get_settings()
         current_fp = _compute_hmac_fingerprint(current_settings)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Failed to compute HMAC fingerprint; will recreate manager: {}", exc)
         current_fp = ""
 
     async with _api_key_manager_lock:
@@ -806,7 +807,8 @@ async def get_api_key_manager() -> APIKeyManager:
             try:
                 if getattr(_api_key_manager, "_hmac_key_fingerprint", None) != current_fp:
                     _api_key_manager = None
-            except Exception:
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Failed to check manager fingerprint; will recreate manager: {}", exc)
                 _api_key_manager = None
 
         if not _api_key_manager:

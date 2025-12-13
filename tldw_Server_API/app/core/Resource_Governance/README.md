@@ -126,7 +126,7 @@ Notes
 - Entity derivation: prefers authenticated user (`user:{id}`), then API key id/hash (`api_key:{id|hash}`), then trusted proxy IP header via `RG_CLIENT_IP_HEADER` when `RG_TRUSTED_PROXIES` contains the peer; otherwise falls back to `request.client.host`.
 - Behavior: performs a pre-check/reserve for the `requests` category before calling the endpoint and commits afterwards. On denial, sets `Retry-After` and `X-RateLimit-*` headers. On success, injects accurate `X-RateLimit-*` headers using a governor `peek` when available.
 - Scope: this middleware enforces **requests only**. Categories such as `tokens`, `streams`, `jobs`, and `minutes` require explicit endpoint-level RG reserve/commit plumbing (for example chat/embeddings tokens, audio streaming concurrency).
-- Enabled automatically whenever `RG_ENABLED=1` unless forced off via `RG_ENABLE_SIMPLE_MIDDLEWARE=0`. The legacy enable flags (`RG_ENABLE_SIMPLE_MIDDLEWARE=1` / `RG_ENABLE_SLOWAPI=1`) remain as compatibility aliases.
+- Enabled automatically whenever `RG_ENABLED=1`.
 
 Headers on success/deny:
 - Deny (429): `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining=0`, `X-RateLimit-Reset` (seconds until retry).
@@ -150,7 +150,7 @@ Headers on success/deny:
 ### Middleware
 - Middleware tests run against tiny stub FastAPI apps and don’t require full server startup.
 - Useful env toggles during manual experiments:
-  - `RG_ENABLE_SIMPLE_MIDDLEWARE=1`
+  - `RG_ENABLED=1`
 - Tests:
   - `pytest -q tldw_Server_API/tests/Resource_Governance/test_middleware_simple.py`
   - `pytest -q tldw_Server_API/tests/Resource_Governance/test_middleware_tokens_headers.py`
@@ -163,7 +163,7 @@ Headers on success/deny:
   - `RG_POLICY_STORE=file`
   - `RG_POLICY_PATH=tldw_Server_API/Config_Files/resource_governor_policies.yaml`
   - `RG_BACKEND=memory`
-  - `RGSimpleMiddleware` is attached automatically on startup (set `RG_ENABLE_SIMPLE_MIDDLEWARE=0` only if you need to force-disable for debugging).
+  - `RGSimpleMiddleware` is attached automatically on startup.
 - Production with DB policy store + Redis:
   - `RG_ENABLED=1`
   - `RG_POLICY_STORE=db` (AuthNZ `rg_policies` as source of truth)

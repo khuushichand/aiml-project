@@ -1,3 +1,4 @@
+import contextlib
 import pytest
 from fastapi.testclient import TestClient
 
@@ -20,6 +21,37 @@ def _reset_rg_state(app):
                 setattr(app.state, attr, None)
         except Exception:
             continue
+
+
+@contextlib.contextmanager
+def _with_rg_middleware(app):
+    """Temporarily install RGSimpleMiddleware for tests that set RG_ENABLED after app import."""
+    try:
+        from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSimpleMiddleware
+        from starlette.middleware import Middleware
+    except Exception:
+        yield
+        return
+
+    original_user_middleware = getattr(app, "user_middleware", [])[:]
+    changed = False
+    try:
+        already = any(getattr(m, "cls", None) is RGSimpleMiddleware for m in original_user_middleware)
+        if not already:
+            app.user_middleware = [Middleware(RGSimpleMiddleware), *original_user_middleware]
+            changed = True
+            try:
+                app.middleware_stack = app.build_middleware_stack()
+            except Exception:
+                pass
+        yield
+    finally:
+        if changed:
+            try:
+                app.user_middleware = original_user_middleware
+                app.middleware_stack = app.build_middleware_stack()
+            except Exception:
+                pass
 
 
 async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
@@ -77,7 +109,6 @@ async def test_e2e_evaluations_deny_headers_retry_after(monkeypatch, tmp_path):
     # Minimal app with RG middleware; enforce requests-only deny semantics for a
     # representative Evaluations endpoint via route_map.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
-    monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_STORE", "file")
@@ -102,20 +133,21 @@ async def test_e2e_evaluations_deny_headers_retry_after(monkeypatch, tmp_path):
 
     _reset_rg_state(app)
 
-    with TestClient(app) as client:
-        # First request should not be rate-limited by RG; allow non-429 errors
-        # from downstream Evaluations plumbing as long as RG does not deny.
-        r1 = client.get(
-            "/api/v1/evaluations/rate-limits",
-            headers={"X-API-KEY": api_key},
-        )
-        assert r1.status_code != 429
+    with _with_rg_middleware(app):
+        with TestClient(app) as client:
+            # First request should not be rate-limited by RG; allow non-429 errors
+            # from downstream Evaluations plumbing as long as RG does not deny.
+            r1 = client.get(
+                "/api/v1/evaluations/rate-limits",
+                headers={"X-API-KEY": api_key},
+            )
+            assert r1.status_code != 429
 
-        # Second request should be governed by RG via route_map.
-        r2 = client.get(
-            "/api/v1/evaluations/rate-limits",
-            headers={"X-API-KEY": api_key},
-        )
+            # Second request should be governed by RG via route_map.
+            r2 = client.get(
+                "/api/v1/evaluations/rate-limits",
+                headers={"X-API-KEY": api_key},
+            )
 
     assert r2.status_code in (429, 503)
     if r2.status_code == 429:
@@ -132,7 +164,6 @@ async def test_e2e_authnz_debug_deny_headers_retry_after(monkeypatch, tmp_path):
     # Minimal app with RG middleware; enforce requests-only deny semantics for a
     # lightweight AuthNZ debug endpoint that does not require full login flow.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
-    monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "1")
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_STORE", "file")
 
@@ -187,11 +218,12 @@ async def test_e2e_authnz_debug_deny_headers_retry_after(monkeypatch, tmp_path):
 
     _reset_rg_state(app)
 
-    with TestClient(app) as client:
-        r1 = client.get("/api/v1/authnz/debug/api-key-id")
-        assert r1.status_code != 429
+    with _with_rg_middleware(app):
+        with TestClient(app) as client:
+            r1 = client.get("/api/v1/authnz/debug/api-key-id")
+            assert r1.status_code != 429
 
-        r2 = client.get("/api/v1/authnz/debug/api-key-id")
+            r2 = client.get("/api/v1/authnz/debug/api-key-id")
 
     assert r2.status_code in (429, 503)
     if r2.status_code == 429:
@@ -212,7 +244,6 @@ async def test_e2e_character_chat_deny_headers_retry_after(monkeypatch, tmp_path
     # Minimal app with RG middleware; enforce requests-only deny semantics for
     # the legacy character chat completion endpoint used in tests.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
-    monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_STORE", "file")
@@ -253,17 +284,18 @@ async def test_e2e_character_chat_deny_headers_retry_after(monkeypatch, tmp_path
     app.dependency_overrides[get_chacha_db_for_user] = _stub_get_db
 
     try:
-        with TestClient(app) as client:
-            chat_id = "rg-e2e-chat"
-            url = f"/api/v1/chats/{chat_id}/complete"
+        with _with_rg_middleware(app):
+            with TestClient(app) as client:
+                chat_id = "rg-e2e-chat"
+                url = f"/api/v1/chats/{chat_id}/complete"
 
-            # First request should not be rate-limited by RG; allow downstream
-            # errors as long as RG does not immediately return 429.
-            r1 = client.post(url, headers={"X-API-KEY": api_key})
-            assert r1.status_code != 429
+                # First request should not be rate-limited by RG; allow downstream
+                # errors as long as RG does not immediately return 429.
+                r1 = client.post(url, headers={"X-API-KEY": api_key})
+                assert r1.status_code != 429
 
-            # Second request should be governed by RG policy via middleware.
-            r2 = client.post(url, headers={"X-API-KEY": api_key})
+                # Second request should be governed by RG policy via middleware.
+                r2 = client.post(url, headers={"X-API-KEY": api_key})
     finally:
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
 

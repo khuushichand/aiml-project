@@ -1,3 +1,4 @@
+import contextlib
 import json
 
 import pytest
@@ -13,6 +14,37 @@ def _reset_rg_state(app):
                 setattr(app.state, attr, None)
         except Exception:
             continue
+
+
+@contextlib.contextmanager
+def _with_rg_middleware(app):
+    """Temporarily install RGSimpleMiddleware for tests that set RG_ENABLED after app import."""
+    try:
+        from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSimpleMiddleware
+        from starlette.middleware import Middleware
+    except Exception:
+        yield
+        return
+
+    original_user_middleware = getattr(app, "user_middleware", [])[:]
+    changed = False
+    try:
+        already = any(getattr(m, "cls", None) is RGSimpleMiddleware for m in original_user_middleware)
+        if not already:
+            app.user_middleware = [Middleware(RGSimpleMiddleware), *original_user_middleware]
+            changed = True
+            try:
+                app.middleware_stack = app.build_middleware_stack()
+            except Exception:
+                pass
+        yield
+    finally:
+        if changed:
+            try:
+                app.user_middleware = original_user_middleware
+                app.middleware_stack = app.build_middleware_stack()
+            except Exception:
+                pass
 
 
 async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
@@ -86,7 +118,7 @@ async def test_e2e_workflows_daily_cap_denies_with_headers(monkeypatch, tmp_path
 
     # Minimal app + RG middleware.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
-    monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "1")
+    monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_STORE", "file")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
@@ -134,22 +166,23 @@ async def test_e2e_workflows_daily_cap_denies_with_headers(monkeypatch, tmp_path
         "inputs": {},
     }
 
-    with TestClient(app) as c:
-        r1 = c.post(
-            "/api/v1/workflows/run",
-            headers={"X-API-KEY": api_key},
-            data=json.dumps(body),
-        )
-        assert r1.status_code == 200
+    with _with_rg_middleware(app):
+        with TestClient(app) as c:
+            r1 = c.post(
+                "/api/v1/workflows/run",
+                headers={"X-API-KEY": api_key},
+                data=json.dumps(body),
+            )
+            assert r1.status_code == 200
 
-        r2 = c.post(
-            "/api/v1/workflows/run",
-            headers={"X-API-KEY": api_key},
-            data=json.dumps(body),
-        )
-        assert r2.status_code == 429
-        limit_hdr = r2.headers.get("X-RateLimit-Limit")
-        assert limit_hdr is not None
-        limit_vals = [v.strip() for v in limit_hdr.split(",")]
-        assert "1" in limit_vals
-        assert r2.headers.get("Retry-After") is not None
+            r2 = c.post(
+                "/api/v1/workflows/run",
+                headers={"X-API-KEY": api_key},
+                data=json.dumps(body),
+            )
+            assert r2.status_code == 429
+            limit_hdr = r2.headers.get("X-RateLimit-Limit")
+            assert limit_hdr is not None
+            limit_vals = [v.strip() for v in limit_hdr.split(",")]
+            assert "1" in limit_vals
+            assert r2.headers.get("Retry-After") is not None

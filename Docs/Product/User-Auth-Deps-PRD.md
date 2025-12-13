@@ -26,9 +26,9 @@ The goal is to make authentication/authorization dependencies predictable, effic
 
 ## Related Documents
 
-- `Docs/Design/Principal-Governance-PRD.md` – defines `AuthPrincipal` / `AuthContext` and AuthNZ guardrails.
-- `Docs/Design/User-Unification-PRD.md` – defines deployment profiles (`local-single-user`, `multi-user-postgres`) and bootstrap semantics.
-- `Docs/Design/Resource_Governor_PRD.md` – describes global resource governance integrated with AuthNZ via `AuthGovernor`.
+- `Docs/Product/Principal-Governance-PRD.md` – defines `AuthPrincipal` / `AuthContext` and AuthNZ guardrails.
+- `Docs/Product/User-Unification-PRD.md` – defines deployment profiles (`local-single-user`, `multi-user-postgres`) and bootstrap semantics.
+- `Docs/Product/Resource_Governor_PRD.md` – describes global resource governance integrated with AuthNZ via `AuthGovernor`.
   - Admin and diagnostics surfaces under `/api/v1/resource-governor/*` are now guarded via claim-first dependencies (`get_auth_principal` + `require_roles("admin")`), with existing integration tests preserved.
 
 ---

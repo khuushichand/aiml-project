@@ -489,7 +489,7 @@ def bypass_api_limits(monkeypatch):
     def _bypass(app, *, limiters: tuple = ()):  # type: ignore[override]
         # Ensure test-friendly behaviors
         monkeypatch.setenv("TEST_MODE", "true")
-        monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "0")
+        monkeypatch.setenv("RG_ENABLED", "0")
 
         # Snapshot existing middleware stack
         original_user_middleware = getattr(app, "user_middleware", [])[:]

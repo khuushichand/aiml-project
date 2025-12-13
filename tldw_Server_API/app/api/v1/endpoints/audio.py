@@ -302,26 +302,29 @@ from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import (
 )
 
 
-def _rate_limit_key(request: _FastAPIRequest) -> str:
+def _rate_limit_key(request: _FastAPIRequest) -> Optional[str]:
     """Rate limit key that prefers authenticated user id over IP.
 
     - Multi-user: per-user limits (fairness across users)
     - Single-user or unauthenticated: fall back to client IP
     """
-    # In TEST_MODE, align with global limiter behavior by delegating to the
-    # test-aware key resolver (which returns None to bypass limits).
+    # Keep SlowAPI as a pure config carrier when RGSimpleMiddleware is installed
+    # (and bypass limits entirely in TEST_MODE) by delegating to the shared
+    # test/RG-aware key resolver first.
     try:
-        if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
-            return _test_mode_key_func(request)
+        key = _test_mode_key_func(request)
+        if key is None:
+            return None
     except Exception as exc:
-        logger.debug(f"rate_limit_key: TEST_MODE key resolution failed, falling back to remote address: {exc}")
+        logger.debug(f"rate_limit_key: shared key resolver failed; falling back to local resolution: {exc}")
+        key = None
     try:
         uid = getattr(request.state, "user_id", None)
         if uid is not None:
             return f"user:{uid}"
     except Exception as e:
         logger.debug(f"rate_limit_key: failed to read user_id from request.state: error={e}")
-    return get_remote_address(request)
+    return key or get_remote_address(request)
 
 
 # Use central limiter instance; override key_func per-route where needed

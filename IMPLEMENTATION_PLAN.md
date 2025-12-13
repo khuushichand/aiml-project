@@ -123,6 +123,9 @@ For a focused breakdown of the remaining work across these three AuthNZ PRDs (in
 
 **Notes**:
 - Removed per-module `RG_ENABLE_*` / chat primary flags so RG is controlled by global `RG_ENABLED`/config.
+- Removed legacy ingress enable/disable aliases (`RG_ENABLE_SIMPLE_MIDDLEWARE`, `RG_ENABLE_SLOWAPI`); `RGSimpleMiddleware` is now controlled solely by `RG_ENABLED` and RG-focused tests set `RG_ENABLED=1` explicitly.
+- Audio SlowAPI key function now defers to the shared RG-aware resolver so SlowAPI remains a config carrier when RG ingress middleware is attached (prevents double-enforcement).
+- RG e2e tests now install `RGSimpleMiddleware` by temporarily injecting it into `app.user_middleware` (avoids import-order dependence without `importlib.reload` and restores the stack after each test).
 - Legacy limiters no longer consume counters when RG decisions exist; they run as fallback-only shims.
 - Added RG vs legacy shadow mismatch metrics for MCP and embeddings (emits `rg_shadow_decision_mismatch_total`).
 - Updated `resource_governor_policies.yaml` defaults to include `api_key` scopes for ingress policies so RG middleware can govern API-key/JWT requests before auth deps resolve `user_id`.

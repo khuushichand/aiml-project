@@ -1,4 +1,4 @@
-# AuthNZ PRDs Implementation Plan (Remaining Work v0.1)
+# AuthNZ PRDs Implementation Plan (v0.1) — Complete
 
 This plan tracks the remaining implementation work for the three AuthNZ-related PRDs:
 
@@ -9,6 +9,8 @@ This plan tracks the remaining implementation work for the three AuthNZ-related 
 It is intentionally incremental and aligned with `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`.
 
 ---
+
+**Overall Status (v0.1)**: Complete — the stages below are implemented and covered by the referenced tests. Any further work is tracked as post-v0.1 follow-ups in the individual PRDs and the AuthNZ refactor plan.
 
 ## Stage 1: Resource-Governor Legacy Limiters & Ingress Coverage
 

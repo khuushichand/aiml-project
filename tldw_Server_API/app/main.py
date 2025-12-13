@@ -2806,10 +2806,10 @@ import os as _os  # noqa: E402
 
 try:
     # Determine whether to enable RGSimpleMiddleware.
-    # - Explicit RG_ENABLE_SIMPLE_MIDDLEWARE=1 or RG_ENABLE_SLOWAPI=1 forces enable.
     # - When global RG is enabled (RG_ENABLED / config), ingress enforcement is on by default.
-    # - Explicit RG_ENABLE_SIMPLE_MIDDLEWARE=0 forces disable.
-    # - MINIMAL_TEST_APP keeps existing behavior and enables middleware for test apps.
+    # - Tests that want RG ingress should set RG_ENABLED=1 explicitly; we avoid
+    #   enabling middleware purely due to pytest/minimal-test settings to prevent
+    #   unintended 429s in unrelated suites.
     from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag  # noqa: E402
 
     try:
@@ -2817,18 +2817,7 @@ try:
     except Exception:
         _rg_global_enabled = False
 
-    _rg_simple_env = (_os.getenv("RG_ENABLE_SIMPLE_MIDDLEWARE") or "").strip().lower()
-    _rg_simple_force_on = _rg_simple_env in {"1", "true", "yes", "on"}
-    _rg_simple_force_off = _rg_simple_env in {"0", "false", "no", "off"}
-    _rg_slowapi_flag = (_os.getenv("RG_ENABLE_SLOWAPI") or "").strip().lower() in {"1", "true", "yes", "on"}
-    _rg_env_enabled = (not _rg_simple_force_off) and (
-        _rg_simple_force_on or _rg_slowapi_flag or _rg_global_enabled
-    )
-
-    # Only enable RGSimpleMiddleware when explicitly requested via env, or when running the
-    # minimal test app mode. Do not enable solely due to pytest detection to avoid unintended
-    # 429 responses in tests that don't expect global rate limiting.
-    if _rg_env_enabled or _MINIMAL_TEST_APP:
+    if _rg_global_enabled:
         from tldw_Server_API.app.core.Resource_Governance.middleware_simple import (
             RGSimpleMiddleware as _RGMw,
         )  # noqa: E402
@@ -2840,7 +2829,7 @@ try:
             already = False
         if not already:
             app.add_middleware(_RGMw)
-            logger.info("RGSimpleMiddleware enabled (env/minimal mode)")
+            logger.info("RGSimpleMiddleware enabled (RG_ENABLED)")
 except Exception as _rg_mw_err:  # pragma: no cover - best effort
     logger.debug(f"RGSimpleMiddleware not enabled: {_rg_mw_err}")
 

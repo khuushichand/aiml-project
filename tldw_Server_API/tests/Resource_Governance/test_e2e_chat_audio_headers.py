@@ -1,3 +1,4 @@
+import contextlib
 import json
 from pathlib import Path
 
@@ -10,6 +11,37 @@ pytestmark = pytest.mark.rate_limit
 def _repo_policy_path() -> str:
     # tldw_Server_API/tests/Resource_Governance → tldw_Server_API
     return str(Path(__file__).resolve().parents[2] / "Config_Files" / "resource_governor_policies.yaml")
+
+
+@contextlib.contextmanager
+def _with_rg_middleware(app):
+    """Temporarily install RGSimpleMiddleware for tests that set RG_ENABLED after app import."""
+    try:
+        from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSimpleMiddleware
+        from starlette.middleware import Middleware
+    except Exception:
+        yield
+        return
+
+    original_user_middleware = getattr(app, "user_middleware", [])[:]
+    changed = False
+    try:
+        already = any(getattr(m, "cls", None) is RGSimpleMiddleware for m in original_user_middleware)
+        if not already:
+            app.user_middleware = [Middleware(RGSimpleMiddleware), *original_user_middleware]
+            changed = True
+            try:
+                app.middleware_stack = app.build_middleware_stack()
+            except Exception:
+                pass
+        yield
+    finally:
+        if changed:
+            try:
+                app.user_middleware = original_user_middleware
+                app.middleware_stack = app.build_middleware_stack()
+            except Exception:
+                pass
 
 
 def _reset_rg_state(app) -> None:
@@ -131,7 +163,6 @@ async def test_e2e_chat_headers_tokens_and_requests(monkeypatch, tmp_path):
 
     # Minimal app mode with RG middleware (requests headers)
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
-    monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_STORE", "file")
@@ -162,16 +193,17 @@ async def test_e2e_chat_headers_tokens_and_requests(monkeypatch, tmp_path):
     monkeypatch.setattr(chat_ep, "build_context_and_messages", _stub_build_context_and_messages, raising=False)
 
     try:
-        with TestClient(app) as c:
-            body = {
-                "model": "openai/gpt-3.5-turbo",
-                "messages": [{"role": "user", "content": "hello"}],
-                "stream": False,
-            }
-            r = c.post("/api/v1/chat/completions", headers={"X-API-KEY": api_key}, json=body)
-            assert r.status_code == 200, r.text
-            assert r.headers.get("X-RateLimit-Limit") is not None
-            assert r.headers.get("X-RateLimit-Remaining") is not None
+        with _with_rg_middleware(app):
+            with TestClient(app) as c:
+                body = {
+                    "model": "openai/gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "stream": False,
+                }
+                r = c.post("/api/v1/chat/completions", headers={"X-API-KEY": api_key}, json=body)
+                assert r.status_code == 200, r.text
+                assert r.headers.get("X-RateLimit-Limit") is not None
+                assert r.headers.get("X-RateLimit-Remaining") is not None
     finally:
         app.dependency_overrides.pop(chacha_dep, None)
 
@@ -188,7 +220,6 @@ async def test_e2e_chat_deny_headers_retry_after(monkeypatch, tmp_path):
     _user_id, api_key = await _create_user_and_key(username="chat-deny-user", email="chat-deny-user@example.com")
 
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
-    monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_STORE", "file")
@@ -218,17 +249,18 @@ async def test_e2e_chat_deny_headers_retry_after(monkeypatch, tmp_path):
         "messages": [{"role": "user", "content": "hello"}],
         "stream": False,
     }
-    with TestClient(app) as c:
-        r1 = c.post("/api/v1/chat/completions", headers={"X-API-KEY": api_key}, json=body)
-        assert r1.status_code != 429
+    with _with_rg_middleware(app):
+        with TestClient(app) as c:
+            r1 = c.post("/api/v1/chat/completions", headers={"X-API-KEY": api_key}, json=body)
+            assert r1.status_code != 429
 
-        r2 = c.post("/api/v1/chat/completions", headers={"X-API-KEY": api_key}, json=body)
-        assert r2.status_code == 429
-        assert r2.headers.get("Retry-After") is not None
-        assert r2.headers.get("X-RateLimit-Limit") == "1"
-        assert r2.headers.get("X-RateLimit-Remaining") == "0"
-        reset = r2.headers.get("X-RateLimit-Reset")
-        assert reset is not None and int(reset) >= 1
+            r2 = c.post("/api/v1/chat/completions", headers={"X-API-KEY": api_key}, json=body)
+            assert r2.status_code == 429
+            assert r2.headers.get("Retry-After") is not None
+            assert r2.headers.get("X-RateLimit-Limit") == "1"
+            assert r2.headers.get("X-RateLimit-Remaining") == "0"
+            reset = r2.headers.get("X-RateLimit-Reset")
+            assert reset is not None and int(reset) >= 1
 
 
 @pytest.mark.asyncio
@@ -241,7 +273,6 @@ async def test_e2e_embeddings_headers_route_map(monkeypatch, tmp_path):
     )
 
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
-    monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_STORE", "file")
@@ -252,8 +283,9 @@ async def test_e2e_embeddings_headers_route_map(monkeypatch, tmp_path):
 
     _reset_rg_state(app)
 
-    with TestClient(app) as c:
-        resp = c.get("/api/v1/embeddings/providers-config", headers={"X-API-KEY": api_key})
+    with _with_rg_middleware(app):
+        with TestClient(app) as c:
+            resp = c.get("/api/v1/embeddings/providers-config", headers={"X-API-KEY": api_key})
 
     assert resp.status_code in (200, 429), resp.text
     assert resp.headers.get("X-RateLimit-Limit") is not None
@@ -270,7 +302,6 @@ async def test_e2e_embeddings_deny_headers_retry_after(monkeypatch, tmp_path):
     )
 
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
-    monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_STORE", "file")
@@ -294,24 +325,24 @@ async def test_e2e_embeddings_deny_headers_retry_after(monkeypatch, tmp_path):
 
     _reset_rg_state(app)
 
-    with TestClient(app) as c:
-        r1 = c.get("/api/v1/embeddings/providers-config", headers={"X-API-KEY": api_key})
-        assert r1.status_code == 200, r1.text
+    with _with_rg_middleware(app):
+        with TestClient(app) as c:
+            r1 = c.get("/api/v1/embeddings/providers-config", headers={"X-API-KEY": api_key})
+            assert r1.status_code == 200, r1.text
 
-        r2 = c.get("/api/v1/embeddings/providers-config", headers={"X-API-KEY": api_key})
-        assert r2.status_code in (429, 503)
-        if r2.status_code == 429:
-            assert r2.headers.get("Retry-After") is not None
-            assert r2.headers.get("X-RateLimit-Limit") == "1"
-            assert r2.headers.get("X-RateLimit-Remaining") == "0"
-            reset = r2.headers.get("X-RateLimit-Reset")
-            assert reset is not None and int(reset) >= 1
+            r2 = c.get("/api/v1/embeddings/providers-config", headers={"X-API-KEY": api_key})
+            assert r2.status_code in (429, 503)
+            if r2.status_code == 429:
+                assert r2.headers.get("Retry-After") is not None
+                assert r2.headers.get("X-RateLimit-Limit") == "1"
+                assert r2.headers.get("X-RateLimit-Remaining") == "0"
+                reset = r2.headers.get("X-RateLimit-Reset")
+                assert reset is not None and int(reset) >= 1
 
 
 @pytest.mark.asyncio
 async def test_e2e_mcp_headers_route_map(monkeypatch):
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
-    monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_STORE", "file")
@@ -332,8 +363,9 @@ async def test_e2e_mcp_headers_route_map(monkeypatch):
 
     _reset_rg_state(app)
 
-    with TestClient(app) as c:
-        resp = c.get("/api/v1/mcp/status", headers={"X-API-KEY": "test-api-key"})
+    with _with_rg_middleware(app):
+        with TestClient(app) as c:
+            resp = c.get("/api/v1/mcp/status", headers={"X-API-KEY": "test-api-key"})
 
     assert resp.status_code == 200, resp.text
     assert resp.headers.get("X-RateLimit-Limit") is not None
@@ -370,32 +402,33 @@ async def test_e2e_audio_websocket_streams_limit(monkeypatch, tmp_path):
 
     _reset_rg_state(app)
 
-    with TestClient(app) as c:
-        ws1 = c.websocket_connect(f"/api/v1/audio/stream/transcribe?token={api_key}")
-        ws2 = c.websocket_connect(f"/api/v1/audio/stream/transcribe?token={api_key}")
-        ws3 = None
-        denied = False
-        try:
-            ws3 = c.websocket_connect(f"/api/v1/audio/stream/transcribe?token={api_key}")
-            data = ws3.receive_json()
-            denied = (data or {}).get("error_type") in {"rate_limited", "quota_exceeded"}
-        except Exception:
-            denied = True
-        finally:
+    with _with_rg_middleware(app):
+        with TestClient(app) as c:
+            ws1 = c.websocket_connect(f"/api/v1/audio/stream/transcribe?token={api_key}")
+            ws2 = c.websocket_connect(f"/api/v1/audio/stream/transcribe?token={api_key}")
+            ws3 = None
+            denied = False
             try:
-                if ws3:
-                    ws3.close()
+                ws3 = c.websocket_connect(f"/api/v1/audio/stream/transcribe?token={api_key}")
+                data = ws3.receive_json()
+                denied = (data or {}).get("error_type") in {"rate_limited", "quota_exceeded"}
             except Exception:
-                pass
-            try:
-                ws2.close()
-            except Exception:
-                pass
-            try:
-                ws1.close()
-            except Exception:
-                pass
-        assert denied
+                denied = True
+            finally:
+                try:
+                    if ws3:
+                        ws3.close()
+                except Exception:
+                    pass
+                try:
+                    ws2.close()
+                except Exception:
+                    pass
+                try:
+                    ws1.close()
+                except Exception:
+                    pass
+            assert denied
 
 
 @pytest.mark.asyncio
@@ -408,7 +441,6 @@ async def test_e2e_audio_transcriptions_headers_and_mocked_stt(monkeypatch, tmp_
     )
 
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
-    monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_STORE", "file")
@@ -496,15 +528,16 @@ async def test_e2e_audio_transcriptions_headers_and_mocked_stt(monkeypatch, tmp_
 
     _reset_rg_state(app)
 
-    with TestClient(app) as c:
-        payload = b"RIFF\x00\x00\x00\x00WAVEfmt "  # not parsed due to monkeypatched sf.read
-        files = {"file": ("test.wav", payload, "audio/wav")}
-        r = c.post(
-            "/api/v1/audio/transcriptions",
-            headers={"X-API-KEY": api_key},
-            data={"model": "whisper-1", "response_format": "json"},
-            files=files,
-        )
-        assert r.status_code == 200, r.text
-        assert r.headers.get("X-RateLimit-Limit") == "2"
-        assert r.headers.get("X-RateLimit-Remaining") is not None
+    with _with_rg_middleware(app):
+        with TestClient(app) as c:
+            payload = b"RIFF\x00\x00\x00\x00WAVEfmt "  # not parsed due to monkeypatched sf.read
+            files = {"file": ("test.wav", payload, "audio/wav")}
+            r = c.post(
+                "/api/v1/audio/transcriptions",
+                headers={"X-API-KEY": api_key},
+                data={"model": "whisper-1", "response_format": "json"},
+                files=files,
+            )
+            assert r.status_code == 200, r.text
+            assert r.headers.get("X-RateLimit-Limit") == "2"
+            assert r.headers.get("X-RateLimit-Remaining") is not None
