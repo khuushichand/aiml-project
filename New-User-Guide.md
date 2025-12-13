@@ -7,9 +7,9 @@ This guide walks a brand-new user through the shortest path to a working local d
 
 ## 1. What You Get
 - **API-first media assistant**: ingest video/audio/docs, run hybrid RAG, and expose OpenAI-compatible Chat, Audio, and Embeddings endpoints.
-- **Bring your own models**: plug in 16+ commercial or local providers (OpenAI, Anthropic, vLLM, Ollama, etc.).
+- **Bring your own models**: plug in 16+ commercial or local providers (OpenAI, Anthropic, vLLM, Llama.cpp, Ollama, etc.).
 - **Knowledge tooling**: searchable notes, prompt studio, character chats, evaluations, Chatbooks import/export.
-- **Deployment flexibility**: run everything locally with Python, Docker Compose, or pair the backend with the Next.js Web UI.
+- **Deployment flexibility**: run everything locally with Python, Docker Compose, or pair the backend with the Next.js Web UI(WIP/Stand-in).
 
 ---
 
