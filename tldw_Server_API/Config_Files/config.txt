@@ -834,12 +834,17 @@ default_custom_openai_tts_voice = shimmer
 default_custom_openai_tts_speed = 1
 default_custom_openai_tts_model = tts-1-hd
 default_custom_openai_tts_output_format = mp3
-default_custom_openai_api_ip = http://
+# Placeholder; override with your custom OpenAI-compatible endpoint
+default_custom_openai_api_ip = http://localhost:8000/v1
+# VibeVoice TTS Provider Configuration
+# VibeVoice is a local, voice-cloning TTS engine. Configure model paths, inference parameters (CFG scale, diffusion steps),
+# streaming behavior, and speaker context for optimal quality and performance.
 default_custom_openai_api_streaming = True
 
 [VibeVoice]
 vibevoice_variant = 1.5B
 vibevoice_model_path = microsoft/VibeVoice-1.5B
+# Device: auto, cpu, cuda, or specific GPU name
 vibevoice_device = auto
 vibevoice_use_fp16 = True
 vibevoice_batch_size = 1
@@ -848,11 +853,14 @@ vibevoice_auto_cleanup = True
 vibevoice_auto_download = True
 vibevoice_attention_type = auto
 vibevoice_enable_sage = False
+; CFG scale for classifier-free guidance (higher = more adherence to prompt, typically 1.0-2.0)
 vibevoice_cfg_scale = 1.3
+; Diffusion steps: more steps = higher quality but slower inference (typical: 10-30)
 vibevoice_diffusion_steps = 20
 vibevoice_temperature = 1.0
 vibevoice_top_p = 0.95
 vibevoice_top_k = 50
+; Streaming chunk size (seconds) and internal buffer size (samples) control latency vs. smoothness
 vibevoice_stream_chunk_size = 0.25
 vibevoice_stream_buffer_size = 4096
 vibevoice_sample_rate = 22050

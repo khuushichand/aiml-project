@@ -38,6 +38,29 @@ router = APIRouter(
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
 
+def get_topic_monitoring_db() -> TopicMonitoringDB:
+    """Return a TopicMonitoringDB instance for alert reads/updates."""
+    raw_db_path = os.getenv("MONITORING_ALERTS_DB", "Databases/monitoring_alerts.db")
+    try:
+        from pathlib import Path as _Path
+        from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+
+        root = _Path(_gpr())
+    except Exception:
+        from pathlib import Path as _Path
+
+        root = _Path(__file__).resolve().parents[5]
+
+    try:
+        db_path = _Path(str(raw_db_path))
+    except Exception:
+        db_path = _Path("Databases/monitoring_alerts.db")
+
+    if not db_path.is_absolute():
+        db_path = (root / db_path).resolve()
+
+    return TopicMonitoringDB(db_path=str(db_path))
+
 
 @router.get(
     "/monitoring/watchlists",
@@ -114,10 +137,10 @@ async def list_alerts(
     unread_only: bool = Query(False, description="Only unread alerts"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    db: TopicMonitoringDB = Depends(get_topic_monitoring_db),
 ) -> AlertsListResponse:
     """List monitoring alerts with optional filters and pagination."""
 
-    db = TopicMonitoringDB()  # default path from env handled in service; keep simple here
     rows = db.list_alerts(user_id=user_id, since_iso=since, unread_only=unread_only, limit=limit, offset=offset)
     items: list[AlertItem] = []
     for r in rows:
@@ -138,10 +161,12 @@ async def list_alerts(
     tags=["monitoring"],
     summary="Mark an alert as read",
 )
-async def mark_alert_read(alert_id: int) -> MarkReadResponse:
+async def mark_alert_read(
+    alert_id: int,
+    db: TopicMonitoringDB = Depends(get_topic_monitoring_db),
+) -> MarkReadResponse:
     """Mark a single alert as read by ID."""
 
-    db = TopicMonitoringDB()
     ok = db.mark_read(alert_id)
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
@@ -274,7 +299,7 @@ async def get_recent_notifications(
     """Return a bounded tail of recent notification events from the JSONL log file."""
 
     svc = get_notification_service()
-    path = getattr(svc, 'file_path', None)
+    path = svc.get_notification_file_path()
     items: list[dict] = []
     if not path or not os.path.exists(path):
         return RecentNotificationsResponse(items=[])

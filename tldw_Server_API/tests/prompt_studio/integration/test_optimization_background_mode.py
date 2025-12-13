@@ -15,7 +15,6 @@ import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
     get_prompt_studio_db,
     get_prompt_studio_user,
@@ -30,6 +29,14 @@ pytestmark = pytest.mark.integration
 async def test_background_optimization_spawn_and_complete(tmp_path, monkeypatch):
     # Ensure TEST_MODE is not true so endpoint schedules background tasks
     monkeypatch.setenv("TEST_MODE", "false")
+    # Ensure we load the full app (Prompt Studio routers are not included in MINIMAL_TEST_APP)
+    monkeypatch.setenv("MINIMAL_TEST_APP", "0")
+
+    # Reload app after env tweaks so router gating sees MINIMAL_TEST_APP=0.
+    import importlib
+    import tldw_Server_API.app.main as main_mod
+
+    _app = importlib.reload(main_mod).app
 
     # Provide an isolated DB instance via dependency override
     db_path = tmp_path / "ps_bg.sqlite"
@@ -66,7 +73,6 @@ async def test_background_optimization_spawn_and_complete(tmp_path, monkeypatch)
 
     monkeypatch.setattr(opt_mod, "run_optimization_async", _fast_run_optimization)
 
-    _app = fastapi_app
     _app.dependency_overrides[get_prompt_studio_db] = override_db
     _app.dependency_overrides[get_prompt_studio_user] = override_user
 

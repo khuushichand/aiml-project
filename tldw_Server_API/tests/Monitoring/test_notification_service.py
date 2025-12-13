@@ -13,6 +13,7 @@ def test_notification_threshold_and_file_sink(tmp_path, monkeypatch):
     monkeypatch.setenv("MONITORING_NOTIFY_FILE", str(out))
 
     svc = NotificationService()
+    assert svc.get_notification_file_path() == str(out)
 
     # Below threshold (warning) should not write
     a1 = TopicAlert(

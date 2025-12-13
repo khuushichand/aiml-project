@@ -131,7 +131,7 @@ class APIKeyManager:
         Raises:
             DatabaseError: If no database pool has been configured.
         """
-        if not self.db_pool:
+        if self.db_pool is None:
             raise DatabaseError(
                 f"APIKeyManager database pool is not initialized {self._db_context_hint()}"
             )
@@ -157,21 +157,29 @@ class APIKeyManager:
         return None
 
     def _parse_expires_at(self, expires_at_raw: Any) -> Optional[datetime]:
-        """Parse and normalize expires_at to a timezone-aware datetime."""
-        if not expires_at_raw:
+        """Parse and normalize expires_at to a timezone-aware datetime.
+
+        Returns ``None`` when the value is missing or cannot be parsed.
+        """
+        if expires_at_raw is None:
             return None
 
-        expires_at_str = (
-            expires_at_raw.replace("Z", "+00:00")
-            if isinstance(expires_at_raw, str)
-            else expires_at_raw
-        )
-        expires_at = (
-            datetime.fromisoformat(expires_at_str)
-            if isinstance(expires_at_raw, str)
-            else expires_at_raw
-        )
-        if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+        expires_at: Optional[datetime]
+        if isinstance(expires_at_raw, datetime):
+            expires_at = expires_at_raw
+        elif isinstance(expires_at_raw, str):
+            expires_at_str = expires_at_raw.strip()
+            if not expires_at_str:
+                return None
+            expires_at_str = expires_at_str.replace("Z", "+00:00")
+            try:
+                expires_at = datetime.fromisoformat(expires_at_str)
+            except ValueError:
+                return None
+        else:
+            return None
+
+        if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
 
         return expires_at
@@ -182,7 +190,7 @@ class APIKeyManager:
             return
 
         # Get database pool
-        if not self.db_pool:
+        if self.db_pool is None:
             self.db_pool = await get_db_pool()
 
         # Create API keys table if it doesn't exist
@@ -345,17 +353,17 @@ class APIKeyManager:
         expires_in_days: Optional[int] = 30,
         org_id: Optional[int] = None,
         team_id: Optional[int] = None,
-        allowed_endpoints: Optional[list[str]] = None,
-        allowed_providers: Optional[list[str]] = None,
-        allowed_models: Optional[list[str]] = None,
+        allowed_endpoints: Optional[List[str]] = None,
+        allowed_providers: Optional[List[str]] = None,
+        allowed_models: Optional[List[str]] = None,
         budget_day_tokens: Optional[int] = None,
         budget_month_tokens: Optional[int] = None,
         budget_day_usd: Optional[float] = None,
         budget_month_usd: Optional[float] = None,
         parent_key_id: Optional[int] = None,
         # Extra generic constraints (stored in metadata)
-        allowed_methods: Optional[list[str]] = None,
-        allowed_paths: Optional[list[str]] = None,
+        allowed_methods: Optional[List[str]] = None,
+        allowed_paths: Optional[List[str]] = None,
         max_calls: Optional[int] = None,
         max_runs: Optional[int] = None,
     ) -> Dict[str, Any]:
@@ -456,23 +464,32 @@ class APIKeyManager:
             primary_hash = hash_candidates[0]
 
             # Check expiration
-            if key_info['expires_at']:
-                expires_at = self._parse_expires_at(key_info['expires_at'])
+            if key_info["expires_at"]:
+                expires_at = self._parse_expires_at(key_info["expires_at"])
+                if expires_at is None:
+                    logger.error(
+                        f"API key {key_info['id']} expires_at could not be parsed; denying access"
+                    )
+                    return None
                 now_utc = datetime.now(timezone.utc)
-                if isinstance(expires_at, datetime) and expires_at < now_utc:
-                    await self._mark_expired(key_info['id'])
+                if expires_at < now_utc:
+                    await self._mark_expired(key_info["id"])
                     return None
 
             # Check IP restrictions
-            if key_info['allowed_ips']:
+            if key_info["allowed_ips"]:
                 try:
-                    raw = key_info['allowed_ips']
-                    if isinstance(raw, str):
-                        allowed_ips = json.loads(raw)
-                    else:
-                        allowed_ips = raw
-                    allowed_ips = {str(ip).strip() for ip in (allowed_ips or []) if str(ip).strip()}
-                except Exception as decode_error:
+                    allowed_ips_raw = self._coerce_json_field(key_info.get("allowed_ips"))
+                    if allowed_ips_raw is None:
+                        allowed_ips_value = key_info.get("allowed_ips")
+                        if isinstance(allowed_ips_value, str) and allowed_ips_value.strip():
+                            allowed_ips_raw = []
+                        else:
+                            raise TypeError("API key allowlist must be stored as JSON array")
+                    if not isinstance(allowed_ips_raw, list):
+                        raise TypeError("API key allowlist must be stored as JSON array")
+                    allowed_ips = {str(ip).strip() for ip in allowed_ips_raw if str(ip).strip()}
+                except (TypeError, ValueError, json.JSONDecodeError) as decode_error:
                     logger.error(
                         f"API key {key_info['id']} allowlist could not be decoded; denying access: {decode_error}"
                     )
@@ -586,6 +603,9 @@ class APIKeyManager:
 
             return new_key_result
 
+        except (ValueError, InvalidTokenError):
+            # Preserve auth/not-found semantics; callers map to appropriate 4xx.
+            raise
         except Exception as e:
             logger.error(f"Failed to rotate API key: {e}")
             raise DatabaseError(
@@ -724,7 +744,7 @@ class APIKeyManager:
         action: str,
         user_id: Optional[int] = None,
         details: Optional[Dict[str, Any]] = None
-        ):
+    ):
         """Log an action in the audit log"""
         try:
             repo = self._get_repo()

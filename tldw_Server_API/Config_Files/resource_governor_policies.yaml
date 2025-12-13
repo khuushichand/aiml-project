@@ -141,7 +141,14 @@ policies:
     requests: { rpm: 60, burst: 1.2 }
     scopes: [user, api_key]
 
-  # Chatbooks import/export endpoints (SlowAPI compat → RG)
+  # Chatbooks import/export endpoints (SlowAPI compat → RG).
+  # Covers `/api/v1/chatbooks/*` used for conversation backup/restore and bulk
+  # user-data transfer (export/import). Limits are intentionally conservative
+  # (5 rpm, no burst) to prevent accidental or abusive bulk operations that
+  # can create heavy DB/file I/O and large payloads. Preview/download are
+  # slightly higher to support iterative validation and retrieval of prepared
+  # artifacts. Include `ip` in scope as an additional safety valve for shared
+  # API keys and to align with legacy SlowAPI behavior.
   chatbooks.export:
     requests: { rpm: 5, burst: 1.0 }
     scopes: [user, api_key, ip]
@@ -158,7 +165,11 @@ policies:
     requests: { rpm: 20, burst: 1.0 }
     scopes: [user, api_key, ip]
 
-  # Watchlists endpoints (SlowAPI compat → RG)
+  # Watchlists API endpoints (sources/groups/tags/jobs/runs).
+  # Applied at ingress for `/api/v1/watchlists/*`. Watchlists can trigger
+  # background fetch/scrape work and external fan-out, so defaults are tuned
+  # for interactive usage (60 rpm) without enabling bulk abuse. Include `ip`
+  # in scope to add a per-client throttle when API keys are shared.
   watchlists.default:
     requests: { rpm: 60, burst: 1.0 }
     scopes: [user, api_key, ip]

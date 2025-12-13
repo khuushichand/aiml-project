@@ -827,8 +827,8 @@ async def get_current_active_user(
 
 
 async def get_user_org_policy(
-    db: Any = Depends(get_db_transaction),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    db: Any = Depends(get_db_transaction),  # noqa: B008
+    current_user: Dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
 ) -> Dict[str, Any]:
     """
     Resolve the active org policy for the current user and fail closed on errors.
@@ -876,9 +876,9 @@ async def _load_org_policy(db: Any, org_id: int) -> Dict[str, Any]:
 
 
 async def get_org_policy_from_principal(
-    db: Any = Depends(get_db_transaction),
-    principal: AuthPrincipal = Depends(get_auth_principal),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    db: Any = Depends(get_db_transaction),  # noqa: B008
+    principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
+    current_user: Dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
 ) -> Dict[str, Any]:
     """
     Resolve organization policy primarily from ``AuthPrincipal``, with fallbacks.
@@ -954,7 +954,7 @@ async def get_org_policy_from_principal(
 
 
 async def require_admin(
-    current_user: Dict[str, Any] = Depends(get_current_active_user)
+    current_user: Dict[str, Any] = Depends(get_current_active_user)  # noqa: B008
 ) -> Dict[str, Any]:
     """
     Require admin role for access (legacy shim).
@@ -1008,7 +1008,7 @@ def require_role(role: str):
         Dependency function that checks for the role
     """
     async def role_checker(
-        current_user: Dict[str, Any] = Depends(get_current_active_user)
+        current_user: Dict[str, Any] = Depends(get_current_active_user)  # noqa: B008
     ) -> Dict[str, Any]:
         user_role = current_user.get("role", "user")
 

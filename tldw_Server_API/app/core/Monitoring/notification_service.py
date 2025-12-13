@@ -69,6 +69,10 @@ class NotificationService:
         except Exception:
             pass
 
+    def get_notification_file_path(self) -> str | None:
+        """Return the path to the notification JSONL file."""
+        return self.file_path or None
+
     def get_settings(self) -> Dict[str, Any]:
         return {
             "enabled": self.enabled,

@@ -36,7 +36,6 @@ from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabas
 from tldw_Server_API.app.core.Workflows import WorkflowEngine, RunMode, WorkflowScheduler
 from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
-from tldw_Server_API.app.core.MCP_unified.auth.rbac import UserRole
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     WORKFLOWS_RUNS_READ,
     WORKFLOWS_RUNS_CONTROL,
@@ -578,17 +577,22 @@ async def _record_workflow_run_usage(
             units=1,
         )
     except Exception as e:
-        logger.debug(f"Workflows ledger recording failed for run {run_id}: {e}")
+        logger.debug(
+            "Workflows ledger recording failed for run {}: {}",
+            run_id,
+            e,
+        )
         return
 
 
 @router.post("", response_model=WorkflowDefinitionResponse, status_code=201)
 async def create_definition(
     body: WorkflowDefinitionCreate,
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
-    request: Request = None,
-    audit_service=Depends(get_audit_service_for_user),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
+    *,
+    request: Request,
+    audit_service=Depends(get_audit_service_for_user),  # noqa: B008
 ):
     _validate_definition_payload(body.model_dump())
     # Basic step type validation is deferred to engine in v0.1; store as-is
@@ -643,8 +647,8 @@ async def create_definition(
 
 @router.get("", response_model=List[WorkflowDefinitionResponse])
 async def list_definitions(
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     defs = db.list_definitions(tenant_id=tenant_id, owner_id=str(current_user.id))
@@ -663,10 +667,11 @@ async def list_definitions(
 async def create_new_version(
     workflow_id: int,
     body: WorkflowDefinitionCreate,
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
-    request: Request = None,
-    audit_service=Depends(get_audit_service_for_user),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
+    *,
+    request: Request,
+    audit_service=Depends(get_audit_service_for_user),  # noqa: B008
 ):
     # Validate payload and create a new immutable version
     _validate_definition_payload(body.model_dump())
@@ -722,10 +727,11 @@ async def create_new_version(
 @router.delete("/{workflow_id}")
 async def delete_definition(
     workflow_id: int,
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
-    request: Request = None,
-    audit_service=Depends(get_audit_service_for_user),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
+    *,
+    request: Request,
+    audit_service=Depends(get_audit_service_for_user),  # noqa: B008
 ):
     d = db.get_definition(workflow_id)
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
@@ -765,7 +771,7 @@ async def delete_definition(
 # --- Auth helpers for workflows integrations ---
 
 @router.get("/auth/check", summary="Validate provided auth and return user context")
-async def workflows_auth_check(current_user: User = Depends(get_request_user)):
+async def workflows_auth_check(current_user: User = Depends(get_request_user)):  # noqa: B008
     try:
         return {
             "ok": True,
@@ -795,7 +801,7 @@ class VirtualKeyRequest(BaseModel):
 )
 async def workflows_virtual_key(
     body: VirtualKeyRequest,
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_request_user),  # noqa: B008
 ):
     # Admin-only in multi-user; not applicable in single-user
     settings = get_settings()
@@ -810,8 +816,8 @@ async def workflows_virtual_key(
     user_id = getattr(current_user, "id_int", None)
     if user_id is None:
         try:
-            user_id = int(getattr(current_user, "id"))
-        except Exception:
+            user_id = int(current_user.id)  # type: ignore[union-attr]
+        except (AttributeError, TypeError, ValueError):
             user_id = None
     if user_id is None:
         raise HTTPException(
@@ -832,8 +838,9 @@ async def workflows_virtual_key(
             schedule_id=(str(body.schedule_id) if body.schedule_id else None),
         )
         exp = datetime.utcnow() + timedelta(minutes=int(body.ttl_minutes))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to mint token: {e}")
+    except Exception:
+        logger.exception("Failed to mint workflows virtual key")
+        raise HTTPException(status_code=500, detail="Failed to mint token")
     return {
         "token": token,
         "expires_at": exp.isoformat(),
@@ -856,9 +863,9 @@ async def run_saved(
     request: Request,
     mode: str = Query("async", description="Execution mode: async|sync"),
     body: RunRequest = Body(...),
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
-    audit_service=Depends(get_audit_service_for_user),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
+    audit_service=Depends(get_audit_service_for_user),  # noqa: B008
 ):
     d = db.get_definition(workflow_id)
     if not d:
@@ -1109,11 +1116,12 @@ async def list_runs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     cursor: Optional[str] = Query(None, description="Opaque continuation token for pagination (overrides offset)"),
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
-    request: Request = None,
-    response: Response = None,
-    audit_service=Depends(get_audit_service_for_user),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
+    *,
+    request: Request,
+    response: Response,
+    audit_service=Depends(get_audit_service_for_user),  # noqa: B008
 ):
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
     is_admin = bool(getattr(current_user, "is_admin", False))
@@ -1307,9 +1315,9 @@ async def run_adhoc(
     request: Request,
     mode: str = Query("async", description="Execution mode: async|sync"),
     body: AdhocRunRequest = Body(...),
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
-    audit_service=Depends(get_audit_service_for_user),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
+    audit_service=Depends(get_audit_service_for_user),  # noqa: B008
 ):
     import os
     if os.getenv("WORKFLOWS_DISABLE_ADHOC", "false").lower() in {"1", "true", "yes"}:
@@ -1446,10 +1454,11 @@ async def run_adhoc(
 )
 async def get_run(
     run_id: str,
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
-    request: Request = None,
-    audit_service=Depends(get_audit_service_for_user),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
+    *,
+    request: Request,
+    audit_service=Depends(get_audit_service_for_user),  # noqa: B008
 ):
     run = db.get_run(run_id)
     if not run:
@@ -1539,10 +1548,11 @@ async def get_run_events(
     limit: int = Query(500, ge=1, le=1000),
     types: Optional[List[str]] = Query(None, description="Filter by event types (repeatable)"),
     cursor: Optional[str] = Query(None, description="Opaque continuation token (overrides since)"),
-    response: Response = None,
-    request: Request = None,
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
+    *,
+    response: Response,
+    request: Request,
 ):
     # Enforce tenant isolation and owner/admin
     run = db.get_run(run_id)
@@ -1629,8 +1639,8 @@ async def get_run_events(
 )
 async def get_run_webhook_deliveries(
     run_id: str,
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     """Return webhook delivery history for a run (derived from events)."""
     run = db.get_run(run_id)
@@ -1666,8 +1676,8 @@ async def get_run_webhook_deliveries(
 async def list_webhook_dlq(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    _current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
+    _current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     """Admin: list webhook DLQ entries (all tenants).
 
@@ -1704,8 +1714,8 @@ async def list_webhook_dlq(
 )
 async def replay_webhook_dlq(
     dlq_id: int,
-    _current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
+    _current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     """Admin: attempt immediate replay of a DLQ item.
 
@@ -1839,8 +1849,8 @@ async def replay_webhook_dlq(
 )
 async def get_run_artifacts(
     run_id: str,
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     run = db.get_run(run_id)
     if not run:
@@ -1878,8 +1888,8 @@ async def get_run_artifacts(
 async def get_run_artifacts_manifest(
     run_id: str,
     verify: bool = Query(False, description="Compute and validate recorded checksums"),
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     run = db.get_run(run_id)
     if not run:
@@ -1950,8 +1960,8 @@ class VerifyBatchRequest(BaseModel):
 async def verify_artifacts_batch(
     run_id: str,
     body: VerifyBatchRequest,
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     run = db.get_run(run_id)
     if not run:
@@ -2010,14 +2020,14 @@ async def verify_artifacts_batch(
 )
 async def download_artifact(
     artifact_id: str,
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
-    request: Request = None,
-    audit_service=Depends(get_audit_service_for_user),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
+    *,
+    request: Request,
+    audit_service=Depends(get_audit_service_for_user),  # noqa: B008
 ):
     import os as _os
     from pathlib import Path
-    from fastapi.responses import FileResponse
     art = db.get_artifact(artifact_id)
     if not art:
         raise HTTPException(status_code=404, detail="Artifact not found")
@@ -2222,8 +2232,8 @@ async def download_artifact(
 )
 async def download_run_artifacts_zip(
     run_id: str,
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     import os as _os
     import mimetypes as _m
@@ -2345,8 +2355,8 @@ async def control_run(
     run_id: str,
     action: str,
     request: Request,
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     # Enforce tenant + owner/admin
     run = db.get_run(run_id)
@@ -2890,7 +2900,10 @@ async def list_workflow_template_tags() -> list[str]:
 
 
 @router.get("/config")
-async def get_workflows_config(current_user: User = Depends(get_request_user), db: WorkflowsDatabase = Depends(_get_db)):
+async def get_workflows_config(
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
+):
     """Return effective Workflows configuration derived from environment and backend (read-only)."""
     import os
     def _env_bool(name: str, default: bool = False) -> bool:
@@ -2957,8 +2970,8 @@ async def get_workflows_config(current_user: User = Depends(get_request_user), d
 )
 async def retry_run(
     run_id: str,
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     run = db.get_run(run_id)
     if not run:
@@ -2987,8 +3000,8 @@ async def retry_run(
 )
 async def get_definition(
     workflow_id: int,
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     """Fetch a workflow definition by id.
 
@@ -3035,8 +3048,8 @@ async def approve_step(
     run_id: str,
     step_id: str,
     payload: HumanReviewPayload = Body(default_factory=HumanReviewPayload),
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     # Owner/admin check for the run
     run = db.get_run(run_id)
@@ -3072,8 +3085,8 @@ async def reject_step(
     run_id: str,
     step_id: str,
     payload: HumanReviewPayload = Body(default_factory=HumanReviewPayload),
-    current_user: User = Depends(get_request_user),
-    db: WorkflowsDatabase = Depends(_get_db),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     run = db.get_run(run_id)
     if not run:
@@ -3101,7 +3114,7 @@ async def workflows_ws(
     run_id: str,
     token: Optional[str] = Query(None),
     types: Optional[List[str]] = Query(None),
-    db: WorkflowsDatabase = Depends(_get_db),
+    db: WorkflowsDatabase = Depends(_get_db),  # noqa: B008
 ):
     # Extract token: prefer query param; fallback to Authorization header
     if not token:
