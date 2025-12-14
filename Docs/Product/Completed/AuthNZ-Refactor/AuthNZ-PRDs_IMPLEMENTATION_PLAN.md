@@ -12,6 +12,9 @@ It is intentionally incremental and aligned with `Docs/Design/AuthNZ-Refactor-Im
 
 **Overall Status (v0.1)**: Complete — the stages below are implemented and covered by the referenced tests. Any further work is tracked as post-v0.1 follow-ups in the individual PRDs and the AuthNZ refactor plan.
 
+Post‑v0.1 tracker:
+- `Docs/Product/AuthNZ-PRDs_POST_V0_1_TRACKER.md`
+
 ## Stage 1: Resource-Governor Legacy Limiters & Ingress Coverage
 
 **Goal**: Finish unifying AuthNZ guardrails under `ResourceGovernor`, retiring legacy per-module limiters and making ingress coverage explicit for high-value routes.

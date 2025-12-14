@@ -185,18 +185,15 @@ class RateLimiter:
                 logger.warning(f"Redis unavailable for rate limiting: {e}")
                 self.redis_client = None
 
-        # Ensure required schema exists for the backend
-        try:
-            # If using SQLite (db_pool.pool is None), create required tables
-            if not getattr(self.db_pool, 'pool', None):
-                await self._ensure_sqlite_schema()
-            else:
-                await self._ensure_postgres_schema()
-        except Exception as e:
-            logger.warning(f"RateLimiter schema ensure warning: {e}")
-
         if self.db_pool and self._rate_limits_repo is None:
             self._rate_limits_repo = AuthnzRateLimitsRepo(self.db_pool)
+
+        # Ensure required schema exists for the backend (bootstrap/backstop).
+        try:
+            if self._rate_limits_repo is not None:
+                await self._rate_limits_repo.ensure_schema()
+        except Exception as e:
+            logger.warning(f"RateLimiter schema ensure warning: {e}")
 
         self._initialized = True
         logger.info(f"RateLimiter initialized (enabled={self.enabled})")
@@ -209,110 +206,6 @@ class RateLimiter:
         if self._rate_limits_repo is None:
             self._rate_limits_repo = AuthnzRateLimitsRepo(self.db_pool)
         return self._rate_limits_repo
-
-    async def _ensure_sqlite_schema(self):
-        """Create SQLite tables used by rate limiter if they do not exist."""
-        ddl_statements = [
-            # Per-identifier request counts per window
-            (
-                """
-                CREATE TABLE IF NOT EXISTS rate_limits (
-                    identifier TEXT NOT NULL,
-                    endpoint TEXT NOT NULL,
-                    request_count INTEGER NOT NULL,
-                    window_start TEXT NOT NULL,
-                    PRIMARY KEY (identifier, endpoint, window_start)
-                )
-                """,
-                None,
-            ),
-            # Failed attempts for lockout
-            (
-                """
-                CREATE TABLE IF NOT EXISTS failed_attempts (
-                    identifier TEXT NOT NULL,
-                    attempt_type TEXT NOT NULL,
-                    attempt_count INTEGER NOT NULL,
-                    window_start TEXT NOT NULL,
-                    PRIMARY KEY (identifier, attempt_type)
-                )
-                """,
-                None,
-            ),
-            # Account lockouts
-            (
-                """
-                CREATE TABLE IF NOT EXISTS account_lockouts (
-                    identifier TEXT PRIMARY KEY,
-                    locked_until TEXT NOT NULL,
-                    reason TEXT
-                )
-                """,
-                None,
-            ),
-            # Helpful index for queries by identifier
-            (
-                "CREATE INDEX IF NOT EXISTS idx_rate_limits_identifier ON rate_limits(identifier)",
-                None,
-            ),
-        ]
-
-        async with self.db_pool.transaction() as conn:
-            for sql, params in ddl_statements:
-                if hasattr(conn, 'execute'):
-                    await conn.execute(sql) if not params else await conn.execute(sql, params)
-            try:
-                await conn.commit()
-            except Exception:
-                # aiosqlite transaction manager may commit outside; ignore
-                pass
-
-    async def _ensure_postgres_schema(self):
-        """Create PostgreSQL tables used by the rate limiter if they do not exist."""
-        ddl_statements = [
-            (
-                """
-                CREATE TABLE IF NOT EXISTS rate_limits (
-                    identifier TEXT NOT NULL,
-                    endpoint TEXT NOT NULL,
-                    request_count INTEGER NOT NULL,
-                    window_start TIMESTAMPTZ NOT NULL,
-                    PRIMARY KEY (identifier, endpoint, window_start)
-                )
-                """,
-                (),
-            ),
-            (
-                """
-                CREATE TABLE IF NOT EXISTS failed_attempts (
-                    identifier TEXT NOT NULL,
-                    attempt_type TEXT NOT NULL,
-                    attempt_count INTEGER NOT NULL,
-                    window_start TIMESTAMPTZ NOT NULL,
-                    PRIMARY KEY (identifier, attempt_type)
-                )
-                """,
-                (),
-            ),
-            (
-                """
-                CREATE TABLE IF NOT EXISTS account_lockouts (
-                    identifier TEXT PRIMARY KEY,
-                    locked_until TIMESTAMPTZ NOT NULL,
-                    reason TEXT
-                )
-                """,
-                (),
-            ),
-            (
-                "CREATE INDEX IF NOT EXISTS idx_rate_limits_identifier ON rate_limits(identifier)",
-                (),
-            ),
-        ]
-
-        async with self.db_pool.transaction() as conn:
-            for sql, params in ddl_statements:
-                await conn.execute(sql, *params)
 
     async def record_failed_attempt(
         self,

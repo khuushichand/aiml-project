@@ -385,13 +385,38 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
             settings.AUTH_MODE,
         )
         return
+
+    # Best-effort schema backstops:
+    # - SQLite: ensure migrations have been applied (file-backed DBs).
+    # - Postgres: ensure core AuthNZ tables (including RBAC) exist via PG extras.
+    try:
+        await ensure_authnz_schema_ready_once()
+    except Exception as schema_err:
+        logger.debug(
+            "ensure_single_user_rbac_seed_if_needed: schema ensure skipped/failed: {}",
+            schema_err,
+        )
     try:
         # Acquire a connection via pool/transaction abstraction
         from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
         pool = await get_db_pool()
-        async with pool.transaction() as conn:
-            # Postgres path: asyncpg connections expose fetch(), SQLite shims do not
-            if hasattr(conn, "fetch"):
+        # Postgres-only: ensure core AuthNZ tables (including RBAC) via bootstrap backstop.
+        if getattr(pool, "pool", None):
+            try:
+                from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
+                    ensure_authnz_core_tables_pg,
+                )
+
+                await ensure_authnz_core_tables_pg(pool)
+            except Exception as ensure_err:
+                logger.debug(
+                    "ensure_single_user_rbac_seed_if_needed: PG ensure_authnz_core_tables_pg failed/skipped: {}",
+                    ensure_err,
+                )
+
+        # Postgres path
+        if getattr(pool, "pool", None):
+            async with pool.transaction() as conn:
                 single_user_id = settings.SINGLE_USER_FIXED_ID
                 # Ensure the single-user account row exists so FK relations succeed
                 await conn.execute(
@@ -406,36 +431,12 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                     "UPDATE users SET role='admin', is_active=TRUE, is_verified=TRUE WHERE id = $1",
                     single_user_id,
                 )
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS roles (
-                        id SERIAL PRIMARY KEY,
-                        name VARCHAR(64) UNIQUE NOT NULL,
-                        description TEXT,
-                        is_system BOOLEAN DEFAULT FALSE
-                    )
-                """)
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS permissions (
-                        id SERIAL PRIMARY KEY,
-                        name VARCHAR(128) UNIQUE NOT NULL,
-                        description TEXT,
-                        category VARCHAR(64)
-                    )
-                """)
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS role_permissions (
-                        role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-                        permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
-                        PRIMARY KEY (role_id, permission_id)
-                    )
-                """)
                 from tldw_Server_API.app.core.AuthNZ.rbac_seed import ensure_baseline_rbac_seed
 
                 await ensure_baseline_rbac_seed(conn, include_mcp_permissions=True)
 
                 # Ensure single-user is assigned the admin role
                 try:
-                    single_user_id = settings.SINGLE_USER_FIXED_ID
                     admin_role_id = await conn.fetchval("SELECT id FROM roles WHERE name = $1", "admin")
                     if admin_role_id:
                         await conn.execute(
@@ -473,40 +474,72 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                         _sanitize_db_url(settings.DATABASE_URL),
                         role_assign_err,
                     )
-                return
+            return
 
         # SQLite path (pool adapters expose .execute returning cursor-like)
+        sqlite_fs_path = str(
+            getattr(pool, "_sqlite_fs_path", None)
+            or getattr(pool, "db_path", None)
+            or ""
+        )
+        sqlite_is_memory = sqlite_fs_path.strip() == ":memory:"
+        try:
+            db_path_str = str(getattr(pool, "db_path", "") or "")
+            if "mode=memory" in db_path_str.lower():
+                sqlite_is_memory = True
+        except Exception:
+            pass
+
         async with pool.transaction() as conn:  # type: ignore[attr-defined]
-            # Some adapters may not expose .execute; fallback to connection from pool
-            try:
-                cur = await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS roles (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        name TEXT UNIQUE NOT NULL,
-                        description TEXT,
-                        is_system INTEGER DEFAULT 0
+            # SQLite in-memory DBs cannot run file-based migrations; create minimal
+            # RBAC tables as a backstop so baseline seed can succeed.
+            if sqlite_is_memory:
+                try:
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS roles (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            name TEXT UNIQUE NOT NULL,
+                            description TEXT,
+                            is_system INTEGER DEFAULT 0
+                        )
+                        """
                     )
-                """)
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS permissions (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        name TEXT UNIQUE NOT NULL,
-                        description TEXT,
-                        category TEXT
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS permissions (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            name TEXT UNIQUE NOT NULL,
+                            description TEXT,
+                            category TEXT
+                        )
+                        """
                     )
-                """)
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS role_permissions (
-                        role_id INTEGER NOT NULL,
-                        permission_id INTEGER NOT NULL,
-                        PRIMARY KEY (role_id, permission_id)
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS role_permissions (
+                            role_id INTEGER NOT NULL,
+                            permission_id INTEGER NOT NULL,
+                            PRIMARY KEY (role_id, permission_id)
+                        )
+                        """
                     )
-                """)
-            except Exception as table_err:
-                logger.debug(
-                    "SQLite RBAC table creation skipped (tables may already exist): {}",
-                    table_err,
-                )
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS user_roles (
+                            user_id INTEGER NOT NULL,
+                            role_id INTEGER NOT NULL,
+                            granted_by INTEGER,
+                            expires_at TIMESTAMP,
+                            PRIMARY KEY (user_id, role_id)
+                        )
+                        """
+                    )
+                except Exception as table_err:
+                    logger.debug(
+                        "SQLite in-memory RBAC table creation skipped (tables may already exist): {}",
+                        table_err,
+                    )
 
             single_user_id = settings.SINGLE_USER_FIXED_ID
             await conn.execute(

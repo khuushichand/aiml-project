@@ -69,6 +69,11 @@ class UserRateLimiter:
 
         # Track requests per user: user_id -> deque of timestamps
         self.user_requests: Dict[str, deque] = defaultdict(lambda: deque())
+        # Shadow-only request history used for RG comparisons. This is kept
+        # separate from the enforcement queue so that enabling RG does not
+        # mutate legacy limiter state while still allowing “what would legacy
+        # do?” drift metrics to remain meaningful.
+        self._shadow_user_requests: Dict[str, deque] = defaultdict(lambda: deque())
 
         # Track user tiers: user_id -> tier
         self.user_tiers: Dict[str, str] = {}
@@ -208,12 +213,47 @@ class UserRateLimiter:
 
         This is intended for RG shadow comparisons where we want to know whether
         the legacy limiter *would* allow a request without counting it.
+
+        This method evaluates the primary (enforcement) in-memory state.
         """
         with self._lock:
             current_time = time.time()
             window_start = current_time - self.window_seconds
 
             user_queue = self.user_requests[user_id]
+            while user_queue and user_queue[0] < window_start:
+                user_queue.popleft()
+
+            limit = self.get_user_limit(user_id)
+            burst_limit = int(limit * self.burst_allowance)
+            current_count = len(user_queue)
+
+            if current_count + cost > burst_limit:
+                if user_queue:
+                    retry_after = int(user_queue[0] + self.window_seconds - current_time) + 1
+                else:
+                    retry_after = 1
+                return False, retry_after
+
+            return True, None
+
+    def peek_shadow_rate_limit(
+        self,
+        user_id: str,
+        cost: int = 1,
+    ) -> tuple[bool, Optional[int]]:
+        """
+        Side-effect-light rate limit check against shadow state.
+
+        This is used for RG shadow comparisons: we want to know whether legacy
+        *would* allow a request given the shadow traffic pattern, without
+        recording a new request when RG denies.
+        """
+        with self._lock:
+            current_time = time.time()
+            window_start = current_time - self.window_seconds
+
+            user_queue = self._shadow_user_requests[user_id]
             while user_queue and user_queue[0] < window_start:
                 user_queue.popleft()
 
@@ -239,14 +279,15 @@ class UserRateLimiter:
         Legacy limiter evaluation intended for RG shadow comparisons.
 
         This mirrors ``check_rate_limit`` without emitting audit/log noise or
-        updating global stats counters, while still updating in-memory state so
-        repeated calls reflect the traffic pattern being simulated.
+        updating global stats counters. It updates *shadow-only* state so
+        repeated comparisons reflect the traffic pattern being simulated
+        without mutating the primary enforcement limiter state.
         """
         with self._lock:
             current_time = time.time()
             window_start = current_time - self.window_seconds
 
-            user_queue = self.user_requests[user_id]
+            user_queue = self._shadow_user_requests[user_id]
             while user_queue and user_queue[0] < window_start:
                 user_queue.popleft()
 
@@ -522,7 +563,7 @@ class AsyncRateLimiter:
                     else:
                         legacy_allowed, _legacy_retry = await loop.run_in_executor(
                             self.executor,
-                            self.rate_limiter.peek_rate_limit,
+                            self.rate_limiter.peek_shadow_rate_limit,
                             user_id,
                             cost,
                         )

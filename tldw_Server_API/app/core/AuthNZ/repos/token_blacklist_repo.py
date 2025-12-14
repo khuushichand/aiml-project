@@ -22,6 +22,71 @@ class AuthnzTokenBlacklistRepo:
 
     db_pool: DatabasePool
 
+    async def ensure_schema(self) -> None:
+        """
+        Ensure the ``token_blacklist`` table and key indexes exist.
+
+        This is an idempotent bootstrap/backstop helper for deployments and
+        test setups that may not have run the full AuthNZ migrations yet.
+        """
+        ddl_postgres = [
+            """
+            CREATE TABLE IF NOT EXISTS token_blacklist (
+                id SERIAL PRIMARY KEY,
+                jti VARCHAR(255) UNIQUE NOT NULL,
+                user_id INTEGER,
+                token_type VARCHAR(50),
+                revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                reason VARCHAR(255),
+                revoked_by INTEGER,
+                ip_address VARCHAR(45),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_blacklist_jti ON token_blacklist(jti)",
+            "CREATE INDEX IF NOT EXISTS idx_blacklist_expires ON token_blacklist(expires_at)",
+            "CREATE INDEX IF NOT EXISTS idx_blacklist_user ON token_blacklist(user_id)",
+        ]
+
+        ddl_sqlite = [
+            """
+            CREATE TABLE IF NOT EXISTS token_blacklist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                jti TEXT UNIQUE NOT NULL,
+                user_id INTEGER,
+                token_type TEXT,
+                revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                reason TEXT,
+                revoked_by INTEGER,
+                ip_address TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_blacklist_jti ON token_blacklist(jti)",
+            "CREATE INDEX IF NOT EXISTS idx_blacklist_expires ON token_blacklist(expires_at)",
+            "CREATE INDEX IF NOT EXISTS idx_blacklist_user ON token_blacklist(user_id)",
+        ]
+
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self.db_pool.pool:
+                    for sql in ddl_postgres:
+                        await conn.execute(sql)
+                else:
+                    for sql in ddl_sqlite:
+                        await conn.execute(sql)
+                    try:
+                        await conn.commit()
+                    except Exception:
+                        logger.debug(
+                            "SQLite commit skipped (likely auto-committed by transaction shim)"
+                        )
+        except Exception as exc:
+            logger.error(f"AuthnzTokenBlacklistRepo.ensure_schema failed: {exc}")
+            raise
+
     async def insert_blacklisted_token(
         self,
         *,

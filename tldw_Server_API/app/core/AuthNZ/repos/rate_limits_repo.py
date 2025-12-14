@@ -21,6 +21,92 @@ class AuthnzRateLimitsRepo:
 
     db_pool: DatabasePool
 
+    async def ensure_schema(self) -> None:
+        """
+        Ensure the AuthNZ rate-limiter tables exist for the configured backend.
+
+        This is an idempotent bootstrap/backstop helper for deployments and
+        test setups that may not have run the full AuthNZ migrations yet.
+        """
+        ddl_sqlite = [
+            # Per-identifier request counts per window
+            """
+            CREATE TABLE IF NOT EXISTS rate_limits (
+                identifier TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                request_count INTEGER NOT NULL,
+                window_start TEXT NOT NULL,
+                PRIMARY KEY (identifier, endpoint, window_start)
+            )
+            """,
+            # Failed attempts for lockout
+            """
+            CREATE TABLE IF NOT EXISTS failed_attempts (
+                identifier TEXT NOT NULL,
+                attempt_type TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL,
+                window_start TEXT NOT NULL,
+                PRIMARY KEY (identifier, attempt_type)
+            )
+            """,
+            # Account lockouts
+            """
+            CREATE TABLE IF NOT EXISTS account_lockouts (
+                identifier TEXT PRIMARY KEY,
+                locked_until TEXT NOT NULL,
+                reason TEXT
+            )
+            """,
+            # Helpful index for queries by identifier
+            "CREATE INDEX IF NOT EXISTS idx_rate_limits_identifier ON rate_limits(identifier)",
+        ]
+
+        ddl_postgres = [
+            """
+            CREATE TABLE IF NOT EXISTS rate_limits (
+                identifier TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                request_count INTEGER NOT NULL,
+                window_start TIMESTAMPTZ NOT NULL,
+                PRIMARY KEY (identifier, endpoint, window_start)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS failed_attempts (
+                identifier TEXT NOT NULL,
+                attempt_type TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL,
+                window_start TIMESTAMPTZ NOT NULL,
+                PRIMARY KEY (identifier, attempt_type)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS account_lockouts (
+                identifier TEXT PRIMARY KEY,
+                locked_until TIMESTAMPTZ NOT NULL,
+                reason TEXT
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_rate_limits_identifier ON rate_limits(identifier)",
+        ]
+
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self.db_pool.pool:
+                    for sql in ddl_postgres:
+                        await conn.execute(sql)
+                else:
+                    for sql in ddl_sqlite:
+                        await conn.execute(sql)
+                    try:
+                        await conn.commit()
+                    except Exception:
+                        # aiosqlite transaction manager may commit outside; ignore
+                        pass
+        except Exception as exc:
+            logger.error(f"AuthnzRateLimitsRepo.ensure_schema failed: {exc}")
+            raise
+
     async def cleanup_rate_limits_older_than(
         self,
         cutoff: datetime,

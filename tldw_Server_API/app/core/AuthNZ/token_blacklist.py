@@ -219,65 +219,8 @@ class TokenBlacklist:
         """Create token blacklist table if it doesn't exist"""
         try:
             db_pool = await self._ensure_db_pool()
-            using_postgres = getattr(db_pool, "pool", None) is not None
-            async with db_pool.transaction() as conn:
-                if using_postgres:
-                    # PostgreSQL
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS token_blacklist (
-                            id SERIAL PRIMARY KEY,
-                            jti VARCHAR(255) UNIQUE NOT NULL,
-                            user_id INTEGER,
-                            token_type VARCHAR(50),
-                            revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            expires_at TIMESTAMP NOT NULL,
-                            reason VARCHAR(255),
-                            revoked_by INTEGER,
-                            ip_address VARCHAR(45),
-                            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                        )
-                    """)
-
-                    # Create indexes
-                    await conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_blacklist_jti ON token_blacklist(jti)"
-                    )
-                    await conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_blacklist_expires ON token_blacklist(expires_at)"
-                    )
-                    await conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_blacklist_user ON token_blacklist(user_id)"
-                    )
-
-                else:
-                    # SQLite
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS token_blacklist (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            jti TEXT UNIQUE NOT NULL,
-                            user_id INTEGER,
-                            token_type TEXT,
-                            revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            expires_at TIMESTAMP NOT NULL,
-                            reason TEXT,
-                            revoked_by INTEGER,
-                            ip_address TEXT,
-                            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                        )
-                    """)
-
-                    # Create indexes
-                    await conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_blacklist_jti ON token_blacklist(jti)"
-                    )
-                    await conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_blacklist_expires ON token_blacklist(expires_at)"
-                    )
-                    await conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_blacklist_user ON token_blacklist(user_id)"
-                    )
-
-                    await conn.commit()
+            repo = AuthnzTokenBlacklistRepo(db_pool)
+            await repo.ensure_schema()
 
         except Exception as e:
             logger.error(f"Failed to create token blacklist table: {e}")
