@@ -1648,27 +1648,27 @@ def _as_int(val: object, default: int) -> int:
         return default
 
 
-def rg_enabled(default: bool = False) -> bool:
+def rg_enabled(default: bool = True) -> bool:
     """
     Global feature flag for Resource Governor integrations.
 
     Resolution order:
       1) Env var RG_ENABLED
       2) [ResourceGovernor] enabled in config.txt
-      3) Provided default (False unless overridden by caller)
+      3) Provided default (True unless overridden by caller)
     """
     v = os.getenv("RG_ENABLED")
     if v is None:
-        # In test environments, avoid enabling RG solely due to config.txt so
-        # unit/integration tests don't unexpectedly start receiving 429s when
-        # importing the main app. Tests that want RG should set RG_ENABLED=1.
+        # In test environments, keep RG disabled unless explicitly enabled via
+        # RG_ENABLED so unit/integration tests don't unexpectedly start
+        # receiving 429s when importing the main app.
         try:
             import sys as _sys
 
             _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
             _pytest_active = bool(os.getenv("PYTEST_CURRENT_TEST")) or ("pytest" in _sys.modules)
             if _test_mode or _pytest_active:
-                return bool(default)
+                return False
         except Exception:
             pass
         try:

@@ -862,6 +862,7 @@ async def lifespan(app: FastAPI):
                 from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
                     ensure_tool_catalogs_tables_pg,
                     ensure_privilege_snapshots_table_pg,
+                    ensure_api_keys_tables_pg,
                     ensure_usage_tables_pg,
                     ensure_virtual_key_counters_pg,
                 )
@@ -872,6 +873,9 @@ async def lifespan(app: FastAPI):
                 ok_priv_snapshots = await ensure_privilege_snapshots_table_pg(db_pool)
                 if ok_priv_snapshots:
                     logger.info("App Startup: Ensured PG privilege_snapshots table")
+                ok_api_keys_pg = await ensure_api_keys_tables_pg(db_pool)
+                if ok_api_keys_pg:
+                    logger.info("App Startup: Ensured PG api_keys tables")
                 ok_usage_pg = await ensure_usage_tables_pg(db_pool)
                 if ok_usage_pg:
                     logger.info("App Startup: Ensured PG usage tables")

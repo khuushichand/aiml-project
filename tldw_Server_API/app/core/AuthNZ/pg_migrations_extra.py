@@ -312,6 +312,84 @@ _CREATE_AUTHNZ_CORE_TABLES = [
 ]
 
 
+_CREATE_API_KEYS_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            key_hash VARCHAR(64) UNIQUE NOT NULL,
+            key_prefix VARCHAR(16) NOT NULL,
+            name VARCHAR(255),
+            description TEXT,
+            scope VARCHAR(50) DEFAULT 'read',
+            status VARCHAR(20) DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP,
+            last_used_at TIMESTAMP,
+            last_used_ip VARCHAR(45),
+            usage_count INTEGER DEFAULT 0,
+            rate_limit INTEGER,
+            allowed_ips TEXT,
+            metadata JSONB,
+            rotated_from INTEGER REFERENCES api_keys(id),
+            rotated_to INTEGER REFERENCES api_keys(id),
+            revoked_at TIMESTAMP,
+            revoked_by INTEGER,
+            revoke_reason TEXT
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS scope VARCHAR(50) DEFAULT 'read'", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS metadata JSONB", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS rotated_from INTEGER REFERENCES api_keys(id)", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS rotated_to INTEGER REFERENCES api_keys(id)", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMP", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS revoked_by INTEGER", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS revoke_reason TEXT", ()),
+    # Virtual key fields
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS is_virtual BOOLEAN DEFAULT FALSE", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS parent_key_id INTEGER REFERENCES api_keys(id)", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_tokens BIGINT", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_tokens BIGINT", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_usd DOUBLE PRECISION", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_usd DOUBLE PRECISION", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_endpoints TEXT", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_providers TEXT", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_models TEXT", ()),
+    # Helpful indexes
+    ("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_api_keys_virtual ON api_keys(is_virtual)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(org_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_api_keys_team ON api_keys(team_id)", ()),
+    # Audit log
+    (
+        """
+        CREATE TABLE IF NOT EXISTS api_key_audit_log (
+            id SERIAL PRIMARY KEY,
+            api_key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+            action VARCHAR(50) NOT NULL,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            ip_address VARCHAR(45),
+            user_agent TEXT,
+            details JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_api_key_audit_log_api_key_id ON api_key_audit_log(api_key_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_api_key_audit_log_created_at ON api_key_audit_log(created_at)", ()),
+]
+
+
 _CREATE_USAGE_TABLES = [
     # usage_log + usage_daily
     (
@@ -507,6 +585,64 @@ async def ensure_authnz_core_tables_pg(pool: Optional[DatabasePool] = None) -> b
         return True
     except Exception as exc:
         logger.warning(f"Failed to ensure PostgreSQL AuthNZ core tables: {exc}")
+        return False
+
+
+async def ensure_api_keys_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
+    """Ensure api_keys + api_key_audit_log tables exist for PostgreSQL backends.
+
+    Returns True when ensured (or already present), False when skipped due to a non-PG backend.
+    """
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+
+        errors: list[Exception] = []
+        for sql, params in _CREATE_API_KEYS_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except Exception as exc:
+                errors.append(exc)
+                logger.debug(f"PG ensure api keys DDL failed: {exc}")
+
+        try:
+            api_keys_ok = await db_pool.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_name = 'api_keys'
+                )
+                """
+            )
+            audit_ok = await db_pool.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_name = 'api_key_audit_log'
+                )
+                """
+            )
+            if not api_keys_ok or not audit_ok:
+                logger.warning(
+                    "PostgreSQL api_keys schema ensure did not complete "
+                    f"(api_keys={bool(api_keys_ok)}, api_key_audit_log={bool(audit_ok)})"
+                )
+                return False
+        except Exception as exc:
+            # Treat verification failure as non-fatal; callers can detect missing tables later.
+            logger.debug(f"PG ensure api_keys table verification failed: {exc}")
+
+        if errors:
+            logger.info(
+                "Ensured PostgreSQL api_keys tables (idempotent) with "
+                f"{len(errors)} non-fatal DDL errors"
+            )
+        else:
+            logger.info("Ensured PostgreSQL api_keys tables (idempotent)")
+        return True
+    except Exception as exc:
+        logger.warning(f"Failed to ensure PostgreSQL api_keys tables: {exc}")
         return False
 
 

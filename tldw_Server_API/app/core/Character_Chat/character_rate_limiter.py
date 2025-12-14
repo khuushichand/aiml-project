@@ -95,7 +95,7 @@ class CharacterRateLimiter:
         self.max_chat_completions_per_minute = max_chat_completions_per_minute
         self.max_message_sends_per_minute = max_message_sends_per_minute
         self.enabled = bool(enabled)
-        self.shadow_enabled = os.getenv("RG_SHADOW_CHARACTER_CHAT", "1").lower() in {"1", "true", "yes", "on"}
+        self.shadow_enabled = os.getenv("RG_SHADOW_CHARACTER_CHAT", "0").lower() in {"1", "true", "yes", "on"}
 
         # In-memory fallback storage (always ready for Redis failures)
         self.memory_store: Dict[int, List[float]] = defaultdict(list)
@@ -122,7 +122,9 @@ class CharacterRateLimiter:
         Raises:
             HTTPException: If rate limit exceeded
         """
-        if not self.enabled:
+        if not _rg_character_enabled():
+            # Legacy limiter has been retired; when RG is disabled, treat this
+            # shim as unlimited.
             return True, self.max_operations
 
         rg_decision = await _maybe_enforce_with_rg_character(
@@ -134,7 +136,7 @@ class CharacterRateLimiter:
             policy_id = str(rg_decision.get("policy_id", "character_chat.default"))
 
             # Shadow mismatch (best-effort): compare to legacy without consuming counters.
-            if self.shadow_enabled and record_shadow_mismatch is not None:
+            if self.shadow_enabled and record_shadow_mismatch is not None and self.enabled:
                 try:
                     legacy_allowed: Optional[bool]
                     now = time.time()
@@ -182,81 +184,11 @@ class CharacterRateLimiter:
             # RG allow → RG is the sole enforcer. Legacy counters are not consumed.
             return True, self.max_operations
 
-        key = f"rate_limit:character:{user_id}"
-
-        if self.redis:
-            member_token: Optional[str] = None
-            try:
-                # Use Redis for distributed rate limiting
-                pipe = self.redis.pipeline()
-                now = time.time()
-                window_start = now - self.window_seconds
-                member_token = f"{now:.9f}:{uuid.uuid4().hex}"
-
-                # Remove old entries and count current
-                pipe.zremrangebyscore(key, 0, window_start)
-                pipe.zcard(key)
-                pipe.zadd(key, {member_token: now})
-                pipe.expire(key, self.window_seconds)
-
-                results = pipe.execute()
-                current_count = results[1]
-
-                if current_count >= self.max_operations:
-                    if member_token:
-                        try:
-                            self.redis.zrem(key, member_token)
-                        except Exception as cleanup_err:  # pragma: no cover - defensive
-                            logger.debug(
-                                "Failed to remove rate-limit token %s during rejection: %s",
-                                member_token,
-                                cleanup_err,
-                            )
-                    logger.warning(
-                        f"Rate limit exceeded for user {user_id}: "
-                        f"{current_count}/{self.max_operations} operations"
-                    )
-                    raise HTTPException(
-                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                        detail=f"Rate limit exceeded. Max {self.max_operations} character operations per hour."
-                    )
-
-                remaining = max(self.max_operations - (current_count + 1), 0)
-                logger.debug(f"Rate limit check for user {user_id}: {remaining} operations remaining (redis)")
-                return True, remaining
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"Redis error in rate limiter: {e}. Falling back to memory.")
-                # Fall through to in-memory implementation
-
-        # In-memory fallback
-        now = time.time()
-        window_start = now - self.window_seconds
-
-        # Clean old entries
-        self.memory_store[user_id] = [
-            t for t in self.memory_store[user_id]
-            if t > window_start
-        ]
-
-        current_count = len(self.memory_store[user_id])
-
-        if current_count >= self.max_operations:
-            logger.warning(
-                f"Rate limit exceeded for user {user_id} (memory): "
-                f"{current_count}/{self.max_operations} operations"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Rate limit exceeded. Max {self.max_operations} character operations per hour."
-            )
-
-        self.memory_store[user_id].append(now)
-        remaining = self.max_operations - current_count - 1
-        logger.debug(f"Rate limit check for user {user_id} (memory): {remaining} operations remaining")
-        return True, remaining
+        # RG is enabled but unavailable: fail closed.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limit enforcement unavailable (ResourceGovernor not initialized)",
+        )
 
     async def check_character_limit(self, user_id: int, current_count: int) -> bool:
         """
@@ -323,7 +255,7 @@ def _rg_character_enabled() -> bool:
     """Return True when RG should gate Character Chat operations."""
     if rg_enabled is not None:
         try:
-            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+            return bool(rg_enabled(True))  # type: ignore[func-returns-value]
         except Exception:
             return False
     return False
@@ -369,7 +301,7 @@ async def _get_character_rg_governor():
             return gov
         except Exception as exc:  # pragma: no cover - optional path
             logger.debug(
-                "Character Chat RG governor init failed; using legacy limiter: {}", exc
+                "Character Chat RG governor init failed: {}", exc
             )
             return None
 
@@ -417,7 +349,7 @@ async def _maybe_enforce_with_rg_character(
         }
     except Exception as exc:
         logger.debug(
-            "Character Chat RG reserve failed; falling back to legacy: {}", exc
+            "Character Chat RG reserve failed: {}", exc
         )
         return None
 
@@ -431,69 +363,43 @@ async def _maybe_enforce_with_rg_character(
         Returns:
             Dictionary with usage statistics
         """
-        if not self.enabled:
-            now = time.time()
+        policy_id = os.getenv("RG_CHARACTER_CHAT_POLICY_ID", "character_chat.default")
+        entity = f"user:{int(user_id)}"
+        try:
+            gov = await _get_character_rg_governor()
+        except Exception:
+            gov = None
+
+        if gov is None:
             return {
-                "operations_used": 0,
-                "operations_limit": self.max_operations,
-                "operations_remaining": self.max_operations,
-                "window_seconds": self.window_seconds,
-                "reset_time": now + self.window_seconds,
+                "rate_limit_source": "resource_governor",
+                "policy_id": policy_id,
+                "requests_remaining": None,
+                "reset": None,
+                "note": "ResourceGovernor not initialized",
             }
-        key = f"rate_limit:character:{user_id}"
-        now = time.time()
-        window_start = now - self.window_seconds
 
-        if self.redis:
+        peek = getattr(gov, "peek_with_policy", None)
+        if callable(peek):
             try:
-                try:
-                    self.redis.zremrangebyscore(key, 0, window_start)
-                except Exception:
-                    logger.debug("Rate limiter stats: unable to prune Redis window for key {}", key)
-                count = self.redis.zcount(key, window_start, "+inf")
-                count_int = int(count)
-                earliest_entry_score: Optional[float] = None
-                if count_int:
-                    try:
-                        earliest_entry = self.redis.zrange(key, 0, 0, withscores=True)
-                    except Exception:
-                        earliest_entry = []
-                    if earliest_entry:
-                        # redis-py returns list of (member, score)
-                        earliest_entry_score = float(earliest_entry[0][1])
-                reset_time_val = (
-                    earliest_entry_score + self.window_seconds
-                    if earliest_entry_score is not None
-                    else now
-                )
-                return {
-                    "operations_used": count_int,
-                    "operations_limit": self.max_operations,
-                    "operations_remaining": max(0, self.max_operations - count_int),
-                    "window_seconds": self.window_seconds,
-                    "reset_time": reset_time_val,
-                }
+                data = await peek(entity, ["requests"], policy_id)  # type: ignore[misc]
             except Exception:
-                pass
+                data = {}
+        else:
+            data = {}
 
-        # In-memory fallback
-        self.memory_store[user_id] = [
-            t for t in self.memory_store[user_id]
-            if t > window_start
-        ]
-        current_window_events = self.memory_store[user_id]
-        count = len(current_window_events)
-        earliest_timestamp = min(current_window_events) if current_window_events else None
-        reset_time_val = (
-            earliest_timestamp + self.window_seconds if earliest_timestamp is not None else now
-        )
+        try:
+            remaining = (data or {}).get("requests", {}).get("remaining")
+            reset = (data or {}).get("requests", {}).get("reset")
+        except Exception:
+            remaining = None
+            reset = None
 
         return {
-            "operations_used": count,
-            "operations_limit": self.max_operations,
-            "operations_remaining": max(0, self.max_operations - count),
-            "window_seconds": self.window_seconds,
-            "reset_time": reset_time_val
+            "rate_limit_source": "resource_governor",
+            "policy_id": policy_id,
+            "requests_remaining": remaining,
+            "reset": reset,
         }
 
     # ========== Chat-specific rate limiting methods ==========

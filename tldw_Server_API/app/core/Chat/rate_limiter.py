@@ -272,8 +272,12 @@ class ConversationRateLimiter:
         Returns:
             Tuple of (allowed, error_message)
         """
-        # Prefer ResourceGovernor when enabled; use the legacy in-process
-        # limiter only as a fallback when RG is unavailable.
+        if not _rg_chat_primary_enabled():
+            # Legacy limiter has been retired; when RG is disabled, rate
+            # limiting is treated as disabled for this shim.
+            return True, None
+
+        # RG-only enforcement (legacy fallback retired).
         try:
             rg_decision = await _maybe_enforce_with_rg_chat(  # type: ignore[name-defined]
                 user_id=user_id,
@@ -283,25 +287,21 @@ class ConversationRateLimiter:
         except NameError:
             rg_decision = None
         except Exception as exc:  # pragma: no cover - defensive
-            logger.debug("Chat RG enforcement failed; falling back to legacy limiter: {}", exc)
+            logger.debug("Chat RG enforcement failed: {}", exc)
             rg_decision = None
 
-        if rg_decision is not None and _rg_chat_primary_enabled():
-            if not rg_decision.get("allowed", False):
-                policy_id = rg_decision.get("policy_id", "chat.default")
-                retry_after = rg_decision.get("retry_after")
-                base_msg = f"Rate limit exceeded (ResourceGovernor policy={policy_id})"
-                if isinstance(retry_after, (int, float)) and retry_after >= 0:
-                    return False, f"{base_msg}; retry_after={int(retry_after)}s"
-                return False, base_msg
-            return True, None
+        if rg_decision is None:
+            return False, "Rate limit enforcement unavailable (ResourceGovernor not initialized)"
 
-        # Legacy limiter (fallback when RG is disabled/unavailable).
-        return await self._check_legacy_rate_limit(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            estimated_tokens=estimated_tokens,
-        )
+        if not rg_decision.get("allowed", False):
+            policy_id = rg_decision.get("policy_id", "chat.default")
+            retry_after = rg_decision.get("retry_after")
+            base_msg = f"Rate limit exceeded (ResourceGovernor policy={policy_id})"
+            if isinstance(retry_after, (int, float)) and retry_after >= 0:
+                return False, f"{base_msg}; retry_after={int(retry_after)}s"
+            return False, base_msg
+
+        return True, None
 
     async def wait_for_capacity(
         self,
@@ -520,7 +520,7 @@ def _rg_chat_enabled() -> bool:
     """Return True when RG should gate chat requests."""
     if rg_enabled is not None:
         try:
-            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+            return bool(rg_enabled(True))  # type: ignore[func-returns-value]
         except Exception:
             return False
     return False
@@ -574,7 +574,7 @@ async def _get_chat_rg_governor():
             return gov
         except Exception as exc:  # pragma: no cover - optional path
             logger.debug(
-                "Chat RG governor init failed; using legacy ConversationRateLimiter: {}",
+                "Chat RG governor init failed: {}",
                 exc,
             )
             return None
@@ -590,7 +590,7 @@ async def _maybe_enforce_with_rg_chat(
     Optionally enforce Chat limits via ResourceGovernor.
 
     Requests are enforced at ingress via `RGSimpleMiddleware`. This helper is
-    used for token accounting (and legacy fallback) and MUST NOT reserve
+    used for token accounting and MUST NOT reserve
     `requests` to avoid double-enforcement on RG-governed routes.
 
     Returns a decision dict when RG is used, or None when RG is unavailable or

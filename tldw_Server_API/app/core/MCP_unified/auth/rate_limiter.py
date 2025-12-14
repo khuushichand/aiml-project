@@ -643,13 +643,17 @@ class RateLimiter:
         if not self.config.rate_limit_enabled:
             return
 
+        if not _rg_mcp_enabled():
+            # Legacy limiter has been retired; when RG is disabled, treat this
+            # shim as unlimited.
+            return
+
         self._ensure_cleanup_task()
 
         limiter = limiter or self.default_limiter
         category = _derive_category(limiter, self)
 
-        # Prefer Resource Governor when enabled; use legacy limiter only as
-        # a fallback when RG is unavailable.
+        # RG-only enforcement (legacy fallback retired).
         rg_decision = await _maybe_enforce_with_rg_mcp(key=key, category=category)
         if rg_decision is not None:
             # Shadow-mode comparison (best-effort): evaluate the legacy limiter
@@ -683,11 +687,7 @@ class RateLimiter:
                 raise RateLimitExceeded(rg_decision.get("retry_after") or 1)
             return
 
-        allowed, retry_after = await limiter.is_allowed(key)
-
-        if not allowed:
-            logger.warning(f"Rate limit exceeded for key: {key}")
-            raise RateLimitExceeded(retry_after)
+        raise RateLimitExceeded(1)
 
     async def get_usage(self, key: str) -> Dict[str, Any]:
         """Get rate limit usage for a key"""
@@ -772,7 +772,7 @@ _rg_mcp_lock = asyncio.Lock()
 def _rg_mcp_enabled() -> bool:
     if rg_enabled:
         try:
-            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+            return bool(rg_enabled(True))  # type: ignore[func-returns-value]
         except Exception:
             return False
     return False
@@ -815,7 +815,7 @@ async def _get_mcp_rg_governor():
             _rg_mcp_governor = gov
             return gov
         except Exception as exc:  # pragma: no cover - optional
-            logger.debug(f"MCP RG governor init failed; using legacy limiter: {exc}")
+            logger.debug(f"MCP RG governor init failed: {exc}")
             return None
 
 
@@ -847,5 +847,5 @@ async def _maybe_enforce_with_rg_mcp(*, key: str, category: str) -> Optional[Dic
             "policy_id": policy_id,
         }
     except Exception as exc:
-        logger.debug(f"MCP RG reserve failed; falling back to legacy: {exc}")
+        logger.debug(f"MCP RG reserve failed: {exc}")
         return None

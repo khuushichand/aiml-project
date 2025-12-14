@@ -312,41 +312,28 @@ class TokenBucketLimiter:
         @wraps(fn)
         def wrapper(*args, **kwargs):
             # When ResourceGovernor is enabled, prefer ResourceGovernor as
-            # the primary enforcement path and treat the in-process TokenBucketLimiter
-            # as a compatibility shim. Otherwise, preserve the original behavior:
-            # - Bypass rate limiting during tests, or when EMBEDDINGS_RATE_LIMIT is not "on".
-            # - Use the local token bucket when enabled.
-            try:
-                if not _rg_embeddings_server_enabled():
-                    if os.getenv("TESTING", "").lower() == "true" or \
-                       os.getenv("EMBEDDINGS_RATE_LIMIT", "off").lower() != "on":
-                        return fn(*args, **kwargs)
-            except Exception:
-                # If env checks fail for any reason, fall back to limiting.
-                pass
+            # the primary enforcement path. The legacy in-process token bucket
+            # is retired; when RG is disabled, this decorator becomes a no-op.
+            if not _rg_embeddings_server_enabled():
+                return fn(*args, **kwargs)
 
-            if _rg_embeddings_server_enabled():
-                # Best-effort RG enforcement with simple backoff based on retry_after.
-                while True:
-                    decision = _maybe_enforce_with_rg_embeddings_server_sync()
-                    if decision is None:
-                        # RG unavailable or misconfigured; fall back to legacy limiter.
-                        break
-                    if decision.get("allowed", False):
-                        # Allowed by RG; do not double-count with the local bucket.
-                        return fn(*args, **kwargs)
-                    retry_after = decision.get("retry_after")
+            # RG enforcement with simple backoff based on retry_after.
+            while True:
+                decision = _maybe_enforce_with_rg_embeddings_server_sync()
+                if decision is None:
+                    raise RuntimeError(
+                        "Embeddings server rate limiting unavailable (ResourceGovernor not initialized)"
+                    )
+                if decision.get("allowed", False):
+                    return fn(*args, **kwargs)
+                retry_after = decision.get("retry_after")
+                wait_s = 1.0
+                try:
+                    if isinstance(retry_after, (int, float)) and retry_after > 0:
+                        wait_s = float(retry_after)
+                except Exception:
                     wait_s = 1.0
-                    try:
-                        if isinstance(retry_after, (int, float)) and retry_after > 0:
-                            wait_s = float(retry_after)
-                    except Exception:
-                        wait_s = 1.0
-                    time.sleep(wait_s)
-
-            # Legacy path: token-bucket limiter when enabled.
-            self._acquire()
-            return fn(*args, **kwargs)
+                time.sleep(wait_s)
 
         return wrapper
 
@@ -382,7 +369,7 @@ def _rg_embeddings_server_enabled() -> bool:
     """Return True when RG should gate standalone embeddings server requests."""
     if rg_enabled is not None:
         try:
-            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+            return bool(rg_enabled(True))  # type: ignore[func-returns-value]
         except Exception:
             return False
     return False
@@ -428,7 +415,7 @@ async def _get_embeddings_server_rg_governor():
             return gov
         except Exception as exc:  # pragma: no cover - optional path
             logging.debug(
-                "Embeddings server RG governor init failed; using legacy TokenBucketLimiter: %s",
+                "Embeddings server RG governor init failed: %s",
                 exc,
             )
             return None
@@ -471,7 +458,7 @@ async def _maybe_enforce_with_rg_embeddings_server_async() -> Optional[Dict[str,
         }
     except Exception as exc:
         logging.debug(
-            "Embeddings server RG reserve failed; falling back to legacy TokenBucketLimiter: %s",
+            "Embeddings server RG reserve failed: %s",
             exc,
         )
         return None

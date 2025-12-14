@@ -1219,21 +1219,16 @@ async def check_rate_limit(
     except Exception as exc:
         logger.debug("AuthNZ rate-limit bypass: unable to read request.state.rg_policy_id: {}", exc)
 
-    # Additional bypass: in canonical single-user deployments, allow admin principals
-    # to skip global IP rate limits. PROFILE is advisory and must not relax
-    # enforcement relative to AUTH_MODE and claims.
+    # Additional bypass: allow the bootstrapped single-user admin principal
+    # to skip global IP rate limits. Detection is principal/claim-first
+    # and does not branch on AUTH_MODE here.
     try:
         ctx = getattr(request.state, "auth", None)
         principal = ctx.principal if isinstance(ctx, AuthContext) else None
     except Exception:
         principal = None
 
-    try:
-        canonical_single_user = is_single_user_mode()
-    except Exception:
-        canonical_single_user = False
-
-    if principal is not None and principal.is_admin and canonical_single_user:
+    if principal is not None and principal.is_admin and is_single_user_principal(principal):
         return
 
     # Get client IP
@@ -1283,21 +1278,16 @@ async def check_auth_rate_limit(
     if _is_test_mode():
         return
 
-    # Additional bypass: in canonical single-user deployments, allow admin principals
-    # to skip auth-specific IP rate limits. PROFILE is advisory and must not relax
-    # enforcement relative to AUTH_MODE and claims.
+    # Additional bypass: allow the bootstrapped single-user admin principal
+    # to skip auth-specific IP rate limits. Detection is principal/claim-first
+    # and does not branch on AUTH_MODE here.
     try:
         ctx = getattr(request.state, "auth", None)
         principal = ctx.principal if isinstance(ctx, AuthContext) else None
     except Exception:
         principal = None
 
-    try:
-        canonical_single_user = is_single_user_mode()
-    except Exception:
-        canonical_single_user = False
-
-    if principal is not None and principal.is_admin and canonical_single_user:
+    if principal is not None and principal.is_admin and is_single_user_principal(principal):
         return
 
     # Get client IP

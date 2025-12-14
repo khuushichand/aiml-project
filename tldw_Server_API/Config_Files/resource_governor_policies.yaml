@@ -192,6 +192,8 @@ route_map:
     rag: rag.default
     media: media.default
     watchlists: watchlists.default
+    authentication: authnz.default
+    "character-chat-sessions": character_chat.default
   by_path:
     "/api/v1/chat/*": chat.default
     "/api/v1/mcp/*": mcp.ingestion
@@ -209,6 +211,8 @@ route_map:
     "/api/v1/chatbooks/preview": chatbooks.preview
     "/api/v1/chatbooks/download/*": chatbooks.download
     "/api/v1/watchlists/*": watchlists.default
+    "/api/v1/chats/*": character_chat.default
+    "/api/v1/auth/*": authnz.default
 
 # Observability note: Do not include entity label in metrics by default.
 # Use RG_METRICS_ENTITY_LABEL=true to enable hashed entity label if necessary.

@@ -106,7 +106,7 @@ class RateLimiter:
 
         self._rate_limits_repo: Optional[AuthnzRateLimitsRepo] = None
         # Shadow-mode flag for comparing legacy vs RG without consuming counters.
-        self.shadow_enabled = os.getenv("RG_SHADOW_AUTHNZ", "1").lower() in {"1", "true", "yes", "on"}
+        self.shadow_enabled = os.getenv("RG_SHADOW_AUTHNZ", "0").lower() in {"1", "true", "yes", "on"}
 
     async def _peek_legacy_allow_without_side_effects(
         self,
@@ -466,8 +466,22 @@ class RateLimiter:
                 "rate_limit_source": "resource_governor",
             }
 
-        if not self.enabled:
-            return True, {"rate_limit_enabled": False}
+        if _rg_authnz_enabled():
+            # Legacy limiter fallback retired: if RG is enabled but we cannot
+            # obtain a decision, fail closed.
+            policy_id = os.getenv("RG_AUTHNZ_POLICY_ID", "authnz.default")
+            return False, {
+                "error": "Rate limit enforcement unavailable (ResourceGovernor not initialized)",
+                "limit": limit if limit is not None else self.default_limit,
+                "remaining": 0,
+                "reset_time": None,
+                "retry_after": 60,
+                "policy_id": policy_id,
+                "rate_limit_source": "resource_governor",
+            }
+
+        # RG disabled → treat as unlimited.
+        return True, {"rate_limit_enabled": False}
 
         # Use provided limits or defaults; treat zero values as intentional
         if limit is None:
@@ -871,7 +885,7 @@ def _rg_authnz_enabled() -> bool:
     """Return True when RG should gate AuthNZ rate limits."""
     if rg_enabled is not None:
         try:
-            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+            return bool(rg_enabled(True))  # type: ignore[func-returns-value]
         except Exception:  # noqa: BLE001
             # Broad catch is intentional: RG enablement hooks are optional and
             # any failure here should simply disable RG for AuthNZ.
@@ -921,7 +935,7 @@ async def _get_authnz_rg_governor():
             # Broad catch is intentional: ResourceGovernor integration is
             # strictly optional and failures must never block AuthNZ traffic.
             logger.debug(
-                "AuthNZ RG governor init failed; using legacy rate limiter: {}", exc
+                "AuthNZ RG governor init failed: {}", exc
             )
             return None
 
@@ -972,10 +986,10 @@ async def _maybe_enforce_with_rg_authnz(
             "policy_id": policy_id,
         }
     except Exception as exc:  # noqa: BLE001
-        # Broad catch is intentional: RG is a best-effort gating layer and any
-        # failure should fall back to the legacy rate limiter rather than
-        # impacting request handling.
-        logger.debug("AuthNZ RG reserve failed; falling back to legacy: {}", exc)
+        # Broad catch is intentional: RG integration should not raise from this
+        # helper. Callers decide whether to fail closed or treat limiting as
+        # disabled when RG is unavailable.
+        logger.debug("AuthNZ RG reserve failed: {}", exc)
         return None
 
 

@@ -54,14 +54,13 @@ def test_embeddings_server_rg_allows_and_skips_token_bucket(monkeypatch):
 
 def test_embeddings_server_rg_unavailable_falls_back_to_token_bucket(monkeypatch):
     """
-    When RG is enabled but the helper returns None (unavailable/disabled at
-    runtime), the wrapper should fall back to the legacy token-bucket
-    _acquire() path and still call the wrapped function exactly once.
+    When RG is enabled but the helper returns None (unavailable/misconfigured),
+    the legacy token-bucket fallback is retired and the wrapper should fail
+    closed to surface the misconfiguration.
     """
     monkeypatch.setenv("RG_ENABLED", "1")
 
     calls = []
-    acquire_calls = []
 
     def _dummy():
         calls.append("called")
@@ -69,11 +68,10 @@ def test_embeddings_server_rg_unavailable_falls_back_to_token_bucket(monkeypatch
 
     limiter = EC.TokenBucketLimiter(capacity=1, period=60)
 
-    def _record_acquire():
-        acquire_calls.append(True)
-        return None
+    def _fail_acquire():
+        raise _SentinelError("TokenBucketLimiter._acquire should not be called when legacy fallback is retired")
 
-    monkeypatch.setattr(limiter, "_acquire", _record_acquire)
+    monkeypatch.setattr(limiter, "_acquire", _fail_acquire)
 
     def _fake_rg_sync_none():
         return None
@@ -81,8 +79,6 @@ def test_embeddings_server_rg_unavailable_falls_back_to_token_bucket(monkeypatch
     monkeypatch.setattr(EC, "_maybe_enforce_with_rg_embeddings_server_sync", _fake_rg_sync_none)
 
     wrapped = limiter(_dummy)
-    result = wrapped()
-
-    assert result == "ok"
-    assert calls == ["called"]
-    assert acquire_calls == [True]
+    with pytest.raises(RuntimeError):
+        wrapped()
+    assert calls == []

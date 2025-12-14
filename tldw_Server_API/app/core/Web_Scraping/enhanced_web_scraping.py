@@ -211,7 +211,7 @@ def _rg_web_scraping_enabled() -> bool:
     """Return True when RG should gate web scraping requests."""
     if rg_enabled is not None:
         try:
-            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+            return bool(rg_enabled(True))  # type: ignore[func-returns-value]
         except Exception:
             return False
     return False
@@ -297,7 +297,7 @@ async def _maybe_enforce_with_rg_web_scraping() -> Optional[Dict[str, object]]:
         }
     except Exception as exc:
         logger.debug(
-            "Web scraping RG reserve failed; falling back to legacy RateLimiter: {}", exc
+            "Web scraping RG reserve failed: {}", exc
         )
         return None
 

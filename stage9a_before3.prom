@@ -1,0 +1,316 @@
+# HELP http_requests_total Total number of HTTP requests
+# TYPE http_requests_total counter
+http_requests_total{endpoint="/metrics",method="GET",status="200"} 5
+http_requests_total{endpoint="/api/v1/health",method="GET",status="200"} 5
+http_requests_total{endpoint="/api/v1/mcp/status",method="GET",status="200"} 1
+http_requests_total{endpoint="/api/v1/chat/commands",method="GET",status="401"} 2
+http_requests_total{endpoint="/api/v1/embeddings/providers-config",method="GET",status="401"} 1
+http_requests_total{endpoint="/api/v1/audio/transcriptions/health",method="GET",status="200"} 1
+http_requests_total{endpoint="/api/v1/evaluations/rate-limits",method="GET",status="401"} 1
+http_requests_total{endpoint="/api/v1/workflows/auth/check",method="GET",status="404"} 1
+http_requests_total{endpoint="/api/v1/auth/login",method="POST",status="401"} 2
+http_requests_total{endpoint="/api/v1/chats/",method="POST",status="401"} 6
+http_requests_total{endpoint="/api/v1/media/process-web-scraping",method="POST",status="422"} 3
+http_requests_total{endpoint="/api/v1/chats/",method="POST",status="404"} 3
+http_requests_total{endpoint="/api/v1/chats/",method="POST",status="201"} 1
+http_requests_total{endpoint="/api/v1/media/process-web-scraping",method="POST",status="429"} 2
+# HELP http_request_duration_seconds HTTP request duration in seconds
+# TYPE http_request_duration_seconds histogram
+http_request_duration_seconds_bucket{endpoint="/metrics",method="GET",le="0.005"} 5
+http_request_duration_seconds_bucket{endpoint="/metrics",method="GET",le="0.01"} 5
+http_request_duration_seconds_bucket{endpoint="/metrics",method="GET",le="0.025"} 5
+http_request_duration_seconds_bucket{endpoint="/metrics",method="GET",le="0.05"} 5
+http_request_duration_seconds_bucket{endpoint="/metrics",method="GET",le="0.1"} 5
+http_request_duration_seconds_bucket{endpoint="/metrics",method="GET",le="0.25"} 5
+http_request_duration_seconds_bucket{endpoint="/metrics",method="GET",le="0.5"} 5
+http_request_duration_seconds_bucket{endpoint="/metrics",method="GET",le="1"} 5
+http_request_duration_seconds_bucket{endpoint="/metrics",method="GET",le="2.5"} 5
+http_request_duration_seconds_bucket{endpoint="/metrics",method="GET",le="5"} 5
+http_request_duration_seconds_bucket{endpoint="/metrics",method="GET",le="10"} 5
+http_request_duration_seconds_bucket{endpoint="/metrics",method="GET",le="+Inf"} 5
+http_request_duration_seconds_sum{endpoint="/metrics",method="GET"} 0.008433041861280799
+http_request_duration_seconds_count{endpoint="/metrics",method="GET"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/health",method="GET",le="0.005"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/health",method="GET",le="0.01"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/health",method="GET",le="0.025"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/health",method="GET",le="0.05"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/health",method="GET",le="0.1"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/health",method="GET",le="0.25"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/health",method="GET",le="0.5"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/health",method="GET",le="1"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/health",method="GET",le="2.5"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/health",method="GET",le="5"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/health",method="GET",le="10"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/health",method="GET",le="+Inf"} 5
+http_request_duration_seconds_sum{endpoint="/api/v1/health",method="GET"} 0.013987458776682615
+http_request_duration_seconds_count{endpoint="/api/v1/health",method="GET"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/mcp/status",method="GET",le="0.005"} 0
+http_request_duration_seconds_bucket{endpoint="/api/v1/mcp/status",method="GET",le="0.01"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/mcp/status",method="GET",le="0.025"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/mcp/status",method="GET",le="0.05"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/mcp/status",method="GET",le="0.1"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/mcp/status",method="GET",le="0.25"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/mcp/status",method="GET",le="0.5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/mcp/status",method="GET",le="1"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/mcp/status",method="GET",le="2.5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/mcp/status",method="GET",le="5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/mcp/status",method="GET",le="10"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/mcp/status",method="GET",le="+Inf"} 1
+http_request_duration_seconds_sum{endpoint="/api/v1/mcp/status",method="GET"} 0.006936166202649474
+http_request_duration_seconds_count{endpoint="/api/v1/mcp/status",method="GET"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/chat/commands",method="GET",le="0.005"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/chat/commands",method="GET",le="0.01"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/chat/commands",method="GET",le="0.025"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/chat/commands",method="GET",le="0.05"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/chat/commands",method="GET",le="0.1"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/chat/commands",method="GET",le="0.25"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/chat/commands",method="GET",le="0.5"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/chat/commands",method="GET",le="1"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/chat/commands",method="GET",le="2.5"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/chat/commands",method="GET",le="5"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/chat/commands",method="GET",le="10"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/chat/commands",method="GET",le="+Inf"} 2
+http_request_duration_seconds_sum{endpoint="/api/v1/chat/commands",method="GET"} 0.016878458205610514
+http_request_duration_seconds_count{endpoint="/api/v1/chat/commands",method="GET"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/embeddings/providers-config",method="GET",le="0.005"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/embeddings/providers-config",method="GET",le="0.01"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/embeddings/providers-config",method="GET",le="0.025"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/embeddings/providers-config",method="GET",le="0.05"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/embeddings/providers-config",method="GET",le="0.1"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/embeddings/providers-config",method="GET",le="0.25"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/embeddings/providers-config",method="GET",le="0.5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/embeddings/providers-config",method="GET",le="1"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/embeddings/providers-config",method="GET",le="2.5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/embeddings/providers-config",method="GET",le="5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/embeddings/providers-config",method="GET",le="10"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/embeddings/providers-config",method="GET",le="+Inf"} 1
+http_request_duration_seconds_sum{endpoint="/api/v1/embeddings/providers-config",method="GET"} 0.004271333105862141
+http_request_duration_seconds_count{endpoint="/api/v1/embeddings/providers-config",method="GET"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/audio/transcriptions/health",method="GET",le="0.005"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/audio/transcriptions/health",method="GET",le="0.01"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/audio/transcriptions/health",method="GET",le="0.025"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/audio/transcriptions/health",method="GET",le="0.05"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/audio/transcriptions/health",method="GET",le="0.1"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/audio/transcriptions/health",method="GET",le="0.25"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/audio/transcriptions/health",method="GET",le="0.5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/audio/transcriptions/health",method="GET",le="1"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/audio/transcriptions/health",method="GET",le="2.5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/audio/transcriptions/health",method="GET",le="5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/audio/transcriptions/health",method="GET",le="10"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/audio/transcriptions/health",method="GET",le="+Inf"} 1
+http_request_duration_seconds_sum{endpoint="/api/v1/audio/transcriptions/health",method="GET"} 0.0023475419729948044
+http_request_duration_seconds_count{endpoint="/api/v1/audio/transcriptions/health",method="GET"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/evaluations/rate-limits",method="GET",le="0.005"} 0
+http_request_duration_seconds_bucket{endpoint="/api/v1/evaluations/rate-limits",method="GET",le="0.01"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/evaluations/rate-limits",method="GET",le="0.025"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/evaluations/rate-limits",method="GET",le="0.05"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/evaluations/rate-limits",method="GET",le="0.1"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/evaluations/rate-limits",method="GET",le="0.25"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/evaluations/rate-limits",method="GET",le="0.5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/evaluations/rate-limits",method="GET",le="1"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/evaluations/rate-limits",method="GET",le="2.5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/evaluations/rate-limits",method="GET",le="5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/evaluations/rate-limits",method="GET",le="10"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/evaluations/rate-limits",method="GET",le="+Inf"} 1
+http_request_duration_seconds_sum{endpoint="/api/v1/evaluations/rate-limits",method="GET"} 0.006181290838867426
+http_request_duration_seconds_count{endpoint="/api/v1/evaluations/rate-limits",method="GET"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/workflows/auth/check",method="GET",le="0.005"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/workflows/auth/check",method="GET",le="0.01"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/workflows/auth/check",method="GET",le="0.025"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/workflows/auth/check",method="GET",le="0.05"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/workflows/auth/check",method="GET",le="0.1"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/workflows/auth/check",method="GET",le="0.25"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/workflows/auth/check",method="GET",le="0.5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/workflows/auth/check",method="GET",le="1"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/workflows/auth/check",method="GET",le="2.5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/workflows/auth/check",method="GET",le="5"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/workflows/auth/check",method="GET",le="10"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/workflows/auth/check",method="GET",le="+Inf"} 1
+http_request_duration_seconds_sum{endpoint="/api/v1/workflows/auth/check",method="GET"} 0.002288083080202341
+http_request_duration_seconds_count{endpoint="/api/v1/workflows/auth/check",method="GET"} 1
+http_request_duration_seconds_bucket{endpoint="/api/v1/auth/login",method="POST",le="0.005"} 0
+http_request_duration_seconds_bucket{endpoint="/api/v1/auth/login",method="POST",le="0.01"} 0
+http_request_duration_seconds_bucket{endpoint="/api/v1/auth/login",method="POST",le="0.025"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/auth/login",method="POST",le="0.05"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/auth/login",method="POST",le="0.1"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/auth/login",method="POST",le="0.25"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/auth/login",method="POST",le="0.5"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/auth/login",method="POST",le="1"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/auth/login",method="POST",le="2.5"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/auth/login",method="POST",le="5"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/auth/login",method="POST",le="10"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/auth/login",method="POST",le="+Inf"} 2
+http_request_duration_seconds_sum{endpoint="/api/v1/auth/login",method="POST"} 0.03816770785488188
+http_request_duration_seconds_count{endpoint="/api/v1/auth/login",method="POST"} 2
+http_request_duration_seconds_bucket{endpoint="/api/v1/chats/",method="POST",le="0.005"} 0
+http_request_duration_seconds_bucket{endpoint="/api/v1/chats/",method="POST",le="0.01"} 6
+http_request_duration_seconds_bucket{endpoint="/api/v1/chats/",method="POST",le="0.025"} 10
+http_request_duration_seconds_bucket{endpoint="/api/v1/chats/",method="POST",le="0.05"} 10
+http_request_duration_seconds_bucket{endpoint="/api/v1/chats/",method="POST",le="0.1"} 10
+http_request_duration_seconds_bucket{endpoint="/api/v1/chats/",method="POST",le="0.25"} 10
+http_request_duration_seconds_bucket{endpoint="/api/v1/chats/",method="POST",le="0.5"} 10
+http_request_duration_seconds_bucket{endpoint="/api/v1/chats/",method="POST",le="1"} 10
+http_request_duration_seconds_bucket{endpoint="/api/v1/chats/",method="POST",le="2.5"} 10
+http_request_duration_seconds_bucket{endpoint="/api/v1/chats/",method="POST",le="5"} 10
+http_request_duration_seconds_bucket{endpoint="/api/v1/chats/",method="POST",le="10"} 10
+http_request_duration_seconds_bucket{endpoint="/api/v1/chats/",method="POST",le="+Inf"} 10
+http_request_duration_seconds_sum{endpoint="/api/v1/chats/",method="POST"} 0.10877054068259895
+http_request_duration_seconds_count{endpoint="/api/v1/chats/",method="POST"} 10
+http_request_duration_seconds_bucket{endpoint="/api/v1/media/process-web-scraping",method="POST",le="0.005"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/media/process-web-scraping",method="POST",le="0.01"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/media/process-web-scraping",method="POST",le="0.025"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/media/process-web-scraping",method="POST",le="0.05"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/media/process-web-scraping",method="POST",le="0.1"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/media/process-web-scraping",method="POST",le="0.25"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/media/process-web-scraping",method="POST",le="0.5"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/media/process-web-scraping",method="POST",le="1"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/media/process-web-scraping",method="POST",le="2.5"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/media/process-web-scraping",method="POST",le="5"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/media/process-web-scraping",method="POST",le="10"} 5
+http_request_duration_seconds_bucket{endpoint="/api/v1/media/process-web-scraping",method="POST",le="+Inf"} 5
+http_request_duration_seconds_sum{endpoint="/api/v1/media/process-web-scraping",method="POST"} 0.009505542227998376
+http_request_duration_seconds_count{endpoint="/api/v1/media/process-web-scraping",method="POST"} 5
+# HELP security_headers_responses_total Total number of responses where security headers were applied
+# TYPE security_headers_responses_total counter
+security_headers_responses_total 34
+# HELP rg_decisions_total Resource Governor decisions (allow/deny)
+# TYPE rg_decisions_total counter
+rg_decisions_total{backend="memory",category="requests",policy_id="mcp.ingestion",result="allow",scope="ip"} 1
+rg_decisions_total{backend="memory",category="requests",policy_id="chat.default",result="allow",scope="ip"} 1
+rg_decisions_total{backend="memory",category="requests",policy_id="chat.default",result="allow",scope="api_key"} 1
+rg_decisions_total{backend="memory",category="requests",policy_id="embeddings.default",result="allow",scope="api_key"} 1
+rg_decisions_total{backend="memory",category="requests",policy_id="audio.default",result="allow",scope="ip"} 1
+rg_decisions_total{backend="memory",category="requests",policy_id="evals.default",result="allow",scope="api_key"} 1
+rg_decisions_total{backend="memory",category="requests",policy_id="workflows.default",result="allow",scope="api_key"} 1
+rg_decisions_total{backend="memory",category="requests",policy_id="media.default",result="allow",scope="api_key"} 3
+rg_decisions_total{backend="memory",category="requests",policy_id="media.default",result="deny",scope="ip"} 2
+# HELP rg_denials_total Resource Governor denials by reason
+# TYPE rg_denials_total counter
+rg_denials_total{category="requests",policy_id="media.default",reason="insufficient_capacity",scope="ip"} 2
+
+# HELP python_gc_objects_collected_total Objects collected during gc
+# TYPE python_gc_objects_collected_total counter
+python_gc_objects_collected_total{generation="0"} 16506.0
+python_gc_objects_collected_total{generation="1"} 9315.0
+python_gc_objects_collected_total{generation="2"} 3200.0
+# HELP python_gc_objects_uncollectable_total Uncollectable objects found during GC
+# TYPE python_gc_objects_uncollectable_total counter
+python_gc_objects_uncollectable_total{generation="0"} 0.0
+python_gc_objects_uncollectable_total{generation="1"} 0.0
+python_gc_objects_uncollectable_total{generation="2"} 0.0
+# HELP python_gc_collections_total Number of times this generation was collected
+# TYPE python_gc_collections_total counter
+python_gc_collections_total{generation="0"} 2028.0
+python_gc_collections_total{generation="1"} 184.0
+python_gc_collections_total{generation="2"} 10.0
+# HELP python_info Python platform information
+# TYPE python_info gauge
+python_info{implementation="CPython",major="3",minor="12",patchlevel="11",version="3.12.11"} 1.0
+# HELP circuit_breaker_state Current state of circuit breaker (0=closed, 1=open, 2=half_open)
+# TYPE circuit_breaker_state gauge
+# HELP circuit_breaker_failures_total Total number of failures tracked by circuit breaker
+# TYPE circuit_breaker_failures_total counter
+# HELP circuit_breaker_successes_total Total number of successes tracked by circuit breaker
+# TYPE circuit_breaker_successes_total counter
+# HELP circuit_breaker_trips_total Total number of times circuit breaker has tripped
+# TYPE circuit_breaker_trips_total counter
+# HELP active_embedder_instances Number of active embedder instances
+# TYPE active_embedder_instances gauge
+# HELP embedding_model_cache_hits_total Total number of model cache hits
+# TYPE embedding_model_cache_hits_total counter
+# HELP embedding_requests_total Total number of embedding requests
+# TYPE embedding_requests_total counter
+# HELP embedding_request_duration_seconds Duration of embedding requests
+# TYPE embedding_request_duration_seconds histogram
+# HELP embedding_cache_hits_total Number of cache hits
+# TYPE embedding_cache_hits_total counter
+# HELP embedding_cache_size Current size of embedding cache
+# TYPE embedding_cache_size gauge
+embedding_cache_size 0.0
+# HELP active_embedding_requests Number of active embedding requests
+# TYPE active_embedding_requests gauge
+active_embedding_requests 0.0
+# HELP embedding_provider_failures_total Provider failures by reason
+# TYPE embedding_provider_failures_total counter
+# HELP embedding_fallbacks_total Count of provider fallbacks taken
+# TYPE embedding_fallbacks_total counter
+# HELP embedding_policy_denied_total Requests denied by policy
+# TYPE embedding_policy_denied_total counter
+# HELP embedding_dimension_adjustments_total Count of dimension adjustments performed
+# TYPE embedding_dimension_adjustments_total counter
+# HELP embedding_token_inputs_total Number of requests using token array inputs
+# TYPE embedding_token_inputs_total counter
+# HELP embedding_dlq_requeued_total Number of DLQ items requeued via admin API
+# TYPE embedding_dlq_requeued_total counter
+# HELP embedding_dlq_requeue_errors_total Errors during DLQ requeue operations
+# TYPE embedding_dlq_requeue_errors_total counter
+# HELP orchestrator_sse_connections Current number of active SSE connections to orchestrator
+# TYPE orchestrator_sse_connections gauge
+orchestrator_sse_connections 0.0
+# HELP orchestrator_sse_disconnects_total Total number of SSE disconnect events from orchestrator
+# TYPE orchestrator_sse_disconnects_total counter
+orchestrator_sse_disconnects_total 0.0
+# HELP orchestrator_sse_disconnects_created Total number of SSE disconnect events from orchestrator
+# TYPE orchestrator_sse_disconnects_created gauge
+orchestrator_sse_disconnects_created 1.765693772078777e+09
+# HELP orchestrator_summary_failures_total Total number of summary failures (fallbacks returned)
+# TYPE orchestrator_summary_failures_total counter
+orchestrator_summary_failures_total 0.0
+# HELP orchestrator_summary_failures_created Total number of summary failures (fallbacks returned)
+# TYPE orchestrator_summary_failures_created gauge
+orchestrator_summary_failures_created 1.76569377207878e+09
+# HELP embedding_queue_age_current_seconds Current age (seconds) of oldest message per queue
+# TYPE embedding_queue_age_current_seconds gauge
+# HELP embedding_stage_flag Per-stage control flags as gauges (1=true,0=false)
+# TYPE embedding_stage_flag gauge
+# HELP pgvector_upsert_latency_seconds Latency for pgvector upsert operations
+# TYPE pgvector_upsert_latency_seconds histogram
+# HELP pgvector_query_latency_seconds Latency for pgvector search queries
+# TYPE pgvector_query_latency_seconds histogram
+# HELP pgvector_delete_latency_seconds Latency for pgvector delete operations
+# TYPE pgvector_delete_latency_seconds histogram
+# HELP pgvector_rows_upserted_total Rows upserted into pgvector
+# TYPE pgvector_rows_upserted_total counter
+# HELP pgvector_rows_deleted_total Rows deleted from pgvector
+# TYPE pgvector_rows_deleted_total counter
+# HELP authnz_auth_attempts_total Total number of authentication attempts
+# TYPE authnz_auth_attempts_total counter
+# HELP authnz_api_key_operations_total Total number of API key operations
+# TYPE authnz_api_key_operations_total counter
+# HELP authnz_rate_limit_violations_total Total number of rate limit violations
+# TYPE authnz_rate_limit_violations_total counter
+# HELP authnz_security_alerts_total Total number of security alerts
+# TYPE authnz_security_alerts_total counter
+# HELP authnz_auth_duration_seconds Authentication request duration in seconds
+# TYPE authnz_auth_duration_seconds histogram
+# HELP authnz_password_strength_score Password strength scores
+# TYPE authnz_password_strength_score histogram
+authnz_password_strength_score_bucket{le="0.0"} 0.0
+authnz_password_strength_score_bucket{le="20.0"} 0.0
+authnz_password_strength_score_bucket{le="40.0"} 0.0
+authnz_password_strength_score_bucket{le="60.0"} 0.0
+authnz_password_strength_score_bucket{le="80.0"} 0.0
+authnz_password_strength_score_bucket{le="100.0"} 0.0
+authnz_password_strength_score_bucket{le="+Inf"} 0.0
+authnz_password_strength_score_count 0.0
+authnz_password_strength_score_sum 0.0
+# HELP authnz_password_strength_score_created Password strength scores
+# TYPE authnz_password_strength_score_created gauge
+authnz_password_strength_score_created 1.765693773242773e+09
+# HELP authnz_active_sessions_count Number of active sessions
+# TYPE authnz_active_sessions_count gauge
+authnz_active_sessions_count 0.0
+# HELP authnz_active_api_keys_count Number of active API keys
+# TYPE authnz_active_api_keys_count gauge
+authnz_active_api_keys_count 0.0
+# HELP authnz_failed_auth_rate_5min Failed authentication rate over 5 minutes
+# TYPE authnz_failed_auth_rate_5min gauge
+authnz_failed_auth_rate_5min 0.0
+# HELP authnz_security_alert_channel_status Last dispatch status per security alert sink (1=success, 0=disabled, -1=failure)
+# TYPE authnz_security_alert_channel_status gauge
+authnz_security_alert_channel_status{sink="file"} 0.0
+authnz_security_alert_channel_status{sink="webhook"} 0.0
+authnz_security_alert_channel_status{sink="email"} 0.0
+# HELP authnz_security_alert_last_success Overall result of the last security alert dispatch (1=success, 0=failure)
+# TYPE authnz_security_alert_last_success gauge
+authnz_security_alert_last_success 0.0

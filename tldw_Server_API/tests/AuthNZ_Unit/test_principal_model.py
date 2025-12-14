@@ -1,9 +1,11 @@
 import re
+from types import SimpleNamespace
 
 from tldw_Server_API.app.core.AuthNZ.principal_model import (
     AuthContext,
     AuthPrincipal,
     compute_principal_id,
+    is_single_user_principal,
 )
 
 
@@ -63,3 +65,26 @@ def test_auth_context_wraps_principal_and_metadata():
     assert ctx.user_agent == "pytest-agent"
     assert ctx.request_id == "req-123"
 
+
+def test_is_single_user_principal_prefers_explicit_subject():
+    principal = AuthPrincipal(kind="user", user_id=123, subject="single_user")
+    assert is_single_user_principal(principal) is True
+
+
+def test_is_single_user_principal_fixed_id_fallback_requires_single_user_mode(monkeypatch):
+    from tldw_Server_API.app.core.AuthNZ import settings as auth_settings
+
+    monkeypatch.setattr(
+        auth_settings,
+        "get_settings",
+        lambda: SimpleNamespace(AUTH_MODE="single_user", SINGLE_USER_FIXED_ID=99),
+    )
+    principal = AuthPrincipal(kind="user", user_id=99, subject=None)
+    assert is_single_user_principal(principal) is True
+
+    monkeypatch.setattr(
+        auth_settings,
+        "get_settings",
+        lambda: SimpleNamespace(AUTH_MODE="multi_user", SINGLE_USER_FIXED_ID=99),
+    )
+    assert is_single_user_principal(principal) is False

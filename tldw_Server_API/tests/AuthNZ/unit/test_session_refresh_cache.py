@@ -370,6 +370,10 @@ async def test_is_token_blacklisted_checks_refresh_hash_fallback(monkeypatch):
             self.revoked_hash = revoked_hash
             self.calls: list[tuple[str, str]] = []
 
+        def acquire(self):
+            # Match DatabasePool.acquire() context manager shape for repo helpers
+            return StubTransaction(self)
+
         async def fetchval(self, query: str, candidate: str):
             self.calls.append((query, candidate))
             if "refresh_token_hash" in query and candidate == self.revoked_hash:

@@ -134,13 +134,15 @@ async def test_can_start_stream_and_finish_stream_via_rg_integration(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_can_start_job_fallback_when_redis_unavailable(monkeypatch):
+async def test_can_start_job_fails_closed_when_rg_unavailable(monkeypatch):
     """
-    Verify that job concurrency enforcement still succeeds when the RG path
-    is unavailable and Redis is disabled, by falling back to the in-process
-    counters in audio_quota.
+    Legacy concurrency counters are retired. If RG is enabled but the governor
+    accessor returns None, can_start_job should fail closed to surface the
+    misconfiguration.
     """
     from tldw_Server_API.app.core.Usage import audio_quota
+
+    monkeypatch.setenv("RG_ENABLED", "1")
 
     # Force RG path to be unavailable
     async def _rg_unavailable():
@@ -148,37 +150,7 @@ async def test_can_start_job_fallback_when_redis_unavailable(monkeypatch):
 
     monkeypatch.setattr(audio_quota, "_get_audio_rg_governor", _rg_unavailable)
 
-    # Disable Redis for this test so the legacy path uses in-process counters
-    async def _no_redis():
-        return None
-
-    monkeypatch.setattr(audio_quota, "_get_redis", _no_redis)
-
-    # Ensure a deterministic per-user concurrent_jobs limit of 1
-    async def _limits(_user_id: int):
-        return {
-            "daily_minutes": 30.0,
-            "concurrent_streams": 1,
-            "concurrent_jobs": 1,
-            "max_file_size_mb": 25,
-        }
-
-    monkeypatch.setattr(audio_quota, "get_limits_for_user", _limits)
-
-    # Reset in-process job counters
-    audio_quota._reset_in_process_counters_for_tests()
-
     user_id = 99
     ok1, msg1 = await audio_quota.can_start_job(user_id)
-    assert ok1 is True
-    assert msg1 in (None, "OK")
-
-    # Second job for same user should be denied by the concurrent_jobs cap
-    ok2, _ = await audio_quota.can_start_job(user_id)
-    assert ok2 is False
-
-    await audio_quota.finish_job(user_id)
-
-    # Verify job was released - should be able to start a new job
-    ok3, msg3 = await audio_quota.can_start_job(user_id)
-    assert ok3 is True, "Job should be allowed after finish_job released the slot"
+    assert ok1 is False
+    assert "unavailable" in (msg1 or "").lower()

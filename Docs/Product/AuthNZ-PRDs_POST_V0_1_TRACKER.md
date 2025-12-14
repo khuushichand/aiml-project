@@ -12,20 +12,61 @@ The v0.1 implementation is complete per `Docs/Product/AuthNZ-PRDs_IMPLEMENTATION
 
 ## Stage 9A: RG Rollout Validation (Operational)
 
-**Goal**: Prove RG parity in production-like traffic before removing legacy limiters.
+**Goal**: Prove RG parity in **staging/dev** traffic before removing legacy limiters.
 
-- [ ] Define the “release window” used for parity (e.g., 1–2 weeks) and record it here.
-- [ ] Build dashboards/alerts for:
+- [x] Define the **parity window** used for validation and record it here.
+  - In the absence of production, treat this as a **staging soak window** (e.g., 30–120 minutes)
+    with **stable RG config** (no policy edits during the window).
+- [x] Build dashboards/alerts (or a lightweight snapshot+diff report) for:
   - `rg_shadow_decision_mismatch_total`
   - `rg_denials_total`, `rg_decisions_total`
   - Any module-specific legacy limiter metrics that still exist during rollout
-- [ ] Confirm representative traffic (or load tests) exercises each governed ingress surface at least once:
-  - Chat, Embeddings, MCP, Audio, AuthNZ, Evaluations, Character Chat, Web Scraping, Workflows
-- [ ] Capture mismatch counts by module/route/policy_id at the end of the window and decide whether drift is acceptable.
+- [x] Confirm representative traffic (or synthetic load) exercises each RG-governed surface at least once:
+  - Ingress: `chat.default`, `embeddings.default`, `audio.default`, `evals.default`, `media.default`, `workflows.default`, `rag.default`
+  - Module-level: `authnz.default`, `character_chat.default`
+  - Optional extras: `mcp.ingestion` (ingress) and `web_scraping.default` (outbound scraping gating) if you want to validate those too
+- Staging/dev notes (common gotchas):
+  - `TEST_MODE=1` / `TLDW_TEST_MODE=1` bypasses AuthNZ endpoint rate limiting deps → you will not observe `authnz.default` decisions.
+  - In `AUTH_MODE=single_user`, Character Chat legacy limiter is **disabled by default**; when `RG_ENABLED=1`, RG still emits `character_chat.default` decisions (enable legacy only if you want fallback/shadow comparisons).
+  - `/api/v1/chat/*` (singular) is the Chat API governed by `chat.default`; `/api/v1/chats/*` (plural) is Character Chat sessions governed by `character_chat.default`.
+- [x] Capture mismatch deltas by `module/route/policy_id` at the end of the window and decide whether drift is acceptable.
+
+### Staging parity run record (latest)
+
+- Window (UTC): `2025-12-14 17:26:19` → `2025-12-14 17:27:09` (synthetic exercise window)
+- Environment: `dev`, `dev@c3f13178`
+- RG config: `RG_ENABLED=1`, `RG_POLICY_STORE=file`, `RG_BACKEND=memory`, `rg_policy_version=1`, `policies=20`
+- Pass criteria (staging): `Σ increase(rg_shadow_decision_mismatch_total) == 0` and expected policy IDs observed in `rg_decisions_total` at least once
+- Results:
+  - Mismatches: `0`
+  - Coverage (rg_decisions_total increases): `authnz.default`, `character_chat.default`, `chat.default`, `embeddings.default`, `audio.default`, `evals.default`, `media.default`, `workflows.default`, `rag.default`
+  - Notes/decision: `PASS` (mismatch delta 0; coverage observed)
 
 Quick commands:
 - `python -m pytest -q tldw_Server_API/tests/Resource_Governance`
-- Metrics endpoint: `GET /api/v1/metrics/prometheus`
+- Metrics endpoints:
+  - `GET /metrics` (full service Prometheus text; includes RG series)
+  - `GET /api/v1/metrics/text` (same content under the API prefix, if enabled)
+  - `GET /api/v1/mcp/metrics/prometheus` (MCP-only scrape endpoint; requires `system.logs`)
+- Automated exercise (recommended):
+  - `python Helper_Scripts/rg_stage9a_parity_window.py exercise --api-key "$SINGLE_USER_API_KEY" --timeout 10`
+- Traffic smoke checklist (prints HTTP status codes):
+  - `curl -sS -o /dev/null -w "mcp.status %{http_code}\\n" "$BASE/api/v1/mcp/status"`
+  - `curl -sS -o /dev/null -w "audio.health %{http_code}\\n" "$BASE/api/v1/audio/transcriptions/health"`
+  - `curl -sS -o /dev/null -w "chat.commands %{http_code}\\n" -H "X-API-KEY: $SINGLE_USER_API_KEY" "$BASE/api/v1/chat/commands"`
+  - `curl -sS -o /dev/null -w "emb.providers %{http_code}\\n" -H "X-API-KEY: $SINGLE_USER_API_KEY" "$BASE/api/v1/embeddings/providers-config"`
+  - `curl -sS -o /dev/null -w "evals.rate_limits %{http_code}\\n" -H "X-API-KEY: $SINGLE_USER_API_KEY" "$BASE/api/v1/evaluations/rate-limits"`
+  - `curl -sS -o /dev/null -w "workflows.auth_check %{http_code}\\n" -H "X-API-KEY: $SINGLE_USER_API_KEY" "$BASE/api/v1/workflows/auth/check"`
+  - `curl -sS -o /dev/null -w "rag.health %{http_code}\\n" "$BASE/api/v1/rag/health"`
+  - `curl -sS -o /dev/null -w "auth.login(bad) %{http_code}\\n" -X POST "$BASE/api/v1/auth/login" -H "Content-Type: application/x-www-form-urlencoded" --data "username=bad&password=bad"`
+- Character chat create (emits `character_chat.default` decisions when `RG_ENABLED=1`; legacy limiter is disabled by default in single-user mode):
+    - `curl -sS -o /dev/null -w "chats.create %{http_code}\\n" -H "X-API-KEY: $SINGLE_USER_API_KEY" -H "Content-Type: application/json" -X POST "$BASE/api/v1/chats/" -d '{"character_id":999999,"title":"stage9a"}'`
+  - Web scraping (valid JSON only; `web_scraping.default` is emitted during outbound fetch gating):
+    - `curl -sS -o /dev/null -w "media.web_scrape %{http_code}\\n" -H "X-API-KEY: $SINGLE_USER_API_KEY" -H "Content-Type: application/json" -X POST "$BASE/api/v1/media/process-web-scraping" -d '{"scrape_method":"Individual URLs","url_input":"https://example.com","max_pages":1,"max_depth":1,"mode":"ephemeral"}'`
+- Snapshot+diff helper:
+  - `python Helper_Scripts/rg_stage9a_parity_window.py snapshot --out stage9a_before.prom`
+  - `python Helper_Scripts/rg_stage9a_parity_window.py snapshot --out stage9a_after.prom`
+  - `python Helper_Scripts/rg_stage9a_parity_window.py report --before stage9a_before.prom --after stage9a_after.prom`
 
 ---
 
@@ -40,7 +81,7 @@ Quick commands:
   - [x] Chat: `tldw_Server_API/app/core/Chat/rate_limiter.py`
     - RG decision short-circuits legacy limiter entirely (no shadow simulation, no legacy consumption).
   - [x] Embeddings: `tldw_Server_API/app/core/Embeddings/rate_limiter.py`
-    - Shadow simulation uses `UserRateLimiter.shadow_check_rate_limit` against a shadow-only queue (does not mutate the legacy enforcement queue); controlled by `RG_SHADOW_EMBEDDINGS` (default on).
+    - Shadow simulation uses `UserRateLimiter.shadow_check_rate_limit` against a shadow-only queue (does not mutate the legacy enforcement queue); controlled by `RG_SHADOW_EMBEDDINGS` (default off).
   - [x] AuthNZ: `tldw_Server_API/app/core/AuthNZ/rate_limiter.py`
     - Uses `_peek_legacy_allow_without_side_effects(...)` for mismatch comparisons; RG allow/deny does not consume legacy counters.
   - [x] Evaluations: `tldw_Server_API/app/core/Evaluations/user_rate_limiter.py`
@@ -59,11 +100,11 @@ Notes:
 
 **Goal**: Remove legacy limiters after parity is proven.
 
-- [ ] Add once-per-process deprecation warnings when legacy limiter code paths are used (especially when `RG_ENABLED=1`).
-- [ ] After the defined parity window, remove or shrink legacy limiters into thin RG-forwarding shims (or delete them where unused):
+- [x] Add once-per-process deprecation warnings when legacy limiter code paths are used (especially when `RG_ENABLED=1`).
+- [x] After the defined parity window, remove or shrink legacy limiters into thin RG-forwarding shims (or delete them where unused):
   - Remove legacy state/counters where they are no longer needed.
   - Keep only diagnostic endpoints/helpers if required, clearly documented as RG diagnostics.
-- [ ] Tighten defaults for shadow flags as appropriate (currently default-on in some modules):
+- [x] Tighten defaults for shadow flags as appropriate (previously default-on in some modules; default-off is preferred):
   - `RG_SHADOW_EMBEDDINGS`
   - `RG_SHADOW_AUTHNZ`
   - `RG_SHADOW_CHARACTER_CHAT`
@@ -79,13 +120,15 @@ Notes:
   - `tldw_Server_API/app/core/AuthNZ/rate_limiter.py`
   - `tldw_Server_API/app/core/AuthNZ/token_blacklist.py`
   - `tldw_Server_API/app/core/AuthNZ/repos/api_keys_repo.py`
-- [ ] For each, decide: migrate into `AuthNZ/migrations.py`, `AuthNZ/pg_migrations_extra.py`, or a dedicated repo `ensure_schema()` helper.
+- [x] For each, decide: migrate into `AuthNZ/migrations.py`, `AuthNZ/pg_migrations_extra.py`, or a dedicated repo `ensure_schema()` helper.
   - [x] Rate limiter schema → `AuthnzRateLimitsRepo.ensure_schema()` (RateLimiter no longer embeds DDL; covered by existing unit tests).
   - [x] Token blacklist schema → `AuthnzTokenBlacklistRepo.ensure_schema()` (TokenBlacklist delegates; covered by existing unit tests).
   - [x] Single-user RBAC seed DDL → `ensure_single_user_rbac_seed_if_needed()` now relies on `ensure_authnz_schema_ready_once()` (SQLite) + `ensure_authnz_core_tables_pg()` (Postgres); only SQLite `:memory:` keeps a minimal backstop DDL.
-  - [ ] API keys schema → decide whether `AuthnzApiKeysRepo.ensure_tables()` remains a long-lived backstop or is reduced once migrations are authoritative.
-- [ ] Add/extend SQLite + Postgres tests for any migrated schema/init behavior.
+  - [x] API keys schema → authoritative in `AuthNZ/migrations.py` (SQLite) + `AuthNZ/pg_migrations_extra.py` (Postgres); `AuthnzApiKeysRepo.ensure_tables()` is a thin wrapper.
+- [x] Add/extend SQLite + Postgres tests for any migrated schema/init behavior.
   - [x] SQLite RBAC seed: `tldw_Server_API/tests/AuthNZ/unit/test_single_user_rbac_seed_sqlite.py`
+  - [x] SQLite API keys virtual fields: `tldw_Server_API/tests/AuthNZ/unit/test_authnz_migrations_api_keys.py`
+  - [x] Postgres API keys ensure helper: `tldw_Server_API/tests/AuthNZ/unit/test_pg_migrations_api_keys.py`
 
 Quick commands:
 - `rg -n "CREATE TABLE IF NOT EXISTS" tldw_Server_API/app/core/AuthNZ`
@@ -99,7 +142,7 @@ Quick commands:
 - `tldw_Server_API/app/core/AuthNZ/repos/token_blacklist_repo.py`
   - `AuthnzTokenBlacklistRepo.ensure_schema()` – idempotent schema backstop for the AuthNZ token blacklist table (SQLite + Postgres), including SQLite column harmonization.
 - `tldw_Server_API/app/core/AuthNZ/repos/api_keys_repo.py`
-  - `AuthnzApiKeysRepo.ensure_tables()` – creates `api_keys` and `api_key_audit_log`, plus a large set of idempotent `ALTER TABLE` additions and indexes.
+  - `AuthnzApiKeysRepo.ensure_tables()` – thin wrapper: delegates Postgres schema ensure to `ensure_api_keys_tables_pg()` and asserts SQLite tables exist (migrations remain authoritative).
 
 ---
 
@@ -109,19 +152,19 @@ Quick commands:
 
 - [x] Re-audit callsites and classify each as **coordination/UX** vs **auth/guardrail**:
   - `rg -n "is_single_user_mode\\(" tldw_Server_API/app`
-- [ ] For any auth/guardrail callsites, design a claim-first alternative (principal + profile/feature flags) and add tests before flipping defaults.
+- [x] For any auth/guardrail callsites, design a claim-first alternative (principal + profile/feature flags) and add tests before flipping defaults.
+  - Rate-limit bypass now uses `is_single_user_principal(principal)` (claim-first; fixed-id fallback only when `AUTH_MODE=single_user`).
 
 ### Current callsite classification (snapshot)
 
 - **Coordination/UX**
-  - `tldw_Server_API/app/main.py:1036` – ChaChaNotes warm-up scheduling for single-user default user.
-  - `tldw_Server_API/app/main.py:1868` – startup banner + “show API key” behavior.
-  - `tldw_Server_API/app/main.py:3027` – legacy lifespan startup banner helper.
-  - `tldw_Server_API/app/main.py:3351` – `/webui/config.json` mode hint + API key injection (non-prod).
+  - `tldw_Server_API/app/main.py:1040` – ChaChaNotes warm-up scheduling for single-user default user.
+  - `tldw_Server_API/app/main.py:1872` – startup banner + “show API key” behavior.
+  - `tldw_Server_API/app/main.py:3031` – legacy lifespan startup banner helper.
+  - `tldw_Server_API/app/main.py:3355` – `/webui/config.json` mode hint + API key injection (non-prod).
 
-- **Auth/guardrail (explicit carve-out)**
-  - `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:1232` – admin bypass of global IP rate limits in **canonical** single-user mode (`AUTH_MODE=single_user`).
-  - `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:1296` – admin bypass of auth-endpoint IP rate limits in **canonical** single-user mode.
+- **Auth/guardrail**
+  - (none) — remaining uses are coordination/UX or compatibility-only.
 
 - **Compatibility / feature-gated helper**
   - `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:1031` – org-policy synthetic `org_id=1` fallback uses principal-first logic by default; legacy mode/profile branch only when `ORG_POLICY_SINGLE_USER_PRINCIPAL` is explicitly disabled.

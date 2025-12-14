@@ -179,6 +179,8 @@ def is_single_user_principal(principal: AuthPrincipal | None) -> bool:
 
     try:
         settings = get_settings()
+        if getattr(settings, "AUTH_MODE", None) != "single_user":
+            return False
         fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", None)
         if fixed_id is None:
             return False

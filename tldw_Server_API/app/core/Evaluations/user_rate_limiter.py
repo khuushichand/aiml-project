@@ -341,56 +341,17 @@ class UserRateLimiter:
                 pass
             return True, metadata
 
-        # Get user's rate limit configuration
-        config = await self._get_user_config(user_id)
+        if _rg_evaluations_enabled():
+            # Legacy limiter fallback retired.
+            return False, {
+                "error": "Rate limit enforcement unavailable (ResourceGovernor not initialized)",
+                "policy_id": os.getenv("RG_EVALUATIONS_POLICY_ID", "evals.default"),
+                "retry_after": 60,
+                "rate_limit_source": "resource_governor",
+            }
 
-        # Check per-minute limits
-        minute_check = await self._check_minute_limit(user_id, endpoint, is_batch, config)
-        if not minute_check[0]:
-            if rg_decision is not None and record_shadow_mismatch is not None:
-                try:
-                    record_shadow_mismatch(
-                        module="evaluations",
-                        route=str(endpoint),
-                        policy_id=str(rg_decision.get("policy_id", "evals.default")),
-                        legacy="deny",
-                        rg="allow",
-                    )
-                except Exception:
-                    pass
-            return minute_check
-
-        # Check daily limits
-        daily_check = await self._check_daily_limits(user_id, tokens_requested, estimated_cost, config)
-        if not daily_check[0]:
-            if rg_decision is not None and record_shadow_mismatch is not None:
-                try:
-                    record_shadow_mismatch(
-                        module="evaluations",
-                        route=str(endpoint),
-                        policy_id=str(rg_decision.get("policy_id", "evals.default")),
-                        legacy="deny",
-                        rg="allow",
-                    )
-                except Exception:
-                    pass
-            return daily_check
-
-        # Record the request
-        await self._record_request(user_id, endpoint, tokens_requested, estimated_cost)
-
-        # Return success with rate limit headers
-        metadata = self._generate_rate_limit_headers(user_id, config, minute_check[1], daily_check[1])
-        if rg_decision is not None:
-            # Attach RG policy metadata for observability when available.
-            try:
-                metadata = dict(metadata)
-                metadata.setdefault("policy_id", rg_decision.get("policy_id", "evals.default"))
-                metadata.setdefault("rate_limit_source", "resource_governor+legacy")
-            except Exception:
-                # Best-effort; do not break callers that depend on legacy shape.
-                pass
-        return True, metadata
+        # RG disabled → treat as unlimited.
+        return True, {}
 
     async def _get_user_config(self, user_id: str) -> RateLimitConfig:
         """Get user's rate limit configuration."""
@@ -1026,7 +987,7 @@ def _rg_evaluations_enabled() -> bool:
     """Return True when RG should gate Evaluations requests."""
     if rg_enabled is not None:
         try:
-            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+            return bool(rg_enabled(True))  # type: ignore[func-returns-value]
         except Exception:
             return False
     return False
@@ -1072,7 +1033,7 @@ async def _get_evaluations_rg_governor():
             return gov
         except Exception as exc:  # pragma: no cover - optional path
             logger.debug(
-                "Evaluations RG governor init failed; using legacy limiter: {}", exc
+                "Evaluations RG governor init failed: {}", exc
             )
             return None
 
@@ -1149,6 +1110,6 @@ async def _maybe_enforce_with_rg_evaluations(
         }
     except Exception as exc:
         logger.debug(
-            "Evaluations RG reserve failed; falling back to legacy: {}", exc
+            "Evaluations RG reserve failed: {}", exc
         )
         return None

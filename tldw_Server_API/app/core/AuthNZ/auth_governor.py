@@ -173,6 +173,11 @@ class AuthGovernor:
         This wraps RateLimiter.check_rate_limit and normalizes the metadata
         shape. On limiter errors or when the limiter is disabled/unavailable,
         this method fails open and returns (True, {}).
+
+        Note: the underlying AuthNZ RateLimiter evaluates Resource Governor
+        (RG) policies even when legacy DB/Redis limiting is disabled, so this
+        wrapper must still call into the limiter when present to allow RG-based
+        enforcement/metrics in dev/staging.
         """
         limiter = rate_limiter
         if limiter is None:
@@ -181,7 +186,7 @@ class AuthGovernor:
             except Exception:
                 limiter = None
 
-        if limiter and getattr(limiter, "enabled", False):
+        if limiter is not None:
             try:
                 kwargs: Dict[str, Any] = {}
                 if limit is not None:
@@ -196,9 +201,7 @@ class AuthGovernor:
                         meta = {}
                 return bool(allowed), meta
             except Exception as exc:
-                logger.debug(
-                    f"AuthGovernor rate-limit check failed for {identifier}:{endpoint}: {exc}"
-                )
+                logger.debug(f"AuthGovernor rate-limit check failed for {identifier}:{endpoint}: {exc}")
 
         # Fail-open when limiter is unavailable or disabled
         return True, {}

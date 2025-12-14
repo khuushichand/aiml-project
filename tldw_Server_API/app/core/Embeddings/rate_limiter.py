@@ -516,7 +516,7 @@ class AsyncRateLimiter:
         self.executor = None
         # Shadow-mode flag for comparing legacy vs RG behavior without breaking callers
         self.shadow_enabled = (
-            os.getenv("RG_SHADOW_EMBEDDINGS", "1").lower() in {"1", "true", "yes", "on"}
+            os.getenv("RG_SHADOW_EMBEDDINGS", "0").lower() in {"1", "true", "yes", "on"}
         )
 
     async def check_rate_limit_async(
@@ -584,15 +584,12 @@ class AsyncRateLimiter:
 
             return rg_allowed, rg_decision.get("retry_after")
 
-        loop = asyncio.get_running_loop()
-        legacy_allowed, legacy_retry = await loop.run_in_executor(
-            self.executor,
-            self.rate_limiter.check_rate_limit,
-            user_id,
-            cost,
-            ip_address,
-        )
-        return legacy_allowed, legacy_retry
+        if _rg_embeddings_enabled():
+            # Legacy limiter fallback retired.
+            return False, 1
+
+        # RG disabled → treat as unlimited.
+        return True, None
 
     async def record_usage_async(self, user_id: str, cost: int = 1):
         """Record usage asynchronously (for post-processing)"""
@@ -630,7 +627,7 @@ _rg_embeddings_lock = asyncio.Lock()
 def _rg_embeddings_enabled() -> bool:
     if rg_enabled:
         try:
-            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+            return bool(rg_enabled(True))  # type: ignore[func-returns-value]
         except Exception:
             return False
     return False
@@ -663,7 +660,7 @@ async def _get_embeddings_rg_governor():
             _rg_embeddings_governor = gov
             return gov
         except Exception as exc:  # pragma: no cover - optional path
-            logger.debug(f"Embeddings RG governor init failed; falling back to legacy limiter: {exc}")
+            logger.debug(f"Embeddings RG governor init failed: {exc}")
             return None
 
 

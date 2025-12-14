@@ -121,12 +121,12 @@ def _rg_audio_enabled() -> bool:
     streams/jobs concurrency instead of Redis/in-process counters.
 
     This is controlled by the global ResourceGovernor enablement
-    (`RG_ENABLED` / config.txt). When RG is disabled or unavailable,
-    legacy behavior remains in effect.
+    (`RG_ENABLED` / config.txt). When RG is disabled, concurrency limiting is
+    treated as disabled (legacy counters are retired).
     """
     if rg_enabled is not None:
         try:
-            return bool(rg_enabled(False))  # type: ignore[func-returns-value]
+            return bool(rg_enabled(True))  # type: ignore[func-returns-value]
         except Exception:
             return False
     return False
@@ -162,7 +162,8 @@ async def _get_audio_rg_governor():
     Lazily initialize a process-local ResourceGovernor instance for audio
     streams/jobs using the same configuration helpers as app.main.
 
-    On failure, returns None and callers must fall back to legacy counters.
+    On failure, returns None and callers either fail closed (when RG is enabled)
+    or treat concurrency limiting as disabled (when RG is disabled).
     """
     global _rg_audio_governor, _rg_audio_loader
     if not _rg_audio_enabled():
@@ -203,7 +204,7 @@ async def _get_audio_rg_governor():
             _rg_audio_governor = gov
             return gov
         except Exception as e:
-            logger.debug(f"Audio quotas: ResourceGovernor initialization failed; falling back to legacy counters: {e}")
+            logger.debug(f"Audio quotas: ResourceGovernor initialization failed: {e}")
             _rg_audio_governor = None
             _rg_audio_loader = None
             return None
@@ -715,9 +716,9 @@ async def can_start_job(user_id: int) -> Tuple[bool, str]:
     Returns:
         (bool, str): `True` and `"OK"` if the job may start and the active-job counter was incremented; `False` and an explanatory message like `"Concurrent job limit reached (<max>)"` if starting the job would exceed the user's concurrency limit.
     """
-    # When RG audio integration is enabled and available, prefer streams/jobs
+    # When RG audio integration is enabled and available, enforce streams/jobs
     # concurrency via the shared governor. Legacy Redis/in-process counters are
-    # retained as a fallback when RG cannot be used.
+    # retired.
     gov = await _get_audio_rg_governor()
     if gov is not None and RGRequest is not None:
         try:
@@ -742,33 +743,14 @@ async def can_start_job(user_id: int) -> Tuple[bool, str]:
                 _metrics_set_gauge("audio_jobs_active", float(len(handles)), {"user_id": str(user_key)})
             return True, "OK"
         except Exception as e:
-            logger.debug(f"RG error in can_start_job; falling back to legacy counters: {e}")
+            logger.debug(f"RG error in can_start_job: {e}")
+            return False, "Rate limit enforcement unavailable"
 
-    # Legacy path: per-tier concurrent_jobs enforced via Redis / in-process counters.
-    limits = await get_limits_for_user(user_id)
-    max_jobs = int(limits.get("concurrent_jobs") or 0)
-    r = await _get_redis()
-    if r and max_jobs:
-        key = f"audio:active_jobs:{int(user_id)}"
-        try:
-            new_val = await r.incr(key)
-            if new_val > max_jobs:
-                await r.decr(key)
-                _metrics_increment("audio_quota_violations_total", {"type": "concurrent_jobs"})
-                return False, f"Concurrent job limit reached ({max_jobs})"
-            _metrics_set_gauge("audio_jobs_active", float(new_val), {"user_id": str(int(user_id))})
-            return True, "OK"
-        except Exception as e:
-            logger.debug(f"Redis error in can_start_job: {e}")
-    async with _lock:
-        active = _active_jobs.get(user_id, 0)
-        if max_jobs and active >= max_jobs:
-            _metrics_increment("audio_quota_violations_total", {"type": "concurrent_jobs"})
-            return False, f"Concurrent job limit reached ({max_jobs})"
-        new_val = active + 1
-        _active_jobs[user_id] = new_val
-        _metrics_set_gauge("audio_jobs_active", float(new_val), {"user_id": str(int(user_id))})
-        return True, "OK"
+    if _rg_audio_enabled():
+        return False, "Rate limit enforcement unavailable (ResourceGovernor not initialized)"
+
+    # RG disabled → treat as unlimited.
+    return True, "OK"
 
 
 async def finish_job(user_id: int) -> None:
@@ -781,7 +763,7 @@ async def finish_job(user_id: int) -> None:
         user_id (int): Numeric identifier of the user whose active-job count should be decremented.
     """
     # When RG audio integration is enabled, release one jobs concurrency lease
-    # for this user if present, then fall back to legacy counters for metrics.
+    # for this user if present. Legacy Redis/in-process counters are retired.
     gov = await _get_audio_rg_governor()
     if gov is not None:
         try:
@@ -808,25 +790,9 @@ async def finish_job(user_id: int) -> None:
             # to avoid double-decrement; legacy state is not used when RG is active.
             return
         except Exception as e:
-            logger.debug(f"RG error in finish_job; falling back to legacy counters: {e}")
-
-    r = await _get_redis()
-    if r:
-        try:
-            key = f"audio:active_jobs:{int(user_id)}"
-            new_val = await r.decr(key)
-            if new_val < 0:
-                await r.set(key, 0)
-                new_val = 0
-            _metrics_set_gauge("audio_jobs_active", float(new_val), {"user_id": str(int(user_id))})
+            logger.debug(f"RG error in finish_job: {e}")
             return
-        except Exception as e:
-            logger.debug(f"Redis error in finish_job: {e}")
-    async with _lock:
-        cur = _active_jobs.get(user_id, 0)
-        new_val = max(0, cur - 1)
-        _active_jobs[user_id] = new_val
-        _metrics_set_gauge("audio_jobs_active", float(new_val), {"user_id": str(int(user_id))})
+    return
 
 
 async def can_start_stream(user_id: int) -> Tuple[bool, str]:
@@ -858,37 +824,14 @@ async def can_start_stream(user_id: int) -> Tuple[bool, str]:
             _metrics_set_gauge("audio_streaming_active", float(len(handles)), {"user_id": str(int(user_id))})
             return True, "OK"
         except Exception as e:
-            logger.debug(f"RG error in can_start_stream; falling back to legacy counters: {e}")
+            logger.debug(f"RG error in can_start_stream: {e}")
+            return False, "Rate limit enforcement unavailable"
 
-    limits = await get_limits_for_user(user_id)
-    max_streams = int(limits.get("concurrent_streams") or 0)
-    r = await _get_redis()
-    if r and max_streams:
-        key = f"audio:active_streams:{int(user_id)}"
-        try:
-            new_val = await r.incr(key)
-            # Set/refresh TTL to mitigate leaks
-            try:
-                await r.expire(key, _get_stream_ttl_seconds())
-            except Exception:
-                pass
-            if new_val > max_streams:
-                await r.decr(key)
-                _metrics_increment("audio_quota_violations_total", {"type": "concurrent_streams"})
-                return False, f"Concurrent streams limit reached ({max_streams})"
-            _metrics_set_gauge("audio_streaming_active", float(new_val), {"user_id": str(int(user_id))})
-            return True, "OK"
-        except Exception as e:
-            logger.debug(f"Redis error in can_start_stream: {e}")
-    async with _lock:
-        active = _active_streams.get(user_id, 0)
-        if max_streams and active >= max_streams:
-            _metrics_increment("audio_quota_violations_total", {"type": "concurrent_streams"})
-            return False, f"Concurrent streams limit reached ({max_streams})"
-        new_val = active + 1
-        _active_streams[user_id] = new_val
-        _metrics_set_gauge("audio_streaming_active", float(new_val), {"user_id": str(int(user_id))})
-        return True, "OK"
+    if _rg_audio_enabled():
+        return False, "Rate limit enforcement unavailable (ResourceGovernor not initialized)"
+
+    # RG disabled → treat as unlimited.
+    return True, "OK"
 
 
 async def finish_stream(user_id: int) -> None:
@@ -915,25 +858,9 @@ async def finish_stream(user_id: int) -> None:
             _metrics_set_gauge("audio_streaming_active", float(remaining), {"user_id": str(int(user_id))})
             return
         except Exception as e:
-            logger.debug(f"RG error in finish_stream; falling back to legacy counters: {e}")
-
-    r = await _get_redis()
-    if r:
-        try:
-            key = f"audio:active_streams:{int(user_id)}"
-            new_val = await r.decr(key)
-            if new_val < 0:
-                await r.set(key, 0)
-                new_val = 0
-            _metrics_set_gauge("audio_streaming_active", float(new_val), {"user_id": str(int(user_id))})
+            logger.debug(f"RG error in finish_stream: {e}")
             return
-        except Exception as e:
-            logger.debug(f"Redis error in finish_stream: {e}")
-    async with _lock:
-        cur = _active_streams.get(user_id, 0)
-        new_val = max(0, cur - 1)
-        _active_streams[user_id] = new_val
-        _metrics_set_gauge("audio_streaming_active", float(new_val), {"user_id": str(int(user_id))})
+    return
 
 
 async def check_daily_minutes_allow(user_id: int, minutes_requested: float) -> Tuple[bool, Optional[float]]:
@@ -1000,7 +927,7 @@ async def heartbeat_stream(user_id: int) -> None:
     """
     # When RG audio integration is enabled, renew any active RG streams leases
     # for this user using the configured stream TTL. Legacy Redis TTL refresh
-    # remains as a fallback when RG is unavailable.
+    # is retired.
     gov = await _get_audio_rg_governor()
     if gov is not None:
         try:
@@ -1011,19 +938,8 @@ async def heartbeat_stream(user_id: int) -> None:
                 except Exception as e:
                     logger.debug(f"RG heartbeat_stream renew failed for handle {handle_id}: {e}")
         except Exception as e:
-            logger.debug(f"RG error in heartbeat_stream; falling back to legacy Redis TTL: {e}")
-
-    r = await _get_redis()
-    if not r:
-        return
-    try:
-        key = f"audio:active_streams:{int(user_id)}"
-        # Only refresh if key exists
-        exists = await r.exists(key)
-        if exists:
-            await r.expire(key, _get_stream_ttl_seconds())
-    except Exception as e:
-        logger.debug(f"Redis heartbeat_stream failed: {e}")
+            logger.debug(f"RG error in heartbeat_stream: {e}")
+    return
 
 
 def _get_job_ttl_seconds() -> int:
@@ -1100,23 +1016,9 @@ async def active_streams_count(user_id: int) -> int:
     if gov is not None:
         try:
             return len(_rg_stream_handles.get(int(user_id)) or [])
-        except Exception as e:
-            logger.debug(f"RG error in active_streams_count; falling back to legacy counters: {e}")
-
-    r = await _get_redis()
-    if r:
-        try:
-            key = f"audio:active_streams:{int(user_id)}"
-            val = await r.get(key)
-            if val is None:
-                return 0
-            try:
-                return int(val)
-            except Exception:
-                return 0
-        except Exception as e:
-            logger.debug(f"Redis active_streams_count failed: {e}")
-    return int(_active_streams.get(int(user_id), 0))
+        except Exception:
+            return 0
+    return 0
 
 
 def _apply_tier_overrides_from_config(base: Dict[str, Dict[str, Optional[float]]]) -> Dict[str, Dict[str, Optional[float]]]:

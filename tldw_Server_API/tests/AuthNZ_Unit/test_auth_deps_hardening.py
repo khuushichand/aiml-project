@@ -179,18 +179,16 @@ async def test_api_key_auth_error_logging_does_not_leak_exception_message_outsid
     assert secret not in captured
 
 
-def _principal_ctx(*, is_admin: bool) -> AuthContext:
-    principal = AuthPrincipal(kind="user", is_admin=is_admin)
-    return AuthContext(principal=principal)
-
-
 def _profile_helper_should_not_be_called() -> bool:
     raise AssertionError("Profile helper should not be used for rate-limit bypass")
+
+def _mode_helper_should_not_be_called() -> bool:
+    raise AssertionError("Mode helper should not be used for rate-limit bypass")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("func_name", ["check_rate_limit", "check_auth_rate_limit"])
-async def test_admin_rate_limit_bypass_requires_canonical_single_user_mode(
+async def test_admin_rate_limit_bypass_is_principal_first(
     monkeypatch: pytest.MonkeyPatch,
     func_name: str,
 ) -> None:
@@ -199,19 +197,33 @@ async def test_admin_rate_limit_bypass_requires_canonical_single_user_mode(
 
     monkeypatch.setenv("TEST_MODE", "0")
     monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setattr(auth_deps, "is_single_user_mode", _mode_helper_should_not_be_called)
     monkeypatch.setattr(auth_deps, "is_single_user_profile_mode", _profile_helper_should_not_be_called)
     monkeypatch.setattr(auth_deps, "get_auth_governor", _boom_auth_governor)
 
+    calls = {"count": 0}
+
+    def _fake_is_single_user_principal(principal: AuthPrincipal | None) -> bool:
+        calls["count"] += 1
+        if not isinstance(principal, AuthPrincipal):
+            return False
+        return getattr(principal, "subject", None) == "single_user"
+
+    monkeypatch.setattr(auth_deps, "is_single_user_principal", _fake_is_single_user_principal)
+
     request = _DummyRequest()
-    request.state.auth = _principal_ctx(is_admin=True)
+    request.state.auth = AuthContext(
+        principal=AuthPrincipal(kind="user", is_admin=True, subject=None),
+    )
 
     func = getattr(auth_deps, func_name)
 
-    # Canonical multi-user: admin should NOT bypass; should reach auth governor.
-    monkeypatch.setattr(auth_deps, "is_single_user_mode", lambda: False)
     with pytest.raises(RuntimeError, match="auth_governor_called"):
         await func(request=request, rate_limiter=object())
+    assert calls["count"] == 1
 
-    # Canonical single-user: admin MAY bypass; should not call auth governor.
-    monkeypatch.setattr(auth_deps, "is_single_user_mode", lambda: True)
+    request.state.auth = AuthContext(
+        principal=AuthPrincipal(kind="user", is_admin=True, subject="single_user"),
+    )
     await func(request=request, rate_limiter=object())
+    assert calls["count"] == 2

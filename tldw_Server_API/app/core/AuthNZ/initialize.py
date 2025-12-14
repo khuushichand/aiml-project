@@ -226,6 +226,7 @@ async def setup_database():
             from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
             from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
                 ensure_authnz_core_tables_pg,
+                ensure_api_keys_tables_pg,
                 ensure_usage_tables_pg,
                 ensure_virtual_key_counters_pg,
             )
@@ -241,8 +242,9 @@ async def setup_database():
                 await ensure_baseline_rbac_seed(conn, include_mcp_permissions=False)
 
             # Ensure API key tables after org/team tables exist
-            api_mgr = APIKeyManager(db_pool=pool)
-            await api_mgr.initialize()
+            ok_api_keys = await ensure_api_keys_tables_pg(pool)
+            if not ok_api_keys:
+                raise RuntimeError("Failed to ensure Postgres api_keys tables")
 
             # Ensure usage/LLM usage tables and virtual-key counters for Postgres.
             # The SQLite path is covered by AuthNZ migrations; on Postgres we rely

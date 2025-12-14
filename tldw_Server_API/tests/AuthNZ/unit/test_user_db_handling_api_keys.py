@@ -139,3 +139,61 @@ async def test_get_request_user_allows_active_api_key_user(monkeypatch):
     for env_key in ("AUTH_MODE", "DATABASE_URL"):
         monkeypatch.delenv(env_key, raising=False)
     reset_settings()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth_mode,expected_subject",
+    [
+        ("multi_user", None),
+        ("single_user", "single_user"),
+    ],
+)
+async def test_api_key_principal_subject_single_user_only_in_single_user_mode(
+    monkeypatch,
+    auth_mode: str,
+    expected_subject: str | None,
+):
+    monkeypatch.setenv("AUTH_MODE", auth_mode)
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("SINGLE_USER_FIXED_ID", "77")
+    reset_settings()
+
+    class StubAPIKeyManager:
+        async def validate_api_key(self, api_key: str, ip_address=None):
+            return {"id": 5, "user_id": 77}
+
+    async def fake_get_api_key_manager():
+        return StubAPIKeyManager()
+
+    async def fake_get_user_by_id(user_id: int):
+        return {
+            "id": user_id,
+            "username": "active-user",
+            "email": "active@example.com",
+            "is_active": 1,
+            "is_superuser": True,
+            "roles": [],
+            "permissions": [],
+        }
+
+    async def fake_list_memberships(user_id: int):
+        return []
+
+    monkeypatch.setattr(user_handling, "get_api_key_manager", fake_get_api_key_manager)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.DB_Management.Users_DB.get_user_by_id",
+        fake_get_user_by_id,
+    )
+    monkeypatch.setattr(user_handling, "list_memberships_for_user", fake_list_memberships)
+    monkeypatch.setattr(user_handling, "set_scope", lambda *_, **__: None)
+
+    request = _build_request()
+    await user_handling.get_request_user(request, api_key="valid-key", token=None)
+    ctx = getattr(request.state, "auth", None)
+    assert ctx is not None
+    assert getattr(ctx.principal, "subject", None) == expected_subject
+
+    for env_key in ("AUTH_MODE", "DATABASE_URL", "SINGLE_USER_FIXED_ID"):
+        monkeypatch.delenv(env_key, raising=False)
+    reset_settings()

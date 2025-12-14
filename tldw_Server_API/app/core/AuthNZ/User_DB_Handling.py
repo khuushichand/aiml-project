@@ -633,9 +633,10 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
 
             subject_val: Optional[str] = None
             try:
-                single_id = getattr(settings, "SINGLE_USER_FIXED_ID", None)
-                if single_id is not None and user_obj.id_int == int(single_id):
-                    subject_val = "single_user"
+                if getattr(settings, "AUTH_MODE", None) == "single_user":
+                    single_id = getattr(settings, "SINGLE_USER_FIXED_ID", None)
+                    if single_id is not None and user_obj.id_int == int(single_id):
+                        subject_val = "single_user"
             except Exception:
                 subject_val = None
 

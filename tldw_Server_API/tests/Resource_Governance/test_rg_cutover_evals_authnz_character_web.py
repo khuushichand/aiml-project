@@ -149,6 +149,40 @@ async def test_authnz_rg_allows_bypasses_legacy_denies(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_auth_governor_invokes_rg_even_when_legacy_limiter_disabled(monkeypatch):
+    """
+    AuthGovernor wraps the AuthNZ RateLimiter for auth endpoints.
+
+    The AuthNZ RateLimiter intentionally evaluates Resource Governor (RG)
+    policies even when the legacy DB/Redis limiter is disabled. Ensure the
+    AuthGovernor wrapper does not skip the call based on limiter.enabled so
+    staging/dev can observe authnz.default RG decisions.
+    """
+    monkeypatch.setenv("RG_ENABLED", "1")
+    fake = _FakeGovernor(allowed=True, retry_after=None)
+    monkeypatch.setattr(auth_rl, "_rg_authnz_governor", fake)
+    monkeypatch.setattr(auth_rl, "_rg_authnz_loader", None)
+
+    limiter = auth_rl.RateLimiter()
+    limiter.enabled = False
+
+    from tldw_Server_API.app.core.AuthNZ.auth_governor import AuthGovernor
+
+    gov = AuthGovernor()
+    allowed, meta = await gov.check_rate_limit(
+        identifier="127.0.0.1",
+        endpoint="auth",
+        limit=5,
+        window_minutes=1,
+        rate_limiter=limiter,
+    )
+
+    assert allowed is True
+    assert meta.get("policy_id") == "authnz.default"
+    assert fake.reserved
+
+
+@pytest.mark.asyncio
 async def test_character_chat_rg_denies(monkeypatch):
     monkeypatch.setenv("RG_ENABLED", "1")
     fake = _FakeGovernor(allowed=False, retry_after=3)
@@ -167,6 +201,21 @@ async def test_character_chat_rg_denies(monkeypatch):
     assert categories == {"requests": {"units": 1}}
     assert tags.get("module") == "character_chat"
     assert tags.get("operation") == "character_op"
+
+
+@pytest.mark.asyncio
+async def test_character_chat_invokes_rg_even_when_legacy_limiter_disabled(monkeypatch):
+    monkeypatch.setenv("RG_ENABLED", "1")
+    fake = _FakeGovernor(allowed=True, retry_after=None)
+    monkeypatch.setattr(char_rl, "_rg_char_governor", fake)
+    monkeypatch.setattr(char_rl, "_rg_char_loader", None)
+
+    limiter = char_rl.CharacterRateLimiter(redis_client=None, max_operations=100, enabled=False)
+
+    allowed, _remaining = await limiter.check_rate_limit(user_id=123, operation="character_op")
+
+    assert allowed is True
+    assert fake.reserved
 
 
 @pytest.mark.asyncio
