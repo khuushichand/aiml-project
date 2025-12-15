@@ -34,6 +34,9 @@ os.environ["MPLBACKEND"] = "Agg"
 # Provide an explicit, deterministic API key for tests that rely on single-user/test-mode shortcuts.
 # Production code no longer assumes a default for SINGLE_USER_TEST_API_KEY.
 os.environ.setdefault("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+# Ensure the AuthNZ PROFILE hint does not leak from developer shells into tests.
+# Tests that need a profile should set it explicitly via monkeypatch.
+os.environ.pop("PROFILE", None)
 # Disable background schedulers/workers that spawn threads during tests
 os.environ["DISABLE_AUTHNZ_SCHEDULER"] = "1"
 os.environ["AUTHNZ_SCHEDULER_DISABLED"] = "1"
@@ -66,6 +69,64 @@ except Exception:
     # Best-effort; tracing is optional
     pass
 import pytest
+
+
+_AUTH_ENV_BASELINE_KEYS = (
+    # AuthNZ mode + core configuration.
+    "AUTH_MODE",
+    "PROFILE",
+    "JWT_SECRET_KEY",
+    "DATABASE_URL",
+    # Single-user auth header compatibility.
+    "SINGLE_USER_API_KEY",
+    "API_KEY",
+    # Common guardrail toggles that can leak between tests when set via os.environ directly.
+    "VIRTUAL_KEYS_ENABLED",
+    "LLM_BUDGET_ENFORCE",
+    "RATE_LIMIT_ENABLED",
+    "CSRF_ENABLED",
+    # Route gating and backend knobs used by a handful of integration tests.
+    "ROUTES_ENABLE",
+    "TLDW_USER_DB_BACKEND",
+)
+
+_AUTH_ENV_BASELINE = {k: os.environ.get(k) for k in _AUTH_ENV_BASELINE_KEYS}
+
+
+@pytest.fixture(autouse=True)
+def _restore_auth_env_and_singletons():
+    """Restore shared AuthNZ-related env and singleton state between tests.
+
+    Many tests legitimately flip `AUTH_MODE` (and related env vars) to exercise
+    multi-user/JWT paths. Some of those tests historically used `os.environ[...]`
+    assignments without restoring them, which makes the suite order-dependent.
+
+    This fixture restores a small set of high-impact environment keys to their
+    baseline values and resets key singletons used by the auth/jobs stacks.
+    """
+    yield
+
+    for key, baseline_value in _AUTH_ENV_BASELINE.items():
+        if baseline_value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = baseline_value
+
+    # Ensure subsequent tests rebuild Settings from the restored environment.
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+        reset_settings()
+    except Exception:
+        pass
+
+    # Avoid leaking the process-wide jobs acquisition gate across tests.
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager
+
+        JobManager.set_acquire_gate(False)
+    except Exception:
+        pass
 
 
 def _log_lingering_threads():

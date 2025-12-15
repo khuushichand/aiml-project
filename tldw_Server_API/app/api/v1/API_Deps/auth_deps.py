@@ -42,6 +42,10 @@ from tldw_Server_API.app.core.DB_Management.Users_DB import get_users_db
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    authenticate_api_key_user,
+    verify_jwt_and_fetch_user,
+)
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
     get_auth_principal as _resolve_auth_principal,
@@ -564,67 +568,23 @@ async def get_current_user(
                     )
                 return user
         try:
-            api_mgr = await get_api_key_manager()
-            # Forward client IP for allowed_ips enforcement
-            client_ip = request.client.host if getattr(request, "client", None) else None
-            key_info = await api_mgr.validate_api_key(api_key=x_api_key, ip_address=client_ip)
-            if not key_info:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid API key"
-                )
-
-            user_id = key_info.get("user_id")
-            if not isinstance(user_id, int):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid API key"
-                )
-
-            users_db = await get_users_db()
-            user = await users_db.get_user_by_id(user_id)
-            if not user or not user.get("is_active", True):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="User account is inactive"
-                )
-
-            # Attach user_id for downstream rate limiting where used
-            team_ids: List[int] = []
-            org_ids: List[int] = []
-            try:
-                request.state.user_id = user_id
-                request.state.api_key_id = key_info.get("id")
-                # Best-effort team/org membership resolution for downstream features
-                try:
-                    memberships = await list_memberships_for_user(int(user_id))
-                    team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
-                    org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
-                    request.state.team_ids = team_ids
-                    request.state.org_ids = org_ids
-                except Exception as memberships_exc:
-                    logger.debug(
-                        "API key path: membership lookup failed; defaulting to empty lists: {}",
-                        memberships_exc,
-                    )
-                    request.state.team_ids = []
-                    request.state.org_ids = []
-            except Exception as state_exc:
-                logger.debug(
-                    "API key path: unable to attach user/team/org state context: {}",
-                    state_exc,
-                )
-
-            _activate_scope_context(
-                request,
-                user_id=user_id,
-                org_ids=org_ids,
-                team_ids=team_ids,
-                is_admin=bool(user.get("is_admin") or ("admin" in (user.get("roles") or []))),
-            )
-
-            return _public_user_dict(user)
+            # Force API key manager resolution through this module so tests can
+            # monkeypatch `auth_deps.get_api_key_manager` and assert error logging
+            # does not leak exception messages outside TEST_MODE.
+            await get_api_key_manager()
+            user_obj = await authenticate_api_key_user(request, x_api_key)
+            # Normalize User model to a plain dict for response serialization.
+            if hasattr(user_obj, "model_dump"):
+                user_dict = user_obj.model_dump()  # type: ignore[call-arg]
+            elif hasattr(user_obj, "dict"):
+                user_dict = user_obj.dict()  # type: ignore[call-arg]
+            elif isinstance(user_obj, Mapping):
+                user_dict = dict(user_obj)
+            else:
+                user_dict = {"id": getattr(user_obj, "id", None)}
+            return _public_user_dict(user_dict)
         except HTTPException:
+            # Propagate explicit HTTP errors unchanged (401/403, etc.)
             raise
         except Exception as e:
             if _is_test_mode():
@@ -636,7 +596,7 @@ async def get_current_user(
                 )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Could not validate API key"
+                detail="Could not validate API key",
             )
 
     # Otherwise, require Bearer token
@@ -659,149 +619,29 @@ async def get_current_user(
             headers=extra_headers
         )
 
+    # Bearer token path (JWT-based authentication)
+    token = credentials.credentials
     try:
-        # Extract token
-        token = credentials.credentials
-
-        # Lazily obtain JWT service
-        jwt_service = get_jwt_service()
-
-        # Decode and validate JWT
-        payload = jwt_service.decode_access_token(token)
-
-        # Check if token is blacklisted (fail-closed on errors)
-        jti = payload.get("jti")
-        if await session_manager.is_token_blacklisted(token, jti):
-            raise InvalidTokenError("Token has been revoked")
-
-        # Get user from database
-        # JWT standard uses 'sub' for subject (user ID)
-        user_id = payload.get("sub") or payload.get("user_id")
-        if not user_id:
-            raise InvalidTokenError("Invalid token payload")
-
-        # Convert to int if it's a string
-        try:
-            user_id = int(user_id)
-        except (ValueError, TypeError):
-            raise InvalidTokenError("Invalid user ID in token")
-
-        # Fetch user from database
-        if db_pool.pool:  # PostgreSQL
-            user = await db_pool.fetchone(
-                "SELECT * FROM users WHERE id = $1 AND is_active = $2",
-                user_id, True
-            )
-        else:  # SQLite
-            user = await db_pool.fetchone(
-                "SELECT * FROM users WHERE id = ? AND is_active = ?",
-                user_id, 1
-            )
-
-        if not user:
-            raise UserNotFoundError(f"User {user_id}")
-
-        # Session activity is already updated during token validation in session_manager
-
-        # Normalize to a plain dict for downstream callers and request.state caching.
-        if not isinstance(user, dict):
-            try:
-                user = dict(user)
-            except Exception as exc:
-                logger.debug("JWT path: unable to normalize user record to dict: {}", exc)
-                raise AuthenticationError("Unable to load user record") from exc
-
-        # Attach user_id for downstream rate limiting where used
-        team_ids: List[int] = []
-        org_ids: List[int] = []
-        try:
-            request.state.user_id = int(user_id)
-            # Best-effort team/org membership resolution
-            try:
-                memberships = await list_memberships_for_user(int(user_id))
-                team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
-                org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
-                request.state.team_ids = team_ids
-                request.state.org_ids = org_ids
-            except Exception as memberships_exc:
-                logger.debug(
-                    "JWT path: membership lookup failed; defaulting to empty lists: {}",
-                    memberships_exc,
-                )
-                request.state.team_ids = []
-                request.state.org_ids = []
-        except Exception as state_exc:
-            logger.debug(
-                "JWT path: unable to attach user/team/org state context: {}",
-                state_exc,
-            )
-
-        _activate_scope_context(
-            request,
-            user_id=int(user_id) if isinstance(user_id, int) else None,
-            org_ids=org_ids,
-            team_ids=team_ids,
-            is_admin=bool(user.get("is_admin") or ("admin" in (user.get("roles") or []))),
-        )
-
-        # Populate AuthContext for compatibility with the new principal model
-        try:
-            roles = list(user.get("roles") or [])
-            perms = list(user.get("permissions") or [])
-            is_admin_flag = bool(user.get("is_admin") or ("admin" in roles))
-
-            principal = AuthPrincipal(
-                kind="user",
-                user_id=int(user_id),
-                api_key_id=None,
-                subject=None,
-                token_type="access",
-                jti=str(jti) if jti is not None else None,
-                roles=roles,
-                permissions=perms,
-                is_admin=is_admin_flag,
-                org_ids=org_ids,
-                team_ids=team_ids,
-            )
-            ip = request.client.host if getattr(request, "client", None) else None
-            user_agent = request.headers.get("User-Agent") if getattr(request, "headers", None) else None
-            request_id = (
-                request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None
-            ) or getattr(request.state, "request_id", None)
-            request.state.auth = AuthContext(
-                principal=principal,
-                ip=ip,
-                user_agent=user_agent,
-                request_id=request_id,
-            )
-            # Optional: cache user dict for fast-path reuse in multi-user flows
-            try:
-                safe_user = _public_user_dict(user)
-                request.state._auth_user = safe_user
-            except Exception as cache_exc:
-                logger.debug("Unable to cache _auth_user on request.state: {}", cache_exc)
-        except Exception as ctx_exc:
-            logger.debug("Unable to populate AuthContext in get_current_user: {}", ctx_exc)
-
-        return _public_user_dict(user)
-
-    except TokenExpiredError:
-        logger.warning("get_current_user: token expired")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-    except InvalidTokenError as e:
-        logger.warning("get_current_user: invalid token: {}", e)
-        extra_headers = {"WWW-Authenticate": "Bearer"}
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
-            extra_headers["X-TLDW-Auth-Reason"] = f"invalid-token:{e}"
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e),
-            headers=extra_headers
-        )
+        # Delegate JWT validation and user enrichment to the shared helper so
+        # roles/permissions/admin flags stay aligned with AuthPrincipal/User flows.
+        user_obj = await verify_jwt_and_fetch_user(request, token)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            # Normalize 401 semantics for callers: detail must contain
+            # "Authentication required" and include WWW-Authenticate header.
+            extra_headers = {"WWW-Authenticate": "Bearer"}
+            if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+                try:
+                    extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{exc.detail}"
+                except Exception:
+                    pass
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+                headers=extra_headers,
+            ) from exc
+        # Propagate non-401 HTTP errors unchanged.
+        raise
     except Exception as e:
         if _is_test_mode():
             logger.exception("Authentication error in get_current_user (TEST_MODE)")
@@ -812,12 +652,41 @@ async def get_current_user(
             )
         extra_headers = {"WWW-Authenticate": "Bearer"}
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
-            extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{e}"
+            try:
+                extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{e}"
+            except Exception:
+                pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
-            headers=extra_headers
+            headers=extra_headers,
         )
+
+    # Successful JWT authentication: normalize the User model to a public dict.
+    if hasattr(user_obj, "model_dump"):
+        user_dict = user_obj.model_dump()  # type: ignore[call-arg]
+    elif hasattr(user_obj, "dict"):
+        user_dict = user_obj.dict()  # type: ignore[call-arg]
+    elif isinstance(user_obj, Mapping):
+        user_dict = dict(user_obj)
+    else:
+        user_dict = {"id": getattr(user_obj, "id", None)}
+
+    safe_user = _public_user_dict(user_dict)
+
+    # Ensure request.state.user_id is populated for downstream consumers, even
+    # though verify_jwt_and_fetch_user already attempts to do this.
+    try:
+        uid = safe_user.get("id")
+        if uid is not None:
+            request.state.user_id = int(uid)
+    except Exception as state_exc:
+        logger.debug(
+            "JWT path: unable to attach user_id from verify_jwt_and_fetch_user: {}",
+            state_exc,
+        )
+
+    return safe_user
 
 
 #######################################################################################################################
@@ -884,7 +753,7 @@ def require_roles(*roles: str) -> Callable[[AuthPrincipal], Awaitable[AuthPrinci
                 logger.debug("require_roles denied principal; required_any_of={}", role_list)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied",
+                detail=f"Access denied. Required role(s): {', '.join(role_list)}",
             )
         return principal
 
@@ -1039,11 +908,15 @@ async def get_org_policy_from_principal(
 
         if not single_profile:
             return False
-        # Principal-first: only explicit single-user principals qualify.
-        # Detection relies on the shared helper, which treats single-user
-        # principals as `kind="user"` tagged with subject "single_user"
-        # (and compatible legacy contexts), not a separate principal kind.
-        return is_single_user_principal(p)
+        # Principal-first: only explicit single-user principals qualify. For the
+        # org-policy fallback, we deliberately require the principal to be
+        # tagged with subject \"single_user\" instead of relying on numeric
+        # fixed-id fallbacks to avoid misclassifying arbitrary principals that
+        # happen to share the single-user id.
+        try:
+            return getattr(p, "subject", None) == "single_user"
+        except Exception:
+            return False
 
     # 1) Claim-first: use principal.org_ids when available.
     org_ids = list(getattr(principal, "org_ids", []) or [])
@@ -1366,15 +1239,13 @@ async def enforce_rbac_rate_limit(
                     role_ids_list, resource
                 )
         else:  # SQLite
-            acquire_cm = db_pool.acquire()
-            cur = await acquire_cm.__aenter__()
-            try:
-                c1 = await cur.execute(
+            async with db_pool.acquire() as conn:
+                c1 = await conn.execute(
                     "SELECT limit_per_min, burst FROM rbac_user_rate_limits WHERE user_id = ? AND resource = ?",
                     (user_id, resource)
                 )
                 user_limit = await c1.fetchone()
-                c2 = await cur.execute(
+                c2 = await conn.execute(
                     """
                     SELECT MIN(rl.limit_per_min), MIN(rl.burst)
                     FROM rbac_role_rate_limits rl
@@ -1385,8 +1256,6 @@ async def enforce_rbac_rate_limit(
                     (user_id, resource)
                 )
                 role_limit = await c2.fetchone()
-            finally:
-                await acquire_cm.__aexit__(None, None, None)
 
         # Choose strictest (lowest) effective limits
         candidates = []

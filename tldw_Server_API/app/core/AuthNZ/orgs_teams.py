@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import threading
 from typing import Optional, Dict, Any, List
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
+
+
+_PG_CORE_TABLES_ENSURED: set[int] = set()
+_PG_CORE_TABLES_ENSURED_LOCK = threading.Lock()
 
 
 async def _get_orgs_teams_repo() -> AuthnzOrgsTeamsRepo:
@@ -14,6 +19,27 @@ async def _get_orgs_teams_repo() -> AuthnzOrgsTeamsRepo:
     need to duplicate pool wiring or imports.
     """
     pool: DatabasePool = await get_db_pool()
+    if getattr(pool, "pool", None) is not None:
+        # Ensure Postgres core tables exist (org/team membership, RBAC backstops, etc.).
+        # This keeps admin/org flows resilient in test environments that only create
+        # a subset of tables.
+        key = id(pool)
+        should_ensure = False
+        with _PG_CORE_TABLES_ENSURED_LOCK:
+            if key not in _PG_CORE_TABLES_ENSURED:
+                _PG_CORE_TABLES_ENSURED.add(key)
+                should_ensure = True
+        if should_ensure:
+            try:
+                from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
+                    ensure_authnz_core_tables_pg,
+                )
+
+                await ensure_authnz_core_tables_pg(pool)
+            except Exception:
+                # Best-effort: org APIs will still raise concrete SQL errors if the schema
+                # is missing; don't mask them here.
+                pass
     return AuthnzOrgsTeamsRepo(pool)
 
 

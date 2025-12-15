@@ -212,9 +212,41 @@ class AuthDatabaseConfig:
                             exc_info=pool_exc,
                         )
         self._user_db = None
-        # Ensure backend detection reflects updated environment/settings
+        # Ensure backend detection reflects updated environment/settings.
+        # Note: This will instantiate AuthNZ Settings if it is currently unset.
+        # Tests that need a "lazy" reset (do not instantiate settings yet) should
+        # call `reset_lazy()` instead.
         self.settings = get_settings()
         self._detect_backend()
+
+    def reset_lazy(self) -> None:
+        """Reset caches without instantiating AuthNZ Settings (test helper).
+
+        This is useful when fixtures call `reset_db_pool()` before they finish
+        setting up environment variables like AUTH_MODE/DATABASE_URL. In those
+        cases, instantiating Settings too early can freeze the wrong defaults
+        (e.g., AUTH_MODE=single_user) and make tests order-dependent.
+        """
+        if self._user_db is not None:
+            backend = getattr(self._user_db, "backend", None)
+            if backend is not None:
+                pool_factory = getattr(backend, "get_pool", None)
+                if callable(pool_factory):
+                    try:
+                        pool = pool_factory()
+                        close_all = getattr(pool, "close_all", None)
+                        if callable(close_all):
+                            close_all()
+                    except Exception as pool_exc:  # noqa: BLE001 - best-effort cleanup only
+                        logger.debug(
+                            "AuthDatabaseConfig.reset_lazy: backend pool close skipped",
+                            exc_info=pool_exc,
+                        )
+        self._user_db = None
+        try:
+            delattr(self, "_initialized")
+        except Exception:
+            pass
 
     @staticmethod
     def _get_bool_env(key: str, default: bool) -> bool:

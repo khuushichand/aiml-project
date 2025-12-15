@@ -359,6 +359,12 @@ class AuthnzApiKeysRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, "fetchval"):
+                    expires_at_param = expires_at
+                    if (
+                        isinstance(expires_at_param, datetime)
+                        and expires_at_param.tzinfo is not None
+                    ):
+                        expires_at_param = expires_at_param.astimezone(timezone.utc).replace(tzinfo=None)
                     key_id = await conn.fetchval(
                         """
                         INSERT INTO api_keys (
@@ -374,7 +380,7 @@ class AuthnzApiKeysRepo:
                         name,
                         description,
                         scope,
-                        expires_at,
+                        expires_at_param,
                         rate_limit,
                         json.dumps(allowed_ips) if allowed_ips else None,
                         json.dumps(metadata) if metadata else None,
@@ -469,6 +475,12 @@ class AuthnzApiKeysRepo:
                         else None
                     )
                     _metadata = json.dumps(meta_dict) if meta_dict else None
+                    expires_at_param = expires_at
+                    if (
+                        isinstance(expires_at_param, datetime)
+                        and expires_at_param.tzinfo is not None
+                    ):
+                        expires_at_param = expires_at_param.astimezone(timezone.utc).replace(tzinfo=None)
 
                     # Detect column types to choose JSONB cast or plain text insert.
                     # Use narrow exception handling so unexpected driver errors surface.
@@ -512,7 +524,7 @@ class AuthnzApiKeysRepo:
                             name,
                             description,
                             "read",
-                            expires_at,
+                            expires_at_param,
                             parent_key_id,
                             org_id,
                             team_id,
@@ -548,7 +560,7 @@ class AuthnzApiKeysRepo:
                             name,
                             description,
                             "read",
-                            expires_at,
+                            expires_at_param,
                             parent_key_id,
                             org_id,
                             team_id,

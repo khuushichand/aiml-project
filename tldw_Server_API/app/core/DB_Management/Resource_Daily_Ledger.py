@@ -6,7 +6,7 @@ from typing import Optional, List, Dict, Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool, is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 
 
 @dataclass(frozen=True)
@@ -31,13 +31,24 @@ class ResourceDailyLedger:
         self.db_pool = db_pool
         self._initialized = False
 
+    async def _using_postgres_backend(self) -> bool:
+        """Return True when this ledger's DatabasePool is backed by PostgreSQL."""
+        if self.db_pool is None:
+            self.db_pool = await get_db_pool()
+        try:
+            await self.db_pool.initialize()
+        except Exception as exc:
+            logger.debug("ResourceDailyLedger: db_pool initialization failed; assuming SQLite: {}", exc)
+            return False
+        return getattr(self.db_pool, "pool", None) is not None
+
     async def initialize(self) -> None:
         if self._initialized:
             return
         if not self.db_pool:
             self.db_pool = await get_db_pool()
 
-        is_pg = await is_postgres_backend()
+        is_pg = await self._using_postgres_backend()
         try:
             async with self.db_pool.transaction() as conn:
                 if is_pg:
@@ -104,7 +115,7 @@ class ResourceDailyLedger:
             await self.initialize()
 
         day = self._to_day_utc(entry.occurred_at)
-        is_pg = await is_postgres_backend()
+        is_pg = await self._using_postgres_backend()
         try:
             if is_pg:
                 q = (
@@ -168,7 +179,7 @@ class ResourceDailyLedger:
                 "SELECT COALESCE(SUM(units), 0) FROM resource_daily_ledger WHERE day_utc = ? AND entity_scope = ? AND entity_value = ? AND category = ?"
             )
             # DatabasePool will adapt '?' to '$N' when using Postgres; for Postgres send a Python date
-            if await is_postgres_backend():
+            if await self._using_postgres_backend():
                 day_param: date = date.fromisoformat(day)
                 val = await self.db_pool.fetchval(q, day_param, entity_scope, entity_value, category)
             else:
@@ -216,7 +227,7 @@ class ResourceDailyLedger:
                 "WHERE entity_scope = ? AND entity_value = ? AND category = ? AND day_utc BETWEEN ? AND ? "
                 "GROUP BY day_utc ORDER BY day_utc"
             )
-            if await is_postgres_backend():
+            if await self._using_postgres_backend():
                 start_param: date = date.fromisoformat(start_day_utc)
                 end_param: date = date.fromisoformat(end_day_utc)
                 rows = await self.db_pool.fetchall(

@@ -13,7 +13,7 @@ from loguru import logger
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
 
 # Once-per-process flags for observability when falling back to DB-based
 # permission/role checks instead of claim-first paths.
@@ -161,6 +161,20 @@ def check_role(user: User, role: str) -> bool:
             logger.error(f"Error checking role {role} for authenticated user (details redacted): {e}")
         else:
             logger.error(f"Error checking role {role} for user {user.id}: {e}")
+        return False
+
+
+def is_single_user_mode_cached() -> bool:
+    """
+    Thin wrapper for settings.is_single_user_mode used by older tests.
+
+    Exposed as a module-level helper so monkeypatching in unit tests can
+    control single-user behavior without reaching into settings directly.
+    """
+    try:
+        return is_single_user_mode()
+    except Exception as exc:
+        logger.debug("is_single_user_mode_cached: failed to resolve mode: {}", exc)
         return False
 
 def check_any_permission(user: User, permissions: List[str]) -> bool:

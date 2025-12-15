@@ -763,6 +763,15 @@ async def lifespan(app: FastAPI):
         None: Yields once to allow the application to run; when resumed performs orderly shutdown and resource cleanup.
     """
     _startup_trace("lifespan: entered")
+    # Ensure in-process restarts (common in tests) reset readiness and job acquisition gates.
+    # In production, the process typically exits after shutdown; in tests we reuse the app object.
+    try:
+        READINESS_STATE["ready"] = True
+        from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+
+        _JM.set_acquire_gate(False)
+    except Exception:
+        pass
     # Determine if heavy (non-critical) startup should be deferred to background
     # Read environment knobs with precedence:
     # - DISABLE_HEAVY_STARTUP=true  => force synchronous (no deferral)
@@ -2413,6 +2422,16 @@ async def lifespan(app: FastAPI):
         test_db_instance_ref.close_all_connections()
     else:
         logger.info("App Shutdown: No test DB instance found to close")
+
+    # Reset the global jobs acquire gate after shutdown completes.
+    # The gate is a process-wide flag meant to prevent new acquisitions during shutdown.
+    # Leaving it enabled breaks in-process reuse patterns (e.g., pytest running workers after a TestClient closes).
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+
+        _JM.set_acquire_gate(False)
+    except Exception:
+        pass
 
 
 #

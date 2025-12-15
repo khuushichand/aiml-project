@@ -206,7 +206,36 @@ class APIKeyManager:
         """Create API keys and related tables if they don't exist"""
         try:
             repo = self._get_repo()
-            await repo.ensure_tables()
+            try:
+                await repo.ensure_tables()
+            except RuntimeError as exc:
+                # SQLite bootstrap: if the AuthNZ migrations have not yet created
+                # the api_keys tables, run the centralized migration helper and
+                # retry once before surfacing an error. This keeps the behaviour
+                # consistent with UsersDB.initialize while preserving explicit
+                # failures when migrations remain misconfigured.
+                msg = str(exc)
+                try:
+                    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables  # noqa: WPS433
+                except Exception:
+                    ensure_authnz_tables = None  # type: ignore[assignment]
+
+                db_path = getattr(self.db_pool, "db_path", None)
+                if (
+                    ensure_authnz_tables is not None
+                    and db_path is not None
+                    and "SQLite api_keys tables are missing" in msg
+                ):
+                    try:
+                        from pathlib import Path as _Path  # noqa: WPS433
+
+                        ensure_authnz_tables(_Path(db_path))
+                        await repo.ensure_tables()
+                    except Exception:
+                        # Fall through to the outer handler with the original context
+                        raise
+                else:
+                    raise
             logger.debug("API keys tables and indexes created/verified")
         except Exception as e:
             logger.exception("Failed to create API keys tables")

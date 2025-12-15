@@ -3,6 +3,8 @@
 #
 # Imports
 import hmac
+import os
+from uuid import UUID
 from typing import Optional, List, Dict, Any, Union
 #
 # 3rd-Party Libraries
@@ -21,7 +23,6 @@ from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
-from tldw_Server_API.app.core.AuthNZ.rbac import get_effective_permissions
 # Utils
 from loguru import logger
 # API Dependencies
@@ -30,8 +31,30 @@ from tldw_Server_API.app.core.config import settings as app_settings
 
 #######################################################################################################################
 
+def is_single_user_mode() -> bool:
+    """Compatibility helper for tests and legacy callers."""
+    return get_settings().AUTH_MODE == "single_user"
 
-_RBAC_ENRICH_REPO = AuthnzRbacRepo(client_id="authnz_user_enrichment")
+
+def is_multi_user_mode() -> bool:
+    """Compatibility helper for tests and legacy callers."""
+    return get_settings().AUTH_MODE == "multi_user"
+
+
+def get_effective_permissions(user_id: int) -> list[str]:
+    """
+    Compatibility helper that returns effective permission codes for a user.
+
+    Several integration tests monkeypatch this symbol on the User_DB_Handling
+    module to inject additional permission codes. The canonical implementation
+    delegates to the RBAC repository facade.
+    """
+    repo = AuthnzRbacRepo(client_id="authnz_effective_permissions")
+    try:
+        return list(repo.get_effective_permissions(int(user_id)))
+    except Exception:
+        logger.exception("Failed to resolve effective permissions for user_id={}", user_id)
+        return []
 
 
 def _enrich_user_with_rbac(
@@ -43,6 +66,7 @@ def _enrich_user_with_rbac(
     """
     Fetch roles/permissions/admin flag for a user from central RBAC tables.
     """
+    repo = AuthnzRbacRepo(client_id="authnz_user_enrichment")
     roles: list[str] = []
     perms: list[str] = []
     is_admin_flag = bool(user_data.get("is_superuser") or user_data.get("is_admin"))
@@ -53,7 +77,7 @@ def _enrich_user_with_rbac(
 
     # Roles from centralized RBAC repository
     try:
-        role_rows = _RBAC_ENRICH_REPO.get_user_roles(int(user_id))
+        role_rows = repo.get_user_roles(int(user_id))
         for row in role_rows or []:
             role_name = row.get("name") or row.get("role") or row.get("role_name")
             if role_name:
@@ -68,6 +92,34 @@ def _enrich_user_with_rbac(
         else:
             logger.debug(f"RBAC enrichment failed for user {user_id} roles: {rb_exc}")
 
+    def _merge_role_permissions(role_name: str) -> None:
+        """Merge role_permissions-derived permission codes into base_perms (best-effort)."""
+        nonlocal base_perms
+        try:
+            role_row_id = repo.get_role_id_by_name(str(role_name))
+        except Exception as rb_exc_lookup:  # pragma: no cover - best-effort lookup
+            role_row_id = None
+            if pii_redact_logs:
+                logger.debug("RBAC role permission lookup failed [redacted]")
+            else:
+                logger.debug(
+                    f"RBAC role permission lookup failed for role {role_name}: {rb_exc_lookup}"
+                )
+        if role_row_id is None:
+            return
+        try:
+            role_perms = repo.get_role_effective_permissions(int(role_row_id))
+            for pname in role_perms.get("all_permissions", []):
+                if pname:
+                    base_perms.add(str(pname))
+        except Exception as rb_exc_role:  # pragma: no cover - best-effort
+            if pii_redact_logs:
+                logger.debug("RBAC role permission expansion failed [redacted]")
+            else:
+                logger.debug(
+                    f"RBAC role permission expansion failed for role {role_name}: {rb_exc_role}"
+                )
+
     # Effective permissions from RBAC helper (roles + user overrides)
     try:
         base_perms = set(get_effective_permissions(int(user_id)))
@@ -76,6 +128,12 @@ def _enrich_user_with_rbac(
             logger.debug("RBAC enrichment failed for permissions (details redacted)")
         else:
             logger.debug(f"RBAC enrichment failed for user {user_id} permissions: {rb_exc}")
+
+    # If we learned roles but permission expansion failed (schema drift, stale caches, etc),
+    # fall back to role-permission mappings so baseline permission gates keep working.
+    if roles and not base_perms:
+        for role_name in roles:
+            _merge_role_permissions(role_name)
 
     # Fallback: honor legacy role column when user_roles entries are absent
     if not roles:
@@ -86,29 +144,7 @@ def _enrich_user_with_rbac(
                 roles.append(rname)
                 if rname == "admin":
                     is_admin_flag = True
-                try:
-                    role_row_id = _RBAC_ENRICH_REPO.get_role_id_by_name(rname)
-                except Exception as rb_exc_lookup:  # pragma: no cover - best-effort lookup
-                    role_row_id = None
-                    if pii_redact_logs:
-                        logger.debug("RBAC fallback (role column) lookup failed [redacted]")
-                    else:
-                        logger.debug(
-                            f"RBAC fallback (role column) lookup failed for role {implicit_role}: {rb_exc_lookup}"
-                        )
-                if role_row_id is not None:
-                    try:
-                        rp_rows_fallback = _RBAC_ENRICH_REPO.get_role_effective_permissions(role_row_id)
-                        for pname in rp_rows_fallback.get("all_permissions", []):
-                            if pname:
-                                base_perms.add(str(pname))
-                    except Exception as rb_exc_fallback:  # pragma: no cover - fallback best-effort
-                        if pii_redact_logs:
-                            logger.debug("RBAC fallback (role column) failed [redacted]")
-                        else:
-                            logger.debug(
-                                f"RBAC fallback (role column) failed for role {implicit_role}: {rb_exc_fallback}"
-                            )
+                _merge_role_permissions(rname)
             except Exception as rb_exc_outer:  # pragma: no cover - guard against unexpected shapes
                 if pii_redact_logs:
                     logger.debug("RBAC fallback (role column) outer failure [redacted]")
@@ -128,9 +164,13 @@ def _enrich_user_with_rbac(
 class User(BaseModel):
     # Accept either integer DB ids or string tenant-style ids in tests
     id: Union[int, str]
+    uuid: Optional[UUID] = None
     username: str
     email: Optional[str] = None
+    role: str = "user"
     is_active: bool = True
+    is_verified: bool = True
+    is_superuser: bool = False
     # Optional tenant field for multi-tenant-aware endpoints/tests
     tenant_id: Optional[str] = None
     # RBAC/claims exposure
@@ -163,6 +203,11 @@ def get_single_user_instance() -> User:
     settings = get_settings()
     desired_id = settings.SINGLE_USER_FIXED_ID
 
+    default_permissions = list(getattr(settings, "SINGLE_USER_DEFAULT_PERMISSIONS", []) or [])
+    if not default_permissions:
+        # Defensive baseline to satisfy permission-gated routes in single-user mode.
+        default_permissions = ["system.configure", "media.read", "media.create"]
+
     if (
         _single_user_instance is None
         or getattr(_single_user_instance, "id", None) != desired_id
@@ -170,7 +215,13 @@ def get_single_user_instance() -> User:
         _single_user_instance = User(
             id=desired_id,
             username="single_user",
-            is_active=True
+            email="",
+            role="admin",
+            is_active=True,
+            is_verified=True,
+            roles=["admin"],
+            permissions=default_permissions,
+            is_admin=True,
         )
     return _single_user_instance
 
@@ -179,6 +230,14 @@ try:
     _single_user_instance = get_single_user_instance()
 except Exception:
     _single_user_instance = None
+
+
+def is_single_user_mode() -> bool:
+    """Compatibility shim for tests that expect this helper in User_DB_Handling."""
+    try:
+        return get_settings().AUTH_MODE == "single_user"
+    except Exception:
+        return False
 
 #######################################################################################################################
 
@@ -496,13 +555,96 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
 
 async def authenticate_api_key_user(request: Request, api_key: str) -> User:
     """
-    Validate an API key in multi-user mode and return the associated User.
+    Validate an API key and return the associated User.
 
     This helper centralizes API-key authentication so that both legacy
     dependencies (get_request_user) and the AuthPrincipal resolver can
-    share the same behavior and context population.
+    share the same behavior and context population. In single-user mode,
+    it also supports the bootstrapped SINGLE_USER_API_KEY /
+    SINGLE_USER_TEST_API_KEY without requiring a backing AuthNZ database
+    row.
     """
     settings = get_settings()
+
+    # Single-user compatibility: treat the configured single-user API key(s)
+    # as an admin-style principal without touching the AuthNZ API key store.
+    try:
+        if getattr(settings, "AUTH_MODE", None) == "single_user":
+            allowed_keys: set[str] = set()
+            primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
+            if primary_key:
+                allowed_keys.add(primary_key)
+            test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+            if test_key:
+                allowed_keys.add(test_key)
+            if api_key in allowed_keys:
+                user = get_single_user_instance()
+                # Ensure admin-style claims are present
+                if not user.roles:
+                    user.roles = ["admin"]
+                if not user.permissions:
+                    default_permissions = list(
+                        getattr(settings, "SINGLE_USER_DEFAULT_PERMISSIONS", []) or []
+                    )
+                    user.permissions = default_permissions or ["system.configure", "media.read", "media.create"]
+                user.is_admin = True
+                # Attach minimal context for downstream consumers
+                try:
+                    request.state.user_id = user.id
+                    request.state.api_key_id = None
+                    request.state.team_ids = []
+                    request.state.org_ids = []
+                except Exception:
+                    pass
+                try:
+                    set_scope(
+                        user_id=user.id_int,
+                        org_ids=[],
+                        team_ids=[],
+                        is_admin=True,
+                    )
+                except Exception:
+                    pass
+                try:
+                    principal = AuthPrincipal(
+                        kind="user",
+                        user_id=user.id_int,
+                        api_key_id=None,
+                        subject="single_user",
+                        token_type="api_key",
+                        jti=None,
+                        roles=list(user.roles or []),
+                        permissions=list(user.permissions or []),
+                        is_admin=True,
+                        org_ids=[],
+                        team_ids=[],
+                    )
+                    ip = request.client.host if getattr(request, "client", None) else None
+                    user_agent = (
+                        request.headers.get("User-Agent")
+                        if getattr(request, "headers", None)
+                        else None
+                    )
+                    request_id = (
+                        request.headers.get("X-Request-ID")
+                        if getattr(request, "headers", None)
+                        else None
+                    ) or getattr(request.state, "request_id", None)
+                    request.state.auth = AuthContext(
+                        principal=principal,
+                        ip=ip,
+                        user_agent=user_agent,
+                        request_id=request_id,
+                    )
+                    request.state._auth_user = user
+                except Exception:
+                    logger.debug("Unable to populate AuthContext for single-user API key")
+                return user
+    except Exception as single_exc:
+        logger.debug(
+            "authenticate_api_key_user: single-user API key path failed; falling back to multi-user flow: {}",
+            single_exc,
+        )
 
     try:
         api_mgr = await get_api_key_manager()

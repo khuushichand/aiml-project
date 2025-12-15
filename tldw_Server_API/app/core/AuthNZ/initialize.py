@@ -354,11 +354,17 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
         effective_auth_mode = os.getenv("AUTH_MODE")
     except Exception:
         effective_auth_mode = None
+    try:
+        effective_single_user_api_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
+    except Exception:
+        effective_single_user_api_key = None
 
     need_reset = False
     if effective_db_url and settings.DATABASE_URL != effective_db_url:
         need_reset = True
     if effective_auth_mode and effective_auth_mode.lower() != settings.AUTH_MODE:
+        need_reset = True
+    if effective_single_user_api_key and settings.SINGLE_USER_API_KEY != effective_single_user_api_key:
         need_reset = True
 
     test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -444,6 +450,37 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                         await conn.execute(
                             "INSERT INTO user_roles (user_id, role_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
                             single_user_id, admin_role_id
+                        )
+
+                    # Ensure primary single-user API key exists so claim-first auth works
+                    # in single-user mode without requiring manual bootstrap.
+                    primary_api_key = (settings.SINGLE_USER_API_KEY or "").strip()
+                    if primary_api_key and primary_api_key != "CHANGE_ME_TO_SECURE_API_KEY":
+                        from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+
+                        api_manager = APIKeyManager(db_pool=pool)
+                        key_hash = api_manager.hash_api_key(primary_api_key)
+                        key_prefix = (primary_api_key[:10] + "...") if len(primary_api_key) > 10 else primary_api_key
+                        await conn.execute(
+                            """
+                            INSERT INTO api_keys (
+                                user_id, key_hash, key_prefix, name, description,
+                                scope, status, is_virtual
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, 'active', FALSE)
+                            ON CONFLICT (key_hash) DO UPDATE SET
+                                user_id = EXCLUDED.user_id,
+                                key_prefix = EXCLUDED.key_prefix,
+                                scope = EXCLUDED.scope,
+                                status = EXCLUDED.status,
+                                is_virtual = EXCLUDED.is_virtual
+                            """,
+                            single_user_id,
+                            key_hash,
+                            key_prefix,
+                            "single-user primary key",
+                            "Primary API key for single-user profile",
+                            "admin",
                         )
 
                     # Seed deterministic API key for test contexts if missing
@@ -566,6 +603,39 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                     await conn.execute(
                         "INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)",
                         (single_user_id, admin_role_id),
+                    )
+
+                primary_api_key = (settings.SINGLE_USER_API_KEY or "").strip()
+                if primary_api_key and primary_api_key != "CHANGE_ME_TO_SECURE_API_KEY":
+                    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+
+                    api_manager = APIKeyManager(db_pool=pool)
+                    key_hash = api_manager.hash_api_key(primary_api_key)
+                    key_prefix = (primary_api_key[:10] + "...") if len(primary_api_key) > 10 else primary_api_key
+                    await conn.execute(
+                        """
+                        INSERT OR REPLACE INTO api_keys (
+                            id, user_id, key_hash, key_prefix, name, description,
+                            scope, status, is_virtual
+                        )
+                        VALUES (
+                            COALESCE(
+                                (SELECT id FROM api_keys WHERE key_hash = ?),
+                                COALESCE((SELECT MAX(id) FROM api_keys), 0) + 1
+                            ),
+                            ?, ?, ?, ?, ?, ?, 'active', ?
+                        )
+                        """,
+                        (
+                            key_hash,
+                            single_user_id,
+                            key_hash,
+                            key_prefix,
+                            "single-user primary key",
+                            "Primary API key for single-user profile",
+                            "admin",
+                            0,
+                        ),
                     )
 
                 test_api_key = os.getenv("SINGLE_USER_TEST_API_KEY")

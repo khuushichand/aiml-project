@@ -10,10 +10,25 @@ from typing import List
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, get_settings_generation
 
 
-_RBAC_REPO = AuthnzRbacRepo()
+_RBAC_REPO: AuthnzRbacRepo | None = None
+_RBAC_SETTINGS_GEN: int = -1
+
+
+def _get_rbac_repo() -> AuthnzRbacRepo:
+    """Return an AuthnzRbacRepo instance tied to the current settings generation."""
+    global _RBAC_REPO
+    global _RBAC_SETTINGS_GEN
+    try:
+        gen = int(get_settings_generation() or 0)
+    except Exception:
+        gen = 0
+    if _RBAC_REPO is None or gen != _RBAC_SETTINGS_GEN:
+        _RBAC_REPO = AuthnzRbacRepo()
+        _RBAC_SETTINGS_GEN = gen
+    return _RBAC_REPO
 
 
 def get_effective_permissions(user_id: int) -> List[str]:
@@ -23,7 +38,7 @@ def get_effective_permissions(user_id: int) -> List[str]:
     existing UserDatabase logic.
     """
     try:
-        return _RBAC_REPO.get_effective_permissions(user_id)
+        return _get_rbac_repo().get_effective_permissions(user_id)
     except Exception as e:
         try:
             redact_logs = get_settings().PII_REDACT_LOGS
@@ -39,7 +54,7 @@ def get_effective_permissions(user_id: int) -> List[str]:
 def user_has_permission(user_id: int, permission: str) -> bool:
     """Check if a user has a given permission code."""
     try:
-        return _RBAC_REPO.has_permission(user_id, permission)
+        return _get_rbac_repo().has_permission(user_id, permission)
     except Exception as e:
         try:
             redact_logs = get_settings().PII_REDACT_LOGS

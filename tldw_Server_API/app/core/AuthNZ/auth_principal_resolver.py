@@ -8,6 +8,7 @@ principal for a request. It intentionally reuses existing AuthNZ helpers
 so that behavior stays aligned with current authentication flows.
 """
 
+import os
 from typing import Optional
 
 from fastapi import HTTPException, Request, status
@@ -20,6 +21,21 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import (
     AuthPrincipal,
     PrincipalKind,
 )
+
+
+def is_single_user_mode() -> bool:
+    """
+    Compatibility shim for tests that expect this helper in auth_principal_resolver.
+
+    The canonical implementation lives in AuthNZ settings; this thin wrapper
+    allows tests to monkeypatch the mode without touching global settings.
+    """
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode as _is_single_user_mode  # noqa: WPS433
+
+        return _is_single_user_mode()
+    except Exception:
+        return False
 
 
 def _extract_bearer_token(request: Request) -> Optional[str]:
@@ -203,6 +219,50 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
 
     # API key path
     if api_key:
+        # Single-user compatibility: treat SINGLE_USER_API_KEY/SINGLE_USER_TEST_API_KEY
+        # as a user-kind principal without requiring API key store lookups.
+        try:
+            from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings  # noqa: WPS433
+
+            settings = _get_settings()
+            if getattr(settings, "AUTH_MODE", None) == "single_user":
+                allowed_keys: set[str] = set()
+                primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
+                if primary_key:
+                    allowed_keys.add(primary_key)
+                test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                if test_key:
+                    allowed_keys.add(test_key)
+                if api_key in allowed_keys:
+                    user = User_DB_Handling.get_single_user_instance()
+                    principal = _build_principal_from_user(
+                        user=user,
+                        kind="user",
+                        request=request,
+                        token_type="api_key",
+                        jti=None,
+                        api_key_id=None,
+                    )
+                    ctx = _build_context(principal, request)
+                    try:
+                        request.state.auth = ctx
+                        request.state._auth_user = user
+                        request.state.user_id = user.id
+                        request.state.api_key_id = None
+                        request.state.team_ids = []
+                        request.state.org_ids = []
+                    except Exception as state_exc:
+                        logger.debug(
+                            "auth_principal_resolver: unable to attach single-user state context: {}",
+                            state_exc,
+                        )
+                    return principal
+        except Exception as single_exc:
+            logger.debug(
+                "auth_principal_resolver: single-user API key compat path failed; falling back: {}",
+                single_exc,
+            )
+
         try:
             user = await User_DB_Handling.authenticate_api_key_user(request, api_key)
         except HTTPException:

@@ -476,8 +476,8 @@ class AuthnzUsageRepo:
                             bytes_in_total = EXCLUDED.bytes_in_total,
                             latency_avg_ms = EXCLUDED.latency_avg_ms
                         """,
-                        day_str,
-                        day_str,
+                        day_val,
+                        day_val,
                     )
                 except Exception:
                     # Fallback to legacy schema without bytes_in_total
@@ -500,8 +500,8 @@ class AuthnzUsageRepo:
                             bytes_total = EXCLUDED.bytes_total,
                             latency_avg_ms = EXCLUDED.latency_avg_ms
                         """,
-                        day_str,
-                        day_str,
+                        day_val,
+                        day_val,
                     )
             else:
                 # SQLite: INSERT OR REPLACE grouped aggregates.
@@ -588,8 +588,8 @@ class AuthnzUsageRepo:
                         total_cost_usd = EXCLUDED.total_cost_usd,
                         latency_avg_ms = EXCLUDED.latency_avg_ms
                     """,
-                    day_str,
-                    day_str,
+                    day_val,
+                    day_val,
                 )
             else:
                 await self.db_pool.execute(

@@ -39,7 +39,7 @@ async def test_authnz_usage_repo_insert_llm_and_rollup_postgres(test_db_pool):
             """,
             int(user_id),
             "pg-usage-rollup-key-hash",
-            "pg-usage-rollup-prefix",
+            "pg-rollup-pfx",
         )
 
     await repo.insert_llm_usage_log(
@@ -204,7 +204,7 @@ async def test_authnz_usage_repo_summarize_user_and_key_day_postgres(test_db_poo
             """,
             int(user_id),
             "pg-usage-summarize-key-hash",
-            "pg-usage-summarize-prefix",
+            "pg-summarize-pfx",
         )
 
     await repo.insert_llm_usage_log(

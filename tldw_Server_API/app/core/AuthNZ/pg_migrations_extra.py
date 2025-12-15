@@ -208,6 +208,9 @@ _CREATE_AUTHNZ_CORE_TABLES = [
         """,
         (),
     ),
+    # Backstop for older/minimal schemas (tests) that created user_roles without these columns.
+    ("ALTER TABLE user_roles ADD COLUMN IF NOT EXISTS granted_by INTEGER", ()),
+    ("ALTER TABLE user_roles ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP", ()),
     (
         """
         CREATE TABLE IF NOT EXISTS user_permissions (
@@ -597,6 +600,15 @@ async def ensure_api_keys_tables_pg(pool: Optional[DatabasePool] = None) -> bool
         db_pool = pool or await get_db_pool()
         if getattr(db_pool, "pool", None) is None:
             return False
+
+        # api_keys includes optional org/team-scoped columns with FK references.
+        # Ensure the core AuthNZ tables (including organizations/teams) exist first
+        # so additive `ALTER TABLE ... REFERENCES organizations/teams` statements
+        # succeed in minimal test schemas.
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except Exception as exc:
+            logger.debug(f"ensure_api_keys_tables_pg: core table ensure skipped/failed: {exc}")
 
         errors: list[Exception] = []
         for sql, params in _CREATE_API_KEYS_TABLES:

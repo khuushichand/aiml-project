@@ -211,7 +211,7 @@ def test_silero_turn_detector_triggers_after_silence(monkeypatch):
         def reset_states(self):
             self.calls = 0
 
-        def __call__(self, _audio_in, _return_seconds=False):
+        def __call__(self, _audio_in, return_seconds=False, **_kwargs):
             self.calls += 1
             if self.calls == 1:
                 return {"speech_timestamps": [{"start": 0, "end": 100}]}
@@ -248,7 +248,7 @@ def test_silero_turn_detector_honors_min_utterance(monkeypatch):
         def reset_states(self):
             self.calls = 0
 
-        def __call__(self, _audio_in, _return_seconds=False):
+        def __call__(self, _audio_in, return_seconds=False, **_kwargs):
             self.calls += 1
             if self.calls == 1:
                 return {"speech_timestamps": [{"start": 0, "end": 20}]}

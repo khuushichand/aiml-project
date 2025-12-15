@@ -374,19 +374,18 @@ ORCH_SCAN_MAX_KEYS = int(_cfg_int("EMB_ORCH_MAX_SCAN_KEYS", 500))
 def _tenant_rps_runtime() -> int:
     """Resolve the effective tenant RPS limit at runtime.
 
-    Prefers the environment variable (handy for tests/overrides), then the
-    loaded settings value, and finally the module-level default.
+    Prefers the environment variable (handy for tests/overrides) and otherwise
+    returns the module-level default.
+
+    Note: The module-level `TENANT_RPS` is already initialized from config/env
+    at import time and is also frequently monkeypatched in unit tests. Reading
+    `core.config.settings` here would bypass those monkeypatches, so we treat it
+    as an initialization-time input only.
     """
     try:
         env_val = os.getenv("EMBEDDINGS_TENANT_RPS")
         if env_val is not None and str(env_val).strip() != "":
             return int(env_val)
-    except Exception:
-        pass
-    try:
-        v = settings.get("EMBEDDINGS_TENANT_RPS", 0)
-        if isinstance(v, (int, float)):
-            return int(v)
     except Exception:
         pass
     return TENANT_RPS

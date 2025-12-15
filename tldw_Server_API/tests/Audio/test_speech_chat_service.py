@@ -70,10 +70,7 @@ class _StubTTSService:
     async def generate_speech(
         self,
         _request,
-        _provider=None,
-        _fallback=True,
-        _voice_to_voice_start=None,
-        _voice_to_voice_route="audio.speech",
+        **_kwargs,
     ):
         # Return a single tiny chunk of bytes
         yield b"stub-audio"
@@ -120,15 +117,14 @@ async def test_run_speech_chat_turn_happy_path(monkeypatch):
     )
 
     # Stub character/conv helpers to avoid touching real DB schema
-    async def _fake_get_or_create_character_context(_db, _character_id, _loop):
+    async def _fake_get_or_create_character_context(*_args, **_kwargs):
         return {"id": 1, "name": "Test Character", "system_prompt": "You are helpful."}, 1
 
-    async def _fake_get_or_create_conversation(
-        _db, conversation_id, _character_id, _character_name, _client_id, _loop
-    ):
-        return conversation_id or "conv-1", conversation_id is None
+    async def _fake_get_or_create_conversation(*_args, **_kwargs):
+        conv_id = _kwargs.get("conversation_id")
+        return conv_id or "conv-1", conv_id is None
 
-    async def _fake_load_history(_db, conversation_id, _character_card, limit=20, _loop=None):
+    async def _fake_load_history(*_args, **_kwargs):
         return []
 
     monkeypatch.setattr(
@@ -170,7 +166,9 @@ async def test_run_speech_chat_turn_happy_path(monkeypatch):
     tts = _StubTTSService()
 
     reg = get_metrics_registry()
-    assert "audio_chat_latency_seconds" in reg.values
+    # Metric should be registered in the registry definitions; values deque
+    # is populated lazily when observations are recorded.
+    assert "audio_chat_latency_seconds" in reg.metrics
     reg.values["audio_chat_latency_seconds"].clear()
 
     resp = await run_speech_chat_turn(
@@ -184,7 +182,8 @@ async def test_run_speech_chat_turn_happy_path(monkeypatch):
     assert resp.user_transcript == "hello from audio"
     assert resp.assistant_text == "stub assistant reply"
     assert resp.action_result is None
-    assert reg.values["audio_chat_latency_seconds"], "Expected audio_chat_latency_seconds metric recorded"
+    values = list(reg.values["audio_chat_latency_seconds"])
+    assert values, "Expected audio_chat_latency_seconds metric recorded"
 
 
 @pytest.mark.asyncio
@@ -200,15 +199,14 @@ async def test_run_speech_chat_turn_stt_error_sentinel_raises(monkeypatch):
     )
 
     # Reuse the same DB/LLM/character stubs from the happy-path test
-    async def _fake_get_or_create_character_context(_db, _character_id, _loop):
+    async def _fake_get_or_create_character_context(*_args, **_kwargs):
         return {"id": 1, "name": "Test Character", "system_prompt": "You are helpful."}, 1
 
-    async def _fake_get_or_create_conversation(
-        _db, conversation_id, _character_id, _character_name, _client_id, _loop
-    ):
-        return conversation_id or "conv-1", conversation_id is None
+    async def _fake_get_or_create_conversation(*_args, **_kwargs):
+        conv_id = _kwargs.get("conversation_id")
+        return conv_id or "conv-1", conv_id is None
 
-    async def _fake_load_history(_db, conversation_id, _character_card, limit=20, _loop=None):
+    async def _fake_load_history(*_args, **_kwargs):
         return []
 
     monkeypatch.setattr(
@@ -275,17 +273,14 @@ async def test_run_speech_chat_turn_invokes_action_when_enabled(monkeypatch):
         lambda *_args, **_kwargs: "action transcript",
     )
 
-    async def _fake_get_or_create_character_context(_db, _character_id, _loop):
+    async def _fake_get_or_create_character_context(*_args, **_kwargs):
         return {"id": 1, "name": "Test Character", "system_prompt": "You are helpful."}, 1
 
-    async def _fake_get_or_create_conversation(
-        _db, _conversation_id, _character_id, _character_name, _client_id, _loop
-    ):
-        return _conversation_id or "conv-1", _conversation_id is None
+    async def _fake_get_or_create_conversation(*_args, **_kwargs):
+        conv_id = _kwargs.get("conversation_id")
+        return conv_id or "conv-1", conv_id is None
 
-    async def _fake_load_history(
-        _db, _conversation_id, _character_card, _limit=20, _loop=None
-    ):
+    async def _fake_load_history(*_args, **_kwargs):
         return []
 
     monkeypatch.setattr(
@@ -358,17 +353,14 @@ async def test_run_speech_chat_turn_blocks_disallowed_action(monkeypatch):
         lambda *_args, **_kwargs: "blocked transcript",
     )
 
-    async def _fake_get_or_create_character_context(_db, _character_id, _loop):
+    async def _fake_get_or_create_character_context(*_args, **_kwargs):
         return {"id": 1, "name": "Test Character", "system_prompt": "You are helpful."}, 1
 
-    async def _fake_get_or_create_conversation(
-        _db, _conversation_id, _character_id, _character_name, _client_id, _loop
-    ):
-        return _conversation_id or "conv-1", _conversation_id is None
+    async def _fake_get_or_create_conversation(*_args, **_kwargs):
+        conv_id = _kwargs.get("conversation_id")
+        return conv_id or "conv-1", conv_id is None
 
-    async def _fake_load_history(
-        _db, _conversation_id, _character_card, _limit=20, _loop=None
-    ):
+    async def _fake_load_history(*_args, **_kwargs):
         return []
 
     monkeypatch.setattr(

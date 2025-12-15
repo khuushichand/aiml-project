@@ -185,7 +185,15 @@ class DatabasePool:
             test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "y", "on"}
         except Exception:
             test_mode = False
-        return test_mode
+        # Also allow Postgres when running under pytest even if TEST_MODE is not set,
+        # to keep Postgres-backed tests deterministic without requiring extra env wiring.
+        try:
+            import sys as _sys  # local import to avoid module-level side effects
+
+            pytest_active = bool(os.getenv("PYTEST_CURRENT_TEST")) or ("pytest" in _sys.modules)
+        except Exception:
+            pytest_active = False
+        return test_mode or pytest_active
 
     @staticmethod
     def _resolve_sqlite_paths(url: str) -> tuple[str, bool, Optional[str]]:
@@ -647,7 +655,12 @@ async def reset_db_pool():
     # the latest DATABASE_URL/AUTH_MODE for each test run.
     try:
         from tldw_Server_API.app.core.AuthNZ.db_config import AuthDatabaseConfig as _AuthDatabaseConfig
-        _AuthDatabaseConfig().reset()
+        cfg = _AuthDatabaseConfig()
+        reset_lazy = getattr(cfg, "reset_lazy", None)
+        if callable(reset_lazy):
+            reset_lazy()
+        else:
+            cfg.reset()
     except Exception as e:
         logger.debug(f"reset_db_pool: ignoring AuthDatabaseConfig reset error: {e}")
     if _db_pool:

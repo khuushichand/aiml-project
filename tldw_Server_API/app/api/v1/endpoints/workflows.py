@@ -1687,8 +1687,11 @@ async def get_run_webhook_deliveries(
 @router.get(
     "/webhooks/dlq",
     dependencies=[
-        Depends(auth_deps.require_roles("admin")),
+        # Permission-first gate so failures clearly attribute the missing
+        # workflows.runs.control permission in error details, even when the
+        # principal also lacks the admin role.
         Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
+        Depends(auth_deps.require_roles("admin")),
     ],
 )
 async def list_webhook_dlq(

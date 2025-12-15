@@ -53,6 +53,14 @@ def client(monkeypatch):
             action_result=None,
         )
 
+    # Bypass AuthNZ for these endpoint-level tests by overriding the
+    # request-user dependency with a lightweight single-user stub.
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+
+    async def _fake_get_request_user() -> User:
+        # Minimal single-user stub; auth details are exercised elsewhere.
+        return User(id=1, username="single_user")
+
     monkeypatch.setattr(
         speech_chat_service,
         "run_speech_chat_turn",
@@ -60,6 +68,7 @@ def client(monkeypatch):
     )
 
     app = FastAPI()
+    app.dependency_overrides[get_request_user] = _fake_get_request_user
     app.include_router(audio_router, prefix="/api/v1/audio")
     with TestClient(app) as c:
         yield c
