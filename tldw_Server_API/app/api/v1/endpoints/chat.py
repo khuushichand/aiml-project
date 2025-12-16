@@ -115,10 +115,15 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     execute_non_stream_call,
     queue_is_active,
 )
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    rbac_rate_limit,
+    require_token_scope,
+    require_permissions,
+    get_auth_principal,
+)
 from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
@@ -128,6 +133,7 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
 from fastapi.encoders import jsonable_encoder
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
+from tldw_Server_API.app.core.Usage.usage_tracker import backfill_legacy_tokens_to_ledger
 from tldw_Server_API.app.core.Chat import command_router
 from tldw_Server_API.app.api.v1.schemas.chat_commands_schemas import ChatCommandsListResponse, ChatCommandInfo
 from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
@@ -285,6 +291,128 @@ async def _decrement_active_request(user_id: str) -> None:
             else:
                 _active_request_counts[user_id] = current - 1
 
+
+async def _maybe_rg_shadow_chat_decision(
+    request: Optional[Request],
+    limiter_user_id: str,
+    limiter_conversation_id: Optional[str],  # noqa: ARG001 - intentionally unused (reserved for future use)
+    estimated_tokens: int,
+    legacy_allowed: bool,
+) -> None:
+    """
+    Optional shadow-mode comparison between the legacy ConversationRateLimiter and
+    the shared ResourceGovernor for chat completions.
+
+    When RG_SHADOW_CHAT=1 and RG_ENABLED is true, this helper evaluates the same
+    request against the governor (policy chat.default) and emits a
+    rg_shadow_decision_mismatch_total metric when the allow/deny decisions differ.
+
+    Control flow always follows the legacy limiter; RG is observability-only for
+    *enforcement* in this path. The shadow decision uses the same governor
+    instance but only issues a read-only ``check`` call, so it does not reserve
+    or commit units and therefore does not consume quota or mutate governor
+    windows/concurrency state. This avoids double-counting when other RG
+    enforcement paths are enabled for chat.
+    """
+    if request is None:
+        return
+
+    try:
+        if str(os.getenv("RG_SHADOW_CHAT", "") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+            return
+    except Exception as exc:  # noqa: BLE001 - defensive: RG shadow must not affect control flow
+        logger.debug("RG shadow: env flag check failed, skipping shadow comparison: {}", exc)
+        return
+
+    try:
+        from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.debug("RG shadow: rg_enabled import failed, skipping shadow comparison: {}", exc)
+        return
+
+    try:
+        if not bool(_rg_enabled_flag(False)):  # type: ignore[arg-type]
+            return
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.debug("RG shadow: rg_enabled check failed, skipping shadow comparison: {}", exc)
+        return
+
+    try:
+        gov = getattr(request.app.state, "rg_governor", None)
+        if gov is None:
+            return
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.debug("RG shadow: governor lookup failed, skipping shadow comparison: {}", exc)
+        return
+
+    try:
+        entity = derive_entity_key(request)
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.debug("RG shadow: entity derivation failed, falling back to limiter_user_id: {}", exc)
+        entity = f"user:{limiter_user_id}"
+
+    path = request.url.path or "/api/v1/chat/completions"
+
+    # Build RG request mirroring chat policy (requests + optional tokens)
+    cats: Dict[str, Dict[str, int]] = {"requests": {"units": 1}}
+    try:
+        est_tokens = int(estimated_tokens or 0)
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.debug("RG shadow: estimated_tokens cast failed, treating as 0: {}", exc)
+        est_tokens = 0
+    if est_tokens > 0:
+        cats["tokens"] = {"units": est_tokens}
+
+    policy_id = "chat.default"
+    try:
+        loader = getattr(request.app.state, "rg_policy_loader", None)
+        if loader is not None:
+            snap = loader.get_snapshot()
+            route_map = dict(getattr(snap, "route_map", {}) or {})
+            by_path = dict(route_map.get("by_path") or {})
+            for pat, pol in by_path.items():
+                s = str(pat)
+                if s.endswith("*"):
+                    if path.startswith(s[:-1]):
+                        policy_id = str(pol)
+                        break
+                elif path == s:
+                    policy_id = str(pol)
+                    break
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.debug("RG shadow: policy lookup failed, defaulting to chat.default: {}", exc)
+        policy_id = "chat.default"
+
+    try:
+        dec = await gov.check(
+            RGRequest(
+                entity=entity,
+                categories=cats,
+                tags={"policy_id": policy_id, "endpoint": path},
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.debug("RG shadow: check failed, skipping shadow comparison: {}", exc)
+        return
+
+    legacy_dec = "allow" if legacy_allowed else "deny"
+    rg_dec = "allow" if getattr(dec, "allowed", False) else "deny"
+
+    if legacy_dec != rg_dec:
+        try:
+            from tldw_Server_API.app.core.Resource_Governance.metrics_rg import record_shadow_mismatch
+
+            record_shadow_mismatch(
+                module="chat",
+                route=path,
+                policy_id=policy_id,
+                legacy=legacy_dec,
+                rg=rg_dec,
+            )
+        except Exception as exc:  # noqa: BLE001 - defensive
+            # Metrics must never affect control flow
+            logger.debug("RG shadow: mismatch metric recording failed: {}", exc)
+
 # ------------------------------------------------------------------------------------
 # New Endpoints: Chat Commands discovery and Dictionary Validation
 # ------------------------------------------------------------------------------------
@@ -314,7 +442,7 @@ async def list_chat_commands(
     # Determine if RBAC filtering is enforced
     require_perms = _cfg_bool_cmds("CHAT_COMMANDS_REQUIRE_PERMISSIONS", "require_permissions", False)
 
-    if not require_perms or is_single_user_mode():
+    if not require_perms:
         # Include required_permission metadata from the registry even if not filtering
         reg = getattr(command_router, "_registry", {})
         items = []
@@ -343,9 +471,29 @@ async def list_chat_commands(
     try:
         # Access registry for permission metadata (conventionally private, stable enough for internal use)
         reg = getattr(command_router, "_registry", {})
+        # Prefer claim-first checks when current_user exposes permissions to avoid DB hits.
+        perms_claim = set(getattr(current_user, "permissions", []) or [])
         for name, spec in reg.items():  # type: ignore
             perm = getattr(spec, "required_permission", None)
-            if not perm or user_has_permission(int(getattr(current_user, "id", 0) or 0), perm):
+            if not perm:
+                items.append(
+                    ChatCommandInfo(
+                        name=name,
+                        description=getattr(spec, "description", name),
+                        required_permission=perm,
+                    )
+                )
+                continue
+
+            has_perm_claim = perm in perms_claim
+            has_perm_db = False
+            if not has_perm_claim:
+                try:
+                    has_perm_db = user_has_permission(int(getattr(current_user, "id", 0) or 0), perm)
+                except Exception:
+                    has_perm_db = False
+
+            if has_perm_claim or has_perm_db:
                 items.append(
                     ChatCommandInfo(
                         name=name,
@@ -766,6 +914,7 @@ async def _save_message_turn_to_db(
     dependencies=[
         Depends(rbac_rate_limit("chat.create")),
         Depends(require_token_scope("any", require_if_present=False, endpoint_id="chat.completions", count_as="call")),
+        Depends(get_auth_principal),  # Establish AuthPrincipal/AuthContext early for guardrails
         Depends(enforce_llm_budget),  # Hard budget stop before handler runs
     ]
 )
@@ -878,52 +1027,11 @@ async def create_chat_completion(
     request_json = json.dumps(request_data.model_dump())
     request_json_bytes = request_json.encode()
 
-    # Optionally reserve tokens via Resource Governor (endpoint-level) and commit after non-stream calls
+    # Resource Governor token reservation handle (endpoint-level). This is used to
+    # enforce token budgets with correct per-request units and to commit/refund
+    # after the completion is generated.
     _rg_handle_id = None
     _rg_policy_id = None
-    try:
-        gov = getattr(request.app.state, "rg_governor", None) if request is not None else None
-        loader = getattr(request.app.state, "rg_policy_loader", None) if request is not None else None
-        if (
-            gov is not None
-            and loader is not None
-            and os.getenv("RG_ENDPOINT_ENFORCE_TOKENS", "").lower() in {"1", "true", "yes"}
-        ):
-            snap = loader.get_snapshot()
-            route_map = dict(getattr(snap, "route_map", {}) or {})
-            by_path = dict(route_map.get("by_path") or {})
-            path = "/api/v1/chat/completions"
-            policy_id = None
-            for pat, pol in by_path.items():
-                s = str(pat)
-                if s.endswith("*"):
-                    if path.startswith(s[:-1]):
-                        policy_id = str(pol)
-                        break
-                elif path == s:
-                    policy_id = str(pol)
-                    break
-            if not policy_id:
-                policy_id = "chat.default"
-            entity = derive_entity_key(request)
-            try:
-                est = int(estimate_tokens_from_json(request_json) or 1)
-            except Exception:
-                est = 1
-            est = max(1, est)
-            dec, hid = await gov.reserve(
-                RGRequest(entity=entity, categories={"tokens": {"units": est}}, tags={"policy_id": policy_id, "endpoint": path}),
-                op_id=request_id,
-            )
-            if not dec.allowed:
-                retry_after = int(dec.retry_after or 1)
-                raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded", headers={"Retry-After": str(retry_after)})
-            _rg_handle_id = hid
-            _rg_policy_id = policy_id
-    except HTTPException:
-        raise
-    except Exception as _rg_err:
-        logger.debug(f"RG tokens reserve skipped: {_rg_err}")
 
     _track_request_cm = metrics.track_request(
         provider=provider,
@@ -978,7 +1086,11 @@ async def create_chat_completion(
             # Validate overall request size (reuse cached JSON)
             validate_request_size(request_json)
 
-            # Apply rate limiting
+            # Apply rate limiting.
+            #
+            # When ResourceGovernor is active (via RGSimpleMiddleware), request-level
+            # limits are already enforced at ingress and we prefer RG for token
+            # accounting as well to avoid double enforcement.
             rate_limiter = get_rate_limiter()
             # In some test scenarios we patch dependencies with Mocks. Historically we
             # disabled rate limiting when mocks were detected to simplify unit tests.
@@ -999,11 +1111,138 @@ async def create_chat_completion(
                     rate_limiter = initialize_rate_limiter()  # type: ignore[arg-type]
                 except Exception:
                     rate_limiter = None
-            if rate_limiter:
+            # ResourceGovernor is attached in middleware and the governor/policy_loader
+            # are stored on app.state. Use them when present to enforce tokens with
+            # correct per-request units (and durable tokens/day caps via the ledger).
+            rg_gov = None
+            rg_loader = None
+            if request is not None:
+                try:
+                    rg_gov = getattr(request.app.state, "rg_governor", None)
+                    rg_loader = getattr(request.app.state, "rg_policy_loader", None)
+                except Exception as exc:
+                    logger.debug(
+                        "Chat RG: governor/policy_loader lookup failed; falling back to legacy limiter only: {}",
+                        exc,
+                    )
+                    rg_gov = None
+                    rg_loader = None
+
+            rg_reserved = False
+            if rate_limiter or (rg_gov is not None and rg_loader is not None):
                 active_count = await _increment_active_request(user_id)
                 try:
-                    # Estimate tokens for rate limiting (heuristic)
+                    # Estimate tokens for rate limiting (heuristic).
                     estimated_tokens = estimate_tokens_from_json(_sanitize_json_for_rate_limit(request_json))
+
+                    # Reserve tokens via ResourceGovernor when available; this is the
+                    # preferred enforcement path once RG is enabled.
+                    if request is not None and rg_gov is not None and rg_loader is not None:
+                        try:
+                            # Derive policy_id from middleware route_map when present.
+                            policy_id = str(
+                                getattr(request.state, "rg_policy_id", None) or "chat.default"
+                            )
+                            _rg_policy_id = policy_id
+
+                            entity = derive_entity_key(request)
+                            try:
+                                entity_scope, entity_value = entity.split(":", 1)
+                            except Exception as exc:
+                                logger.debug(
+                                    "Chat RG: entity split failed, using user fallback: {}",
+                                    exc,
+                                )
+                                entity_scope, entity_value = "user", str(getattr(current_user, "id", "1"))
+
+                            # Best-effort backfill: if a tokens.daily_cap is configured,
+                            # mirror today's legacy llm_usage_log totals into the ledger
+                            # so upgrades preserve in-progress daily caps.
+                            daily_cap = 0
+                            try:
+                                pol = rg_loader.get_policy(policy_id) or {}
+                                daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
+                            except Exception as exc:
+                                logger.debug(
+                                    "Chat RG: tokens.daily_cap lookup failed for policy_id={}: {}",
+                                    policy_id,
+                                    exc,
+                                )
+                                daily_cap = 0
+                            if daily_cap > 0:
+                                # Best-effort helper is idempotent and internally guarded
+                                # by a per-process entity/day set, so hot-path overhead is
+                                # minimal after the first backfill.
+                                try:
+                                    await backfill_legacy_tokens_to_ledger(
+                                        entity_scope=str(entity_scope),
+                                        entity_value=str(entity_value),
+                                    )
+                                except Exception as exc:
+                                    logger.debug(
+                                        "Chat RG: legacy tokens backfill failed for entity_scope={} entity_value={}: {}",
+                                        entity_scope,
+                                        entity_value,
+                                        exc,
+                                    )
+
+                            completion_budget = 0
+                            try:
+                                completion_budget = int(getattr(request_data, "max_tokens", 0) or 0)
+                            except Exception:
+                                completion_budget = 0
+
+                            reserve_units = max(1, int(estimated_tokens or 0) + max(0, completion_budget))
+                            dec, hid = await rg_gov.reserve(
+                                RGRequest(
+                                    entity=entity,
+                                    categories={"tokens": {"units": reserve_units}},
+                                    tags={"policy_id": policy_id, "endpoint": request.url.path},
+                                ),
+                                op_id=request_id,
+                            )
+                            if not bool(getattr(dec, "allowed", False)):
+                                retry_after = int(getattr(dec, "retry_after", None) or 1)
+                                headers = {"Retry-After": str(retry_after)}
+                                try:
+                                    pol = rg_loader.get_policy(policy_id) or {}
+                                    per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
+                                    limit_val = per_min or int((pol.get("tokens") or {}).get("daily_cap") or 0)
+                                    if limit_val:
+                                        headers.update(
+                                            {
+                                                "X-RateLimit-Limit": str(limit_val),
+                                                "X-RateLimit-Remaining": "0",
+                                                "X-RateLimit-Reset": str(retry_after),
+                                            }
+                                        )
+                                        if per_min > 0:
+                                            headers.update(
+                                                {
+                                                    "X-RateLimit-PerMinute-Limit": str(per_min),
+                                                    "X-RateLimit-PerMinute-Remaining": "0",
+                                                    "X-RateLimit-Tokens-Remaining": "0",
+                                                }
+                                            )
+                                except Exception as exc:
+                                    logger.debug(
+                                        "Chat RG: header enrichment from policy failed for policy_id={}: {}",
+                                        policy_id,
+                                        exc,
+                                    )
+                                raise HTTPException(
+                                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                    detail="Rate limit exceeded",
+                                    headers=headers,
+                                )
+                            _rg_handle_id = hid
+                            rg_reserved = bool(hid)
+                        except HTTPException:
+                            raise
+                        except Exception as rg_exc:
+                            logger.debug(f"RG tokens reserve skipped: {rg_exc}")
+                            rg_reserved = False
+
                     # In TEST_MODE, avoid cross-test flakiness by scoping limiter to this request
                     # when no explicit conversation_id is provided. This prevents cumulative
                     # state from prior tests from causing 429s here, while leaving production
@@ -1012,83 +1251,101 @@ async def create_chat_completion(
                     if _is_test_mode and not limiter_conversation_id:
                         limiter_conversation_id = request_id
 
-                    # Heuristic: detect concurrent bursts for this user (TEST_MODE only)
-                    per_user_limit = getattr(getattr(rate_limiter, "config", None), "per_user_rpm", None)
-                    enable_burst_suppression = (
-                        _is_test_mode
-                        and isinstance(per_user_limit, (int, float))
-                        and per_user_limit >= _RECENT_CALLS_MIN_CONCURRENT
-                    )
-                    concurrent_burst = active_count > 1
-                    if enable_burst_suppression and not concurrent_burst:
-                        try:
-                            now_ts = time.time()
-                            dq = _recent_calls_by_user[str(user_id)]
-                            # prune window
-                            while dq and (now_ts - dq[0]) > _RECENT_CALLS_WINDOW_SEC:
-                                dq.popleft()
-                            dq.append(now_ts)
-                            concurrent_burst = len(dq) >= _RECENT_CALLS_MIN_CONCURRENT
-                        except Exception:
-                            concurrent_burst = False
+                    if rate_limiter and not rg_reserved:
+                        # Heuristic: detect concurrent bursts for this user (TEST_MODE only)
+                        per_user_limit = getattr(getattr(rate_limiter, "config", None), "per_user_rpm", None)
+                        enable_burst_suppression = (
+                            _is_test_mode
+                            and isinstance(per_user_limit, (int, float))
+                            and per_user_limit >= _RECENT_CALLS_MIN_CONCURRENT
+                        )
+                        concurrent_burst = active_count > 1
+                        if enable_burst_suppression and not concurrent_burst:
+                            try:
+                                now_ts = time.time()
+                                dq = _recent_calls_by_user[str(user_id)]
+                                # prune window
+                                while dq and (now_ts - dq[0]) > _RECENT_CALLS_WINDOW_SEC:
+                                    dq.popleft()
+                                dq.append(now_ts)
+                                concurrent_burst = len(dq) >= _RECENT_CALLS_MIN_CONCURRENT
+                            except Exception:
+                                concurrent_burst = False
 
-                    limiter_user_id = user_id
-                    if enable_burst_suppression and concurrent_burst:
-                        try:
-                            limiter_user_id = f"{user_id}:{request_id}"
-                        except Exception:
-                            limiter_user_id = user_id
+                        limiter_user_id = user_id
+                        if enable_burst_suppression and concurrent_burst:
+                            try:
+                                limiter_user_id = f"{user_id}:{request_id}"
+                            except Exception:
+                                limiter_user_id = user_id
 
-                    allowed, rate_error = await rate_limiter.check_rate_limit(
-                        user_id=limiter_user_id,
-                        conversation_id=limiter_conversation_id,
-                        estimated_tokens=estimated_tokens
-                    )
+                        allowed, rate_error = await rate_limiter.check_rate_limit(
+                            user_id=limiter_user_id,
+                            conversation_id=limiter_conversation_id,
+                            estimated_tokens=estimated_tokens,
+                        )
 
-                    if not allowed:
-                        metrics.track_rate_limit(user_id)
-                        if audit_service and context:
-                            await audit_service.log_event(
-                                event_type=AuditEventType.API_RATE_LIMITED,
-                                context=context,
-                                action="rate_limit_exceeded",
-                                metadata={"reason": rate_error}
-                            )
-                        # In TEST_MODE, try a short wait-for-capacity to reduce
-                        # suite-order flakiness in concurrency tests. If still denied,
-                        # surface as 503 (service busy) rather than 429 which those
-                        # tests do not assert on.
-                        if _is_test_mode:
-                            # Only apply wait/503 fallback for global capacity exhaustion;
-                            # keep 429 for per-user/conversation/token limits to satisfy
-                            # deterministic rate-limit tests.
-                            is_global_cap = (rate_error or "").lower().startswith("global rate limit exceeded")
-                            if is_global_cap or concurrent_burst:
-                                try:
-                                    allowed_after_wait, _ = await rate_limiter.wait_for_capacity(
-                                        user_id=limiter_user_id,
-                                        conversation_id=limiter_conversation_id,
-                                        estimated_tokens=estimated_tokens,
-                                        timeout=5.0,
-                                    )
-                                except Exception:
-                                    allowed_after_wait = False
-                                if not allowed_after_wait:
+                        # Shadow-mode comparison between legacy limiter and ResourceGovernor (observability-only).
+                        if request is not None:
+                            try:
+                                await _maybe_rg_shadow_chat_decision(
+                                    request=request,
+                                    limiter_user_id=str(limiter_user_id),
+                                    limiter_conversation_id=limiter_conversation_id,
+                                    estimated_tokens=int(estimated_tokens or 0),
+                                    legacy_allowed=bool(allowed),
+                                )
+                            except Exception as exc:  # noqa: BLE001 - defensive: RG shadow must not affect rate limiting
+                                # Shadow path must never affect primary rate-limiting behavior.
+                                logger.debug(
+                                    "RG shadow helper failed; ignoring and continuing: {}",
+                                    exc,
+                                )
+
+                        if not allowed:
+                            metrics.track_rate_limit(user_id)
+                            if audit_service and context:
+                                await audit_service.log_event(
+                                    event_type=AuditEventType.API_RATE_LIMITED,
+                                    context=context,
+                                    action="rate_limit_exceeded",
+                                    metadata={"reason": rate_error},
+                                )
+                            # In TEST_MODE, try a short wait-for-capacity to reduce
+                            # suite-order flakiness in concurrency tests. If still denied,
+                            # surface as 503 (service busy) rather than 429 which those
+                            # tests do not assert on.
+                            if _is_test_mode:
+                                # Only apply wait/503 fallback for global capacity exhaustion;
+                                # keep 429 for per-user/conversation/token limits to satisfy
+                                # deterministic rate-limit tests.
+                                is_global_cap = (rate_error or "").lower().startswith("global rate limit exceeded")
+                                if is_global_cap or concurrent_burst:
+                                    try:
+                                        allowed_after_wait, _ = await rate_limiter.wait_for_capacity(
+                                            user_id=limiter_user_id,
+                                            conversation_id=limiter_conversation_id,
+                                            estimated_tokens=estimated_tokens,
+                                            timeout=5.0,
+                                        )
+                                    except Exception:
+                                        allowed_after_wait = False
+                                    if not allowed_after_wait:
+                                        raise HTTPException(
+                                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                            detail="Service busy. Please retry.",
+                                        )
+                                    # If capacity became available, continue processing
+                                else:
                                     raise HTTPException(
-                                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                        detail="Service busy. Please retry."
+                                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                        detail=rate_error or "Rate limit exceeded",
                                     )
-                                # If capacity became available, continue processing
                             else:
                                 raise HTTPException(
                                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                                    detail=rate_error or "Rate limit exceeded"
+                                    detail=rate_error or "Rate limit exceeded",
                                 )
-                        else:
-                            raise HTTPException(
-                                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                                detail=rate_error or "Rate limit exceeded"
-                            )
                 finally:
                     await _decrement_active_request(user_id)
         except ValueError as e:
@@ -1301,7 +1558,6 @@ async def create_chat_completion(
 
         character_card_for_context: Optional[Dict[str, Any]] = None
         final_conversation_id: Optional[str] = request_data.conversation_id
-        final_character_db_id: Optional[int] = None # Initialize
 
         try:
             # In TEST_MODE or when explicitly enabled via config/env, allow
@@ -1348,7 +1604,7 @@ async def create_chat_completion(
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
             # --- Character/Conversation Context, History, and Current Turn ---
-            character_card_for_context, final_character_db_id, final_conversation_id, conversation_created_this_turn, llm_payload_messages, should_persist = await build_context_and_messages(
+            character_card_for_context, _, final_conversation_id, conversation_created_this_turn, llm_payload_messages, should_persist = await build_context_and_messages(
                 chat_db=chat_db,
                 request_data=request_data,
                 loop=current_loop,
@@ -1968,30 +2224,14 @@ async def create_chat_completion(
 @router.get(
     "/queue/status",
     summary="Chat request queue status",
-    tags=["chat"]
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.queue.status")),
+        Depends(require_permissions(SYSTEM_LOGS)),
+    ],
 )
-async def get_chat_queue_status(request: Request):
+async def get_chat_queue_status():
     """Expose raw chat request queue metrics for diagnostics."""
-    # Enforce RBAC only in multi-user mode; allow in single-user for convenience/testing
-    try:
-        if not is_single_user_mode():
-            # Extract auth headers and resolve user via existing dependency logic
-            api_key = request.headers.get("X-API-KEY")
-            legacy_token = request.headers.get("Token")
-            auth_header = request.headers.get("Authorization", "")
-            token_val = None
-            if isinstance(auth_header, str) and auth_header.lower().startswith("bearer "):
-                token_val = auth_header[len("Bearer "):].strip()
-            # Use get_request_user directly with explicit args (bypasses DI)
-            user_obj = await get_request_user(request, api_key=api_key, token=token_val, legacy_token_header=legacy_token)
-            if not user_has_permission(user_obj.id, "system.logs"):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied: system.logs")
-    except HTTPException:
-        raise
-    except Exception as _e:
-        # Fail closed in multi-user mode if auth context cannot be resolved
-        if not is_single_user_mode():
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     try:
         queue = get_request_queue()
     except Exception:
@@ -2002,37 +2242,23 @@ async def get_chat_queue_status(request: Request):
         queue_status = queue.get_queue_status()
         return {"enabled": True, **queue_status}
     except Exception as e:
+        logger.warning("Chat queue status inspection failed: {}", e)
         return {"enabled": True, "error": str(e)}
 
 
 @router.get(
     "/queue/activity",
     summary="Recent chat queue activity",
-    tags=["chat"]
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.queue.activity")),
+        Depends(require_permissions(SYSTEM_LOGS)),
+    ],
 )
-async def get_chat_queue_activity(limit: int = 50, request: Request = None):
-    # Enforce RBAC only in multi-user mode; allow in single-user for convenience/testing
-    try:
-        if not is_single_user_mode():
-            # Extract auth headers and resolve user via existing dependency logic
-            api_key = request.headers.get("X-API-KEY") if request else None
-            legacy_token = request.headers.get("Token") if request else None
-            auth_header = request.headers.get("Authorization", "") if request else ""
-            token_val = None
-            if isinstance(auth_header, str) and auth_header.lower().startswith("bearer "):
-                token_val = auth_header[len("Bearer "):].strip()
-            user_obj = await get_request_user(request, api_key=api_key, token=token_val, legacy_token_header=legacy_token)
-            if not user_has_permission(user_obj.id, "system.logs"):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied: system.logs")
-    except HTTPException:
-        raise
-    except Exception:
-        if not is_single_user_mode():
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+async def get_chat_queue_activity(
+    limit: int = 50,
+):
     """Expose a rolling sample of recent queue activity (last N jobs)."""
-    # Guardrail: enforce sane bounds for limit
-    if limit is None:
-        limit = 50
     try:
         limit = int(limit)
     except Exception:
@@ -2049,6 +2275,7 @@ async def get_chat_queue_activity(limit: int = 50, request: Request = None):
         activity = queue.get_recent_activity(limit=limit)
         return {"enabled": True, "limit": limit, "activity": activity}
     except Exception as e:
+        logger.warning("Chat queue activity inspection failed: {}", e)
         return {"enabled": True, "error": str(e)}
 
 def _sanitize_json_for_rate_limit(request_json: str) -> str:

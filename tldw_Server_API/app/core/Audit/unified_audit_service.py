@@ -1826,7 +1826,7 @@ class UnifiedAuditService:
         format: str = "json",
         file_path: Optional[Union[str, Path]] = None,
         chunk_size: int = 5000,
-        stream: bool = True,
+        stream: bool = False,
         max_rows: Optional[int] = None,
     ) -> Union[str, int, AsyncGenerator[str, None]]:
         """

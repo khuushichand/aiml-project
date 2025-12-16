@@ -15,9 +15,12 @@ tool calling) to keep the v1 speech chat path simple and testable.
 from __future__ import annotations
 
 import base64
+import json
 import io
 import time
 import asyncio
+import os
+import uuid
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
@@ -49,6 +52,9 @@ from tldw_Server_API.app.core.Chat.chat_helpers import (
     load_conversation_history,
     extract_response_content,
 )
+from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
+from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+from tldw_Server_API.app.core.MCP_unified.modules.registry import get_module_registry
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSError,
@@ -58,6 +64,22 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
     TTSRateLimitError,
     TTSQuotaExceededError,
 )
+
+_ALLOWED_AUDIO_FORMATS = {"wav", "mp3", "ogg", "opus", "aac", "flac", "webm", "m4a"}
+
+
+def _normalize_audio_format(input_format: str) -> str:
+    """Normalize common audio format strings (extensions or MIME types) to bare extensions."""
+    fmt = input_format.lower().strip()
+    # Strip any MIME subtype and parameters (e.g., audio/wav;codec=... -> wav)
+    if "/" in fmt:
+        fmt = fmt.split("/", 1)[1]
+    if ";" in fmt:
+        fmt = fmt.split(";", 1)[0]
+    # Drop leading "x-" if present (audio/x-wav)
+    if fmt.startswith("x-"):
+        fmt = fmt[2:]
+    return fmt
 
 
 def _decode_base64_audio(data: str) -> bytes:
@@ -99,6 +121,156 @@ def _load_audio_to_mono_np(audio_bytes: bytes) -> Tuple[np.ndarray, int]:
         audio = np.mean(audio, axis=1)
 
     return audio, int(sample_rate or 16000)
+
+
+def _validate_audio_constraints(
+    *,
+    audio_bytes: bytes,
+    duration_sec: float,
+    input_format: str,
+) -> None:
+    """Validate input audio size/duration/format for speech chat."""
+    if not input_format or not isinstance(input_format, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="input_audio_format is required",
+        )
+    fmt = _normalize_audio_format(input_format)
+    if fmt not in _ALLOWED_AUDIO_FORMATS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported input_audio_format '{input_format}'",
+        )
+    # Size limit (bytes): allow env override but fall back safely on parse errors.
+    _raw_max_bytes = os.getenv("AUDIO_CHAT_MAX_BYTES")
+    if _raw_max_bytes is not None:
+        try:
+            max_bytes = int(_raw_max_bytes)
+        except (ValueError, TypeError) as exc:
+            logger.debug(
+                f"AUDIO_CHAT_MAX_BYTES parse failed ({_raw_max_bytes!r}); using default 20MB: {exc}"
+            )
+            max_bytes = 20 * 1024 * 1024
+    else:
+        max_bytes = 20 * 1024 * 1024
+
+    if audio_bytes and len(audio_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="input_audio exceeds size limit for speech chat",
+        )
+    # Duration limit (seconds): allow env override but fall back safely on parse errors.
+    _raw_max_duration = os.getenv("AUDIO_CHAT_MAX_DURATION_SEC")
+    if _raw_max_duration is not None:
+        try:
+            max_duration = float(_raw_max_duration)
+        except (ValueError, TypeError) as exc:
+            logger.debug(
+                f"AUDIO_CHAT_MAX_DURATION_SEC parse failed ({_raw_max_duration!r}); using default 120s: {exc}"
+            )
+            max_duration = 120.0
+    else:
+        max_duration = 120.0
+
+    if duration_sec > max_duration:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="input_audio duration exceeds allowed limit for speech chat",
+        )
+
+
+def _actions_enabled() -> bool:
+    """Return True when action execution is enabled for audio chat."""
+    flag = os.getenv("AUDIO_CHAT_ENABLE_ACTIONS", "")
+    return str(flag).lower() in ("1", "true", "yes", "on")
+
+
+async def _execute_action(action_name: str, transcript: str, current_user: User) -> Dict[str, Any]:
+    """
+    Execute a tool/workflow via MCP modules when available; fail soft with status.
+    """
+    allow_env = os.getenv("AUDIO_CHAT_ALLOWED_ACTIONS", "")
+    if allow_env:
+        allowed = {a.strip() for a in allow_env.split(",") if a.strip()}
+        if allowed and action_name not in allowed:
+            return {
+                "action": action_name,
+                "status": "not_allowed",
+                "message": "Action not allowed",
+                "user_id": getattr(current_user, "id", None),
+            }
+    user_id = getattr(current_user, "id", None)
+    ctx = RequestContext(
+        request_id=str(uuid.uuid4()),
+        user_id=str(user_id) if user_id is not None else None,
+        client_id=None,
+        metadata={"source": "audio.chat"},
+    )
+    registry = get_module_registry()
+    try:
+        module = await registry.find_module_for_tool(action_name)
+    except Exception as exc:  # noqa: BLE001  # defensive: action failures must not break speech chat
+        logger.warning(
+            f"Action lookup failed: action={action_name}, error={exc}",
+            exc_info=True,
+        )
+        return {
+            "action": action_name,
+            "status": "error",
+            "message": "Action lookup failed; see server logs for details.",
+            "user_id": user_id,
+        }
+
+    if module is None:
+        return {
+            "action": action_name,
+            "status": "not_found",
+            "message": "No module registered for this action",
+            "user_id": user_id,
+        }
+
+    try:
+        result = await module.execute_tool(action_name, {"input": transcript}, context=ctx)
+        return {
+            "action": action_name,
+            "status": "ok",
+            "result": result,
+            "user_id": user_id,
+        }
+    except Exception as exc:  # noqa: BLE001  # defensive: action failures must not break speech chat
+        logger.warning(
+            f"Action execution failed: action={action_name}, error={exc}",
+            exc_info=True,
+        )
+        return {
+            "action": action_name,
+            "status": "error",
+            "message": "Action execution failed; see server logs for details.",
+            "user_id": user_id,
+        }
+
+
+async def _maybe_execute_action(
+    *,
+    transcript: str,
+    request_data: SpeechChatRequest,
+    current_user: User,
+) -> Optional[Dict[str, Any]]:
+    """
+    Execute an action/workflow when enabled and requested.
+
+    The action hint can come from request metadata or llm_config.extra_params["action"].
+    """
+    if not _actions_enabled():
+        return None
+    action_hint = None
+    if request_data.metadata and isinstance(request_data.metadata, dict):
+        action_hint = request_data.metadata.get("action")
+    if not action_hint and request_data.llm_config and request_data.llm_config.extra_params:
+        action_hint = request_data.llm_config.extra_params.get("action")
+    if not action_hint:
+        return None
+    return await _execute_action(str(action_hint), transcript, current_user)
 
 
 def _is_transcription_error(msg: str) -> bool:
@@ -198,8 +370,15 @@ async def run_speech_chat_turn(
       6. Run TTS to synthesize assistant reply and base64-encode it.
     """
     # --- Decode audio ---
+    req_start = time.time()
     raw_audio_bytes = _decode_base64_audio(request_data.input_audio)
     audio_np, sample_rate = _load_audio_to_mono_np(raw_audio_bytes)
+    duration_sec = float(len(audio_np) / float(sample_rate or 16000))
+    _validate_audio_constraints(
+        audio_bytes=raw_audio_bytes,
+        duration_sec=duration_sec,
+        input_format=request_data.input_audio_format,
+    )
 
     # --- STT ---
     stt_start = time.time()
@@ -366,6 +545,13 @@ async def run_speech_chat_turn(
                 total_tokens=usage.get("total_tokens"),
             )
 
+    # --- Optional action/workflow execution ---
+    action_result: Optional[Dict[str, Any]] = await _maybe_execute_action(
+        transcript=transcript,
+        request_data=request_data,
+        current_user=current_user,
+    )
+
     # --- Persist messages into ChaChaNotes ---
     try:
         chat_db.add_message(
@@ -384,6 +570,20 @@ async def run_speech_chat_turn(
                 "client_id": client_id,
             }
         )
+        if action_result is not None:
+            try:
+                tool_content = json.dumps(action_result)
+            except TypeError as exc:
+                logger.warning(f"Failed to serialize action_result for chat history: {exc}")
+            else:
+                chat_db.add_message(
+                    {
+                        "conversation_id": conversation_id,
+                        "sender": "tool",
+                        "content": tool_content,
+                        "client_id": client_id,
+                    }
+                )
     except Exception as e:  # noqa: BLE001
         logger.error(f"Failed to persist speech chat messages: {e}", exc_info=True)
         # Do not fail the user-facing request solely due to DB persistence issues
@@ -443,6 +643,22 @@ async def run_speech_chat_turn(
         tts_ms=tts_ms,
     )
 
+    # End-to-end latency metric (defensive: metrics must not break the request)
+    try:
+        total_latency = max(0.0, time.time() - req_start)
+        reg = get_metrics_registry()
+        reg.observe(
+            "audio_chat_latency_seconds",
+            total_latency,
+            labels={
+                "stt_provider": stt_provider or "default",
+                "llm_provider": llm_provider,
+                "tts_provider": (tts_config.provider if tts_config and tts_config.provider else "default"),
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"Failed to record audio_chat_latency_seconds metric: {e}")
+
     return SpeechChatResponse(
         session_id=conversation_id,
         user_transcript=transcript,
@@ -452,4 +668,5 @@ async def run_speech_chat_turn(
         timing=timing,
         token_usage=token_usage,
         metadata=request_data.metadata,
+        action_result=action_result,
     )

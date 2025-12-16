@@ -84,6 +84,10 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
         if stop_event and stop_event.is_set():
             logger.info("Stopping Audio Jobs worker on shutdown signal")
             return
+        # Per-iteration state used in the outer finally block. These must be
+        # initialized before any `continue` to avoid leaking previous values.
+        owner: Optional[str] = None
+        acquired_slot = False
         try:
             lease_seconds = int(os.getenv("JOBS_LEASE_SECONDS", "120") or "120")
             # Optional strict owner-aware acquisition: try to pick an owner under cap
@@ -176,7 +180,6 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                 jm.fail_job(int(job["id"]), error="missing owner_user_id", retryable=False, worker_id=worker_id, lease_id=str(job.get("lease_id")))
                 continue
             # Cross-process fairness: enforce concurrent processing cap across all workers
-            acquired_slot = False
             try:
                 limits_owner = await get_limits_for_user(int(owner))
             except Exception as e:
@@ -339,7 +342,7 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
             logger.error(f"Audio worker loop error: {e}")
         finally:
             try:
-                if acquired_slot:
+                if acquired_slot and owner is not None:
                     await finish_job(int(owner))  # type: ignore[arg-type]
             except Exception as e:
                 logger.warning(f"Failed to release job slot: {e}")

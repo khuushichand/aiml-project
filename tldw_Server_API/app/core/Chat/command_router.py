@@ -33,12 +33,8 @@ from tldw_Server_API.app.core.Metrics import increment_counter
 from tldw_Server_API.app.core.Integrations import weather_providers
 from tldw_Server_API.app.core.config import load_comprehensive_config
 try:
-    from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
     from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission as _user_has_permission
 except Exception:  # pragma: no cover - fallback if AuthNZ is trimmed in tests
-    def is_single_user_mode() -> bool:  # type: ignore
-        return True
-
     def _user_has_permission(user_id: int, permission: str) -> bool:  # type: ignore
         return True
 
@@ -213,13 +209,10 @@ async def async_dispatch_command(ctx: CommandContext, command: str, args: Option
         permitted = False
         details = {"checked": True, "required_permission": spec.required_permission}
         try:
-            if is_single_user_mode():
-                permitted = True
+            if ctx.auth_user_id is not None:
+                permitted = bool(_user_has_permission(int(ctx.auth_user_id), spec.required_permission))
             else:
-                if ctx.auth_user_id is not None:
-                    permitted = bool(_user_has_permission(int(ctx.auth_user_id), spec.required_permission))
-                else:
-                    permitted = False
+                permitted = False
         except Exception:
             permitted = False
         if not permitted:

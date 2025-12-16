@@ -198,6 +198,53 @@ async def run_local():
 
 asyncio.run(run_local())
 
+---
+
+WebSocket TTS (PCM)
+-------------------
+
+Endpoint: `/api/v1/audio/stream/tts`
+
+- Auth/quotas: mirrors streaming STT (API key/JWT/single-user key) with per-user concurrent stream guard. Credentials
+  may be supplied via `X-API-KEY`, `Authorization: Bearer <JWT>`, a `token` query parameter (API key or JWT), or
+  an initial auth message; single-user setups additionally accept the fixed API key via these sources.
+- Client → server frames: one JSON prompt frame
+
+```json
+{ "type": "prompt", "text": "Hello world", "voice": "af_heart", "format": "pcm", "model": "kokoro" }
+```
+
+- Server → client frames:
+  - Binary PCM16 audio frames streamed as they are generated.
+  - Error frames: `{ "type": "error", "message": "..." }`.
+  - Finalizer: `{ "type": "done" }` then the socket closes (policy close code on quota errors when configured).
+
+Notes:
+- Backpressure: bounded queue with underrun counter (`audio_stream_underruns_total{provider}`); slow readers trigger drops with metrics.
+- Metrics: streaming TTS emits `tts_ttfb_seconds`/`voice_to_voice_seconds{route="audio.stream.tts"}` and error counters on transport failures.
+- Default format is `pcm`; `mp3|opus|aac|flac|wav` are accepted but PCM is preferred for low latency.
+
+WebSocket Voice Chat v2
+-----------------------
+
+Endpoint: `/api/v1/audio/chat/stream`
+
+- Auth/quotas: same as `/stream/transcribe` (JWT/X-API-KEY/single-user key) with support for a `token` query parameter
+  (API key or JWT), `can_start_stream` concurrency guard, per-chunk minute accounting with bounded fail-open; closes
+  with code 4003 (or 1008 when `AUDIO_WS_QUOTA_CLOSE_1008=1`) on quota failures.
+- Client → server frames:
+  - `config` (required first): STT knobs (`model|variant|sample_rate|enable_vad|min_silence_ms|turn_stop_secs`), `llm` (`provider|model|temperature|max_tokens|system|extra_params`), `tts` (`voice|model|provider|format|speed|extra_params`), optional `session_id|metadata`.
+  - `audio`: base64 float32/PCM chunks (same shape as `/stream/transcribe`).
+  - `commit`: finalize the current turn (also auto-triggered by VAD when enabled).
+  - `reset` / `stop`: reset buffers or close the stream.
+- Server → client frames:
+  - STT partials/finals: mirrors `/stream/transcribe` plus `full_transcript` with `voice_to_voice_start` timestamp and `auto_commit` hint.
+  - LLM streaming: `{"type":"llm_delta","delta": "<text>"}` per SSE chunk, then `llm_message` + `assistant_summary` (finish_reason/usage).
+  - TTS streaming: binary audio frames (PCM default; `mp3|opus|aac|flac|wav` accepted) preceded by `tts_start` and terminated by `tts_done`; underruns surfaced via `audio_stream_underruns_total`.
+  - Errors use `{type:"error", error_type:"...", message}`; quota/rate errors include `quota`.
+- VAD: Silero-based auto-commit when enabled (`enable_vad=true`, `vad_threshold`, `min_silence_ms`, `turn_stop_secs`, `min_utterance_secs`).
+- Metrics: `stt_final_latency_seconds{endpoint="audio.chat.stream"}`, `voice_to_voice_seconds{route="audio.chat.stream"}`, `audio_stream_underruns_total`, `audio_stream_errors_total`, plus provider metrics from LLM/TTS.
+
 Deployment Notes
 ----------------
 

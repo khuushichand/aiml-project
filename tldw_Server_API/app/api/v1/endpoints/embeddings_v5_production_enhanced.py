@@ -26,6 +26,7 @@ import numpy as np
 from functools import lru_cache, wraps
 import atexit
 import os
+import uuid
 
 from fastapi import APIRouter, HTTPException, Body, Depends, status, BackgroundTasks, Request, Query, Header, Response
 from contextlib import asynccontextmanager
@@ -43,14 +44,23 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_models import (
     EmbeddingData,
     EmbeddingUsage
 )
-from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
+from tldw_Server_API.app.core.Usage.usage_tracker import (
+    backfill_legacy_tokens_to_ledger,
+    log_llm_usage,
+)
 from pydantic import BaseModel, Field
 
 # Authentication
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    rbac_rate_limit,
+    require_roles,
+    require_permissions,
+)
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE, EMBEDDINGS_ADMIN
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal, is_single_user_principal
 
 # Configuration
 from tldw_Server_API.app.core.config import settings
@@ -81,10 +91,13 @@ from tldw_Server_API.app.core.Infrastructure.redis_factory import (
 )
 from tldw_Server_API.app.core.LLM_Calls.embeddings_adapter_registry import get_embeddings_registry
 from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_present
+from tldw_Server_API.app.core.Embeddings.messages import validate_schema
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
 from fnmatch import fnmatch
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
+from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 
 # ============================================================================
 # Embeddings Implementation Import (Safe/Lazy)
@@ -357,6 +370,28 @@ TENANT_RPS = int(_cfg_int("EMBEDDINGS_TENANT_RPS", 0))  # 0 disables
 # Orchestrator snapshot scan cap (prevent unbounded SCAN work per build)
 ORCH_SCAN_MAX_KEYS = int(_cfg_int("EMB_ORCH_MAX_SCAN_KEYS", 500))
 
+
+def _tenant_rps_runtime() -> int:
+    """Resolve the effective tenant RPS limit at runtime.
+
+    Prefers the environment variable (handy for tests/overrides) and otherwise
+    returns the module-level default.
+
+    Note: The module-level `TENANT_RPS` is already initialized from config/env
+    at import time and is also frequently monkeypatched in unit tests. Reading
+    `core.config.settings` here would bypass those monkeypatches, so we treat it
+    as an initialization-time input only.
+    """
+    try:
+        env_val = os.getenv("EMBEDDINGS_TENANT_RPS")
+        if env_val is not None and str(env_val).strip() != "":
+            return int(env_val)
+    except Exception:
+        pass
+    return TENANT_RPS
+
+
+
 async def _orchestrator_depth_and_age(client: aioredis.Redis) -> tuple[int, float]:
     """Return (max_queue_depth, max_queue_age_seconds) for core embeddings queues."""
     queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
@@ -380,6 +415,54 @@ async def _orchestrator_depth_and_age(client: aioredis.Redis) -> tuple[int, floa
         except Exception:
             ages.append(0.0)
     return (max(depths) if depths else 0, max(ages) if ages else 0.0)
+
+
+def _should_enforce_tenant_rps(request: Request) -> bool:
+    """
+    Decide whether to enforce per-tenant RPS quotas for this request.
+
+    Behaviour:
+    - When EMBEDDINGS_TENANT_RPS_PROFILE_AWARE is unset/false (\"0\"/\"false\"/\"off\"):
+      fall back to the legacy mode/profile guard via ``_is_multi_user_runtime()``,
+      preserving existing behaviour.
+    - When the flag is enabled (any other truthy value):
+      * Disable tenant quotas for single-user profiles (PROFILE indicating
+        local single-user/desktop), regardless of AUTH_MODE.
+      * Disable tenant quotas when the authenticated principal is explicitly
+        tagged as the single-user profile (helper-detected).
+      * Otherwise, treat the runtime as multi-tenant and enforce quotas when
+        a positive RPS limit is configured.
+    """
+    flag = os.getenv("EMBEDDINGS_TENANT_RPS_PROFILE_AWARE", "").strip().lower()
+    if flag in {"", "0", "false", "off"}:
+        # Compatibility path: preserve legacy AUTH_MODE/profile heuristics.
+        return _is_multi_user_runtime()
+
+    principal: Optional[AuthPrincipal] = None
+    try:
+        ctx = getattr(request.state, "auth", None)
+        if isinstance(ctx, AuthContext):
+            principal = ctx.principal
+    except Exception:
+        principal = None
+
+    try:
+        single_profile = _is_single_user_profile()
+    except Exception:
+        single_profile = False
+
+    if single_profile:
+        # Local single-user/desktop profiles should not see tenant-style
+        # RPS quotas even when AUTH_MODE is misconfigured.
+        return False
+
+    # Principal-first: if we can see an explicit single-user principal, do not
+    # enforce tenant quotas even under multi-user profiles.
+    if principal is not None and is_single_user_principal(principal):
+        return False
+
+    # Multi-tenant runtime: enforce quotas when a positive RPS is configured.
+    return True
 
 async def _check_backpressure_and_quotas(request: Request, user: User) -> Optional[HTTPException]:
     """Return HTTPException(429) if backpressure or tenant quota exceeded; else None."""
@@ -408,39 +491,10 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
 
     # Per-tenant quotas in multi-user mode
     try:
-        def _is_multi_user_runtime() -> bool:
-            try:
-                am = os.getenv("AUTH_MODE")
-                if am:
-                    return am.strip().lower() == "multi_user"
-            except Exception:
-                pass
-            try:
-                return not is_single_user_mode()
-            except Exception:
-                return False
-
         # Read tenant RPS dynamically so tests can monkeypatch env at runtime
-        def _tenant_rps_runtime() -> int:
-            try:
-                # Prefer env var when set during tests; fall back to settings
-                env_val = os.getenv("EMBEDDINGS_TENANT_RPS")
-                if env_val is not None and str(env_val).strip() != "":
-                    return int(env_val)
-            except Exception:
-                pass
-            try:
-                v = settings.get("EMBEDDINGS_TENANT_RPS", 0)
-                if isinstance(v, (int, float)):
-                    return int(v)
-            except Exception:
-                pass
-            # Fallback to module default
-            return TENANT_RPS
-
         tenant_rps = _tenant_rps_runtime()
 
-        if _is_multi_user_runtime() and tenant_rps > 0:
+        if _should_enforce_tenant_rps(request) and tenant_rps > 0:
             client2 = await _get_redis_client()
             try:
                 # Use a single rolling key with 1-second TTL to avoid flakiness across second boundaries
@@ -1025,18 +1079,19 @@ class CompactorRunResponse(BaseModel):
 @router.post(
     "/embeddings/compactor/run",
     response_model=CompactorRunResponse,
-    summary="Run a one-shot vector compaction for a user (admin only)"
+    summary="Run a one-shot vector compaction for a user (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def run_compactor_once(
     req: CompactorRunRequest,
     current_user: User = Depends(get_request_user),
 ):
-    require_admin(current_user)
     try:
         # Lazy import to avoid heavy imports on module import
         from tldw_Server_API.app.core.Embeddings.services.vector_compactor import compact_once as _compact_once  # type: ignore
-    except Exception:
-        raise HTTPException(status_code=503, detail="Compactor unavailable")
+    except Exception as exc:
+        logger.exception("Compactor module import failed")
+        raise HTTPException(status_code=503, detail="Compactor unavailable") from exc
     uid = str(req.user_id or current_user.id)
     try:
         touched = await _compact_once(uid, db_path=req.media_db_path or None)
@@ -1044,7 +1099,12 @@ async def run_compactor_once(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Compactor run failed: {e}")
+        logger.exception(
+            "Compactor run failed for user '{}' with db_path_override={}",
+            uid,
+            bool(req.media_db_path),
+        )
+        raise HTTPException(status_code=500, detail="Compactor run failed") from e
 
 # ============================================================================
 # Token-array handling and dimension adjustment helpers
@@ -1689,23 +1749,6 @@ async def create_embeddings_batch_async(
 
     return embeddings
 
-# ============================================================================
-# Authorization Helpers
-# ============================================================================
-
-def require_admin(user: User) -> None:
-    """Require admin privileges for endpoint"""
-    # In single-user mode, the sole user is considered admin for admin-only ops
-    try:
-        if is_single_user_mode():
-            return
-    except Exception:
-        pass
-    if not user or not getattr(user, 'is_admin', False):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required"
-        )
 
 # ============================================================================
 # API Endpoints
@@ -1739,6 +1782,11 @@ async def create_embedding_endpoint(
     start_time = time.time()
 
     user_metadata = _build_user_metadata(current_user)
+    rg_handle_id: Optional[str] = None
+    rg_commit_op_id: Optional[str] = None
+    rg_reserved_units: int = 0
+    rg_actual_units: int = 0
+    rg_governor = None
 
     try:
         # Backpressure and tenant quotas
@@ -1831,10 +1879,15 @@ async def create_embedding_endpoint(
         # Enforce per-model token length limits (fail-fast)
         max_tokens = _get_model_max_tokens(provider, model)
         too_long: List[Tuple[int, int]] = []  # (index, token_count)
+        token_total = 0
         for idx, t in enumerate(texts_to_embed):
             tok = count_tokens(t, model)
+            if not provided_token_arrays:
+                token_total += int(tok or 0)
             if tok > max_tokens:
                 too_long.append((idx, tok))
+        if provided_token_arrays:
+            token_total = int(provided_token_count or 0)
         if too_long:
             # Return top-level JSON error object to match tests (not nested under "detail")
             return JSONResponse(
@@ -1877,6 +1930,90 @@ async def create_embedding_endpoint(
         else:
             if provider.lower() not in IMPLEMENTED_PROVIDERS:
                 raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=f"Provider '{provider}' not implemented")
+
+        # ResourceGovernor tokens enforcement (per-minute + durable tokens/day caps).
+        # Requests are enforced at ingress via RGSimpleMiddleware when enabled; token
+        # accounting needs endpoint-level units.
+        try:
+            rg_governor = getattr(request.app.state, "rg_governor", None)
+            rg_loader = getattr(request.app.state, "rg_policy_loader", None)
+        except Exception:
+            rg_governor = None
+            rg_loader = None
+
+        if rg_governor is not None and rg_loader is not None:
+            try:
+                policy_id = str(getattr(request.state, "rg_policy_id", None) or "embeddings.default")
+                rg_commit_op_id = str(
+                    getattr(request.state, "request_id", None)
+                    or request.headers.get("X-Request-ID")
+                    or uuid.uuid4().hex
+                )
+
+                entity = derive_entity_key(request)
+                try:
+                    entity_scope, entity_value = entity.split(":", 1)
+                except Exception:
+                    entity_scope, entity_value = "user", str(getattr(current_user, "id", "1"))
+
+                daily_cap = 0
+                try:
+                    pol = rg_loader.get_policy(policy_id) or {}
+                    daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
+                except Exception:
+                    daily_cap = 0
+                if daily_cap > 0:
+                    await backfill_legacy_tokens_to_ledger(
+                        entity_scope=str(entity_scope),
+                        entity_value=str(entity_value),
+                    )
+
+                rg_reserved_units = max(1, int(token_total or 0))
+                rg_actual_units = int(rg_reserved_units)
+                dec, hid = await rg_governor.reserve(
+                    RGRequest(
+                        entity=entity,
+                        categories={"tokens": {"units": int(rg_reserved_units)}},
+                        tags={"policy_id": policy_id, "endpoint": request.url.path},
+                    ),
+                    op_id=rg_commit_op_id,
+                )
+                if not bool(getattr(dec, "allowed", False)):
+                    retry_after = int(getattr(dec, "retry_after", None) or 1)
+                    headers = {"Retry-After": str(retry_after)}
+                    try:
+                        pol = rg_loader.get_policy(policy_id) or {}
+                        per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
+                        limit_val = per_min or int((pol.get("tokens") or {}).get("daily_cap") or 0)
+                        if limit_val:
+                            headers.update(
+                                {
+                                    "X-RateLimit-Limit": str(limit_val),
+                                    "X-RateLimit-Remaining": "0",
+                                    "X-RateLimit-Reset": str(retry_after),
+                                }
+                            )
+                            if per_min > 0:
+                                headers.update(
+                                    {
+                                        "X-RateLimit-PerMinute-Limit": str(per_min),
+                                        "X-RateLimit-PerMinute-Remaining": "0",
+                                        "X-RateLimit-Tokens-Remaining": "0",
+                                    }
+                                )
+                    except Exception:
+                        pass
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail="Rate limit exceeded",
+                        headers=headers,
+                    )
+                rg_handle_id = hid
+            except HTTPException:
+                raise
+            except Exception as rg_exc:
+                logger.debug(f"RG tokens reserve skipped: {rg_exc}")
+                rg_handle_id = None
 
         # Create embeddings
         # Special-case for OpenAI in test mode: synthesize vectors deterministically
@@ -2073,11 +2210,9 @@ async def create_embedding_endpoint(
                 )
             )
 
-        # Calculate token usage
-        if provided_token_arrays:
-            num_tokens = provided_token_count
-        else:
-            num_tokens = sum(count_tokens(text, model) for text in texts_to_embed)
+        # Calculate token usage (reused for usage logging and RG commit).
+        num_tokens = int(token_total or 0)
+        rg_actual_units = int(num_tokens)
 
         # Track metrics
         duration = time.time() - start_time
@@ -2125,7 +2260,7 @@ async def create_embedding_endpoint(
                 prompt_tokens=int(num_tokens or 0),
                 completion_tokens=0,
                 total_tokens=int(num_tokens or 0),
-                request_id=request.headers.get('X-Request-ID') if request else None,
+                request_id=getattr(getattr(request, "state", None), "request_id", None) or request.headers.get('X-Request-ID'),
             )
         except Exception:
             pass
@@ -2149,6 +2284,17 @@ async def create_embedding_endpoint(
         )
 
     finally:
+        try:
+            if rg_governor is not None and rg_handle_id:
+                actual = int(rg_actual_units or rg_reserved_units or 0)
+                actual = max(0, actual)
+                await rg_governor.commit(
+                    rg_handle_id,
+                    actuals={"tokens": int(actual)},
+                    op_id=rg_commit_op_id,
+                )
+        except Exception as rg_commit_exc:
+            logger.debug(f"RG tokens commit skipped/failed: {rg_commit_exc}")
         active_embedding_requests.dec()
 
 class EmbeddingsBatchRequest(BaseModel):
@@ -2299,7 +2445,7 @@ async def list_embedding_models():
 async def get_embedding_model_info(
     model_id: str,
     provider: Optional[str] = Query(None, description="Provider override"),
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     model = model_id
     resolved_provider = guess_provider_for_model(model, provider)
@@ -2344,20 +2490,46 @@ class TenantQuotaResponse(BaseModel):
     remaining: Optional[int] = None
 
 
+def _is_single_user_profile() -> bool:
+    """Check if profile indicates single-user deployment."""
+    try:
+        return is_single_user_profile_mode()
+    except Exception as exc:
+        logger.debug("Failed to resolve profile for runtime mode: {}", exc)
+        return False
+
+
+def _is_multi_user_runtime() -> bool:
+    """Detect whether the current runtime should be treated as multi-user."""
+    try:
+        return not _is_single_user_profile()
+    except Exception:
+        return True
+
+
 @router.get("/embeddings/tenant/quotas", summary="Get current tenant quotas (if multi-tenant)")
-async def get_tenant_quotas(current_user: User = Depends(get_request_user)) -> TenantQuotaResponse:
-    if is_single_user_mode() or TENANT_RPS <= 0:
+async def get_tenant_quotas(
+    request: Request,
+    current_user: User = Depends(get_request_user),
+) -> TenantQuotaResponse:
+    tenant_rps = _tenant_rps_runtime()
+    if not _should_enforce_tenant_rps(request) or tenant_rps <= 0:
         return TenantQuotaResponse(limit_rps=0, remaining=None)
+    client = None
     try:
         client = await _get_redis_client()
-        ts = int(time.time())
-        key = f"embeddings:tenant:rps:{getattr(current_user, 'id', 'anon')}:{ts}"
+        key = f"embeddings:tenant:rps:{getattr(current_user, 'id', 'anon')}"
         val = await client.get(key)
-        await ensure_async_client_closed(client)
         used = int(val or 0)
-        return TenantQuotaResponse(limit_rps=TENANT_RPS, remaining=max(0, TENANT_RPS - used))
+        return TenantQuotaResponse(limit_rps=tenant_rps, remaining=max(0, tenant_rps - used))
     except Exception:
-        return TenantQuotaResponse(limit_rps=TENANT_RPS, remaining=None)
+        return TenantQuotaResponse(limit_rps=tenant_rps, remaining=None)
+    finally:
+        try:
+            if client is not None:
+                await ensure_async_client_closed(client)
+        except Exception:
+            pass
 
 
 class PriorityBumpRequest(BaseModel):
@@ -2366,22 +2538,55 @@ class PriorityBumpRequest(BaseModel):
     ttl_seconds: Optional[int] = Field(default=600, ge=1, le=86400)
 
 
-@router.post("/embeddings/job/priority/bump", summary="Override/bump job priority for routing into priority queues (best-effort)")
-async def bump_job_priority(req: PriorityBumpRequest, current_user: User = Depends(get_request_user)) -> Dict[str, Any]:
-    if not getattr(current_user, 'is_admin', False) and not is_single_user_mode():
-        raise HTTPException(status_code=403, detail="Admin privileges required")
+@router.post(
+    "/embeddings/job/priority/bump",
+    summary="Override/bump job priority for routing into priority queues (best-effort)",
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(EMBEDDINGS_ADMIN)),
+    ],
+)
+async def bump_job_priority(
+    req: PriorityBumpRequest,
+    current_user: User = Depends(get_request_user),
+) -> Dict[str, Any]:
     pr = (req.priority or "").strip().lower()
     if pr not in ("high", "normal", "low"):
         raise HTTPException(status_code=400, detail="priority must be one of: high|normal|low")
+
+    try:
+        logger.info(
+            "Embeddings admin priority bump requested",
+            extra={
+                "admin_id": getattr(current_user, "id", None),
+                "job_id": req.job_id,
+                "priority": pr,
+            },
+        )
+    except Exception:
+        # Logging must not interfere with admin operations
+        pass
+    client: Optional[aioredis.Redis] = None
     try:
         client = await _get_redis_client()
         key = f"embeddings:priority:override:{req.job_id}"
         await client.set(key, pr)
         await client.expire(key, int(req.ttl_seconds or 600))
-        await ensure_async_client_closed(client)
-        return {"status": "ok", "job_id": req.job_id, "priority": pr, "ttl_seconds": int(req.ttl_seconds or 600)}
+        return {
+            "status": "ok",
+            "job_id": req.job_id,
+            "priority": pr,
+            "ttl_seconds": int(req.ttl_seconds or 600),
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to set priority override: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to set priority override: {e}") from e
+    finally:
+        try:
+            if client is not None:
+                await ensure_async_client_closed(client)
+        except Exception:
+            # Connection cleanup must never interfere with HTTP error semantics
+            pass
 
 
 class ModelActionRequest(BaseModel):
@@ -2408,12 +2613,15 @@ class CollectionStatsResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
-@router.post("/embeddings/models/warmup", summary="Warmup (preload) an embedding model (admin)")
+@router.post(
+    "/embeddings/models/warmup",
+    summary="Warmup (preload) an embedding model (admin)",
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
+)
 async def warmup_model(
     payload: ModelActionRequest,
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
-    require_admin(current_user)
     provider = guess_provider_for_model(payload.model, payload.provider)
     if not is_model_allowed(provider, payload.model):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Model/provider not allowed")
@@ -2434,12 +2642,15 @@ async def warmup_model(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Warmup failed: {e}")
 
 
-@router.post("/embeddings/models/download", summary="Download/prepare a model (admin)")
+@router.post(
+    "/embeddings/models/download",
+    summary="Download/prepare a model (admin)",
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
+)
 async def download_model(
     payload: ModelActionRequest,
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
-    require_admin(current_user)
     provider = guess_provider_for_model(payload.model, payload.provider)
     if not is_model_allowed(provider, payload.model):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Model/provider not allowed")
@@ -2462,14 +2673,13 @@ async def download_model(
 
 @router.delete(
     "/embeddings/cache",
-    summary="Clear embedding cache (admin only)"
+    summary="Clear embedding cache (admin only)",
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def clear_cache(
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     """Clear the embedding cache - requires admin privileges"""
-
-    require_admin(current_user)
 
     cache_stats = embedding_cache.stats()
     await embedding_cache.clear()
@@ -2500,7 +2710,7 @@ async def clear_cache(
 )
 async def create_collection(
     payload: CollectionCreateRequest,
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ) -> CollectionResponse:
     name = (payload.name or "").strip()
     if not name:
@@ -2569,7 +2779,7 @@ async def list_collections(current_user: User = Depends(get_request_user)) -> Li
 )
 async def delete_collection(
     collection_name: str,
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ) -> Response:
     manager = _chroma_manager_for_user(current_user)
     try:
@@ -2587,7 +2797,7 @@ async def delete_collection(
 )
 async def get_collection_stats(
     collection_name: str,
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ) -> CollectionStatsResponse:
     manager = _chroma_manager_for_user(current_user)
     try:
@@ -2701,28 +2911,26 @@ async def health_check():
 
 @router.get(
     "/embeddings/circuit-breakers",
-    summary="Get circuit breaker status (admin only)"
+    summary="Get circuit breaker status (admin only)",
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def get_circuit_breakers(
-    current_user: User = Depends(get_request_user)
+    _current_user: User = Depends(get_request_user),
 ):
     """Get detailed circuit breaker status - requires admin privileges"""
-
-    require_admin(current_user)
 
     return circuit_breaker_registry.get_all_status()
 
 @router.post(
     "/embeddings/circuit-breakers/{provider}/reset",
-    summary="Reset circuit breaker (admin only)"
+    summary="Reset circuit breaker (admin only)",
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def reset_circuit_breaker(
     provider: str,
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     """Reset specific circuit breaker - requires admin privileges"""
-
-    require_admin(current_user)
 
     breaker_name = f"embeddings_{provider}"
     breaker = circuit_breaker_registry.get(breaker_name)
@@ -2749,14 +2957,13 @@ async def reset_circuit_breaker(
 
 @router.get(
     "/embeddings/metrics",
-    summary="Get service metrics (admin only)"
+    summary="Get service metrics (admin only)",
+    dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def get_metrics(
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     """Get detailed service metrics - requires admin privileges"""
-
-    require_admin(current_user)
 
     # Helper to sum counters across all labels
     def _sum_counter(c):
@@ -2865,16 +3072,21 @@ def _redact_obj(obj: Any, depth: int = 0) -> Any:
 
 @router.get(
     "/embeddings/dlq",
-    summary="List DLQ items for a stage (admin only)"
+    summary="List DLQ items for a stage (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def list_dlq_items(
     stage: str = Query("embedding", description="Stage: chunking|embedding|storage"),
     count: int = Query(50, ge=1, le=500, description="Max items to return"),
     job_id: Optional[str] = Query(None, description="Optional job_id to filter"),
-    current_user: User = Depends(get_request_user)
-):
-    require_admin(current_user)
+    _current_user: User = Depends(get_request_user),
+) -> Dict[str, Any]:
+    """List DLQ items for a stage.
+
+    _current_user is included to enforce authentication via dependencies.
+    """
     stream = _dlq_stream_name(stage)
+    client: Optional[aioredis.Redis] = None
     try:
         client = await _get_redis_client()
         # Reverse range: most recent first
@@ -2920,12 +3132,18 @@ async def list_dlq_items(
                 dlq_state=dlq_state,
                 operator_note=operator_note,
             ))
-        await ensure_async_client_closed(client)
         return {"stream": stream, "count": len(items), "items": [i.model_dump() for i in items]}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list DLQ items: {e}")
+    finally:
+        try:
+            if client is not None:
+                await ensure_async_client_closed(client)
+        except Exception:
+            # Connection cleanup must never interfere with HTTP error semantics
+            pass
 
 
 class DLQRequeueRequest(BaseModel):
@@ -2937,13 +3155,13 @@ class DLQRequeueRequest(BaseModel):
 
 @router.post(
     "/embeddings/dlq/requeue",
-    summary="Requeue a DLQ item to its live stream (admin only)"
+    summary="Requeue a DLQ item to its live stream (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def requeue_dlq_item(
     req: DLQRequeueRequest,
-    current_user: User = Depends(get_request_user)
-):
-    require_admin(current_user)
+    current_user: User = Depends(get_request_user),
+) -> Dict[str, Any]:
     dlq_stream = _dlq_stream_name(req.stage)
     live_stream = _live_stream_name(req.stage)
     client = await _get_redis_client()
@@ -3037,13 +3255,13 @@ class DLQRequeueBulkRequest(BaseModel):
 
 @router.post(
     "/embeddings/dlq/requeue/bulk",
-    summary="Bulk requeue DLQ items to live stream (admin only)"
+    summary="Bulk requeue DLQ items to live stream (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def requeue_dlq_bulk(
     req: DLQRequeueBulkRequest,
-    current_user: User = Depends(get_request_user)
-):
-    require_admin(current_user)
+    current_user: User = Depends(get_request_user),
+) -> Dict[str, Any]:
     dlq_stream = _dlq_stream_name(req.stage)
     live_stream = _live_stream_name(req.stage)
     client = await _get_redis_client()
@@ -3051,6 +3269,7 @@ async def requeue_dlq_bulk(
     try:
         for eid in req.entry_ids:
             status = "success"
+            warning = None
             try:
                 entries = await client.xrange(dlq_stream, min=eid, max=eid, count=1)
                 if not entries:
@@ -3067,7 +3286,6 @@ async def requeue_dlq_bulk(
                         results.append({"entry_id": eid, "status": status})
                         continue
                     requeue_fields = dict(fields)
-                    warning = None
                     # Validate original payload JSON (if present) and surface warnings
                     try:
                         raw = fields.get("payload")
@@ -3100,7 +3318,7 @@ async def requeue_dlq_bulk(
             else:
                 dlq_requeued_total.labels(queue_name=dlq_stream, status=status).inc()
             res = {"entry_id": eid, "status": status}
-            if 'warning' in locals() and warning:
+            if warning:
                 res["warning"] = warning
             results.append(res)
         # Audit: DLQ bulk requeue summary
@@ -3138,12 +3356,12 @@ async def requeue_dlq_bulk(
 
 @router.get(
     "/embeddings/dlq/stats",
-    summary="DLQ and queue depths (admin only)"
+    summary="DLQ and queue depths (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def get_dlq_stats(
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
-    require_admin(current_user)
     client = await _get_redis_client()
     try:
         queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage"]
@@ -3215,10 +3433,10 @@ def _dlq_state_key(stream: str, entry_id: str) -> str:
 
 @router.post(
     "/embeddings/dlq/state",
-    summary="Set DLQ quarantine state (admin only)"
+    summary="Set DLQ quarantine state (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def set_dlq_state(req: DLQStateSetRequest, current_user: User = Depends(get_request_user)):
-    require_admin(current_user)
     client = await _get_redis_client()
     try:
         dlq_stream = _dlq_stream_name(req.stage)
@@ -3280,10 +3498,10 @@ def _stage_key(stage: str, suffix: str) -> str:
 
 @router.get(
     "/embeddings/stage/status",
-    summary="Get per-stage pause/drain flags (admin only)"
+    summary="Get per-stage pause/drain flags (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def get_stage_status(current_user: User = Depends(get_request_user)):
-    require_admin(current_user)
     client = await _get_redis_client()
     try:
         out = {}
@@ -3301,10 +3519,10 @@ async def get_stage_status(current_user: User = Depends(get_request_user)):
 
 @router.post(
     "/embeddings/stage/control",
-    summary="Pause/Resume/Drain a stage (admin only)"
+    summary="Pause/Resume/Drain a stage (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def control_stage(req: StageControlRequest, current_user: User = Depends(get_request_user)):
-    require_admin(current_user)
     client = await _get_redis_client()
     try:
         stages = [req.stage] if req.stage != "all" else ["chunking", "embedding", "storage"]
@@ -3359,10 +3577,10 @@ def _skip_key(job_id: str) -> str:
 
 @router.post(
     "/embeddings/job/skip",
-    summary="Mark a job_id as skipped (admin only)"
+    summary="Mark a job_id as skipped (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def mark_job_skipped(req: JobSkipRequest, current_user: User = Depends(get_request_user)):
-    require_admin(current_user)
     client = await _get_redis_client()
     try:
         await client.set(_skip_key(req.job_id), "1", ex=int(req.ttl_seconds))
@@ -3392,10 +3610,10 @@ async def mark_job_skipped(req: JobSkipRequest, current_user: User = Depends(get
 
 @router.get(
     "/embeddings/job/skip/status",
-    summary="Check if a job_id is marked as skipped (admin only)"
+    summary="Check if a job_id is marked as skipped (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def get_job_skip_status(job_id: str = Query(..., description="Job ID to check"), current_user: User = Depends(get_request_user)):
-    require_admin(current_user)
     client = await _get_redis_client()
     try:
         val = await client.get(_skip_key(job_id))
@@ -3419,21 +3637,23 @@ class LedgerEntry(BaseModel):
 
 @router.get(
     "/embeddings/ledger/status",
-    summary="Inspect ledger entries by idempotency_key/dedupe_key (admin only)"
+    summary="Inspect ledger entries by idempotency_key/dedupe_key (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def get_ledger_status(
     idempotency_key: Optional[str] = Query(default=None),
     dedupe_key: Optional[str] = Query(default=None),
-    current_user: User = Depends(get_request_user),
-):
+    _current_user: User = Depends(get_request_user),
+) -> Dict[str, Optional[LedgerEntry]]:
     """Return current ledger values for provided keys.
+
+    _current_user is included to enforce authentication and RBAC via dependencies.
 
     Reads:
       - embeddings:ledger:idemp:{idempotency_key}
       - embeddings:ledger:dedupe:{dedupe_key}
     Values may be plain strings or JSON objects with {status, ts, job_id}.
     """
-    require_admin(current_user)
     if not idempotency_key and not dedupe_key:
         raise HTTPException(status_code=400, detail="Provide idempotency_key and/or dedupe_key")
     client = await _get_redis_client()
@@ -3504,7 +3724,8 @@ class ReembedScheduleResponse(BaseModel):
 @router.post(
     "/embeddings/reembed/schedule",
     response_model=ReembedScheduleResponse,
-    summary="Schedule a re-embed expansion job (admin only)"
+    summary="Schedule a re-embed expansion job (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def schedule_reembed(
     req: ReembedScheduleRequest,
@@ -3515,7 +3736,6 @@ async def schedule_reembed(
 
     Domain: embeddings, Queue: reembed (configurable via REEMBED_JOB_QUEUE), Job Type: expand_reembed.
     """
-    require_admin(current_user)
     # Build payload
     uid = str(req.user_id or current_user.id)
     payload = {
@@ -3701,10 +3921,19 @@ async def _sse_orchestrator_stream(client: aioredis.Redis):
 
 @router.get(
     "/embeddings/orchestrator/events",
-    summary="SSE: embeddings orchestrator live summary (admin only)"
+    summary="SSE: embeddings orchestrator live summary (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
-async def orchestrator_events(current_user: User = Depends(get_request_user)):
-    require_admin(current_user)
+async def orchestrator_events(_current_user: User = Depends(get_request_user)):
+    # Admin/embeddings-admin gate is enforced via AuthNZ permissions; _current_user is used for audit context.
+    try:
+        logger.info(
+            "Embeddings orchestrator SSE connection initiated",
+            extra={"user_id": getattr(_current_user, "id", None)},
+        )
+    except Exception:
+        # Audit logging is best-effort and must not break the SSE stream
+        pass
     client = await _get_redis_client()
 
     # Legacy path (default): keep existing SSE generator behavior
@@ -3788,14 +4017,14 @@ async def orchestrator_events(current_user: User = Depends(get_request_user)):
 
 @router.get(
     "/embeddings/orchestrator/summary",
-    summary="Orchestrator summary for polling (admin only)"
+    summary="Orchestrator summary for polling (admin only)",
+    dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def orchestrator_summary(current_user: User = Depends(get_request_user)):
     """Return a snapshot identical to the SSE payload.
 
     Includes: queues, dlq, ages, stages, flags, ts
     """
-    require_admin(current_user)
     client: Optional[aioredis.Redis] = None
     def _zero_snapshot() -> Dict[str, Any]:
         return {"queues": {}, "dlq": {}, "ages": {}, "stages": {}, "flags": {}, "ts": datetime.utcnow().timestamp()}

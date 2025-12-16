@@ -8,6 +8,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
 
 
 async def aggregate_usage_daily(db_pool: Optional[DatabasePool] = None, day: Optional[str] = None) -> None:
@@ -21,98 +22,16 @@ async def aggregate_usage_daily(db_pool: Optional[DatabasePool] = None, day: Opt
     try:
         pool = db_pool or await get_db_pool()
         # Resolve day (UTC)
-        day_str = day or datetime.now(timezone.utc).date().isoformat()
-
-        # Upsert aggregates per user for given day
-        if pool.pool:
-            # PostgreSQL: use date(ts) for grouping
+        day_val = datetime.now(timezone.utc).date()
+        if day:
             try:
-                # Try with bytes_in_total if column exists
-                query = (
-                    """
-                    INSERT INTO usage_daily (user_id, day, requests, errors, bytes_total, bytes_in_total, latency_avg_ms)
-                    SELECT
-                        user_id as user_id,
-                        $1::date as day,
-                        COUNT(*) as requests,
-                        SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors,
-                        COALESCE(SUM(COALESCE(bytes, 0)), 0) as bytes_total,
-                        COALESCE(SUM(COALESCE(bytes_in, 0)), 0) as bytes_in_total,
-                        AVG(latency_ms)::float as latency_avg_ms
-                    FROM usage_log
-                    WHERE user_id IS NOT NULL AND date(ts AT TIME ZONE 'UTC') = $1::date
-                    GROUP BY user_id
-                    ON CONFLICT (user_id, day) DO UPDATE SET
-                        requests = EXCLUDED.requests,
-                        errors = EXCLUDED.errors,
-                        bytes_total = EXCLUDED.bytes_total,
-                        bytes_in_total = EXCLUDED.bytes_in_total,
-                        latency_avg_ms = EXCLUDED.latency_avg_ms
-                    """
-                )
-                await pool.execute(query, day_str)
+                day_val = datetime.fromisoformat(day).date()
             except Exception:
-                # Fallback to legacy schema without bytes_in_total
-                query = (
-                    """
-                    INSERT INTO usage_daily (user_id, day, requests, errors, bytes_total, latency_avg_ms)
-                    SELECT
-                        user_id as user_id,
-                        $1::date as day,
-                        COUNT(*) as requests,
-                        SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors,
-                        COALESCE(SUM(COALESCE(bytes, 0)), 0) as bytes_total,
-                        AVG(latency_ms)::float as latency_avg_ms
-                    FROM usage_log
-                    WHERE user_id IS NOT NULL AND date(ts AT TIME ZONE 'UTC') = $1::date
-                    GROUP BY user_id
-                    ON CONFLICT (user_id, day) DO UPDATE SET
-                        requests = EXCLUDED.requests,
-                        errors = EXCLUDED.errors,
-                        bytes_total = EXCLUDED.bytes_total,
-                        latency_avg_ms = EXCLUDED.latency_avg_ms
-                    """
-                )
-                await pool.execute(query, day_str)
-        else:
-            # SQLite: use DATE(ts) for grouping
-            try:
-                query = (
-                    """
-                    INSERT OR REPLACE INTO usage_daily (user_id, day, requests, errors, bytes_total, bytes_in_total, latency_avg_ms)
-                    SELECT
-                        user_id as user_id,
-                        ? as day,
-                        COUNT(*) as requests,
-                        SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors,
-                        IFNULL(SUM(IFNULL(bytes, 0)), 0) as bytes_total,
-                        IFNULL(SUM(IFNULL(bytes_in, 0)), 0) as bytes_in_total,
-                        AVG(latency_ms) as latency_avg_ms
-                    FROM usage_log
-                    WHERE user_id IS NOT NULL AND DATE(ts) = ?
-                    GROUP BY user_id
-                    """
-                )
-                await pool.execute(query, day_str, day_str)
-            except Exception:
-                query = (
-                    """
-                    INSERT OR REPLACE INTO usage_daily (user_id, day, requests, errors, bytes_total, latency_avg_ms)
-                    SELECT
-                        user_id as user_id,
-                        ? as day,
-                        COUNT(*) as requests,
-                        SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors,
-                        IFNULL(SUM(IFNULL(bytes, 0)), 0) as bytes_total,
-                        AVG(latency_ms) as latency_avg_ms
-                    FROM usage_log
-                    WHERE user_id IS NOT NULL AND DATE(ts) = ?
-                    GROUP BY user_id
-                    """
-                )
-                await pool.execute(query, day_str, day_str)
+                day_val = datetime.now(timezone.utc).date()
 
-        logger.debug(f"usage_daily aggregated for {day_str}")
+        repo = AuthnzUsageRepo(pool)
+        await repo.aggregate_usage_daily_for_day(day=day_val)
+        logger.debug(f"usage_daily aggregated for {day_val.isoformat()}")
     except Exception as e:
         logger.debug(f"usage_daily aggregation skipped/failed: {e}")
 

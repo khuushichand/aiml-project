@@ -3,7 +3,11 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Body
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    rbac_rate_limit,
+    require_token_scope,
+    require_permissions,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.api.v1.schemas.notes_graph import (
     NoteGraphRequest,
@@ -13,6 +17,7 @@ from tldw_Server_API.app.api.v1.schemas.notes_graph import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError, InputError, CharactersRAGDBError
+from tldw_Server_API.app.core.AuthNZ.permissions import NOTES_GRAPH_READ, NOTES_GRAPH_WRITE
 
 
 router = APIRouter()
@@ -103,7 +108,8 @@ async def get_notes_graph(
     req: NoteGraphRequest = Depends(),
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("notes.graph.read")),
-    __: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.read")),
+    __: None = Depends(require_permissions(NOTES_GRAPH_READ)),
+    ___: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.read")),
 ) -> NoteGraphResponse:
     """
     Stub response for notes graph. RBAC and token-scope dependencies are enforced.
@@ -151,7 +157,8 @@ async def get_note_neighbors(
     req: NoteGraphRequest = Depends(),
     current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("notes.graph.read")),
-    __: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.read")),
+    __: None = Depends(require_permissions(NOTES_GRAPH_READ)),
+    ___: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.read")),
 ) -> NoteGraphResponse:
     """
     Stub neighbors endpoint; enforces RBAC and token scope.
@@ -209,7 +216,8 @@ async def create_manual_link(
     current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     _: None = Depends(rbac_rate_limit("notes.graph.write")),
-    __: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.write")),
+    __: None = Depends(require_permissions(NOTES_GRAPH_WRITE)),
+    ___: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.write")),
 ) -> Dict[str, Any]:
     """
     Create a manual link in the user's ChaChaNotes DB. Populates created_by.
@@ -272,7 +280,8 @@ async def delete_manual_link(
     current_user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     _: None = Depends(rbac_rate_limit("notes.graph.write")),
-    __: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.write")),
+    __: None = Depends(require_permissions(NOTES_GRAPH_WRITE)),
+    ___: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.write")),
 ) -> Dict[str, Any]:
     """
     Delete a manual link by id for the current user.

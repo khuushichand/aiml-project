@@ -360,7 +360,8 @@ class UsersDB:
         role: str = "user",
         is_active: bool = True,
         is_superuser: bool = False,
-        storage_quota_mb: int = 5120
+        storage_quota_mb: int = 5120,
+        uuid_value: Optional[uuid.UUID | str] = None,
     ) -> Dict[str, Any]:
         """
         Create a new user
@@ -373,6 +374,8 @@ class UsersDB:
             is_active: Whether user is active
             is_superuser: Whether user is a superuser
             storage_quota_mb: Storage quota in MB
+            uuid_value: Optional pre-assigned UUID for the user. When omitted,
+                a new UUID4 is generated.
 
         Returns:
             Created user data
@@ -393,7 +396,8 @@ class UsersDB:
             raise DuplicateUserError(f"Email '{email}' already exists")
 
         try:
-            generated_uuid = str(uuid.uuid4())
+            generated_uuid = str(uuid_value) if uuid_value is not None else str(uuid.uuid4())
+            user_id: Optional[int] = None
 
             async with self.db_pool.transaction() as conn:
                 if hasattr(conn, 'fetchval'):
@@ -455,10 +459,13 @@ class UsersDB:
                     user_id = cursor.lastrowid
                     await conn.commit()
 
-                logger.info(f"Created user: {username} (ID: {user_id})")
+            logger.info(f"Created user: {username} (ID: {user_id})")
 
-                # Return the created user
-                return await self.get_user_by_id(user_id)
+            if user_id is None:
+                raise DatabaseError("Failed to create user: no id returned from insert")
+
+            # Return the created user (outside transaction so row is visible on all connections)
+            return await self.get_user_by_id(int(user_id))
 
         except DuplicateUserError:
             raise

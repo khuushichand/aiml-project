@@ -890,7 +890,7 @@ class TestSyncLogEndpoint:
         mock_log_entry_from_db = {
             "change_id": 1,
             "entity": "Prompts",
-            "entity_uuid": "some-uuid-123",
+            "entity_uuid": "00000000-0000-0000-0000-000000000000",
             "operation": "create",
             "timestamp": datetime.now(timezone.utc),
             "client_id": "test_client_xyz",

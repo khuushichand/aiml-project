@@ -708,20 +708,18 @@ const chatUI = new ChatUI();
 function initializeChatCompletionsTab() {
     const prefix = 'chatCompletions';
 
-    // Check if already initialized
+    // Initialize message builder when present; do not bail out entirely so legacy fields still bind
     const container = document.getElementById(`${prefix}_messagesContainer`);
-    if (!container || container.children.length > 0) {
-        return;
-    }
-
-    // Load auto-saved messages or defaults
-    const hasSaved = Utils.getFromStorage(`${prefix}_autosave`);
-    if (hasSaved) {
-        chatUI.loadAutoSavedMessages(prefix);
-    } else {
-        // Add default messages
-        chatUI.addMessage(prefix, 'system', 'You are a helpful assistant that provides concise answers.');
-        chatUI.addMessage(prefix, 'user', 'What is the capital of France?');
+    if (container && container.children.length === 0) {
+        // Load auto-saved messages or defaults
+        const hasSaved = Utils.getFromStorage(`${prefix}_autosave`);
+        if (hasSaved) {
+            chatUI.loadAutoSavedMessages(prefix);
+        } else {
+            // Add default messages
+            chatUI.addMessage(prefix, 'system', 'You are a helpful assistant that provides concise answers.');
+            chatUI.addMessage(prefix, 'user', 'What is the capital of France?');
+        }
     }
 
     // Set default values

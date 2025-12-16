@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.services.claims_rebuild_service import get_claims_rebuild_service
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
 
 def _setup_db_with_claims() -> tuple[str, int]:
@@ -85,6 +87,36 @@ def _setup_db_for_policies() -> tuple[str, dict[str, int]]:
     return db_path, {"with_claims": with_claims, "missing": missing_mid, "stale": stale_mid}
 
 
+def _principal_override(is_admin: bool):
+    async def _override(request=None):
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject="admin",
+            token_type="access",
+            jti=None,
+            roles=["admin"] if is_admin else ["user"],
+            permissions=["claims.status"],
+            is_admin=is_admin,
+            org_ids=[],
+            team_ids=[],
+        )
+        if request is not None:
+            try:
+                request.state.auth = AuthContext(
+                    principal=principal,
+                    ip=None,
+                    user_agent=None,
+                    request_id=None,
+                )
+            except Exception:
+                pass
+        return principal
+
+    return _override
+
+
 def _reset_claims_rebuild_service():
     svc = get_claims_rebuild_service()
     svc.stop()
@@ -136,18 +168,24 @@ def test_claims_status_admin_ok():
             except Exception:
                 pass
 
+    fastapi_app.dependency_overrides[get_auth_principal] = _principal_override(True)
     fastapi_app.dependency_overrides[get_request_user] = _override_user
     fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db
 
-    with TestClient(fastapi_app) as client:
-        r = client.get("/api/v1/claims/status")
-        assert r.status_code == 200, r.text
-        data = r.json()
-        assert data.get("status") == "ok"
-        assert isinstance(data.get("stats", {}), dict)
-        assert isinstance(data.get("queue_length"), int)
-        # workers may be None or int depending on initialized state
-        assert data.get("workers") is None or isinstance(data.get("workers"), int)
+    try:
+        with TestClient(fastapi_app) as client:
+            r = client.get("/api/v1/claims/status")
+            assert r.status_code == 200, r.text
+            data = r.json()
+            assert data.get("status") == "ok"
+            assert isinstance(data.get("stats", {}), dict)
+            assert isinstance(data.get("queue_length"), int)
+            # workers may be None or int depending on initialized state
+            assert data.get("workers") is None or isinstance(data.get("workers"), int)
+    finally:
+        fastapi_app.dependency_overrides.pop(get_auth_principal, None)
+        fastapi_app.dependency_overrides.pop(get_request_user, None)
+        fastapi_app.dependency_overrides.pop(get_media_db_for_user, None)
 
 
 def test_claims_envelope_pagination_absolute_link():
@@ -207,11 +245,16 @@ def test_claims_status_forbidden_non_admin():
     async def _override_user():
         return _User()
 
+    fastapi_app.dependency_overrides[get_auth_principal] = _principal_override(False)
     fastapi_app.dependency_overrides[get_request_user] = _override_user
 
-    with TestClient(fastapi_app) as client:
-        r = client.get("/api/v1/claims/status")
-        assert r.status_code == 403
+    try:
+        with TestClient(fastapi_app) as client:
+            r = client.get("/api/v1/claims/status")
+            assert r.status_code == 403
+    finally:
+        fastapi_app.dependency_overrides.pop(get_auth_principal, None)
+        fastapi_app.dependency_overrides.pop(get_request_user, None)
 
 
 def test_claims_status_reports_queue_activity():
@@ -241,30 +284,35 @@ def test_claims_status_reports_queue_activity():
             except Exception:
                 pass
 
+    fastapi_app.dependency_overrides[get_auth_principal] = _principal_override(True)
     fastapi_app.dependency_overrides[get_request_user] = _override_user
     fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db
 
-    with TestClient(fastapi_app) as client:
-        initial = client.get("/api/v1/claims/status")
-        assert initial.status_code == 200
-        init_body = initial.json()
-        assert init_body.get("stats", {}).get("enqueued", 0) == 0
+    try:
+        with TestClient(fastapi_app) as client:
+            initial = client.get("/api/v1/claims/status")
+            assert initial.status_code == 200
+            init_body = initial.json()
+            assert init_body.get("stats", {}).get("enqueued", 0) == 0
 
-        r = client.post(f"/api/v1/claims/{media_id}/rebuild")
-        assert r.status_code == 200, r.text
+            r = client.post(f"/api/v1/claims/{media_id}/rebuild")
+            assert r.status_code == 200, r.text
 
-        _wait_for_service_completion(expected_processed=1)
+            _wait_for_service_completion(expected_processed=1)
 
-        status = client.get("/api/v1/claims/status")
-        assert status.status_code == 200, status.text
-        data = status.json()
-        stats = data.get("stats", {})
-        assert stats.get("enqueued") == 1
-        assert stats.get("processed") == 1
-        assert data.get("queue_length") == 0
-
-    svc.stop()
-    svc.start()
+            status = client.get("/api/v1/claims/status")
+            assert status.status_code == 200, status.text
+            data = status.json()
+            stats = data.get("stats", {})
+            assert stats.get("enqueued") == 1
+            assert stats.get("processed") == 1
+            assert data.get("queue_length") == 0
+    finally:
+        fastapi_app.dependency_overrides.pop(get_auth_principal, None)
+        fastapi_app.dependency_overrides.pop(get_request_user, None)
+        fastapi_app.dependency_overrides.pop(get_media_db_for_user, None)
+        svc.stop()
+        svc.start()
 
 
 def test_claims_rebuild_policies_enqueue_expected_media():
@@ -281,6 +329,7 @@ def test_claims_rebuild_policies_enqueue_expected_media():
     async def _override_user():
         return _Admin()
 
+    fastapi_app.dependency_overrides[get_auth_principal] = _principal_override(True)
     fastapi_app.dependency_overrides[get_request_user] = _override_user
 
     policies = ["missing", "stale", "all"]
@@ -331,3 +380,4 @@ def test_claims_rebuild_policies_enqueue_expected_media():
     finally:
         fastapi_app.dependency_overrides.pop(get_media_db_for_user, None)
         fastapi_app.dependency_overrides.pop(get_request_user, None)
+        fastapi_app.dependency_overrides.pop(get_auth_principal, None)

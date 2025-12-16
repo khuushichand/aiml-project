@@ -75,51 +75,42 @@ The tldw_server AuthNZ module implements a comprehensive Role-Based Access Contr
 
 ## Usage in Code
 
-### Using Permission Decorators (FastAPI)
+### Claim-First Dependencies (Preferred)
+
+For new FastAPI endpoints, use the unified `AuthPrincipal` dependency stack from `auth_deps`. This keeps authorization claim-first and aligned with the AuthNZ refactor PRDs and the AuthNZ Code Guide.
 
 ```python
-from fastapi import Depends
-from tldw_Server_API.app.core.AuthNZ.permissions import (
-    PermissionChecker,
-    RoleChecker,
-    AnyPermissionChecker,
-    AllPermissionsChecker
+from fastapi import APIRouter, Depends
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
+    require_permissions,
+    require_roles,
 )
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
-# Single permission check
-@router.delete("/media/{id}")
-async def delete_media(
+router = APIRouter()
+
+@router.get("/secure")
+async def secure(principal: AuthPrincipal = Depends(get_auth_principal)):
+    return {"principal_id": principal.principal_id, "roles": principal.roles}
+
+@router.post("/media/{media_id}", dependencies=[Depends(require_permissions("media.update"))])
+async def update_media(
     media_id: int,
-    user: User = Depends(PermissionChecker("media.delete"))
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
-    # Only users with media.delete permission can access
-    pass
+    return {"ok": True, "media_id": media_id, "by": principal.principal_id}
 
-# Role check
-@router.get("/admin/dashboard")
+@router.get("/admin/dashboard", dependencies=[Depends(require_roles("admin"))])
 async def admin_dashboard(
-    user: User = Depends(RoleChecker("admin"))
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
-    # Only admin users can access
-    pass
-
-# Any of multiple permissions
-@router.put("/content/{id}")
-async def update_content(
-    content_id: int,
-    user: User = Depends(AnyPermissionChecker(["media.update", "media.create"]))
-):
-    # Users with either permission can access
-    pass
-
-# All permissions required
-@router.post("/system/critical")
-async def critical_operation(
-    user: User = Depends(AllPermissionsChecker(["system.configure", "system.maintenance"]))
-):
-    # User must have both permissions
-    pass
+    return {"ok": True, "admin_id": principal.principal_id}
 ```
+
+### Legacy Permission Decorators (Historical)
+
+Earlier versions exposed decorator-style FastAPI helpers (`PermissionChecker`, `RoleChecker`, `AnyPermissionChecker`, `AllPermissionsChecker`) from `permissions.py`. These have been removed in favor of the claim-first dependency pattern; new and existing routes should rely on `get_auth_principal` together with `require_permissions` / `require_roles` instead.
 
 ### Using Permission Functions
 

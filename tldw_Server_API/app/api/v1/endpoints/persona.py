@@ -17,7 +17,8 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
 )
 from tldw_Server_API.app.core.feature_flags import is_persona_enabled
 from tldw_Server_API.app.core.MCP_unified import get_mcp_server, MCPRequest
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 
 
@@ -61,10 +62,17 @@ async def persona_stream(
     token: Optional[str] = Query(default=None),
     api_key: Optional[str] = Query(default=None),
 ):
-    """Bi-directional placeholder stream.
+    """
+    Bi-directional placeholder stream.
 
     Standardized with WebSocketStream lifecycle/metrics; domain payloads unchanged.
     Accepts JSON text frames and echoes minimal notices.
+
+    Security model:
+    - Feature-gated via PERSONA_ENABLED.
+    - API keys are optional and used only to associate a best-effort user_id with the
+      session; invalid or missing keys fall back to anonymous persona sessions rather
+      than closing the connection.
     """
     # Wrap socket for lifecycle and metrics; keep domain payloads unchanged
     stream = WebSocketStream(
@@ -80,21 +88,30 @@ async def persona_stream(
         await stream.send_json({"event": "notice", "level": "error", "message": "Persona disabled"})
         try:
             await stream.ws.close(code=1000)
-        except Exception:
-            pass
+        except (RuntimeError, OSError) as exc:
+            logger.debug(f"Persona stream close failed after disable notice: {exc}")
         return
     try:
         await stream.send_json({"event": "notice", "message": "persona stream connected (scaffold)"})
-        # Resolve user_id from token/api_key similar to MCP ws
-        # Resolve user_id from token/api_key similar to MCP ws
+        # Resolve user_id from api_key via AuthNZ API key manager.
+        # On known AuthNZ/database errors, log at debug level and continue
+        # without a resolved user_id rather than failing the stream. Persona is
+        # currently designed as an optional personalization layer for single-user
+        # style deployments, so invalid/missing API keys are treated as anonymous
+        # sessions rather than hard auth failures.
         user_id: Optional[str] = None
-        try:
-            if api_key and is_single_user_mode():
-                s = get_settings()
-                if api_key == s.SINGLE_USER_API_KEY:
-                    user_id = str(s.SINGLE_USER_FIXED_ID)
-        except Exception:
-            pass
+        if api_key:
+            try:
+                api_mgr = await get_api_key_manager()
+                client = getattr(ws, "client", None)
+                client_ip = getattr(client, "host", None) if client is not None else None
+                info = await api_mgr.validate_api_key(api_key, ip_address=client_ip)
+                if info and info.get("user_id") is not None:
+                    user_id = str(info["user_id"])
+            except (DatabaseError, InvalidTokenError) as exc:
+                logger.debug(f"persona stream: failed to resolve user from api_key: {exc}")
+            except Exception:  # noqa: BLE001 - keep stream alive, fall back to anonymous
+                logger.exception("persona stream: unexpected error resolving user from api_key")
         # Basic RBAC policy from settings
         from tldw_Server_API.app.core.config import settings as _app_settings
         allow_export = bool(_app_settings.get("PERSONA_RBAC_ALLOW_EXPORT", False))
@@ -131,7 +148,7 @@ async def persona_stream(
             return {"steps": steps}
 
         while True:
-            raw = await ws.receive_text()
+            raw = await stream.receive_text()
             try:
                 msg = json.loads(raw)
             except Exception:

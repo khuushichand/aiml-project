@@ -15,7 +15,6 @@ def _setup_env():
     os.environ["SINGLE_USER_FIXED_ID"] = "1"
     os.environ["MCP_JWT_SECRET"] = "x" * 64
     os.environ["MCP_API_KEY_SALT"] = "s" * 64
-    os.environ["MCP_PROMETHEUS_PUBLIC"] = "1"
     os.environ["MCP_TRUST_X_FORWARDED"] = "1"
     os.environ["MCP_ALLOWED_IPS"] = ""
     # Reset config/IP controller caches to pick up env
@@ -68,8 +67,35 @@ class StubWriteModule(BaseModule):
 def client():
     _setup_env()
     from tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint import router as mcp_router
+    from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+    from fastapi import Request, HTTPException, status
     app = FastAPI()
     app.include_router(mcp_router, prefix="/api/v1")
+
+    async def _fake_get_auth_principal(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        auth = request.headers.get("Authorization")
+        x_api_key = request.headers.get("X-API-KEY")
+        if not auth and not x_api_key:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+            )
+        return AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject=None,
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.logs"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+
+    app.dependency_overrides[auth_deps.get_auth_principal] = _fake_get_auth_principal
     with TestClient(app) as c:
         yield c
 
@@ -115,8 +141,14 @@ async def test_prometheus_exports_validation_counters(client: TestClient):
     body1 = r1.json()
     assert isinstance(body1, dict) and body1.get("error") is not None
 
-    # Scrape Prometheus metrics (public mode)
-    r2 = client.get("/api/v1/mcp/metrics/prometheus", headers={"X-Forwarded-For": "127.0.0.1"})
+    # Scrape Prometheus metrics with auth
+    r2 = client.get(
+        "/api/v1/mcp/metrics/prometheus",
+        headers={
+            "X-Forwarded-For": "127.0.0.1",
+            "Authorization": f"Bearer {token}",
+        },
+    )
     assert r2.status_code == 200
     text = r2.text
     # Expect either schema or validator invalid counter present for our tool
@@ -193,7 +225,13 @@ async def test_prometheus_validator_missing_counter(client: TestClient):
     assert isinstance(body1, dict) and body1.get("error") is not None
 
     # Scrape metrics and assert validator-missing counter appears
-    r2 = client.get("/api/v1/mcp/metrics/prometheus", headers={"X-Forwarded-For": "127.0.0.1"})
+    r2 = client.get(
+        "/api/v1/mcp/metrics/prometheus",
+        headers={
+            "X-Forwarded-For": "127.0.0.1",
+            "Authorization": f"Bearer {token}",
+        },
+    )
     assert r2.status_code == 200
     text = r2.text
     assert "mcp_tool_validator_missing_total" in text

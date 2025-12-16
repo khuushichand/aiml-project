@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import string
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 from typing import Optional, List, Tuple, Dict, Any
 #
 # 3rd-party imports
@@ -29,16 +29,16 @@ else:
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
-    derive_hmac_key,
-    derive_hmac_key_candidates,
-)
+from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     AuthenticationError,
     InvalidTokenError,
     DatabaseError
 )
+from tldw_Server_API.app.core.AuthNZ.repos.mfa_repo import AuthnzMfaRepo
+
+_DB_POOL_NOT_INITIALIZED = "MFAService database pool not initialized"
 
 #######################################################################################################################
 #
@@ -59,12 +59,14 @@ class MFAService:
     def __init__(
         self,
         db_pool: Optional[DatabasePool] = None,
-        settings: Optional[Settings] = None
+        settings: Optional[Settings] = None,
+        repo: Optional[AuthnzMfaRepo] = None,
     ):
         """Initialize MFA service"""
         self.settings = settings or get_settings()
         self.db_pool = db_pool
         self._initialized = False
+        self._repo: Optional[AuthnzMfaRepo] = repo
         self._cipher: Optional[Fernet] = None
         self._cipher_candidates: List[Fernet] = []
         self._cipher_key_material: Tuple[bytes, ...] = tuple()
@@ -89,6 +91,24 @@ class MFAService:
 
         self._initialized = True
         logger.info("MFAService initialized")
+
+    def _ensure_db_pool(self) -> DatabasePool:
+        """Ensure database pool is initialized, raising DatabaseError if not."""
+        if not self.db_pool:
+            raise DatabaseError(_DB_POOL_NOT_INITIALIZED)
+        return self.db_pool
+
+    def _get_repo(self) -> AuthnzMfaRepo:
+        """
+        Return the MFA repository, constructing it lazily when needed.
+
+        This allows reusing a single repo instance and makes it easy to
+        inject a fake or preconfigured repo in tests.
+        """
+        if self._repo is not None:
+            return self._repo
+        self._repo = AuthnzMfaRepo(self._ensure_db_pool())
+        return self._repo
 
     def _ensure_cipher_candidates(self) -> List[Fernet]:
         """Return Fernet instances for all active/legacy key materials."""
@@ -309,28 +329,13 @@ class MFAService:
             hashed_codes = [self._hash_backup_code(user_id, code) for code in backup_codes]
             backup_codes_json = json.dumps(hashed_codes)
 
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    await conn.execute("""
-                        UPDATE users
-                        SET totp_secret = $1,
-                            two_factor_enabled = true,
-                            backup_codes = $2,
-                            updated_at = $3
-                        WHERE id = $4
-                    """, encrypted_secret, backup_codes_json, datetime.utcnow(), user_id)
-                else:
-                    # SQLite
-                    await conn.execute("""
-                        UPDATE users
-                        SET totp_secret = ?,
-                            two_factor_enabled = 1,
-                            backup_codes = ?,
-                            updated_at = ?
-                        WHERE id = ?
-                    """, (encrypted_secret, backup_codes_json, datetime.utcnow().isoformat(), user_id))
-                    await conn.commit()
+            repo = self._get_repo()
+            await repo.set_mfa_config(
+                user_id=user_id,
+                encrypted_secret=encrypted_secret,
+                backup_codes_json=backup_codes_json,
+                updated_at=datetime.now(timezone.utc),
+            )
 
             logger.info(f"MFA enabled for user {user_id}")
             return True
@@ -353,28 +358,11 @@ class MFAService:
             await self.initialize()
 
         try:
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    await conn.execute("""
-                        UPDATE users
-                        SET totp_secret = NULL,
-                            two_factor_enabled = false,
-                            backup_codes = NULL,
-                            updated_at = $1
-                        WHERE id = $2
-                    """, datetime.utcnow(), user_id)
-                else:
-                    # SQLite
-                    await conn.execute("""
-                        UPDATE users
-                        SET totp_secret = NULL,
-                            two_factor_enabled = 0,
-                            backup_codes = NULL,
-                            updated_at = ?
-                        WHERE id = ?
-                    """, (datetime.utcnow().isoformat(), user_id))
-                    await conn.commit()
+            repo = self._get_repo()
+            await repo.clear_mfa_config(
+                user_id=user_id,
+                updated_at=datetime.now(timezone.utc),
+            )
 
             logger.info(f"MFA disabled for user {user_id}")
             return True
@@ -389,19 +377,8 @@ class MFAService:
             await self.initialize()
 
         try:
-            async with self.db_pool.acquire() as conn:
-                if hasattr(conn, "fetchval"):
-                    encrypted = await conn.fetchval(
-                        "SELECT totp_secret FROM users WHERE id = $1",
-                        user_id,
-                    )
-                else:
-                    cursor = await conn.execute(
-                        "SELECT totp_secret FROM users WHERE id = ?",
-                        (user_id,),
-                    )
-                    result = await cursor.fetchone()
-                    encrypted = result[0] if result else None
+            repo = self._get_repo()
+            encrypted = await repo.get_encrypted_totp_secret(user_id)
             return self._decrypt_secret(encrypted)
         except DatabaseError:
             raise
@@ -423,34 +400,28 @@ class MFAService:
             await self.initialize()
 
         try:
-            async with self.db_pool.acquire() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    result = await conn.fetchrow("""
-                        SELECT two_factor_enabled, totp_secret IS NOT NULL as has_secret,
-                               backup_codes IS NOT NULL as has_backup_codes
-                        FROM users WHERE id = $1
-                    """, user_id)
-                else:
-                    # SQLite
-                    cursor = await conn.execute("""
-                        SELECT two_factor_enabled,
-                               totp_secret IS NOT NULL as has_secret,
-                               backup_codes IS NOT NULL as has_backup_codes
-                        FROM users WHERE id = ?
-                    """, (user_id,))
-                    result = await cursor.fetchone()
+            repo = self._get_repo()
+            row = await repo.get_mfa_status_row(user_id)
 
-                if result:
-                    return {
-                        "enabled": bool(result[0] if isinstance(result, tuple) else result['two_factor_enabled']),
-                        "has_secret": bool(result[1] if isinstance(result, tuple) else result['has_secret']),
-                        "has_backup_codes": bool(result[2] if isinstance(result, tuple) else result['has_backup_codes']),
-                        "method": "totp" if result[0] else None
-                    }
+            if row:
+                enabled_raw = row.get("two_factor_enabled")
+                has_secret_raw = row.get("has_secret")
+                has_backup_raw = row.get("has_backup_codes")
+                enabled = bool(enabled_raw)
+                return {
+                    "enabled": enabled,
+                    "has_secret": bool(has_secret_raw),
+                    "has_backup_codes": bool(has_backup_raw),
+                    "method": "totp" if enabled else None,
+                }
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - fail safe fallback for dashboard views
             logger.error(f"Failed to get MFA status: {e}")
+            # This method is used for read-only status introspection. On
+            # unexpected failures we intentionally fall back to a "MFA
+            # disabled" snapshot instead of propagating the error, so that
+            # dashboard/profile views are not blocked by transient MFA
+            # backend issues.
 
         return {
             "enabled": False,
@@ -478,80 +449,72 @@ class MFAService:
             await self.initialize()
 
         try:
-            async with self.db_pool.transaction() as conn:
-                # Get backup codes
-                if hasattr(conn, 'fetchval'):
-                    # PostgreSQL
-                    backup_codes_json = await conn.fetchval(
-                        "SELECT backup_codes FROM users WHERE id = $1",
-                        user_id
-                    )
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        "SELECT backup_codes FROM users WHERE id = ?",
-                        (user_id,)
-                    )
-                    result = await cursor.fetchone()
-                    backup_codes_json = result[0] if result else None
+            repo = self._get_repo()
 
-                if not backup_codes_json:
-                    return False
+            # Get backup codes JSON
+            backup_codes_json = await repo.get_backup_codes_json(user_id)
 
-                backup_codes = json.loads(backup_codes_json)
-                hash_candidates = self._hash_backup_code_candidates(user_id, code)
-                normalized_input = self._normalize_backup_code(code)
+            if not backup_codes_json:
+                return False
 
-                matched = False
-                for digest in hash_candidates:
-                    if digest in backup_codes:
-                        backup_codes.remove(digest)
-                        matched = True
-                        break
-                if not matched:
-                    for candidate in list(backup_codes):
-                        if not isinstance(candidate, str):
-                            continue
-                        if self._normalize_backup_code(candidate) == normalized_input:
-                            backup_codes.remove(candidate)
-                            matched = True
-                            break
-                if not matched:
-                    return False
+            backup_codes = json.loads(backup_codes_json)
+            hash_candidates = self._hash_backup_code_candidates(user_id, code)
+            normalized_input = self._normalize_backup_code(code)
 
-                # Ensure remaining codes are stored as hashed values
-                normalized_codes: List[str] = []
-                for candidate in backup_codes:
+            matched = False
+            for digest in hash_candidates:
+                if digest in backup_codes:
+                    backup_codes.remove(digest)
+                    matched = True
+                    break
+            if not matched:
+                # Fallback for backward compatibility: older deployments stored
+                # backup codes as plain-text strings. Compare normalized values
+                # here and then re-save remaining codes as hashes below. This
+                # path can be removed once all users have migrated.
+                # TODO: Track migration progress and remove this fallback in a future release.
+                for candidate in list(backup_codes):
                     if not isinstance(candidate, str):
                         continue
-                    if len(candidate) == 64 and all(ch in string.hexdigits for ch in candidate):
-                        normalized_codes.append(candidate.lower())
-                    else:
-                        normalized_codes.append(self._hash_backup_code(user_id, candidate))
+                    if self._normalize_backup_code(candidate) == normalized_input:
+                        backup_codes.remove(candidate)
+                        matched = True
+                        logger.debug(f"User {user_id} used legacy plain-text backup code")
+                        break
+            if not matched:
+                return False
 
-                updated_codes_json = json.dumps(normalized_codes)
-
-                # Update database
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    await conn.execute(
-                        "UPDATE users SET backup_codes = $1 WHERE id = $2",
-                        updated_codes_json, user_id
-                    )
+            # Ensure remaining codes are stored as hashed values
+            normalized_codes: List[str] = []
+            for candidate in backup_codes:
+                if not isinstance(candidate, str):
+                    continue
+                if len(candidate) == 64 and all(ch in string.hexdigits for ch in candidate):
+                    normalized_codes.append(candidate.lower())
                 else:
-                    # SQLite
-                    await conn.execute(
-                        "UPDATE users SET backup_codes = ? WHERE id = ?",
-                        (updated_codes_json, user_id)
-                    )
-                    await conn.commit()
+                    normalized_codes.append(self._hash_backup_code(user_id, candidate))
 
-                logger.info(f"Backup code used for user {user_id}")
-                return True
+            updated_codes_json = json.dumps(normalized_codes)
 
-        except Exception as e:
+            # Atomically persist updated codes only if the underlying value has not
+            # changed since we loaded it, so the same backup code cannot be consumed
+            # twice under concurrent requests.
+            consumed = await repo.consume_backup_codes_json(
+                user_id=user_id,
+                expected_backup_codes_json=backup_codes_json,
+                updated_backup_codes_json=updated_codes_json,
+            )
+            if not consumed:
+                logger.info(
+                    f"Backup code for user {user_id} could not be consumed (already used or refreshed)."
+                )
+                return False
+        except Exception as e:  # noqa: BLE001 - fail closed on any unexpected error in auth path
             logger.error(f"Failed to verify backup code: {e}")
             return False
+        else:
+            logger.info(f"Backup code used for user {user_id}")
+            return True
 
     async def regenerate_backup_codes(
         self,
@@ -575,20 +538,12 @@ class MFAService:
             hashed_codes = [self._hash_backup_code(user_id, code) for code in new_codes]
             backup_codes_json = json.dumps(hashed_codes)
 
-            async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    await conn.execute(
-                        "UPDATE users SET backup_codes = $1, updated_at = $2 WHERE id = $3",
-                        backup_codes_json, datetime.utcnow(), user_id
-                    )
-                else:
-                    # SQLite
-                    await conn.execute(
-                        "UPDATE users SET backup_codes = ?, updated_at = ? WHERE id = ?",
-                        (backup_codes_json, datetime.utcnow().isoformat(), user_id)
-                    )
-                    await conn.commit()
+            repo = self._get_repo()
+            await repo.set_backup_codes_with_timestamp(
+                user_id=user_id,
+                backup_codes_json=backup_codes_json,
+                updated_at=datetime.now(timezone.utc),
+            )
 
             logger.info(f"Regenerated backup codes for user {user_id}")
             return new_codes

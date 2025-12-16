@@ -80,9 +80,29 @@ https://www.a11y-collective.com/blog/accessible-writing/?ref=sidebar
 https://uxdesign.cc/right-narratives-shape-lasting-products-9a50e28caae9
 https://posthog.com/newsletter/building-ai-features
 https://savolai.net/ux/product-and-framework-thinkers-when-developers-and-uxers-dont-get-each-other/
+https://emesstyle.com/usability/
+https://medium.com/@ryan.almeida86/5-design-psychology-secrets-every-ui-ux-designer-should-know-0cb50532ff1c
+https://medium.com/design-bootcamp/the-end-of-the-single-truth-rethinking-ai-user-interfaces-to-combat-mode-collapse-36717074d0e5
+https://medium.com/design-bootcamp/best-practices-for-user-flow-design-using-figma-a3c759055f37
+https://medium.com/design-bootcamp/7-ui-ux-mistakes-that-scream-youre-a-beginner-and-exactly-how-to-fix-each-one-6e407242a3e7
+https://medium.com/@ryan.almeida86/5-micro-interactions-to-make-any-product-feel-premium-68e3b3eae3bf
+https://daleenrabe.substack.com/p/the-product-designers-lens
+https://nurxmedov.medium.com/stop-overthinking-every-design-decision-use-these-7-rules-instead-70be04705392
+https://www.nngroup.com/articles/designing-use-case-prompt-suggestions/
+https://arxiv.org/pdf/2309.14459
+https://uxplanet.org/16-ui-design-tips-ba2e7524d203
+https://creativecommons.org/2006/02/14/yahoodesignpatternlibrary/
+https://component.gallery/
+https://medium.com/@alphadesignglobal/8-tiny-ui-fixes-that-will-make-your-product-feel-10x-smarter-afffb1a61a6b
 
 
 
+www.aiuxplayground.com/pattern/chat-artifact
+https://www.8bitcn.com/?ref=sidebar
+https://uxdesign.cc/designing-decisions-behavioral-psychology-that-moves-users-e5fb08e7917a
+https://medium.com/design-bootcamp/top-ui-ux-trends-to-watch-in-2026-379a955ce591
+https://commercialtype.com/about/collections/thorowgood_grotesque
+https://uxdesign.cc/locksmith-stickers-are-annoying-but-kind-of-genius-85690b7ae045
 https://savolai.net/ux/the-why-and-the-how-usability-testing/
 https://medium.com/design-bootcamp/10-ui-ux-cheat-codes-for-instantly-better-designs-2c6f6b4312c8
 https://medium.com/ai-ux-designers/37-ai-patterns-for-product-teams-e04c953270b3

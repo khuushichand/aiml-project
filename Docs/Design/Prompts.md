@@ -19,7 +19,7 @@ https://news.ycombinator.com/item?id=44838018
 https://www.turingpost.com/p/topic25
 https://medium.com/@sahin.samia/prompt-compression-in-large-language-models-llms-making-every-token-count-078a2d1c7e03
 https://github.com/open-compass/ProSA
-
+https://academy.openai.com/public/tags/prompt-packs-6849a0f98c613939acef841c
 https://ai-sdk.dev/elements/components/prompt-input
 https://dspy.ai/api/optimizers/MIPROv2/
 https://github.com/davidkimai/Context-Engineering

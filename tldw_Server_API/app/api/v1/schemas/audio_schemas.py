@@ -373,7 +373,8 @@ class SpeechChatResponse(BaseModel):
     Response body for the non-streaming Speech-to-Speech chat endpoint.
 
     Returns the resolved session identifier, user transcript, assistant reply text,
-    and base64-encoded audio for the reply, along with timing and optional token usage.
+    and base64-encoded audio for the reply, along with timing, optional token usage,
+    and an optional action_result payload when a downstream action/workflow is executed.
     """
 
     session_id: str = Field(..., description="Resolved chat session identifier.")
@@ -398,4 +399,8 @@ class SpeechChatResponse(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Optional metadata echo or server-side annotations.",
+    )
+    action_result: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional action/workflow execution result derived from the transcript.",
     )

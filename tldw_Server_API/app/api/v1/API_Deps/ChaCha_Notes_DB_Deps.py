@@ -40,7 +40,10 @@ from tldw_Server_API.app.core.Utils.Utils import get_project_root
 # --- Configuration ---
 _HAS_CACHETOOLS = True
 DEFAULT_CHACHA_DB_SUBDIR = "chachanotes_user_dbs"  # This will be a sub-directory within the user's main DB directory
-_CHACHA_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chacha-db")
+_CHACHA_EXECUTOR: ThreadPoolExecutor | None = None
+_CHACHA_EXECUTOR_SHUTDOWN: bool = False
+_CHACHA_EXECUTOR_LOCK = threading.Lock()
+_CHACHA_EXECUTOR_MAX_WORKERS = max(1, int(os.getenv("CHACHA_EXECUTOR_MAX_WORKERS", "4")))
 _CHACHA_WATCHDOG_SECS = float(os.getenv("CHACHA_INIT_WATCHDOG_SECS", "5"))
 _CHACHA_HEALTH_LOCK = threading.Lock()
 _CHACHA_HEALTH: Dict[str, Any] = {
@@ -54,6 +57,26 @@ _CHACHA_HEALTH: Dict[str, Any] = {
     "default_char_failures": 0,
     "warm_startups": 0,
 }
+
+
+def _get_chacha_executor() -> ThreadPoolExecutor:
+    """
+    Return a live executor for ChaChaNotes DB work.
+
+    The main FastAPI app shuts down this executor during application shutdown.
+    In test suites, startup/shutdown can happen repeatedly within the same
+    Python process; recreating the executor on-demand avoids order-dependent
+    failures like "cannot schedule new futures after shutdown".
+    """
+    global _CHACHA_EXECUTOR, _CHACHA_EXECUTOR_SHUTDOWN
+    with _CHACHA_EXECUTOR_LOCK:
+        if _CHACHA_EXECUTOR is None or _CHACHA_EXECUTOR_SHUTDOWN:
+            _CHACHA_EXECUTOR = ThreadPoolExecutor(
+                max_workers=_CHACHA_EXECUTOR_MAX_WORKERS,
+                thread_name_prefix="chacha-db",
+            )
+            _CHACHA_EXECUTOR_SHUTDOWN = False
+        return _CHACHA_EXECUTOR
 
 
 def _normalise_user_base_path(raw_path: Path) -> Path:
@@ -266,7 +289,7 @@ async def _ensure_default_character_async(db_instance: CharactersRAGDB, user_id:
     loop = asyncio.get_running_loop()
     try:
         await asyncio.wait_for(
-            loop.run_in_executor(_CHACHA_EXECUTOR, _ensure_default_character, db_instance),
+            loop.run_in_executor(_get_chacha_executor(), _ensure_default_character, db_instance),
             timeout=5,
         )
         _record_default_character(True)
@@ -370,7 +393,7 @@ async def _get_or_init_db_instance(user_id: int, client_id: str) -> CharactersRA
     start = time.perf_counter()
     try:
         db_instance = await asyncio.wait_for(
-            loop.run_in_executor(_CHACHA_EXECUTOR, _create_and_prepare_db, user_id, client_id),
+            loop.run_in_executor(_get_chacha_executor(), _create_and_prepare_db, user_id, client_id),
             timeout=max(_CHACHA_WATCHDOG_SECS * 3, 5),
         )
         duration_ms = (time.perf_counter() - start) * 1000
@@ -468,9 +491,31 @@ def close_all_chacha_db_instances():
 
 
 def shutdown_chacha_executor(wait: bool = False) -> None:
-    """Shut down the ChaChaNotes executor to avoid lingering threads on shutdown."""
+    """
+    Shut down the ChaChaNotes executor to avoid lingering threads on shutdown.
+
+    Captures the current executor under lock, clears the global reference,
+    marks shutdown, then releases the lock before shutting down the captured
+    executor. This pattern avoids deadlock and allows _get_chacha_executor()
+    to safely create a new executor if called again (e.g., in test scenarios).
+
+    Args:
+        wait: If True, block until all pending futures complete. If False,
+            return immediately after cancelling pending futures.
+
+    Note:
+        Uses cancel_futures=True to aggressively terminate pending work.
+        Safe to call multiple times; subsequent calls are no-ops.
+    """
+    global _CHACHA_EXECUTOR, _CHACHA_EXECUTOR_SHUTDOWN
+    with _CHACHA_EXECUTOR_LOCK:
+        executor = _CHACHA_EXECUTOR
+        _CHACHA_EXECUTOR = None
+        _CHACHA_EXECUTOR_SHUTDOWN = True
+    if executor is None:
+        return
     try:
-        _CHACHA_EXECUTOR.shutdown(wait=wait, cancel_futures=True)
+        executor.shutdown(wait=wait, cancel_futures=True)
     except Exception as e:
         logger.debug(f"ChaChaNotes executor shutdown error: {e}")
 

@@ -2,6 +2,8 @@
 # Description: Schemas for RBAC admin endpoints (roles, permissions, overrides, limits)
 
 from typing import Optional, List, Dict, Any
+from enum import Enum
+
 from pydantic import BaseModel, Field, ConfigDict
 
 
@@ -37,10 +39,20 @@ class UserRoleListResponse(BaseModel):
     roles: List[RoleResponse]
 
 
+class OverrideEffect(str, Enum):
+    """Allowed override effects for user permissions."""
+
+    allow = "allow"
+    deny = "deny"
+
+
 class UserOverrideUpsertRequest(BaseModel):
     permission_id: Optional[int] = None
     permission_name: Optional[str] = None
-    effect: str = Field(..., pattern="^(allow|deny)$")
+    effect: OverrideEffect = Field(
+        ...,
+        description="Override effect: 'allow' to grant, 'deny' to revoke",
+    )
     expires_at: Optional[str] = None  # ISO timestamp
 
 

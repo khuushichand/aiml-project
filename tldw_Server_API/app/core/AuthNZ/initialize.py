@@ -16,6 +16,7 @@ import secrets
 from pathlib import Path
 from typing import Optional
 from getpass import getpass
+from urllib.parse import urlsplit
 from loguru import logger
 from dotenv import load_dotenv
 
@@ -42,6 +43,41 @@ from tldw_Server_API.app.core.AuthNZ.monitoring import get_authnz_monitor
 #
 # Initialization Functions
 #
+
+
+def _sanitize_db_url(url: Optional[str]) -> str:
+    """Strip credentials from DB URL for safe diagnostics."""
+    if not url:
+        return "unknown"
+
+    try:
+        parsed = urlsplit(url)
+
+        # For file-based URLs (e.g., sqlite) that lack a netloc, return as-is.
+        if not parsed.netloc:
+            return url
+
+        netloc_no_auth = parsed.netloc.split("@", 1)[-1]
+        host = parsed.hostname or netloc_no_auth
+        port = f":{parsed.port}" if parsed.port else ""
+        # urlsplit strips IPv6 brackets; restore them when reconstructing
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+
+        sanitized_netloc = f"{host}{port}"
+        prefix = f"{parsed.scheme}://" if parsed.scheme else ""
+        sanitized_url = f"{prefix}{sanitized_netloc}{parsed.path}"
+
+        if parsed.query:
+            sanitized_url += f"?{parsed.query}"
+        if parsed.fragment:
+            sanitized_url += f"#{parsed.fragment}"
+
+        return sanitized_url or url
+    except Exception:
+        # Fall back to the original string if parsing fails; avoid raising during diagnostics.
+        return url
+
 
 def print_banner():
     """Print initialization banner"""
@@ -124,7 +160,8 @@ def check_environment():
 
     print("✅ Environment configuration valid")
     print(f"   Mode: {settings.AUTH_MODE}")
-    print(f"   Database: {settings.DATABASE_URL[:30]}...")
+    db_url_safe = _sanitize_db_url(settings.DATABASE_URL)
+    print(f"   Database: {db_url_safe}")
 
     return True
 
@@ -186,371 +223,61 @@ async def setup_database():
             users_db = await get_users_db()
             await users_db.initialize()
 
-            # Ensure sessions and registration_codes tables (if missing)
             from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+            from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
+                ensure_authnz_core_tables_pg,
+                ensure_api_keys_tables_pg,
+                ensure_usage_tables_pg,
+                ensure_virtual_key_counters_pg,
+            )
+
             pool = await get_db_pool()
+
+            # Ensure core AuthNZ tables (audit_logs, sessions, registration_codes, RBAC, orgs/teams)
+            await ensure_authnz_core_tables_pg(pool)
+
+            # Seed baseline RBAC roles and permissions (centralized helper to avoid drift)
+            from tldw_Server_API.app.core.AuthNZ.rbac_seed import ensure_baseline_rbac_seed
             async with pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS audit_logs (
-                            id SERIAL PRIMARY KEY,
-                            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                            action VARCHAR(255) NOT NULL,
-                            resource_type VARCHAR(128),
-                            resource_id INTEGER,
-                            ip_address VARCHAR(45),
-                            user_agent TEXT,
-                            status VARCHAR(32),
-                            details TEXT,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )
-                    """)
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)")
+                await ensure_baseline_rbac_seed(conn, include_mcp_permissions=False)
 
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS sessions (
-                            id SERIAL PRIMARY KEY,
-                            user_id INTEGER NOT NULL,
-                            token_hash VARCHAR(64) NOT NULL,
-                            refresh_token_hash VARCHAR(64),
-                            encrypted_token TEXT,
-                            encrypted_refresh TEXT,
-                            expires_at TIMESTAMP NOT NULL,
-                            refresh_expires_at TIMESTAMP,
-                            ip_address VARCHAR(45),
-                            user_agent TEXT,
-                            device_id TEXT,
-                            is_active BOOLEAN DEFAULT TRUE,
-                            is_revoked BOOLEAN DEFAULT FALSE,
-                            revoked_at TIMESTAMP,
-                            revoked_by INTEGER,
-                            revoke_reason TEXT,
-                            access_jti VARCHAR(128),
-                            refresh_jti VARCHAR(128),
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                        )
-                    """)
-                    await conn.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS refresh_expires_at TIMESTAMP")
-                    await conn.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS is_revoked BOOLEAN DEFAULT FALSE")
-                    await conn.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS access_jti VARCHAR(128)")
-                    await conn.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS refresh_jti VARCHAR(128)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_access_jti ON sessions(access_jti)")
-
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS registration_codes (
-                            id SERIAL PRIMARY KEY,
-                            code VARCHAR(128) UNIQUE NOT NULL,
-                            role_to_grant VARCHAR(50) DEFAULT 'user',
-                            max_uses INTEGER DEFAULT 1,
-                            uses INTEGER DEFAULT 0,
-                            expires_at TIMESTAMP,
-                            created_by INTEGER,
-                            metadata JSONB,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )
-                    """)
-                    # RBAC core tables
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS roles (
-                            id SERIAL PRIMARY KEY,
-                            name VARCHAR(64) UNIQUE NOT NULL,
-                            description TEXT,
-                            is_system BOOLEAN DEFAULT FALSE
-                        )
-                    """)
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS permissions (
-                            id SERIAL PRIMARY KEY,
-                            name VARCHAR(128) UNIQUE NOT NULL,
-                            description TEXT,
-                            category VARCHAR(64)
-                        )
-                    """)
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS role_permissions (
-                            role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-                            permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
-                            PRIMARY KEY (role_id, permission_id)
-                        )
-                    """)
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS user_roles (
-                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                            role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-                            granted_by INTEGER,
-                            expires_at TIMESTAMP,
-                            PRIMARY KEY (user_id, role_id)
-                        )
-                    """)
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS user_permissions (
-                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                            permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
-                            granted BOOLEAN NOT NULL DEFAULT TRUE,
-                            expires_at TIMESTAMP,
-                            PRIMARY KEY (user_id, permission_id)
-                        )
-                    """)
-                    # RBAC rate limits + usage
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS rbac_role_rate_limits (
-                            role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-                            resource VARCHAR(128) NOT NULL,
-                            limit_per_min INTEGER,
-                            burst INTEGER,
-                            PRIMARY KEY (role_id, resource)
-                        )
-                    """)
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS rbac_user_rate_limits (
-                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                            resource VARCHAR(128) NOT NULL,
-                            limit_per_min INTEGER,
-                            burst INTEGER,
-                            PRIMARY KEY (user_id, resource)
-                        )
-                    """)
-                    # (moved) Usage tables will be created after api_keys schema exists
-
-                    # Organizations and Teams hierarchy
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS organizations (
-                            id SERIAL PRIMARY KEY,
-                            uuid VARCHAR(64) UNIQUE,
-                            name VARCHAR(255) UNIQUE NOT NULL,
-                            slug VARCHAR(255) UNIQUE,
-                            owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                            is_active BOOLEAN DEFAULT TRUE,
-                            metadata JSONB,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )
-                    """)
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_owner ON organizations(owner_user_id)")
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS org_members (
-                            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                            role VARCHAR(32) DEFAULT 'member',
-                            status VARCHAR(32) DEFAULT 'active',
-                            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            PRIMARY KEY (org_id, user_id)
-                        )
-                    """)
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_org_members_user ON org_members(user_id)")
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS teams (
-                            id SERIAL PRIMARY KEY,
-                            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-                            name VARCHAR(255) NOT NULL,
-                            slug VARCHAR(255),
-                            description TEXT,
-                            is_active BOOLEAN DEFAULT TRUE,
-                            metadata JSONB,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            UNIQUE (org_id, name)
-                        )
-                    """)
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_teams_org ON teams(org_id)")
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS team_members (
-                            team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                            role VARCHAR(32) DEFAULT 'member',
-                            status VARCHAR(32) DEFAULT 'active',
-                            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            PRIMARY KEY (team_id, user_id)
-                        )
-                    """)
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id)")
-
-                    # Seed baseline RBAC roles and permissions
-                    await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('admin','Administrator', TRUE) ON CONFLICT (name) DO NOTHING")
-                    await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('user','Standard User', TRUE) ON CONFLICT (name) DO NOTHING")
-                    await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('viewer','Read-only User', TRUE) ON CONFLICT (name) DO NOTHING")
-
-                    perm_defs = [
-                        ('media.read','Read media','media'),
-                        ('media.create','Create media','media'),
-                        ('media.delete','Delete media','media'),
-                        ('system.configure','Configure system','system'),
-                        ('users.manage_roles','Manage user roles','users'),
-                    ]
-                    for _name, _desc, _cat in perm_defs:
-                        await conn.execute(
-                            "INSERT INTO permissions (name, description, category) VALUES ($1,$2,$3) ON CONFLICT (name) DO NOTHING",
-                            _name, _desc, _cat
-                        )
-                    role_rows = await conn.fetch("SELECT id,name FROM roles WHERE name IN ('admin','user','viewer')")
-                    perm_rows = await conn.fetch("SELECT id,name FROM permissions")
-                    role_id = {r['name']: r['id'] for r in role_rows}
-                    perm_id = {p['name']: p['id'] for p in perm_rows}
-                    # user role defaults
-                    for pname in ('media.read','media.create'):
-                        if pname in perm_id and 'user' in role_id:
-                            await conn.execute(
-                                "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-                                role_id['user'], perm_id[pname]
-                            )
-                    # viewer role default
-                    if 'viewer' in role_id and 'media.read' in perm_id:
-                        await conn.execute(
-                            "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-                            role_id['viewer'], perm_id['media.read']
-                        )
-                    # admin: grant all
-                    if 'admin' in role_id:
-                        for pname in ('media.read','media.create','media.delete','system.configure','users.manage_roles'):
-                            if pname in perm_id:
-                                await conn.execute(
-                                    "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-                                    role_id['admin'], perm_id[pname]
-                                )
-
-                    # (moved) api_keys column extensions will be applied after api_keys exists
             # Ensure API key tables after org/team tables exist
-            api_mgr = APIKeyManager()
-            await api_mgr.initialize()
+            ok_api_keys = await ensure_api_keys_tables_pg(pool)
+            if not ok_api_keys:
+                raise RuntimeError("Failed to ensure Postgres api_keys tables")
 
-            # Now create usage tables that reference api_keys
-            pool = await get_db_pool()
-            async with pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # Extend api_keys with Virtual Key fields (apply after base api_keys created)
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS is_virtual BOOLEAN DEFAULT FALSE")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS parent_key_id INTEGER REFERENCES api_keys(id)")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_tokens BIGINT")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_tokens BIGINT")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_day_usd DOUBLE PRECISION")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_budget_month_usd DOUBLE PRECISION")
-                    # Store allowlists as TEXT (JSON string) for compatibility across asyncpg versions
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_endpoints TEXT")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_providers TEXT")
-                    await conn.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS llm_allowed_models TEXT")
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS usage_log (
-                            id SERIAL PRIMARY KEY,
-                            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                            key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
-                            endpoint TEXT,
-                            status INTEGER,
-                            latency_ms INTEGER,
-                            bytes BIGINT,
-                            bytes_in BIGINT,
-                            meta JSONB,
-                            request_id TEXT
-                        )
-                    """)
-                    # Extend existing table (if created before) with request_id column
-                    await conn.execute("ALTER TABLE usage_log ADD COLUMN IF NOT EXISTS request_id TEXT")
-                    # Extend existing table with bytes_in if missing
-                    await conn.execute("ALTER TABLE usage_log ADD COLUMN IF NOT EXISTS bytes_in BIGINT")
-                    # Helpful indexes
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_log(ts)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_user ON usage_log(user_id)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_status ON usage_log(status)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_endpoint ON usage_log(endpoint)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_request_id ON usage_log(request_id)")
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS usage_daily (
-                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                            day DATE NOT NULL,
-                            requests INTEGER DEFAULT 0,
-                            errors INTEGER DEFAULT 0,
-                            bytes_total BIGINT DEFAULT 0,
-                            bytes_in_total BIGINT DEFAULT 0,
-                            latency_avg_ms DOUBLE PRECISION,
-                            PRIMARY KEY (user_id, day)
-                        )
-                    """)
-                    # Indexes for reporting
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_daily_day_user ON usage_daily(day, user_id)")
-                    # Extend existing table with bytes_in_total
-                    await conn.execute("ALTER TABLE usage_daily ADD COLUMN IF NOT EXISTS bytes_in_total BIGINT")
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS llm_usage_log (
-                            id SERIAL PRIMARY KEY,
-                            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                            key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
-                            endpoint TEXT,
-                            operation TEXT,
-                            provider TEXT,
-                            model TEXT,
-                            status INTEGER,
-                            latency_ms INTEGER,
-                            prompt_tokens INTEGER,
-                            completion_tokens INTEGER,
-                            total_tokens INTEGER,
-                            prompt_cost_usd DOUBLE PRECISION,
-                            completion_cost_usd DOUBLE PRECISION,
-                            total_cost_usd DOUBLE PRECISION,
-                            currency TEXT DEFAULT 'USD',
-                            estimated BOOLEAN DEFAULT FALSE,
-                            request_id TEXT
-                        )
-                    """)
-                    # Helpful indexes
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_ts ON llm_usage_log(ts)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_user ON llm_usage_log(user_id)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_provider_model ON llm_usage_log(provider, model)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_op_ts ON llm_usage_log(operation, ts)")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_log_operation ON llm_usage_log(operation)")
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS llm_usage_daily (
-                            day DATE NOT NULL,
-                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                            operation TEXT NOT NULL,
-                            provider TEXT NOT NULL,
-                            model TEXT NOT NULL,
-                            requests INTEGER DEFAULT 0,
-                            errors INTEGER DEFAULT 0,
-                            input_tokens BIGINT DEFAULT 0,
-                            output_tokens BIGINT DEFAULT 0,
-                            total_tokens BIGINT DEFAULT 0,
-                            total_cost_usd DOUBLE PRECISION DEFAULT 0.0,
-                            latency_avg_ms DOUBLE PRECISION,
-                            PRIMARY KEY (day, user_id, operation, provider, model)
-                        )
-                    """)
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_daily_day_user_op_prov_model ON llm_usage_daily(day, user_id, operation, provider, model)")
+            # Ensure usage/LLM usage tables and virtual-key counters for Postgres.
+            # The SQLite path is covered by AuthNZ migrations; on Postgres we rely
+            # on these additive helpers instead of inline DDL here.
+            # Capture a sanitized view of the DB URL for diagnostics without leaking credentials.
+            db_url_safe = "unknown"
+            try:
+                raw_url = get_settings().DATABASE_URL
+                db_url_safe = _sanitize_db_url(raw_url)
+            except Exception as settings_err:
+                # Settings resolution failures during bootstrap are non-fatal here; keep "unknown".
+                logger.debug(
+                    f"DB URL extraction for diagnostics failed: {settings_err}"
+                )
+            try:
+                await ensure_usage_tables_pg(pool)
+            except Exception as usage_err:
+                logger.warning(
+                    "AuthNZ initialize: ensure_usage_tables_pg failed for Postgres backend "
+                    f"(db={db_url_safe}); usage tables may be missing: {usage_err}"
+                )
+            try:
+                await ensure_virtual_key_counters_pg(pool)
+            except Exception as vk_err:
+                logger.warning(
+                    "AuthNZ initialize: ensure_virtual_key_counters_pg failed for Postgres backend "
+                    f"(db={db_url_safe}); virtual-key counters tables may be missing: {vk_err}"
+                )
 
-                    # Cross-instance quota counters for virtual keys (JWT + API keys)
-                    await conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS vk_jwt_counters (
-                            jti TEXT NOT NULL,
-                            counter_type TEXT NOT NULL,
-                            count BIGINT DEFAULT 0,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            PRIMARY KEY (jti, counter_type)
-                        )
-                        """
-                    )
-                    await conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS vk_api_key_counters (
-                            api_key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
-                            counter_type TEXT NOT NULL,
-                            count BIGINT DEFAULT 0,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            PRIMARY KEY (api_key_id, counter_type)
-                        )
-                        """
-                    )
-
-            print("✅ Basic schema ensured for Postgres (users, api keys, sessions, registration_codes, RBAC, orgs/teams, usage tables)")
+            print(
+                "✅ Basic schema ensured for Postgres (users, api keys, sessions, "
+                "registration_codes, RBAC, orgs/teams, usage tables)"
+            )
         except Exception as e:
             print(f"❌ Failed to bootstrap Postgres schema: {e}")
             logger.exception("Postgres schema bootstrap error")
@@ -627,11 +354,17 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
         effective_auth_mode = os.getenv("AUTH_MODE")
     except Exception:
         effective_auth_mode = None
+    try:
+        effective_single_user_api_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
+    except Exception:
+        effective_single_user_api_key = None
 
     need_reset = False
     if effective_db_url and settings.DATABASE_URL != effective_db_url:
         need_reset = True
     if effective_auth_mode and effective_auth_mode.lower() != settings.AUTH_MODE:
+        need_reset = True
+    if effective_single_user_api_key and settings.SINGLE_USER_API_KEY != effective_single_user_api_key:
         need_reset = True
 
     test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -649,18 +382,49 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
         settings = get_settings()
 
     if settings.AUTH_MODE != "single_user":
-        if not test_mode:
-            return
+        # In multi-user modes we rely on the normal RBAC/bootstrap paths for
+        # roles and permissions. Forcing the single-user seed (including an
+        # explicit ``id = SINGLE_USER_FIXED_ID`` row in ``users``) would
+        # interfere with Postgres SERIAL/identity sequences and tests that
+        # exercise multi-user registration flows. Only single-user profile
+        # (AUTH_MODE=single_user) should reach the seed logic below.
         logger.debug(
-            "RBAC seed forced in TEST_MODE despite AUTH_MODE=%s", settings.AUTH_MODE
+            "ensure_single_user_rbac_seed_if_needed: skipping seed; AUTH_MODE={}",
+            settings.AUTH_MODE,
+        )
+        return
+
+    # Best-effort schema backstops:
+    # - SQLite: ensure migrations have been applied (file-backed DBs).
+    # - Postgres: ensure core AuthNZ tables (including RBAC) exist via PG extras.
+    try:
+        await ensure_authnz_schema_ready_once()
+    except Exception as schema_err:
+        logger.debug(
+            "ensure_single_user_rbac_seed_if_needed: schema ensure skipped/failed: {}",
+            schema_err,
         )
     try:
         # Acquire a connection via pool/transaction abstraction
         from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
         pool = await get_db_pool()
-        async with pool.transaction() as conn:
-            # Postgres path: asyncpg connections expose fetch(), SQLite shims do not
-            if hasattr(conn, "fetch"):
+        # Postgres-only: ensure core AuthNZ tables (including RBAC) via bootstrap backstop.
+        if getattr(pool, "pool", None):
+            try:
+                from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
+                    ensure_authnz_core_tables_pg,
+                )
+
+                await ensure_authnz_core_tables_pg(pool)
+            except Exception as ensure_err:
+                logger.debug(
+                    "ensure_single_user_rbac_seed_if_needed: PG ensure_authnz_core_tables_pg failed/skipped: {}",
+                    ensure_err,
+                )
+
+        # Postgres path
+        if getattr(pool, "pool", None):
+            async with pool.transaction() as conn:
                 single_user_id = settings.SINGLE_USER_FIXED_ID
                 # Ensure the single-user account row exists so FK relations succeed
                 await conn.execute(
@@ -675,83 +439,53 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                     "UPDATE users SET role='admin', is_active=TRUE, is_verified=TRUE WHERE id = $1",
                     single_user_id,
                 )
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS roles (
-                        id SERIAL PRIMARY KEY,
-                        name VARCHAR(64) UNIQUE NOT NULL,
-                        description TEXT,
-                        is_system BOOLEAN DEFAULT FALSE
-                    )
-                """)
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS permissions (
-                        id SERIAL PRIMARY KEY,
-                        name VARCHAR(128) UNIQUE NOT NULL,
-                        description TEXT,
-                        category VARCHAR(64)
-                    )
-                """)
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS role_permissions (
-                        role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-                        permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
-                        PRIMARY KEY (role_id, permission_id)
-                    )
-                """)
-                # Minimal seed for tests and baseline UI flows
-                await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('admin','Administrator', TRUE) ON CONFLICT (name) DO NOTHING")
-                await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('user','Standard User', TRUE) ON CONFLICT (name) DO NOTHING")
-                await conn.execute("INSERT INTO roles (name, description, is_system) VALUES ('viewer','Read-only User', TRUE) ON CONFLICT (name) DO NOTHING")
+                from tldw_Server_API.app.core.AuthNZ.rbac_seed import ensure_baseline_rbac_seed
 
-                for _name, _desc, _cat in (
-                    ('media.read','Read media','media'),
-                    ('media.create','Create media','media'),
-                    ('users.manage_roles','Manage user roles','users'),
-                    ('modules.read','Read MCP modules','modules'),
-                    ('tools.execute:*','Execute any MCP tool','tools'),
-                ):
-                    await conn.execute(
-                        "INSERT INTO permissions (name, description, category) VALUES ($1,$2,$3) ON CONFLICT (name) DO NOTHING",
-                        _name, _desc, _cat,
-                    )
-                role_rows = await conn.fetch("SELECT id,name FROM roles WHERE name IN ('admin','user','viewer')")
-                perm_rows = await conn.fetch("SELECT id,name FROM permissions WHERE name IN ('media.read','media.create','users.manage_roles','modules.read','tools.execute:*')")
-                role_id = {r['name']: r['id'] for r in role_rows}
-                perm_id = {p['name']: p['id'] for p in perm_rows}
-                # Grant user baseline perms
-                for pname in ('media.read','media.create','modules.read'):
-                    if pname in perm_id and 'user' in role_id:
-                        await conn.execute(
-                            "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-                            role_id['user'], perm_id[pname]
-                        )
-                # Viewer read-only
-                if 'viewer' in role_id and 'media.read' in perm_id:
-                    await conn.execute(
-                        "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-                        role_id['viewer'], perm_id['media.read']
-                    )
-                # Admin elevated
-                if 'admin' in role_id:
-                    for pname in ('media.read','media.create','users.manage_roles','modules.read','tools.execute:*'):
-                        if pname in perm_id:
-                            await conn.execute(
-                                "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-                                role_id['admin'], perm_id[pname]
-                            )
+                await ensure_baseline_rbac_seed(conn, include_mcp_permissions=True)
 
                 # Ensure single-user is assigned the admin role
                 try:
-                    single_user_id = settings.SINGLE_USER_FIXED_ID
-                    if 'admin' in role_id:
+                    admin_role_id = await conn.fetchval("SELECT id FROM roles WHERE name = $1", "admin")
+                    if admin_role_id:
                         await conn.execute(
                             "INSERT INTO user_roles (user_id, role_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-                            single_user_id, role_id['admin']
+                            single_user_id, admin_role_id
+                        )
+
+                    # Ensure primary single-user API key exists so claim-first auth works
+                    # in single-user mode without requiring manual bootstrap.
+                    primary_api_key = (settings.SINGLE_USER_API_KEY or "").strip()
+                    if primary_api_key and primary_api_key != "CHANGE_ME_TO_SECURE_API_KEY":
+                        from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+
+                        api_manager = APIKeyManager(db_pool=pool)
+                        key_hash = api_manager.hash_api_key(primary_api_key)
+                        key_prefix = (primary_api_key[:10] + "...") if len(primary_api_key) > 10 else primary_api_key
+                        await conn.execute(
+                            """
+                            INSERT INTO api_keys (
+                                user_id, key_hash, key_prefix, name, description,
+                                scope, status, is_virtual
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, 'active', FALSE)
+                            ON CONFLICT (key_hash) DO UPDATE SET
+                                user_id = EXCLUDED.user_id,
+                                key_prefix = EXCLUDED.key_prefix,
+                                scope = EXCLUDED.scope,
+                                status = EXCLUDED.status,
+                                is_virtual = EXCLUDED.is_virtual
+                            """,
+                            single_user_id,
+                            key_hash,
+                            key_prefix,
+                            "single-user primary key",
+                            "Primary API key for single-user profile",
+                            "admin",
                         )
 
                     # Seed deterministic API key for test contexts if missing
-                    test_api_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
-                    if test_api_key:
+                    test_api_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                    if test_mode and test_api_key:
                         from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
 
                         api_manager = APIKeyManager(db_pool=pool)
@@ -771,38 +505,80 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                             "admin",
                         )
                 except Exception as role_assign_err:
-                    logger.debug(f"Single-user admin role assignment skipped: {role_assign_err}")
-                return
+                    # Log at warning level with context so repeated failures surface operationally
+                    logger.warning(
+                        "Single-user admin role assignment skipped in ensure_single_user_rbac_seed_if_needed "
+                        "(AUTH_MODE={}, db_url={}): {}",
+                        settings.AUTH_MODE,
+                        _sanitize_db_url(settings.DATABASE_URL),
+                        role_assign_err,
+                    )
+            return
 
         # SQLite path (pool adapters expose .execute returning cursor-like)
+        sqlite_fs_path = str(
+            getattr(pool, "_sqlite_fs_path", None)
+            or getattr(pool, "db_path", None)
+            or ""
+        )
+        sqlite_is_memory = sqlite_fs_path.strip() == ":memory:"
+        try:
+            db_path_str = str(getattr(pool, "db_path", "") or "")
+            if "mode=memory" in db_path_str.lower():
+                sqlite_is_memory = True
+        except Exception:
+            pass
+
         async with pool.transaction() as conn:  # type: ignore[attr-defined]
-            # Some adapters may not expose .execute; fallback to connection from pool
-            try:
-                cur = await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS roles (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        name TEXT UNIQUE NOT NULL,
-                        description TEXT,
-                        is_system INTEGER DEFAULT 0
+            # SQLite in-memory DBs cannot run file-based migrations; create minimal
+            # RBAC tables as a backstop so baseline seed can succeed.
+            if sqlite_is_memory:
+                try:
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS roles (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            name TEXT UNIQUE NOT NULL,
+                            description TEXT,
+                            is_system INTEGER DEFAULT 0
+                        )
+                        """
                     )
-                """)
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS permissions (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        name TEXT UNIQUE NOT NULL,
-                        description TEXT,
-                        category TEXT
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS permissions (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            name TEXT UNIQUE NOT NULL,
+                            description TEXT,
+                            category TEXT
+                        )
+                        """
                     )
-                """)
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS role_permissions (
-                        role_id INTEGER NOT NULL,
-                        permission_id INTEGER NOT NULL,
-                        PRIMARY KEY (role_id, permission_id)
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS role_permissions (
+                            role_id INTEGER NOT NULL,
+                            permission_id INTEGER NOT NULL,
+                            PRIMARY KEY (role_id, permission_id)
+                        )
+                        """
                     )
-                """)
-            except Exception:
-                pass
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS user_roles (
+                            user_id INTEGER NOT NULL,
+                            role_id INTEGER NOT NULL,
+                            granted_by INTEGER,
+                            expires_at TIMESTAMP,
+                            PRIMARY KEY (user_id, role_id)
+                        )
+                        """
+                    )
+                except Exception as table_err:
+                    logger.debug(
+                        "SQLite in-memory RBAC table creation skipped (tables may already exist): {}",
+                        table_err,
+                    )
 
             single_user_id = settings.SINGLE_USER_FIXED_ID
             await conn.execute(
@@ -816,75 +592,94 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                 "UPDATE users SET role='admin', is_active=1, is_verified=1 WHERE id = ?",
                 (single_user_id,),
             )
-            await conn.execute("INSERT OR IGNORE INTO roles (name, description, is_system) VALUES ('admin','Administrator',1)")
-            await conn.execute("INSERT OR IGNORE INTO roles (name, description, is_system) VALUES ('user','Standard User',1)")
-            await conn.execute("INSERT OR IGNORE INTO roles (name, description, is_system) VALUES ('viewer','Read-only User',1)")
-            await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('media.read','Read media','media')")
-            await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('media.create','Create media','media')")
-            await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('users.manage_roles','Manage user roles','users')")
-            await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('modules.read','Read MCP modules','modules')")
-            await conn.execute("INSERT OR IGNORE INTO permissions (name, description, category) VALUES ('tools.execute:*','Execute any MCP tool','tools')")
+            from tldw_Server_API.app.core.AuthNZ.rbac_seed import ensure_baseline_rbac_seed
 
-            # Map role names → ids
-            cur = await conn.execute("SELECT id,name FROM roles WHERE name IN ('admin','user','viewer')")
-            rows = await cur.fetchall()
-            role_id = {r[1]: r[0] for r in rows}
-            cur = await conn.execute("SELECT id,name FROM permissions WHERE name IN ('media.read','media.create','users.manage_roles','modules.read','tools.execute:*')")
-            rows = await cur.fetchall()
-            perm_id = {r[1]: r[0] for r in rows}
-
-            # Baselines
-            for pname in ('media.read','media.create','modules.read'):
-                if pname in perm_id and 'user' in role_id:
-                    await conn.execute(
-                        "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
-                        (role_id['user'], perm_id[pname])
-                    )
-            if 'viewer' in role_id and 'media.read' in perm_id:
-                await conn.execute(
-                    "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
-                    (role_id['viewer'], perm_id['media.read'])
-                )
-            if 'admin' in role_id:
-                for pname in ('media.read','media.create','users.manage_roles','modules.read','tools.execute:*'):
-                    if pname in perm_id:
-                        await conn.execute(
-                            "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
-                            (role_id['admin'], perm_id[pname])
-                        )
-            if 'admin' in role_id:
-                try:
-                    single_user_id = settings.SINGLE_USER_FIXED_ID
+            await ensure_baseline_rbac_seed(conn, include_mcp_permissions=True)
+            try:
+                cur = await conn.execute("SELECT id FROM roles WHERE name = ?", ("admin",))
+                row = await cur.fetchone()
+                admin_role_id = row[0] if row else None
+                if admin_role_id is not None:
                     await conn.execute(
                         "INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)",
-                        (single_user_id, role_id['admin'])
+                        (single_user_id, admin_role_id),
                     )
 
-                    test_api_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
-                    if test_api_key:
-                        from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+                primary_api_key = (settings.SINGLE_USER_API_KEY or "").strip()
+                if primary_api_key and primary_api_key != "CHANGE_ME_TO_SECURE_API_KEY":
+                    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
 
-                        api_manager = APIKeyManager()
-                        key_hash = api_manager.hash_api_key(test_api_key)
-                        key_prefix = (test_api_key[:10] + "...") if len(test_api_key) > 10 else test_api_key
-                        await conn.execute(
-                            """
-                            INSERT OR IGNORE INTO api_keys (
-                                user_id, key_hash, key_prefix, name, description,
-                                scope, status, is_virtual
-                            ) VALUES (?, ?, ?, ?, ?, ?, 'active', 1)
-                            """,
-                            (single_user_id, key_hash, key_prefix, "single-user test key", "Deterministic API key for test automation", "admin")
+                    api_manager = APIKeyManager(db_pool=pool)
+                    key_hash = api_manager.hash_api_key(primary_api_key)
+                    key_prefix = (primary_api_key[:10] + "...") if len(primary_api_key) > 10 else primary_api_key
+                    await conn.execute(
+                        """
+                        INSERT OR REPLACE INTO api_keys (
+                            id, user_id, key_hash, key_prefix, name, description,
+                            scope, status, is_virtual
                         )
-                except Exception as role_assign_err:
-                    logger.debug(f"Single-user admin role assignment skipped: {role_assign_err}")
+                        VALUES (
+                            COALESCE(
+                                (SELECT id FROM api_keys WHERE key_hash = ?),
+                                COALESCE((SELECT MAX(id) FROM api_keys), 0) + 1
+                            ),
+                            ?, ?, ?, ?, ?, ?, 'active', ?
+                        )
+                        """,
+                        (
+                            key_hash,
+                            single_user_id,
+                            key_hash,
+                            key_prefix,
+                            "single-user primary key",
+                            "Primary API key for single-user profile",
+                            "admin",
+                            0,
+                        ),
+                    )
+
+                test_api_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                if test_mode and test_api_key:
+                    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+
+                    api_manager = APIKeyManager(db_pool=pool)
+                    key_hash = api_manager.hash_api_key(test_api_key)
+                    key_prefix = (test_api_key[:10] + "...") if len(test_api_key) > 10 else test_api_key
+                    await conn.execute(
+                        """
+                        INSERT OR IGNORE INTO api_keys (
+                            user_id, key_hash, key_prefix, name, description,
+                            scope, status, is_virtual
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'active', 1)
+                        """,
+                        (
+                            single_user_id,
+                            key_hash,
+                            key_prefix,
+                            "single-user test key",
+                            "Deterministic API key for test automation",
+                            "admin",
+                        ),
+                    )
+            except Exception as role_assign_err:
+                logger.debug(f"Single-user admin role assignment skipped: {role_assign_err}")
             # Commit if adapter requires it
             try:
                 await conn.commit()  # type: ignore[attr-defined]
-            except Exception:
+            except AttributeError:
+                # Adapter doesn't expose commit; nothing to do.
                 pass
+            except Exception as commit_err:
+                logger.debug("Commit skipped or failed: {}", commit_err)
     except Exception as e:
-        logger.debug(f"Single-user RBAC seed ensure skipped or failed: {e}")
+        # Non-fatal but important for observability: surface failures at warning level
+        logger.opt(exception=True).warning(
+            "Single-user RBAC seed ensure skipped or failed in ensure_single_user_rbac_seed_if_needed "
+            "(AUTH_MODE={}, db_url={}): {}",
+            settings.AUTH_MODE,
+            _sanitize_db_url(settings.DATABASE_URL),
+            e,
+        )
 
 async def create_admin_user():
     """Create initial admin user for multi-user mode"""
@@ -958,6 +753,82 @@ async def create_admin_user():
 
     except Exception as e:
         print(f"❌ Failed to create admin user: {e}")
+        return False
+
+
+async def bootstrap_single_user_profile() -> bool:
+    """
+    Bootstrap single-user profile using normal AuthNZ flows.
+
+    This helper is idempotent and ensures:
+    - A single admin user exists with id = SINGLE_USER_FIXED_ID.
+    - A primary API key exists for that user matching SINGLE_USER_API_KEY
+      (hashed via the centralized API key HMAC logic).
+    """
+    settings = get_settings()
+    if settings.AUTH_MODE != "single_user":
+        return True
+
+    print("\n👤 Bootstrapping single-user profile (admin user + primary API key)...")
+    logger.info("Bootstrapping single-user profile (admin user + primary API key)...")
+
+    # Ensure RBAC seed for the single-user account (roles, permissions, user row)
+    try:
+        await ensure_single_user_rbac_seed_if_needed()
+    except Exception as e:
+        print(f"⚠️  Single-user RBAC seed failed (continuing): {e}")
+        logger.opt(exception=True).warning(
+            "Single-user RBAC seed failed in bootstrap_single_user_profile "
+            "(continuing): {}",
+            e,
+        )
+
+    # The RBAC seed path may reset settings/DB pools; refresh settings to reflect
+    # the current environment before reading SINGLE_USER_* values.
+    settings = get_settings()
+    api_key_value = settings.SINGLE_USER_API_KEY or ""
+    if not api_key_value or api_key_value == "CHANGE_ME_TO_SECURE_API_KEY":
+        print(
+            "⚠️  SINGLE_USER_API_KEY is not set or uses the default placeholder; "
+            "skipping primary API key bootstrap."
+        )
+        logger.warning(
+            "SINGLE_USER_API_KEY is not set or uses the default placeholder; "
+            "skipping single-user primary API key bootstrap."
+        )
+        return True
+
+    try:
+        # Use APIKeyManager to ensure tables and compute key hash
+        pool = await get_db_pool()
+        manager = APIKeyManager(db_pool=pool)
+        await manager.initialize()
+
+        key_hash = manager.hash_api_key(api_key_value)
+        key_prefix = (api_key_value[:10] + "...") if len(api_key_value) > 10 else api_key_value
+
+        from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
+
+        repo = AuthnzApiKeysRepo(pool)
+        await repo.upsert_primary_key(
+            user_id=settings.SINGLE_USER_FIXED_ID,
+            key_hash=key_hash,
+            key_prefix=key_prefix,
+            name="single-user primary key",
+            description="Primary API key for single-user profile",
+            scope="admin",
+            is_virtual=False,
+        )
+
+        print("✅ Single-user primary API key ensured in AuthNZ store")
+        logger.info("Single-user primary API key ensured in AuthNZ store")
+        return True
+    except Exception as e:
+        print(f"⚠️  Failed to bootstrap single-user primary API key (continuing): {e}")
+        logger.opt(exception=True).warning(
+            "Failed to bootstrap single-user primary API key (continuing): {}",
+            e,
+        )
         return False
 
 async def test_authentication():
@@ -1048,7 +919,7 @@ async def main():
         print("\n❌ Database setup failed")
         sys.exit(1)
 
-    # Step 4: Create admin user (multi-user mode)
+    # Step 4: Create admin user / bootstrap profile
     settings = get_settings()
     if settings.AUTH_MODE == "multi_user":
         # Check if any users exist
@@ -1068,6 +939,25 @@ async def main():
             response = input("\n📝 Create admin user? (Y/n): ").strip().lower()
             if response != 'n':
                 await create_admin_user()
+    else:
+        # Single-user profile: ensure bootstrap user + primary API key
+        bootstrap_ok = await bootstrap_single_user_profile()
+        if not bootstrap_ok:
+            print("\n❌ Single-user bootstrap failed")
+            logger.error("Single-user bootstrap failed during AuthNZ initialization")
+            test_mode = (
+                str(os.getenv("TEST_MODE", "")).strip().lower()
+                in {"1", "true", "yes", "y", "on"}
+            )
+            if not test_mode:
+                print("❌ Exiting due to single-user bootstrap failure.")
+                sys.exit(1)
+            print(
+                "⚠️  TEST_MODE is enabled; continuing despite single-user bootstrap failure."
+            )
+            logger.warning(
+                "TEST_MODE enabled; continuing despite single-user bootstrap failure"
+            )
 
     # Step 5: Test authentication
     if not await test_authentication():

@@ -2,6 +2,7 @@
 # Pydantic models and FastAPI request forms for provider-specific paper search.
 
 from typing import Optional, Dict, Any, List
+from uuid import UUID
 from fastapi import Query
 from pydantic import BaseModel
 
@@ -501,7 +502,7 @@ class IngestBatchResultItem(BaseModel):
     arxiv_id: Optional[str] = None
     success: bool
     media_id: Optional[int] = None
-    media_uuid: Optional[str] = None
+    media_uuid: Optional[UUID] = None
     error: Optional[str] = None
 
 

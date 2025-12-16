@@ -46,12 +46,8 @@ jobs:
               echo "cyclonedx-py failed; will try fallbacks"
             fi
 
-            # Module invocation for modern CLI
-            if python - <<'PY'
-import importlib.util, sys
-sys.exit(0 if importlib.util.find_spec('cyclonedx_py') else 1)
-PY
-            then
+            # Module invocation for modern CLI (avoid depending on CLI binary layout)
+            if python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('cyclonedx_py') else 1)" >/dev/null 2>&1; then
               echo "Using python -m cyclonedx_py"
               if python -m cyclonedx_py requirements -i "$req" -o sbom-python.cdx.json; then
                 return 0
@@ -69,11 +65,7 @@ PY
             fi
 
             # Legacy module invocation
-            if python - <<'PY'
-import importlib.util, sys
-sys.exit(0 if importlib.util.find_spec('cyclonedx_bom') else 1)
-PY
-            then
+            if python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('cyclonedx_bom') else 1)" >/dev/null 2>&1; then
               echo "Using python -m cyclonedx_bom (legacy)"
               if python -m cyclonedx_bom -r "$req" -o sbom-python.cdx.json; then
                 return 0

@@ -17,11 +17,18 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    rbac_rate_limit,
+    require_permissions,
+)
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
     get_usage_event_logger,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.permissions import (
+    MEDIA_CREATE,
+)
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
     get_process_videos_form,
 )
@@ -49,6 +56,10 @@ router = APIRouter()
     "/process-videos",
     summary="Transcribe / chunk / analyse videos and return the full artefacts (no DB write)",
     tags=["Media Processing (No DB)"],
+    dependencies=[
+        Depends(require_permissions(MEDIA_CREATE)),
+        Depends(rbac_rate_limit("media.create")),
+    ],
 )
 async def process_videos_endpoint(
     background_tasks: BackgroundTasks,

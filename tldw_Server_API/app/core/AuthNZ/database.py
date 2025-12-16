@@ -161,14 +161,39 @@ class DatabasePool:
                 raise DatabaseError(f"Database initialization failed: {e}")
 
     def _should_use_postgres(self) -> bool:
-        """Return True if the configured DATABASE_URL resolves to PostgreSQL."""
-        if self.settings.AUTH_MODE != "multi_user":
-            return False
+        """Return True if the configured DATABASE_URL resolves to PostgreSQL.
+
+        In production, PostgreSQL is only used when AUTH_MODE is ``multi_user``.
+        For test contexts (``TEST_MODE=1``) we allow exercising single-user
+        bootstrap and RBAC seed paths against a Postgres backend when a
+        Postgres DSN is configured. This keeps local single-user deployments
+        safely on SQLite by default while enabling the User-Unification
+        Postgres test coverage.
+        """
         parsed = urlparse(self.settings.DATABASE_URL)
         scheme = (parsed.scheme or "").lower()
-        if not scheme:
+        if not scheme or not scheme.startswith("postgres"):
             return False
-        return scheme.startswith("postgres")
+
+        mode = getattr(self.settings, "AUTH_MODE", "multi_user")
+        if mode == "multi_user":
+            return True
+
+        # Allow Postgres in single-user mode only in explicit test contexts,
+        # so production single-user profiles continue to fall back to SQLite.
+        try:
+            test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "y", "on"}
+        except Exception:
+            test_mode = False
+        # Also allow Postgres when running under pytest even if TEST_MODE is not set,
+        # to keep Postgres-backed tests deterministic without requiring extra env wiring.
+        try:
+            import sys as _sys  # local import to avoid module-level side effects
+
+            pytest_active = bool(os.getenv("PYTEST_CURRENT_TEST")) or ("pytest" in _sys.modules)
+        except Exception:
+            pytest_active = False
+        return test_mode or pytest_active
 
     @staticmethod
     def _resolve_sqlite_paths(url: str) -> tuple[str, bool, Optional[str]]:
@@ -623,8 +648,21 @@ async def reset_db_pool():
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as _reset_settings
         _reset_settings()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring settings reset error: {e}")
+    # Also reset the AuthNZ UserDatabase / backend config so helpers that
+    # use AuthDatabaseConfig (e.g. RBAC helpers via UserDatabase_v2) see
+    # the latest DATABASE_URL/AUTH_MODE for each test run.
+    try:
+        from tldw_Server_API.app.core.AuthNZ.db_config import AuthDatabaseConfig as _AuthDatabaseConfig
+        cfg = _AuthDatabaseConfig()
+        reset_lazy = getattr(cfg, "reset_lazy", None)
+        if callable(reset_lazy):
+            reset_lazy()
+        else:
+            cfg.reset()
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring AuthDatabaseConfig reset error: {e}")
     if _db_pool:
         try:
             await _db_pool.close()
@@ -635,32 +673,32 @@ async def reset_db_pool():
     try:
         from tldw_Server_API.app.core.MCP_unified.auth.authnz_rbac import reset_rbac_policy as _reset_rbac_policy
         _reset_rbac_policy()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring RBAC policy reset error: {e}")
     # Reset MCP cached configuration/filters so tests pick up new DB/config values
     try:
         from tldw_Server_API.app.core.MCP_unified.config import get_config as _get_mcp_config
         if hasattr(_get_mcp_config, "cache_clear"):
             _get_mcp_config.cache_clear()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring MCP config cache reset error: {e}")
     try:
         from tldw_Server_API.app.core.MCP_unified.security.ip_filter import get_ip_access_controller as _get_ip_controller
         if hasattr(_get_ip_controller, "cache_clear"):
             _get_ip_controller.cache_clear()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring MCP IP access controller reset error: {e}")
     try:
 
         from tldw_Server_API.app.core.MCP_unified.server import reset_mcp_server as _reset_mcp_server
         await _reset_mcp_server()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring MCP server reset error: {e}")
     try:
         from tldw_Server_API.app.core.AuthNZ.api_key_manager import reset_api_key_manager as _reset_api_manager
         await _reset_api_manager()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring API key manager reset error: {e}")
 
 async def get_db():
     """FastAPI dependency to get database connection"""

@@ -6,8 +6,9 @@ Implements minimal definition CRUD and run lifecycle with a no-op engine.
 
 import asyncio
 import json
+import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status, Request, Body, Response
@@ -36,19 +37,34 @@ from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabas
 from tldw_Server_API.app.core.Workflows import WorkflowEngine, RunMode, WorkflowScheduler
 from tldw_Server_API.app.core.Workflows.registry import StepTypeRegistry
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
-from tldw_Server_API.app.core.MCP_unified.auth.rbac import UserRole
 from tldw_Server_API.app.core.AuthNZ.permissions import (
-    PermissionChecker,
     WORKFLOWS_RUNS_READ,
     WORKFLOWS_RUNS_CONTROL,
+    WORKFLOWS_ADMIN,
 )
-from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import require_admin
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditEventCategory, AuditSeverity, AuditContext
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
+from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
+from tldw_Server_API.app.core.Resource_Governance.daily_caps import check_daily_cap
+from tldw_Server_API.app.core.Workflows.daily_ledger import (
+    get_workflows_daily_ledger,
+    backfill_legacy_runs_to_ledger,
+    record_workflow_run,
+    workflows_ledger_category,
+)
+
+
+# Best-effort per-process cache for "did we backfill today" keys.
+# Keep it bounded to avoid unbounded growth in long-lived workers.
+_WORKFLOWS_BACKFILL_CACHE: Set[str] = set()
+_raw_cache_max = int(os.getenv("WORKFLOWS_BACKFILL_CACHE_MAX", "50000") or "50000")
+_WORKFLOWS_BACKFILL_CACHE_MAX = max(1, _raw_cache_max)
 
 
 def _utcnow_iso() -> str:
@@ -70,7 +86,6 @@ To keep tests deterministic, rate limits are automatically disabled when
 running under pytest or TEST_MODE/TLDW_TEST_MODE. This check is evaluated at
 call time to avoid import-order issues.
 """
-import os
 import functools
 from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter as _limiter
 
@@ -102,6 +117,9 @@ def _optional_limit(rate: str):
             req = kwargs.get("request", None)
             try:
                 from starlette.requests import Request as _StarReq  # type: ignore
+                if not isinstance(req, _StarReq):
+                    # Fallback: try positional args for request.
+                    req = next((a for a in args if isinstance(a, _StarReq)), None)
                 if not isinstance(req, _StarReq):
                     return await func(*args, **kwargs)
             except Exception:
@@ -401,12 +419,198 @@ def _build_rate_limit_headers(limit: int, remaining: int, reset_epoch: int) -> D
     return headers
 
 
+async def _enforce_workflows_daily_cap(
+    *,
+    request: Request,
+    current_user: User,
+    db: WorkflowsDatabase,
+) -> None:
+    """
+    Enforce workflows daily run caps via ResourceDailyLedger/RG.
+
+    Preference order:
+      1) workflows_runs.daily_cap from the active RG policy
+      2) Legacy WORKFLOWS_QUOTA_DAILY_PER_USER env as fallback alias
+
+    Raises HTTPException(429) with legacy-compatible headers on denial.
+    """
+    try:
+        if os.getenv("WORKFLOWS_DISABLE_QUOTAS", "").lower() in {"1", "true", "yes", "on"}:
+            return
+    except Exception as exc:
+        logger.debug("Workflows quota: WORKFLOWS_DISABLE_QUOTAS check failed: {}", exc)
+
+    # Derive RG entity key to align ledger accounting with middleware.
+    try:
+        entity = derive_entity_key(request)
+    except Exception as exc:
+        logger.debug(
+            "Workflows quota: entity derivation failed, using user fallback: {}",
+            exc,
+        )
+        entity = f"user:{getattr(current_user, 'id', '1')}"
+    try:
+        entity_scope, entity_value = entity.split(":", 1)
+    except Exception as exc:
+        logger.debug(
+            "Workflows quota: entity split failed, using user fallback: {}",
+            exc,
+        )
+        entity_scope, entity_value = "user", str(getattr(current_user, "id", "1"))
+
+    policy_id = None
+    try:
+        policy_id = str(getattr(request.state, "rg_policy_id", None) or "workflows.default")
+    except Exception as exc:
+        logger.debug(
+            "Workflows quota: rg_policy_id resolution failed, using default: {}",
+            exc,
+        )
+        policy_id = "workflows.default"
+
+    daily_cap_policy = 0
+    try:
+        loader = getattr(request.app.state, "rg_policy_loader", None)
+        if loader is not None and policy_id:
+            pol = loader.get_policy(policy_id) or {}
+            daily_cap_policy = int((pol.get(workflows_ledger_category()) or {}).get("daily_cap") or 0)
+    except Exception as exc:
+        logger.debug(
+            "Workflows quota: RG policy lookup failed for policy_id={}: {}",
+            policy_id,
+            exc,
+        )
+        daily_cap_policy = 0
+
+    daily_cap_env = 0
+    if daily_cap_policy <= 0:
+        try:
+            daily_cap_env = int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000") or 0)
+        except Exception as exc:
+            logger.debug(
+                "Workflows quota: WORKFLOWS_QUOTA_DAILY_PER_USER parsing failed: {}",
+                exc,
+            )
+            daily_cap_env = 0
+
+    daily_cap = daily_cap_policy if daily_cap_policy > 0 else daily_cap_env
+    if daily_cap <= 0:
+        return
+
+    # One-time best-effort backfill of today's legacy counts into ledger.
+    # Guarded by an in-memory per-(tenant, entity, date) key to avoid
+    # re-running on every request in the hot path.
+    try:
+        import datetime as _dt
+
+        tenant_id = str(getattr(current_user, "tenant_id", "default"))
+        today = _dt.datetime.utcnow().strftime("%Y-%m-%d")
+        backfill_key = f"{tenant_id}:{entity_scope}:{entity_value}:{today}"
+        if backfill_key not in _WORKFLOWS_BACKFILL_CACHE:
+            if len(_WORKFLOWS_BACKFILL_CACHE) >= _WORKFLOWS_BACKFILL_CACHE_MAX:
+                _WORKFLOWS_BACKFILL_CACHE.clear()
+            _WORKFLOWS_BACKFILL_CACHE.add(backfill_key)
+            ledger = await get_workflows_daily_ledger()
+            if ledger is not None:
+                await backfill_legacy_runs_to_ledger(
+                    ledger=ledger,
+                    db=db,
+                    tenant_id=tenant_id,
+                    user_id=str(getattr(current_user, "id", "")),
+                    entity_scope=entity_scope,
+                    entity_value=entity_value,
+                )
+    except Exception as exc:
+        logger.debug(
+            "Workflows quota: legacy ledger backfill failed for entity_scope={} entity_value={}: {}",
+            entity_scope,
+            entity_value,
+            exc,
+        )
+
+    # Prefer governor check when the policy defines the cap (single-source RG).
+    if daily_cap_policy > 0:
+        try:
+            gov = getattr(request.app.state, "rg_governor", None)
+            if gov is not None:
+                dec = await gov.check(
+                    RGRequest(
+                        entity=entity,
+                        categories={workflows_ledger_category(): {"units": 1}},
+                        tags={"policy_id": policy_id, "endpoint": request.url.path},
+                    )
+                )
+                if not bool(getattr(dec, "allowed", False)):
+                    cats = (dec.details or {}).get("categories") or {}
+                    cat_det = cats.get(workflows_ledger_category()) or {}
+                    remaining = int(cat_det.get("daily_remaining") or cat_det.get("remaining") or 0)
+                    retry_after = int(getattr(dec, "retry_after", None) or cat_det.get("retry_after") or 1)
+                    reset_epoch = int(time.time()) + retry_after
+                    headers = _build_rate_limit_headers(daily_cap, remaining, reset_epoch)
+                    raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
+                return
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # Fall back to direct check below.
+            logger.debug(
+                "Workflows quota: governor check failed for entity={} policy_id={}: {}",
+                entity,
+                policy_id,
+                exc,
+            )
+
+    # Fallback direct check using computed cap (env alias).
+    allowed, ra, det = await check_daily_cap(
+        entity_scope=entity_scope,
+        entity_value=entity_value,
+        category=workflows_ledger_category(),
+        daily_cap=daily_cap,
+        units=1,
+    )
+    if not allowed:
+        remaining = int((det or {}).get("daily_remaining") or 0)
+        retry_after = int(ra or 1)
+        reset_epoch = int(time.time()) + retry_after
+        headers = _build_rate_limit_headers(daily_cap, remaining, reset_epoch)
+        raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
+
+
+async def _record_workflow_run_usage(
+    *,
+    request: Optional[Request],
+    current_user: User,
+    run_id: str,
+) -> None:
+    """Best-effort shadow-write a workflow run into the daily ledger."""
+    try:
+        if request is not None:
+            entity = derive_entity_key(request)
+        else:
+            entity = f"user:{getattr(current_user, 'id', '1')}"
+        entity_scope, entity_value = entity.split(":", 1)
+        await record_workflow_run(
+            entity_scope=entity_scope,
+            entity_value=entity_value,
+            run_id=str(run_id),
+            units=1,
+        )
+    except Exception as e:
+        logger.debug(
+            "Workflows ledger recording failed for run {}: {}",
+            run_id,
+            e,
+        )
+        return
+
+
 @router.post("", response_model=WorkflowDefinitionResponse, status_code=201)
 async def create_definition(
     body: WorkflowDefinitionCreate,
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
-    request: Request = None,
+    *,
+    request: Request,
     audit_service=Depends(get_audit_service_for_user),
 ):
     _validate_definition_payload(body.model_dump())
@@ -484,7 +688,8 @@ async def create_new_version(
     body: WorkflowDefinitionCreate,
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
-    request: Request = None,
+    *,
+    request: Request,
     audit_service=Depends(get_audit_service_for_user),
 ):
     # Validate payload and create a new immutable version
@@ -543,7 +748,8 @@ async def delete_definition(
     workflow_id: int,
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
-    request: Request = None,
+    *,
+    request: Request,
     audit_service=Depends(get_audit_service_for_user),
 ):
     d = db.get_definition(workflow_id)
@@ -577,7 +783,7 @@ async def delete_definition(
                 action="delete",
             )
     except Exception as e:
-        logger.debug(f"Workflows audit(run_saved) failed: {e}")
+        logger.debug(f"Workflows audit(delete) failed: {e}")
     return {"ok": True}
 
 
@@ -604,28 +810,46 @@ class VirtualKeyRequest(BaseModel):
     schedule_id: Optional[str] = None
 
 
-@router.post("/auth/virtual-key", summary="Mint a short-lived JWT for workflows (multi-user)")
+@router.post(
+    "/auth/virtual-key",
+    summary="Mint a short-lived JWT for workflows (multi-user)",
+    dependencies=[
+        Depends(auth_deps.require_roles("admin")),
+        Depends(auth_deps.require_permissions(WORKFLOWS_ADMIN)),
+    ],
+)
 async def workflows_virtual_key(
     body: VirtualKeyRequest,
     current_user: User = Depends(get_request_user),
 ):
     # Admin-only in multi-user; not applicable in single-user
     settings = get_settings()
-    try:
-        if settings.AUTH_MODE != "multi_user":
-            raise HTTPException(status_code=400, detail="Virtual keys only apply in multi-user mode")
-        require_admin(current_user)
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    if settings.AUTH_MODE != "multi_user":
+        raise HTTPException(
+            status_code=400,
+            detail="Virtual keys only apply in multi-user mode",
+        )
+
+    # Virtual keys require numeric user ids so that downstream
+    # AuthNZ components can safely treat the subject as an integer.
+    user_id = getattr(current_user, "id_int", None)
+    if user_id is None:
+        try:
+            user_id = int(current_user.id)  # type: ignore[union-attr]
+        except (AttributeError, TypeError, ValueError):
+            user_id = None
+    if user_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Virtual keys require numeric user ids",
+        )
 
     # Build a minimal access token with custom TTL and scope claims
     try:
         from datetime import datetime, timedelta
         svc = JWTService(settings)
         token = svc.create_virtual_access_token(
-            user_id=int(current_user.id),
+            user_id=user_id,
             username=str(getattr(current_user, "username", "user")),
             role=(current_user.roles[0] if getattr(current_user, "roles", None) else ("admin" if getattr(current_user, "is_admin", False) else "user")),
             scope=str(body.scope or "workflows"),
@@ -634,7 +858,8 @@ async def workflows_virtual_key(
         )
         exp = datetime.utcnow() + timedelta(minutes=int(body.ttl_minutes))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to mint token: {e}")
+        logger.exception("Failed to mint workflows virtual key")
+        raise HTTPException(status_code=500, detail="Failed to mint token") from e
     return {
         "token": token,
         "expires_at": exp.isoformat(),
@@ -654,8 +879,8 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 @limit_run_saved
 async def run_saved(
     workflow_id: int,
+    request: Request,
     mode: str = Query("async", description="Execution mode: async|sync"),
-    request: Request = None,
     body: RunRequest = Body(...),
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
@@ -687,40 +912,8 @@ async def run_saved(
                 error=existing.error,
                 definition_version=existing.definition_version,
             )
-    # Quotas (disable in tests via env)
-    try:
-        import os, datetime as _dt
-        _disable_quotas = (
-            os.getenv("WORKFLOWS_DISABLE_QUOTAS", "").lower() in {"1", "true", "yes", "on"}
-            or os.getenv("PYTEST_CURRENT_TEST") is not None
-            or os.getenv("TLDW_TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-            or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-        )
-        if not _disable_quotas:
-            # Per-user burst per minute
-            now = _dt.datetime.utcnow()
-            minute_ago = (now - _dt.timedelta(seconds=60)).replace(tzinfo=_dt.timezone.utc).isoformat()
-            midnight = _dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=_dt.timezone.utc).isoformat()
-            daily_limit = int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000"))
-            burst_limit = int(os.getenv("WORKFLOWS_QUOTA_BURST_PER_MIN", "60"))
-            tenant_id = str(getattr(current_user, "tenant_id", "default"))
-            uid = str(current_user.id)
-            c_min = db.count_runs_for_user_window(tenant_id=tenant_id, user_id=uid, window_start_iso=minute_ago)
-            c_day = db.count_runs_for_user_window(tenant_id=tenant_id, user_id=uid, window_start_iso=midnight)
-            if c_min >= burst_limit:
-                reset = int((now.replace(second=0, microsecond=0) + _dt.timedelta(minutes=1)).timestamp())
-                headers = _build_rate_limit_headers(burst_limit, 0, reset)
-                raise HTTPException(status_code=429, detail="Burst quota exceeded", headers=headers)
-            if c_day >= daily_limit:
-                # Reset at next UTC midnight (use UTC-aware datetime for correct epoch)
-                tomorrow = (now + _dt.timedelta(days=1)).date()
-                reset_dt = _dt.datetime.combine(tomorrow, _dt.time(0, 0, 0, tzinfo=_dt.timezone.utc))
-                headers = _build_rate_limit_headers(daily_limit, 0, int(reset_dt.timestamp()))
-                raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.debug(f"Workflows audit(run_adhoc) failed: {e}")
+    # Daily runs quota is enforced via RG + ResourceDailyLedger.
+    await _enforce_workflows_daily_cap(request=request, current_user=current_user, db=db)
 
     run_id = str(uuid4())
     db.create_run(
@@ -735,6 +928,7 @@ async def run_saved(
         session_id=body.session_id if body else None,
         validation_mode=(body.validation_mode if body and getattr(body, "validation_mode", None) else "block"),
     )
+    await _record_workflow_run_usage(request=request, current_user=current_user, run_id=run_id)
     # Special-case: if first step is prompt with force_error or template='bad', mark run failed immediately
     try:
         snap = json.loads(d.definition_json or "{}")
@@ -911,7 +1105,9 @@ async def run_saved(
 @router.get(
     "/runs",
     response_model=WorkflowRunListResponse,
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
+    ],
     openapi_extra={
         "x-codeSamples": [
             {
@@ -941,8 +1137,9 @@ async def list_runs(
     cursor: Optional[str] = Query(None, description="Opaque continuation token for pagination (overrides offset)"),
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
-    request: Request = None,
-    response: Response = None,
+    *,
+    request: Request,
+    response: Response,
     audit_service=Depends(get_audit_service_for_user),
 ):
     tenant_id = str(getattr(current_user, "tenant_id", "default"))
@@ -1134,8 +1331,8 @@ async def list_runs(
 @router.post("/run", response_model=WorkflowRunResponse)
 @limit_adhoc
 async def run_adhoc(
+    request: Request,
     mode: str = Query("async", description="Execution mode: async|sync"),
-    request: Request = None,
     body: AdhocRunRequest = Body(...),
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
@@ -1165,38 +1362,8 @@ async def run_adhoc(
                 definition_version=existing.definition_version,
             )
 
-    # Quotas (disable in tests via env)
-    try:
-        import os, datetime as _dt
-        _disable_quotas = (
-            os.getenv("WORKFLOWS_DISABLE_QUOTAS", "").lower() in {"1", "true", "yes", "on"}
-            or os.getenv("PYTEST_CURRENT_TEST") is not None
-            or os.getenv("TLDW_TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-            or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-        )
-        if not _disable_quotas:
-            now = _dt.datetime.utcnow()
-            minute_ago = (now - _dt.timedelta(seconds=60)).replace(tzinfo=_dt.timezone.utc).isoformat()
-            midnight = _dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=_dt.timezone.utc).isoformat()
-            daily_limit = int(os.getenv("WORKFLOWS_QUOTA_DAILY_PER_USER", "1000"))
-            burst_limit = int(os.getenv("WORKFLOWS_QUOTA_BURST_PER_MIN", "60"))
-            tenant_id = str(getattr(current_user, "tenant_id", "default"))
-            uid = str(current_user.id)
-            c_min = db.count_runs_for_user_window(tenant_id=tenant_id, user_id=uid, window_start_iso=minute_ago)
-            c_day = db.count_runs_for_user_window(tenant_id=tenant_id, user_id=uid, window_start_iso=midnight)
-            if c_min >= burst_limit:
-                reset = int((now.replace(second=0, microsecond=0) + _dt.timedelta(minutes=1)).timestamp())
-                headers = _build_rate_limit_headers(burst_limit, 0, reset)
-                raise HTTPException(status_code=429, detail="Burst quota exceeded", headers=headers)
-            if c_day >= daily_limit:
-                tomorrow = (now + _dt.timedelta(days=1)).date()
-                reset_dt = _dt.datetime.combine(tomorrow, _dt.time(0, 0, 0, tzinfo=_dt.timezone.utc))
-                headers = _build_rate_limit_headers(daily_limit, 0, int(reset_dt.timestamp()))
-                raise HTTPException(status_code=429, detail="Daily quota exceeded", headers=headers)
-    except HTTPException:
-        raise
-    except Exception:
-        pass
+    # Daily runs quota is enforced via RG + ResourceDailyLedger.
+    await _enforce_workflows_daily_cap(request=request, current_user=current_user, db=db)
 
     # Persist a snapshot-less run
     run_id = str(uuid4())
@@ -1212,6 +1379,7 @@ async def run_adhoc(
         session_id=body.session_id,
         validation_mode=(body.validation_mode if getattr(body, "validation_mode", None) else "block"),
     )
+    await _record_workflow_run_usage(request=request, current_user=current_user, run_id=run_id)
     engine = WorkflowEngine(db)
     try:
         if body and getattr(body, "secrets", None):
@@ -1299,13 +1467,16 @@ async def run_adhoc(
 @router.get(
     "/runs/{run_id}",
     response_model=WorkflowRunResponse,
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
+    ],
 )
 async def get_run(
     run_id: str,
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
-    request: Request = None,
+    *,
+    request: Request,
     audit_service=Depends(get_audit_service_for_user),
 ):
     run = db.get_run(run_id)
@@ -1388,7 +1559,7 @@ async def get_run(
             }
         ]
     },
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+    dependencies=[Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ))],
 )
 async def get_run_events(
     run_id: str,
@@ -1396,10 +1567,10 @@ async def get_run_events(
     limit: int = Query(500, ge=1, le=1000),
     types: Optional[List[str]] = Query(None, description="Filter by event types (repeatable)"),
     cursor: Optional[str] = Query(None, description="Opaque continuation token (overrides since)"),
-    response: Response = None,
-    request: Request = None,
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
+    *,
+    response: Response,
 ):
     # Enforce tenant isolation and owner/admin
     run = db.get_run(run_id)
@@ -1480,7 +1651,9 @@ async def get_run_events(
 
 @router.get(
     "/runs/{run_id}/webhooks/deliveries",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
+    ],
 )
 async def get_run_webhook_deliveries(
     run_id: str,
@@ -1513,18 +1686,25 @@ async def get_run_webhook_deliveries(
 
 @router.get(
     "/webhooks/dlq",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL))],
+    dependencies=[
+        # Permission-first gate so failures clearly attribute the missing
+        # workflows.runs.control permission in error details, even when the
+        # principal also lacks the admin role.
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
+        Depends(auth_deps.require_roles("admin")),
+    ],
 )
 async def list_webhook_dlq(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    current_user: User = Depends(get_request_user),
+    _current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
-    """Admin: list webhook DLQ entries (all tenants)."""
-    if not bool(getattr(current_user, "is_admin", False)):
-        # Hide presence
-        raise HTTPException(status_code=404, detail="Not found")
+    """Admin: list webhook DLQ entries (all tenants).
+
+    Access is gated via claim-first dependencies (admin role +
+    WORKFLOWS_RUNS_CONTROL) to align with other admin surfaces.
+    """
     rows = db.list_webhook_dlq_all(limit=limit, offset=offset)
     out = []
     for r in rows:
@@ -1548,21 +1728,23 @@ async def list_webhook_dlq(
 
 @router.post(
     "/webhooks/dlq/{dlq_id}/replay",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL))],
+    dependencies=[
+        Depends(auth_deps.require_roles("admin")),
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
+    ],
 )
 async def replay_webhook_dlq(
     dlq_id: int,
-    current_user: User = Depends(get_request_user),
+    _current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
 ):
     """Admin: attempt immediate replay of a DLQ item.
 
     Honors the same allow/deny and replay headers as the engine.
-    In TEST_MODE, if WORKFLOWS_TEST_REPLAY_SUCCESS=true, the entry is deleted without network.
+    In TEST_MODE, if WORKFLOWS_TEST_REPLAY_SUCCESS=true, the entry is deleted
+    without network. Access is gated via claim-first dependencies (admin role
+    + WORKFLOWS_RUNS_CONTROL) consistent with other admin endpoints.
     """
-    if not bool(getattr(current_user, "is_admin", False)):
-        raise HTTPException(status_code=404, detail="Not found")
-
     # Find the entry
     rows = db.list_webhook_dlq_all(limit=1, offset=0)
     target = None
@@ -1682,7 +1864,9 @@ async def replay_webhook_dlq(
 
 @router.get(
     "/runs/{run_id}/artifacts",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
+    ],
 )
 async def get_run_artifacts(
     run_id: str,
@@ -1718,7 +1902,9 @@ async def get_run_artifacts(
 
 @router.get(
     "/runs/{run_id}/artifacts/manifest",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
+    ],
 )
 async def get_run_artifacts_manifest(
     run_id: str,
@@ -1788,7 +1974,9 @@ class VerifyBatchRequest(BaseModel):
 
 @router.post(
     "/runs/{run_id}/artifacts/verify-batch",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
+    ],
 )
 async def verify_artifacts_batch(
     run_id: str,
@@ -1847,18 +2035,20 @@ async def verify_artifacts_batch(
 
 @router.get(
     "/artifacts/{artifact_id}/download",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
+    ],
 )
 async def download_artifact(
     artifact_id: str,
     current_user: User = Depends(get_request_user),
     db: WorkflowsDatabase = Depends(_get_db),
-    request: Request = None,
+    *,
+    request: Request,
     audit_service=Depends(get_audit_service_for_user),
 ):
     import os as _os
     from pathlib import Path
-    from fastapi.responses import FileResponse
     art = db.get_artifact(artifact_id)
     if not art:
         raise HTTPException(status_code=404, detail="Artifact not found")
@@ -2057,7 +2247,9 @@ async def download_artifact(
 
 @router.get(
     "/runs/{run_id}/artifacts/download",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
+    ],
 )
 async def download_run_artifacts_zip(
     run_id: str,
@@ -2176,7 +2368,9 @@ async def get_chunker_options():
 
 @router.post(
     "/runs/{run_id}/{action}",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL))],
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
+    ],
 )
 async def control_run(
     run_id: str,
@@ -2222,7 +2416,7 @@ async def control_run(
         # Delegate to retry behavior
         failed_step = db.get_last_failed_step_id(run_id)
         if failed_step:
-            asyncio.get_event_loop().create_task(engine.continue_run(run_id, after_step_id=failed_step, last_outputs=None))
+            asyncio.create_task(engine.continue_run(run_id, after_step_id=failed_step, last_outputs=None))
         else:
             engine.submit(run_id, RunMode.ASYNC)
     else:
@@ -2587,61 +2781,6 @@ async def list_workflow_templates(q: Optional[str] = Query(None, description="Se
         return []
 
 
-@router.get(
-    "/templates/tags",
-    openapi_extra={
-        "x-codeSamples": [
-            {
-                "lang": "bash",
-                "label": "List tags",
-                "source": "curl -sS -H 'X-API-KEY: $API_KEY' \"$BASE/api/v1/workflows/templates/tags\" | jq ."
-            }
-        ]
-    },
-)
-async def list_workflow_template_tags() -> list[str]:
-    return await list_workflow_template_tags_internal()
-
-@router.get(
-    "/templates/_tags_internal",
-)
-async def list_workflow_template_tags_internal() -> list[str]:
-    """Return the unique set of tags from all bundled templates."""
-    try:
-        # Robust search for Samples/Workflows
-        here = Path(__file__).resolve()
-        tpl_dir = None
-        p = here
-        for _ in range(0, 9):
-            candidate = p.parent / "Samples" / "Workflows"
-            if candidate.exists():
-                tpl_dir = candidate
-                break
-            p = p.parent
-        if tpl_dir is None or not tpl_dir.exists():
-            return []
-        tags_set: set[str] = set()
-        for f in tpl_dir.glob("*.workflow.json"):
-            try:
-                import json as _json
-                data = _json.loads(f.read_text(encoding="utf-8"))
-                tags = data.get("tags") or []
-                if isinstance(tags, list):
-                    for t in tags:
-                        try:
-                            s = str(t).strip()
-                            if s:
-                                tags_set.add(s)
-                        except Exception:
-                            continue
-            except Exception:
-                continue
-        return sorted(tags_set)
-    except Exception as e:
-        logger.warning(f"Failed to list template tags: {e}")
-        return []
-
-
 @router.get("/templates/{name:path}")
 async def get_workflow_template(name: str) -> Dict[str, Any]:
     """Return JSON content for a named workflow template (sans extension)."""
@@ -2781,10 +2920,16 @@ async def list_workflow_template_tags() -> list[str]:
         return []
 
 
-@router.get("/config")
-async def get_workflows_config(current_user: User = Depends(get_request_user), db: WorkflowsDatabase = Depends(_get_db)):
+@router.get(
+    "/config",
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_ADMIN)),
+    ],
+)
+async def get_workflows_config(
+    _current_user: User = Depends(get_request_user),
+):
     """Return effective Workflows configuration derived from environment and backend (read-only)."""
-    import os
     def _env_bool(name: str, default: bool = False) -> bool:
         v = os.getenv(name, "")
         if not v:
@@ -2792,11 +2937,9 @@ async def get_workflows_config(current_user: User = Depends(get_request_user), d
         return v.lower() in {"1", "true", "yes", "y", "on"}
 
     backend_type = "sqlite"
-    try:
-        if getattr(db, "backend", None) and getattr(db.backend, "backend_type", None) == BackendType.POSTGRESQL:
-            backend_type = "postgres"
-    except Exception:
-        pass
+    backend = get_content_backend_instance()
+    if backend is not None and getattr(backend, "backend_type", None) == BackendType.POSTGRESQL:
+        backend_type = "postgres"
 
     def _csv(name: str) -> list[str]:
         raw = os.getenv(name, "")
@@ -2843,7 +2986,9 @@ async def get_workflows_config(current_user: User = Depends(get_request_user), d
 
 @router.post(
     "/runs/{run_id}/retry",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL))],
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
+    ],
 )
 async def retry_run(
     run_id: str,
@@ -2863,7 +3008,7 @@ async def retry_run(
     # Resume from last failed step if present
     failed_step = db.get_last_failed_step_id(run_id)
     if failed_step:
-        asyncio.get_event_loop().create_task(engine.continue_run(run_id, after_step_id=failed_step, last_outputs=None))
+        asyncio.create_task(engine.continue_run(run_id, after_step_id=failed_step, last_outputs=None))
     else:
         engine.submit(run_id, RunMode.ASYNC)
     return {"ok": True}
@@ -2871,7 +3016,9 @@ async def retry_run(
 
 @router.get(
     "/{workflow_id}",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_READ))],
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_READ)),
+    ],
 )
 async def get_definition(
     workflow_id: int,
@@ -2915,7 +3062,9 @@ class HumanReviewPayload(BaseModel):
 
 @router.post(
     "/runs/{run_id}/steps/{step_id}/approve",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL))],
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
+    ],
 )
 async def approve_step(
     run_id: str,
@@ -2944,13 +3093,15 @@ async def approve_step(
     engine = WorkflowEngine(db)
     # Pass edited fields as last outputs override
     last_outputs = payload.edited_fields or {}
-    asyncio.get_event_loop().create_task(engine.continue_run(run_id, after_step_id=step_id, last_outputs=last_outputs))
+    asyncio.create_task(engine.continue_run(run_id, after_step_id=step_id, last_outputs=last_outputs))
     return {"ok": True}
 
 
 @router.post(
     "/runs/{run_id}/steps/{step_id}/reject",
-    dependencies=[Depends(PermissionChecker(WORKFLOWS_RUNS_CONTROL))],
+    dependencies=[
+        Depends(auth_deps.require_permissions(WORKFLOWS_RUNS_CONTROL)),
+    ],
 )
 async def reject_step(
     run_id: str,

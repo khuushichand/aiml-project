@@ -64,6 +64,15 @@ def ensure_rg_metrics_registered() -> None:
                 labels=["category", "scope", "policy_id"],
             )
         )
+        # Shadow-mode comparison metric: legacy vs RG decisions
+        reg.register_metric(
+            MetricDefinition(
+                name="rg_shadow_decision_mismatch_total",
+                type=MetricType.COUNTER,
+                description="Shadow-mode mismatches between legacy limiter and ResourceGovernor decisions",
+                labels=["module", "route", "policy_id", "legacy", "rg"],
+            )
+        )
         # Wait histogram (optional, for backoff/queueing semantics)
         reg.register_metric(
             MetricDefinition(
@@ -138,3 +147,41 @@ def rg_metrics_entity_label_enabled() -> bool:
         return str(v).strip().lower() in ("1", "true", "yes", "on")
     except Exception:
         return False
+
+
+def record_shadow_mismatch(
+    *,
+    module: str,
+    route: str,
+    policy_id: str,
+    legacy: str,
+    rg: str,
+) -> None:
+    """
+    Increment the rg_shadow_decision_mismatch_total counter when a legacy limiter
+    and the ResourceGovernor disagree on an allow/deny decision.
+
+    This helper is best-effort and must never raise.
+    """
+    try:
+        # Ensure metrics are registered so early callers do not depend on
+        # external registration order. Safe to call multiple times.
+        ensure_rg_metrics_registered()
+
+        reg = get_metrics_registry()
+        if not reg:
+            return
+        reg.increment(
+            "rg_shadow_decision_mismatch_total",
+            1,
+            {
+                "module": str(module),
+                "route": str(route),
+                "policy_id": str(policy_id),
+                "legacy": str(legacy),
+                "rg": str(rg),
+            },
+        )
+    except Exception:
+        # Metrics must never affect control flow
+        logger.debug("RG shadow mismatch metric recording failed", exc_info=True)

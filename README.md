@@ -354,7 +354,7 @@ export AUTH_MODE=multi_user
 export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
 # Optional: route Jobs module to Postgres as well
 export JOBS_DB_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
-docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.override.yml up -d --build
+docker compose -f Dockerfiles/docker-compose.postgres.yml up -d
 
 # Option C) Dev overlay — enable unified streaming (non-prod)
 # This turns on the SSE/WS unified streams (STREAMS_UNIFIED=1) for pilot endpoints.
@@ -661,7 +661,7 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 - Monitoring docs and setup: `Docs/Deployment/Monitoring/README.md`
 - Grafana dashboards and samples: `Helper_Scripts/Samples/Grafana/README.md`
-- Prometheus scrape endpoints: `GET /metrics` and `GET /api/v1/mcp/metrics/prometheus`
+- Prometheus scrape endpoints: `GET /metrics` and `GET /api/v1/mcp/metrics/prometheus` (both require authenticated principals with appropriate permissions; MCP Prometheus uses `system.logs`)
 
 ### PostgreSQL Content Mode
 
@@ -796,9 +796,10 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
   - Qwen/Qwen3-VL-4B-Instruct (Qwen3 4B+Vision): https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF 
   - Qwen3-30B-A3B-Instruct-2507: https://huggingface.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF
 
-For commercial API usage for use with this project: Claude Sonnet 4.5, Kimi k2, DeepSeek, gpt5. 
+For commercial API usage for use with this project: GPT-5.1, Anthropic's models(The Temu of AI services/models), Kimi k2, DeepSeek 
 Originally written: Flipside I would say none, honestly. The (largest players) will gaslight you and charge you money for it. Fun.  That being said they obviously can provide help/be useful(helped me make this app), but it's important to remember that they're not your friend, and they're not there to help you. They are there to make money not off you, but off large institutions and your data.  You are just a stepping stone to their goals.
 2025 Nov: I would say service quality has improved enough to the point where it can make sense to use a 'premium' subscription/usage of API services without expecting to be screwed 7-8/10 times.
+2025 Dec: I spoke too soon. I have the opinion of GPT-5.1 High > Sonnet/Opus. The Anthropic models are just too 'independent/lazy'. I personally have never had gpt5 fill out a PRD with completely hallucinated bullshit, or gaslight me repeatedly across multiple different sessions. Sonnet/Opus 4.0-4.5? Complete opposite.
 
 
 From @nrose 05/08/2024 on Threads:

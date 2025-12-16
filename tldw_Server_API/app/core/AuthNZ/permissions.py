@@ -8,13 +8,17 @@
 
 import functools
 from typing import List, Optional, Union, Callable, Any
-from fastapi import HTTPException, status, Depends
 from loguru import logger
 
 # Local imports
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
+
+# Once-per-process flags for observability when falling back to DB-based
+# permission/role checks instead of claim-first paths.
+_PERMISSION_DB_FALLBACK_LOGGED: bool = False
+_ROLE_DB_FALLBACK_LOGGED: bool = False
 
 ########################################################################################################################
 # Database Instance Management
@@ -44,20 +48,38 @@ def check_permission(user: User, permission: str) -> bool:
     Returns:
         bool: True if user has permission
     """
-    # In single-user mode, always return True
-    if is_single_user_mode():
-        return True
-
     # Prefer permission claims already attached to the request user to avoid
     # re-querying the RBAC store and to ensure consistency with the token's
     # authenticated context (especially in tests where multiple DB pools may
-    # exist).
-    try:
-        perms = getattr(user, "permissions", None)
-        if isinstance(perms, list) and permission in perms:
-            return True
-    except Exception:
-        pass
+    # exist). This applies in both single-user and multi-user modes.
+    perms = getattr(user, "permissions", None)
+
+    if isinstance(perms, (list, tuple, set)):
+        # Claims are authoritative when present; if the permission is not listed,
+        # treat it as absent without hitting the DB.
+        return permission in perms
+
+    # For caller contexts that do not provide claim lists at all (perms is None),
+    # fall back to the UserDatabase for compatibility with older code paths.
+    # If a non-list value is present (e.g., string, dict), treat that as an
+    # explicitly unsupported shape and fail closed without reaching into the DB.
+    if perms is not None:
+        logger.debug(
+            "check_permission: non-list permissions attribute encountered on user; "
+            "treating as no permissions and skipping DB lookup"
+        )
+        return False
+
+    # Legacy/compatibility path: no permission claims were attached to the
+    # request user, so fall back to the UserDatabase. Log once per process so
+    # operators can identify and migrate legacy call sites to claim-first flows.
+    global _PERMISSION_DB_FALLBACK_LOGGED
+    if not _PERMISSION_DB_FALLBACK_LOGGED:
+        _PERMISSION_DB_FALLBACK_LOGGED = True
+        logger.debug(
+            "check_permission: falling back to UserDatabase for permission checks; "
+            "prefer claim-first AuthPrincipal-based callers where possible"
+        )
 
     try:
         user_db = get_user_database()
@@ -65,7 +87,10 @@ def check_permission(user: User, permission: str) -> bool:
     except Exception as e:
         try:
             redact = get_settings().PII_REDACT_LOGS
-        except Exception:
+        except Exception as settings_err:  # noqa: BLE001  # best-effort PII redaction
+            logger.debug(
+                f"check_permission: failed to read PII_REDACT_LOGS; defaulting to non-redacted logging: {settings_err}"
+            )
             redact = False
         if redact:
             logger.error(f"Error checking permission {permission} for authenticated user (details redacted): {e}")
@@ -84,19 +109,42 @@ def check_role(user: User, role: str) -> bool:
     Returns:
         bool: True if user has role
     """
-    # In single-user mode, treat as admin
-    if is_single_user_mode():
-        return role in ['admin', 'user']
-
     # Prefer role claims already attached to the request user for fast-path
     # checks and to avoid depending on a potentially stale UserDatabase
-    # singleton that may point at a different backend during tests.
-    try:
-        roles = getattr(user, "roles", None)
-        if isinstance(roles, list) and role in roles:
+    # singleton that may point at a different backend during tests. This applies
+    # in both single-user and multi-user modes.
+    roles = getattr(user, "roles", None)
+
+    if isinstance(roles, (list, tuple, set)):
+        # Claims are authoritative when present; if the role is not listed,
+        # treat it as absent without hitting the DB. An explicit "admin"
+        # claim implies both admin- and user-level access regardless of
+        # deployment mode so that RBAC semantics are driven purely by claims.
+        if "admin" in roles and role in ["admin", "user"]:
             return True
-    except Exception:
-        pass
+        return role in roles
+
+    # For caller contexts that do not provide claim lists at all (roles is None),
+    # fall back to the UserDatabase for compatibility with older code paths.
+    # If a non-list value is present, treat that as an explicit "no roles"
+    # state and avoid hitting the DB.
+    if roles is not None:
+        logger.debug(
+            "check_role: non-list roles attribute encountered on user; "
+            "treating as no roles and skipping DB lookup"
+        )
+        return False
+
+    # Legacy/compatibility path: no role claims were attached to the request
+    # user, so fall back to the UserDatabase. Log once per process so legacy
+    # role-based callers can be identified and migrated.
+    global _ROLE_DB_FALLBACK_LOGGED
+    if not _ROLE_DB_FALLBACK_LOGGED:
+        _ROLE_DB_FALLBACK_LOGGED = True
+        logger.debug(
+            "check_role: falling back to UserDatabase for role checks; "
+            "prefer claim-first AuthPrincipal-based callers where possible"
+        )
 
     try:
         user_db = get_user_database()
@@ -104,12 +152,29 @@ def check_role(user: User, role: str) -> bool:
     except Exception as e:
         try:
             redact = get_settings().PII_REDACT_LOGS
-        except Exception:
+        except Exception as settings_err:  # noqa: BLE001  # best-effort PII redaction
+            logger.debug(
+                f"check_role: failed to read PII_REDACT_LOGS; defaulting to non-redacted logging: {settings_err}"
+            )
             redact = False
         if redact:
             logger.error(f"Error checking role {role} for authenticated user (details redacted): {e}")
         else:
             logger.error(f"Error checking role {role} for user {user.id}: {e}")
+        return False
+
+
+def is_single_user_mode_cached() -> bool:
+    """
+    Thin wrapper for settings.is_single_user_mode used by older tests.
+
+    Exposed as a module-level helper so monkeypatching in unit tests can
+    control single-user behavior without reaching into settings directly.
+    """
+    try:
+        return is_single_user_mode()
+    except Exception as exc:
+        logger.debug("is_single_user_mode_cached: failed to resolve mode: {}", exc)
         return False
 
 def check_any_permission(user: User, permissions: List[str]) -> bool:
@@ -123,10 +188,6 @@ def check_any_permission(user: User, permissions: List[str]) -> bool:
     Returns:
         bool: True if user has at least one permission
     """
-    # In single-user mode, always return True
-    if is_single_user_mode():
-        return True
-
     for permission in permissions:
         if check_permission(user, permission):
             return True
@@ -143,225 +204,10 @@ def check_all_permissions(user: User, permissions: List[str]) -> bool:
     Returns:
         bool: True if user has all permissions
     """
-    # In single-user mode, always return True
-    if is_single_user_mode():
-        return True
-
     for permission in permissions:
         if not check_permission(user, permission):
             return False
     return True
-
-########################################################################################################################
-# FastAPI Dependency Functions
-########################################################################################################################
-
-class PermissionChecker:
-    """
-    FastAPI dependency for checking permissions.
-
-    Usage:
-        @router.get("/protected")
-        def protected_route(user: User = Depends(PermissionChecker("media.read"))):
-            return {"message": "You have permission!"}
-    """
-
-    def __init__(self, permission: str):
-        """
-        Initialize permission checker.
-
-        Args:
-            permission: Required permission string
-        """
-        self.permission = permission
-
-    def __call__(self, user: User = Depends(get_request_user)) -> User:
-        """
-        Check if user has required permission.
-
-        Args:
-            user: Current user from request
-
-        Returns:
-            User: The authenticated user if permission check passes
-
-        Raises:
-            HTTPException: If user lacks required permission
-        """
-        redact_logs = False
-        try:
-            current_settings = get_settings()
-            redact_logs = current_settings.PII_REDACT_LOGS
-        except Exception:
-            current_settings = None
-        if not check_permission(user, self.permission):
-            # Soft-enforce option: log and allow if enabled
-            try:
-                if current_settings and current_settings.RBAC_SOFT_ENFORCE:
-                    if redact_logs:
-                        logger.warning(
-                            f"[RBAC soft-enforce] Authenticated user lacks '{self.permission}' - allowing (soft mode)"
-                        )
-                    else:
-                        logger.warning(
-                            f"[RBAC soft-enforce] User {user.username} lacks '{self.permission}' - allowing (soft mode)"
-                        )
-                    return user
-            except Exception:
-                pass
-            if redact_logs:
-                logger.warning(f"Authenticated user denied access - lacks permission: {self.permission}")
-            else:
-                logger.warning(f"User {user.username} denied access - lacks permission: {self.permission}")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission denied. Required: {self.permission}"
-            )
-        return user
-
-class RoleChecker:
-    """
-    FastAPI dependency for checking roles.
-
-    Usage:
-        @router.get("/admin")
-        def admin_route(user: User = Depends(RoleChecker("admin"))):
-            return {"message": "Welcome admin!"}
-    """
-
-    def __init__(self, role: str):
-        """
-        Initialize role checker.
-
-        Args:
-            role: Required role name
-        """
-        self.role = role
-
-    def __call__(self, user: User = Depends(get_request_user)) -> User:
-        """
-        Check if user has required role.
-
-        Args:
-            user: Current user from request
-
-        Returns:
-            User: The authenticated user if role check passes
-
-        Raises:
-            HTTPException: If user lacks required role
-        """
-        redact_logs = False
-        try:
-            redact_logs = get_settings().PII_REDACT_LOGS
-        except Exception:
-            pass
-        if not check_role(user, self.role):
-            if redact_logs:
-                logger.warning(f"Authenticated user denied access - lacks role: {self.role}")
-            else:
-                logger.warning(f"User {user.username} denied access - lacks role: {self.role}")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied. Required role: {self.role}"
-            )
-        return user
-
-class AnyPermissionChecker:
-    """
-    FastAPI dependency for checking if user has any of the specified permissions.
-
-    Usage:
-        @router.get("/content")
-        def content_route(user: User = Depends(AnyPermissionChecker(["media.read", "media.update"]))):
-            return {"message": "You can access content!"}
-    """
-
-    def __init__(self, permissions: List[str]):
-        """
-        Initialize any-permission checker.
-
-        Args:
-            permissions: List of permission strings (user needs at least one)
-        """
-        self.permissions = permissions
-
-    def __call__(self, user: User = Depends(get_request_user)) -> User:
-        """
-        Check if user has any of the required permissions.
-
-        Args:
-            user: Current user from request
-
-        Returns:
-            User: The authenticated user if permission check passes
-
-        Raises:
-            HTTPException: If user lacks all required permissions
-        """
-        redact_logs = False
-        try:
-            redact_logs = get_settings().PII_REDACT_LOGS
-        except Exception:
-            pass
-        if not check_any_permission(user, self.permissions):
-            if redact_logs:
-                logger.warning(f"Authenticated user denied access - lacks any of: {self.permissions}")
-            else:
-                logger.warning(f"User {user.username} denied access - lacks any of: {self.permissions}")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission denied. Requires one of: {', '.join(self.permissions)}"
-            )
-        return user
-
-class AllPermissionsChecker:
-    """
-    FastAPI dependency for checking if user has all specified permissions.
-
-    Usage:
-        @router.delete("/critical")
-        def critical_operation(user: User = Depends(AllPermissionsChecker(["system.configure", "system.maintenance"]))):
-            return {"message": "Critical operation allowed"}
-    """
-
-    def __init__(self, permissions: List[str]):
-        """
-        Initialize all-permissions checker.
-
-        Args:
-            permissions: List of permission strings (user needs all)
-        """
-        self.permissions = permissions
-
-    def __call__(self, user: User = Depends(get_request_user)) -> User:
-        """
-        Check if user has all required permissions.
-
-        Args:
-            user: Current user from request
-
-        Returns:
-            User: The authenticated user if permission check passes
-
-        Raises:
-            HTTPException: If user lacks any required permission
-        """
-        redact_logs = False
-        try:
-            redact_logs = get_settings().PII_REDACT_LOGS
-        except Exception:
-            pass
-        if not check_all_permissions(user, self.permissions):
-            if redact_logs:
-                logger.warning(f"Authenticated user denied access - lacks all of: {self.permissions}")
-            else:
-                logger.warning(f"User {user.username} denied access - lacks all of: {self.permissions}")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission denied. Requires all: {', '.join(self.permissions)}"
-            )
-        return user
 
 ########################################################################################################################
 # Decorator Functions (for non-FastAPI use)
@@ -486,6 +332,21 @@ API_RATE_LIMIT_OVERRIDE = "api.rate_limit_override"
 # Workflows permissions
 WORKFLOWS_RUNS_READ = "workflows.runs.read"
 WORKFLOWS_RUNS_CONTROL = "workflows.runs.control"
+WORKFLOWS_ADMIN = "workflows.admin"
+
+# Notes / graph permissions
+NOTES_GRAPH_READ = "notes.graph.read"
+NOTES_GRAPH_WRITE = "notes.graph.write"
+
+# Evaluations permissions
+EVALS_MANAGE = "evals.manage"
+EVALS_READ = "evals.read"
+
+# Flashcards permissions
+FLASHCARDS_ADMIN = "flashcards.admin"
+
+# Embeddings permissions
+EMBEDDINGS_ADMIN = "embeddings.admin"
 
 # Role names
 ROLE_ADMIN = "admin"

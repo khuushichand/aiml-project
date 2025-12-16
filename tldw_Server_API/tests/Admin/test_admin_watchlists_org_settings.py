@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 
 pytestmark = pytest.mark.integration
@@ -29,12 +30,36 @@ def test_admin_update_org_watchlists_settings(monkeypatch, tmp_path, authnz_sche
     # Spin up app and override admin requirement
     mod = import_module("tldw_Server_API.app.main")
     app = getattr(mod, "app")
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
-    async def _pass_admin():
-        return {"id": 1, "role": "admin", "username": "admin"}
+    async def _principal_override(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject="admin",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        try:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=None,
+                user_agent=None,
+                request_id=None,
+            )
+        except Exception:
+            # Best-effort; not all test paths require request.state.auth
+            pass
+        return principal
 
-    app.dependency_overrides[require_admin] = _pass_admin
+    app.dependency_overrides[get_auth_principal] = _principal_override
 
     with TestClient(app) as client:
         # Create an organization (should succeed on a fresh DB)
@@ -84,7 +109,7 @@ def test_admin_update_org_watchlists_settings(monkeypatch, tmp_path, authnz_sche
         assert data["org_id"] == org_id
         assert data.get("require_include_default") is False
 
-    app.dependency_overrides.pop(require_admin, None)
+    app.dependency_overrides.pop(get_auth_principal, None)
 
 
 def test_admin_create_org_conflict_returns_409(monkeypatch, tmp_path, authnz_schema_ready_sync):
@@ -103,12 +128,36 @@ def test_admin_create_org_conflict_returns_409(monkeypatch, tmp_path, authnz_sch
 
     mod = import_module("tldw_Server_API.app.main")
     app = getattr(mod, "app")
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
-    async def _pass_admin():
-        return {"id": 1, "role": "admin", "username": "admin"}
+    async def _principal_override(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject="admin",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        try:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=None,
+                user_agent=None,
+                request_id=None,
+                )
+        except Exception:
+            # Best-effort; not all test paths require request.state.auth
+            pass
+        return principal
 
-    app.dependency_overrides[require_admin] = _pass_admin
+    app.dependency_overrides[get_auth_principal] = _principal_override
 
     with TestClient(app) as client:
         # First create OK
@@ -118,7 +167,7 @@ def test_admin_create_org_conflict_returns_409(monkeypatch, tmp_path, authnz_sch
         r2 = client.post("/api/v1/admin/orgs", json={"name": "Alpha Org"})
         assert r2.status_code == 409, r2.text
 
-    app.dependency_overrides.pop(require_admin, None)
+    app.dependency_overrides.pop(get_auth_principal, None)
 
 
 def test_admin_watchlists_org_settings_404(monkeypatch, authnz_schema_ready_sync):
@@ -139,12 +188,36 @@ def test_admin_watchlists_org_settings_404(monkeypatch, authnz_schema_ready_sync
     # App + admin override
     mod = import_module("tldw_Server_API.app.main")
     app = getattr(mod, "app")
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
-    async def _pass_admin():
-        return {"id": 1, "role": "admin", "username": "admin"}
+    async def _principal_override(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject="admin",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        try:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=None,
+                user_agent=None,
+                request_id=None,
+            )
+        except Exception:
+            # Best-effort; not all test paths require request.state.auth
+            pass
+        return principal
 
-    app.dependency_overrides[require_admin] = _pass_admin
+    app.dependency_overrides[get_auth_principal] = _principal_override
 
     with TestClient(app) as client:
         missing_id = 9999
@@ -158,4 +231,4 @@ def test_admin_watchlists_org_settings_404(monkeypatch, authnz_schema_ready_sync
         )
         assert r.status_code == 404
 
-    app.dependency_overrides.pop(require_admin, None)
+    app.dependency_overrides.pop(get_auth_principal, None)

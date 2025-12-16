@@ -127,9 +127,10 @@ Notes:
 - System: `mcp_memory_usage_bytes`, `mcp_cpu_usage_percent`.
 Notes:
 - JSON metrics: `GET /api/v1/mcp/metrics` (admin-only).
-- Prometheus scrape (unauthenticated, for internal networks): `GET /api/v1/mcp/metrics/prometheus`.
+- Prometheus scrape (requires `system.logs` permission via AuthPrincipal): `GET /api/v1/mcp/metrics/prometheus`.
   - Security: expose only on trusted networks or behind an authing proxy.
   - If Prometheus client is not installed, the endpoint returns a placeholder comment.
+  - Migration note: existing Prometheus scrapers must authenticate using a principal that holds the `system.logs` permission (for example, via an API key or JWT with that claim). Without this permission, the endpoint returns `403 Forbidden` and no metrics are exposed.
 
 Prometheus scrape_config example:
 ```yaml

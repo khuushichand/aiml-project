@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limi
 from tldw_Server_API.app.core.Embeddings.multi_tier_cache import get_multi_tier_cache
 from tldw_Server_API.app.core.Embeddings.request_batching import get_batcher
 from tldw_Server_API.app.core.Embeddings.simplified_config import get_config
+from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens
 
 
 class AsyncEmbeddingProvider:
@@ -73,7 +74,14 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
 
         # Check rate limit
         if user_id:
-            allowed, retry_after = await self.rate_limiter.check_rate_limit_async(user_id)
+            try:
+                tokens_units = int(_count_tokens(text))
+            except Exception:
+                tokens_units = 0
+            allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
+                user_id,
+                tokens_units=tokens_units,
+            )
             if not allowed:
                 status = "rate_limited"
                 retry_after_msg = f" Retry after {retry_after}s." if retry_after else ""
@@ -139,7 +147,14 @@ class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
 
         # Check rate limit
         if user_id:
-            allowed, retry_after = await self.rate_limiter.check_rate_limit_async(user_id)
+            try:
+                tokens_units = int(_count_tokens(text))
+            except Exception:
+                tokens_units = 0
+            allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
+                user_id,
+                tokens_units=tokens_units,
+            )
             if not allowed:
                 retry_after_msg = f" Retry after {retry_after}s." if retry_after else ""
                 self.metrics.log_request(self.provider_name, model, status="rate_limited")

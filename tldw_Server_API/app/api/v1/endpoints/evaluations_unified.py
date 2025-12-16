@@ -10,7 +10,7 @@ import json
 import asyncio
 import time
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Annotated
 from fastapi import APIRouter, HTTPException, Depends, status, Query, Request, Response, Header, BackgroundTasks, UploadFile, File, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
@@ -82,7 +82,7 @@ from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_roles
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 
@@ -101,9 +101,10 @@ from .evaluations_auth import (
     create_error_response,
     check_evaluation_rate_limit,
     _apply_rate_limit_headers,
-    require_admin,
+    enforce_heavy_evaluations_admin,
 )
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope, get_auth_principal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
     global _wm_lock
@@ -137,19 +138,23 @@ def get_db_for_user(user_id: int):
 # verify_api_key et al. imported from evaluations_auth
 
 
-@router.post("/admin/idempotency/cleanup")
+@router.post(
+    "/admin/idempotency/cleanup",
+    dependencies=[Depends(require_roles("admin"))],
+)
 async def admin_cleanup_idempotency(
+    principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
+    _current_user: Annotated[User, Depends(get_request_user)],  # dependency for side effects
     ttl_hours: int = Query(72, ge=1, le=720, description="Delete idempotency keys older than this TTL (hours)"),
     target_user_id: Optional[int] = Query(None, description="If provided, only clean this user's evaluations DB"),
-    user_ctx: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    _user_ctx: str = Depends(verify_api_key),  # dependency for side effects
 ):
     """Admin-only: purge stale idempotency keys in Evaluations DBs on-demand.
 
     Returns a summary of deleted rows per user and total.
     """
-    # Admin gate
-    require_admin(current_user)
+    # Admin gate (claim-first + legacy shim)
+    enforce_heavy_evaluations_admin(principal)
     try:
         from pathlib import Path as _Path
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
@@ -258,250 +263,6 @@ def _estimate_tokens_from_texts(*texts: Optional[str], provider: Optional[str] =
         if isinstance(t, str):
             total_chars += len(t)
     return max(0, total_chars // 4)
-
-
-async def _apply_rate_limit_headers(limiter, user_id: str, response: Response, meta: Optional[Dict[str, Any]] = None) -> None:
-    """Fetch usage summary and set standard X-RateLimit-* headers."""
-    try:
-        summary = await limiter.get_usage_summary(user_id)
-        limits = summary.get("limits", {})
-        usage = summary.get("usage", {})
-        remaining = summary.get("remaining", {})
-        # Tier
-        response.headers["X-RateLimit-Tier"] = str(summary.get("tier", "free"))
-        # Per-minute (evaluations)
-        pm = limits.get("per_minute", {})
-        per_min_limit = int(pm.get("evaluations", 0) or 0)
-        response.headers["X-RateLimit-PerMinute-Limit"] = str(per_min_limit)
-        # Per-minute remaining: prefer value from prior check; otherwise default to 0
-        try:
-            remaining_requests = None
-            if meta and isinstance(meta, dict):
-                remaining_requests = meta.get("requests_remaining")
-            if remaining_requests is None:
-                # If not provided by limiter, include header with a safe default
-                remaining_requests = 0
-            response.headers["X-RateLimit-PerMinute-Remaining"] = str(int(remaining_requests or 0))
-        except Exception:
-            response.headers["X-RateLimit-PerMinute-Remaining"] = "0"
-        # Daily quotas
-        daily = limits.get("daily", {})
-        response.headers["X-RateLimit-Daily-Limit"] = str(daily.get("evaluations", 0))
-        response.headers["X-RateLimit-Daily-Remaining"] = str(remaining.get("daily_evaluations", 0))
-        response.headers["X-RateLimit-Tokens-Remaining"] = str(remaining.get("daily_tokens", 0))
-        # Cost quotas (optional)
-        response.headers["X-RateLimit-Daily-Cost-Remaining"] = f"{remaining.get('daily_cost', 0):.2f}"
-        response.headers["X-RateLimit-Monthly-Cost-Remaining"] = f"{remaining.get('monthly_cost', 0):.2f}"
-        # Baseline RateLimit-* headers (simple minute window approximation)
-        try:
-            response.headers["RateLimit-Limit"] = str(per_min_limit)
-            if meta and isinstance(meta, dict) and "requests_remaining" in meta:
-                response.headers["RateLimit-Remaining"] = str(int(meta.get("requests_remaining") or 0))
-            reset_val = 60
-            if meta and isinstance(meta, dict) and "reset_seconds" in meta:
-                reset_val = int(meta.get("reset_seconds") or 60)
-            response.headers["RateLimit-Reset"] = str(reset_val)
-            # X- header parity for reset seconds
-            response.headers["X-RateLimit-Reset"] = str(reset_val)
-        except Exception:
-            pass
-    except Exception:
-        # Non-fatal
-        pass
-
-
-# ============= Authentication =============
-
-# (definition moved earlier to satisfy Depends references)
-def _verify_api_key_placeholder():
-    """
-    Placeholder to maintain file structure; actual verify_api_key is defined above.
-    """
-
-
-# Note: verify_api_key is defined once above. Keep a single definition to avoid confusion.
-
-
-@router.post("/admin/idempotency/cleanup")
-async def admin_cleanup_idempotency(
-    ttl_hours: int = Query(72, ge=1, le=720, description="Delete idempotency keys older than this TTL (hours)"),
-    target_user_id: Optional[int] = Query(None, description="If provided, only clean this user's evaluations DB"),
-    user_ctx: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
-):
-    """Admin-only: purge stale idempotency keys in Evaluations DBs on-demand.
-
-    Returns a summary of deleted rows per user and total.
-    """
-    # Admin gate
-    require_admin(current_user)
-    try:
-        from pathlib import Path as _Path
-        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
-        from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase as _EDB
-
-        deleted_total = 0
-        details = []
-
-        # Build candidate user ids
-        candidate_ids = set()
-        if target_user_id is not None:
-            candidate_ids.add(int(target_user_id))
-        else:
-            try:
-                candidate_ids.add(int(_DP.get_single_user_id()))
-            except Exception:
-                pass
-            try:
-                base = _Path(_DP.get_user_base_directory(_DP.get_single_user_id())).parent
-                if base.exists():
-                    for entry in base.iterdir():
-                        if entry.is_dir():
-                            try:
-                                candidate_ids.add(int(entry.name))
-                            except Exception:
-                                continue
-            except Exception:
-                pass
-
-        for uid in sorted(candidate_ids):
-            try:
-                db_path = _DP.get_evaluations_db_path(uid)
-                if not db_path.exists():
-                    continue
-                db = _EDB(str(db_path))
-                deleted = db.cleanup_idempotency_keys(ttl_hours=int(ttl_hours))
-                deleted_total += int(deleted)
-                details.append({"user_id": uid, "deleted": int(deleted)})
-            except Exception:
-                continue
-
-        return {"deleted_total": deleted_total, "details": details}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Admin idempotency cleanup failed: {e}")
-        raise HTTPException(status_code=500, detail="Idempotency cleanup failed")
-
-
-def _estimate_tokens_from_texts(*texts: Optional[str], provider: Optional[str] = None, model: Optional[str] = None) -> int:
-    """Estimate tokens with provider/model hints when available.
-
-    Preference order when tiktoken is available:
-    1) encoding_for_model(model) if model provided and recognized
-    2) Heuristic by model name -> o200k_base for 4o/4.1/o1 families
-    3) cl100k_base as a general default
-
-    Falls back to chars/4 if tiktoken or encoding lookup is unavailable.
-    """
-    try:
-        import tiktoken  # type: ignore
-        enc = None
-
-        # Try exact model mapping first (OpenAI models)
-        if isinstance(model, str) and model:
-            try:
-                enc = tiktoken.encoding_for_model(model)
-            except Exception:
-                enc = None
-
-        # Heuristic for modern OpenAI models when model hint exists
-        if enc is None and isinstance(model, str):
-            m = model.lower()
-            try:
-                if ("gpt-4o" in m) or ("gpt-4.1" in m) or m.startswith("o1"):
-                    enc = tiktoken.get_encoding("o200k_base")
-            except Exception:
-                enc = None
-
-        # Provider fallback (OpenAI -> cl100k_base)
-        if enc is None and isinstance(provider, str) and provider.lower() == "openai":
-            try:
-                enc = tiktoken.get_encoding("cl100k_base")
-            except Exception:
-                enc = None
-
-        # Final default
-        if enc is None:
-            try:
-                enc = tiktoken.get_encoding("cl100k_base")
-            except Exception:
-                enc = None
-
-        if enc is not None:
-            total = 0
-            for t in texts:
-                if isinstance(t, str) and t:
-                    total += len(enc.encode(t))
-            return total
-    except Exception:
-        pass
-
-    # Fallback: character-based approximation
-    total_chars = 0
-    for t in texts:
-        if isinstance(t, str):
-            total_chars += len(t)
-    return max(0, total_chars // 4)
-
-
-async def _apply_rate_limit_headers(limiter, user_id: str, response: Response, meta: Optional[Dict[str, Any]] = None) -> None:
-    """Fetch usage summary and set standard X-RateLimit-* headers."""
-    try:
-        summary = await limiter.get_usage_summary(user_id)
-        limits = summary.get("limits", {})
-        usage = summary.get("usage", {})
-        remaining = summary.get("remaining", {})
-        # Tier
-        response.headers["X-RateLimit-Tier"] = str(summary.get("tier", "free"))
-        # Per-minute (evaluations)
-        pm = limits.get("per_minute", {})
-        per_min_limit = int(pm.get("evaluations", 0) or 0)
-        response.headers["X-RateLimit-PerMinute-Limit"] = str(per_min_limit)
-        # Per-minute remaining: prefer value from prior check; otherwise default to 0
-        try:
-            remaining_requests = None
-            if meta and isinstance(meta, dict):
-                remaining_requests = meta.get("requests_remaining")
-            if remaining_requests is None:
-                # If not provided by limiter, include header with a safe default
-                remaining_requests = 0
-            response.headers["X-RateLimit-PerMinute-Remaining"] = str(int(remaining_requests or 0))
-        except Exception:
-            response.headers["X-RateLimit-PerMinute-Remaining"] = "0"
-        # Daily quotas
-        daily = limits.get("daily", {})
-        response.headers["X-RateLimit-Daily-Limit"] = str(daily.get("evaluations", 0))
-        response.headers["X-RateLimit-Daily-Remaining"] = str(remaining.get("daily_evaluations", 0))
-        response.headers["X-RateLimit-Tokens-Remaining"] = str(remaining.get("daily_tokens", 0))
-        # Cost quotas (optional)
-        response.headers["X-RateLimit-Daily-Cost-Remaining"] = f"{remaining.get('daily_cost', 0):.2f}"
-        response.headers["X-RateLimit-Monthly-Cost-Remaining"] = f"{remaining.get('monthly_cost', 0):.2f}"
-        # Baseline RateLimit-* headers (simple minute window approximation)
-        try:
-            response.headers["RateLimit-Limit"] = str(per_min_limit)
-            if meta and isinstance(meta, dict) and "requests_remaining" in meta:
-                response.headers["RateLimit-Remaining"] = str(int(meta.get("requests_remaining") or 0))
-            reset_val = 60
-            if meta and isinstance(meta, dict) and "reset_seconds" in meta:
-                reset_val = int(meta.get("reset_seconds") or 60)
-            response.headers["RateLimit-Reset"] = str(reset_val)
-            # X- header parity for reset seconds
-            response.headers["X-RateLimit-Reset"] = str(reset_val)
-        except Exception:
-            pass
-    except Exception:
-        # Non-fatal
-        pass
-
-
-# ============= Authentication =============
-
-# (definition moved earlier to satisfy Depends references)
-def _verify_api_key_placeholder():
-    """
-    Placeholder to maintain file structure; actual verify_api_key is defined above.
-    """
 
 
 # ============= Rate Limiting =============
@@ -633,17 +394,24 @@ async def delete_embeddings_abtest(
     return {"status": "deleted", "test_id": test_id}
 
 
-@router.get("/embeddings/abtest/{test_id}/export")
+@router.get(
+    "/embeddings/abtest/{test_id}/export",
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(rbac_rate_limit("evals.abtest.export")),
+    ],
+)
 async def export_embeddings_abtest(
     test_id: str,
+    principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
+    current_user: Annotated[User, Depends(get_request_user)],
     format: str = Query("json", pattern="^(json|csv)$"),
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
-    current_user: User = Depends(get_request_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
     """Export AB test results (JSON or CSV). Admin-only."""
-    require_admin(current_user)
+    enforce_heavy_evaluations_admin(principal)
     svc = get_unified_evaluation_service_for_user(current_user.id)
     rows, total = svc.db.list_abtest_results(test_id, limit=100000, offset=0)
     if format == 'json':
@@ -1160,8 +928,6 @@ async def delete_evaluation(
 
 
 # ============= Run Management Endpoints =============
-
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 
 
 @router.post(

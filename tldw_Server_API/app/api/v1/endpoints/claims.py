@@ -5,6 +5,8 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.services.claims_rebuild_service import get_claims_rebuild_service
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.config import settings
 
@@ -13,12 +15,10 @@ router = APIRouter(prefix="/claims", tags=["claims"])
 
 @router.get("/status")
 def claims_rebuild_status(
-    current_user: User = Depends(get_request_user),
+    _principal: AuthPrincipal = Depends(require_roles("admin")),  # admin role enforced via dependency; value unused  # noqa: B008
 ) -> Dict[str, Any]:
     """Return statistics about the claims rebuild worker. Admin only."""
     try:
-        if not getattr(current_user, 'is_admin', False):
-            raise HTTPException(status_code=403, detail="Admin privileges required")
         svc = get_claims_rebuild_service()
         try:
             stats = svc.get_stats()
@@ -210,8 +210,8 @@ def rebuild_all_media(
 @router.post("/rebuild_fts")
 def rebuild_claims_fts(
     user_id: Optional[int] = None,
-    current_user: User = Depends(get_request_user),
-    db: MediaDatabase = Depends(get_media_db_for_user),
+    current_user: User = Depends(get_request_user),  # noqa: B008
+    db: MediaDatabase = Depends(get_media_db_for_user),  # noqa: B008
 ) -> Dict[str, Any]:
     """Rebuild claims_fts index from Claims content."""
     try:

@@ -8,6 +8,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
 
 
 async def aggregate_llm_usage_daily(db_pool: Optional[DatabasePool] = None, day: Optional[str] = None) -> None:
@@ -20,72 +21,17 @@ async def aggregate_llm_usage_daily(db_pool: Optional[DatabasePool] = None, day:
     """
     try:
         pool = db_pool or await get_db_pool()
-        day_str = day or datetime.now(timezone.utc).date().isoformat()
+        day_val = datetime.now(timezone.utc).date()
+        if day:
+            try:
+                day_val = datetime.fromisoformat(day).date()
+            except Exception:
+                day_val = datetime.now(timezone.utc).date()
 
-        if pool.pool:
-            # PostgreSQL
-            query = (
-                """
-                INSERT INTO llm_usage_daily (
-                    day, user_id, operation, provider, model,
-                    requests, errors, input_tokens, output_tokens, total_tokens, total_cost_usd, latency_avg_ms
-                )
-                SELECT
-                    $1::date as day,
-                    user_id as user_id,
-                    COALESCE(operation,'') as operation,
-                    COALESCE(provider,'') as provider,
-                    COALESCE(model,'') as model,
-                    COUNT(*) as requests,
-                    SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors,
-                    COALESCE(SUM(COALESCE(prompt_tokens,0)),0) as input_tokens,
-                    COALESCE(SUM(COALESCE(completion_tokens,0)),0) as output_tokens,
-                    COALESCE(SUM(COALESCE(total_tokens,0)),0) as total_tokens,
-                    COALESCE(SUM(COALESCE(total_cost_usd,0)),0) as total_cost_usd,
-                    AVG(latency_ms)::float as latency_avg_ms
-                FROM llm_usage_log
-                WHERE user_id IS NOT NULL AND date(ts AT TIME ZONE 'UTC') = $1::date
-                GROUP BY user_id, COALESCE(operation,''), COALESCE(provider,''), COALESCE(model,'')
-                ON CONFLICT (day, user_id, operation, provider, model) DO UPDATE SET
-                    requests = EXCLUDED.requests,
-                    errors = EXCLUDED.errors,
-                    input_tokens = EXCLUDED.input_tokens,
-                    output_tokens = EXCLUDED.output_tokens,
-                    total_tokens = EXCLUDED.total_tokens,
-                    total_cost_usd = EXCLUDED.total_cost_usd,
-                    latency_avg_ms = EXCLUDED.latency_avg_ms
-                """
-            )
-            await pool.execute(query, day_str)
-        else:
-            # SQLite
-            query = (
-                """
-                INSERT OR REPLACE INTO llm_usage_daily (
-                    day, user_id, operation, provider, model,
-                    requests, errors, input_tokens, output_tokens, total_tokens, total_cost_usd, latency_avg_ms
-                )
-                SELECT
-                    ? as day,
-                    user_id as user_id,
-                    IFNULL(operation,'') as operation,
-                    IFNULL(provider,'') as provider,
-                    IFNULL(model,'') as model,
-                    COUNT(*) as requests,
-                    SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors,
-                    IFNULL(SUM(IFNULL(prompt_tokens,0)),0) as input_tokens,
-                    IFNULL(SUM(IFNULL(completion_tokens,0)),0) as output_tokens,
-                    IFNULL(SUM(IFNULL(total_tokens,0)),0) as total_tokens,
-                    IFNULL(SUM(IFNULL(total_cost_usd,0)),0) as total_cost_usd,
-                    AVG(latency_ms) as latency_avg_ms
-                FROM llm_usage_log
-                WHERE user_id IS NOT NULL AND DATE(ts) = ?
-                GROUP BY user_id, IFNULL(operation,''), IFNULL(provider,''), IFNULL(model,'')
-                """
-            )
-            await pool.execute(query, day_str, day_str)
+        repo = AuthnzUsageRepo(pool)
+        await repo.aggregate_llm_usage_daily_for_day(day=day_val)
 
-        logger.debug(f"llm_usage_daily aggregated for {day_str}")
+        logger.debug(f"llm_usage_daily aggregated for {day_val.isoformat()}")
     except Exception as e:
         logger.debug(f"llm_usage_daily aggregation skipped/failed: {e}")
 

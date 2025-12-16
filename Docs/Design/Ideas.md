@@ -1,6 +1,8 @@
 
 
 https://github.com/ankitects/anki-manual/blob/main/src/importing/text-files.md?plain=1
+https://arxiv.org/abs/2510.01171
+https://medium.com/@stunspot/everyone-is-wrong-about-notebooklm-802770aa12f7
 
 
 Multi-modal support

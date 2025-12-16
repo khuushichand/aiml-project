@@ -31,6 +31,12 @@ except Exception:
     pass
 # Force test-friendly env knobs
 os.environ["MPLBACKEND"] = "Agg"
+# Provide an explicit, deterministic API key for tests that rely on single-user/test-mode shortcuts.
+# Production code no longer assumes a default for SINGLE_USER_TEST_API_KEY.
+os.environ.setdefault("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+# Ensure the AuthNZ PROFILE hint does not leak from developer shells into tests.
+# Tests that need a profile should set it explicitly via monkeypatch.
+os.environ.pop("PROFILE", None)
 # Disable background schedulers/workers that spawn threads during tests
 os.environ["DISABLE_AUTHNZ_SCHEDULER"] = "1"
 os.environ["AUTHNZ_SCHEDULER_DISABLED"] = "1"
@@ -63,6 +69,64 @@ except Exception:
     # Best-effort; tracing is optional
     pass
 import pytest
+
+
+_AUTH_ENV_BASELINE_KEYS = (
+    # AuthNZ mode + core configuration.
+    "AUTH_MODE",
+    "PROFILE",
+    "JWT_SECRET_KEY",
+    "DATABASE_URL",
+    # Single-user auth header compatibility.
+    "SINGLE_USER_API_KEY",
+    "API_KEY",
+    # Common guardrail toggles that can leak between tests when set via os.environ directly.
+    "VIRTUAL_KEYS_ENABLED",
+    "LLM_BUDGET_ENFORCE",
+    "RATE_LIMIT_ENABLED",
+    "CSRF_ENABLED",
+    # Route gating and backend knobs used by a handful of integration tests.
+    "ROUTES_ENABLE",
+    "TLDW_USER_DB_BACKEND",
+)
+
+_AUTH_ENV_BASELINE = {k: os.environ.get(k) for k in _AUTH_ENV_BASELINE_KEYS}
+
+
+@pytest.fixture(autouse=True)
+def _restore_auth_env_and_singletons():
+    """Restore shared AuthNZ-related env and singleton state between tests.
+
+    Many tests legitimately flip `AUTH_MODE` (and related env vars) to exercise
+    multi-user/JWT paths. Some of those tests historically used `os.environ[...]`
+    assignments without restoring them, which makes the suite order-dependent.
+
+    This fixture restores a small set of high-impact environment keys to their
+    baseline values and resets key singletons used by the auth/jobs stacks.
+    """
+    yield
+
+    for key, baseline_value in _AUTH_ENV_BASELINE.items():
+        if baseline_value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = baseline_value
+
+    # Ensure subsequent tests rebuild Settings from the restored environment.
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+        reset_settings()
+    except Exception:
+        pass
+
+    # Avoid leaking the process-wide jobs acquisition gate across tests.
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager
+
+        JobManager.set_acquire_gate(False)
+    except Exception:
+        pass
 
 
 def _log_lingering_threads():
@@ -361,8 +425,9 @@ def client_with_single_user(monkeypatch):
     # Import the FastAPI app and dependencies lazily to avoid heavy imports during test collection
     from tldw_Server_API.app.main import app as fastapi_app
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
     from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
     async def _override_user():
         return User(id=1, username="tester", email=None, is_active=True)
@@ -370,23 +435,44 @@ def client_with_single_user(monkeypatch):
     def _override_logger():
         return usage_logger
 
+    async def _override_principal(request=None):
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject="single-user",
+            token_type="single_user",
+            jti=None,
+            roles=["admin"],
+            permissions=["media.create"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        if request is not None:
+            try:
+                request.state.auth = AuthContext(
+                    principal=principal,
+                    ip=None,
+                    user_agent=None,
+                    request_id=None,
+                )
+            except Exception as e:
+                # Best-effort; don't fail tests if state attachment fails
+                import logging
+                logging.getLogger(__name__).debug("Failed to set request.state.auth: %s", e)
+        return principal
+
     fastapi_app.dependency_overrides[get_request_user] = _override_user
     fastapi_app.dependency_overrides[get_usage_event_logger] = _override_logger
-    # Bypass admin guard in tests by treating the test user as admin
-    fastapi_app.dependency_overrides[require_admin] = lambda: {
-        "id": 1,
-        "username": "tester",
-        "role": "admin",
-        "is_active": True,
-        "is_verified": True,
-    }
+    fastapi_app.dependency_overrides[get_auth_principal] = _override_principal
 
     with TestClient(fastapi_app) as client:
         yield client, usage_logger
 
     fastapi_app.dependency_overrides.pop(get_request_user, None)
     fastapi_app.dependency_overrides.pop(get_usage_event_logger, None)
-    fastapi_app.dependency_overrides.pop(require_admin, None)
+    fastapi_app.dependency_overrides.pop(get_auth_principal, None)
 
 
 @pytest.fixture()
@@ -464,7 +550,7 @@ def bypass_api_limits(monkeypatch):
     def _bypass(app, *, limiters: tuple = ()):  # type: ignore[override]
         # Ensure test-friendly behaviors
         monkeypatch.setenv("TEST_MODE", "true")
-        monkeypatch.setenv("RG_ENABLE_SIMPLE_MIDDLEWARE", "0")
+        monkeypatch.setenv("RG_ENABLED", "0")
 
         # Snapshot existing middleware stack
         original_user_middleware = getattr(app, "user_middleware", [])[:]

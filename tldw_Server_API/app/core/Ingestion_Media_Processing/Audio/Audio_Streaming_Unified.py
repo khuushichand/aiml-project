@@ -228,7 +228,7 @@ class UnifiedStreamingConfig(StreamingConfig):
     model_variant: str = 'standard'  # For Parakeet: 'standard', 'onnx', 'mlx'
     language: Optional[str] = None  # Language code for transcription
     auto_detect_language: bool = False  # Auto-detect language
-    enable_vad: bool = False  # Voice Activity Detection
+    enable_vad: bool = True  # Voice Activity Detection default on for lower latency
     vad_threshold: float = 0.5
     vad_min_silence_ms: int = 250  # Silence window before considering EOS
     vad_turn_stop_secs: float = 0.2  # Wall clock silence duration to finalize a turn
@@ -1217,36 +1217,76 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 if self.model is None:
                     raise RuntimeError(f"Failed to load Parakeet {variant} model")
                 logger.info(f"Loaded Parakeet {variant} model")
-                if self.config.parakeet_use_rnnt_streamer:
+
+                # RNNT streaming backend is optional and only enabled when the
+                # UnifiedStreamingConfig fields are present. When a legacy
+                # Parakeet StreamingConfig is provided (used by older tests),
+                # these attributes may be missing; in that case we fall back to
+                # the chunked implementation without raising.
+                use_rnnt = bool(getattr(self.config, "parakeet_use_rnnt_streamer", False))
+                if use_rnnt and _ParakeetRNNTStreamer is not None:
                     try:
+                        model_name = getattr(
+                            self.config,
+                            "parakeet_rnnt_model_name",
+                            "nvidia/parakeet-tdt-0.6b-v3",
+                        )
+                        device = getattr(self.config, "parakeet_rnnt_device", None)
+                        left_context_s = float(
+                            getattr(self.config, "parakeet_rnnt_left_context_s", 10.0)
+                        )
+                        max_buffer_s = float(
+                            getattr(self.config, "parakeet_rnnt_max_buffer_s", 40.0)
+                        )
+                        chunk_s = max(
+                            float(getattr(self.config, "chunk_duration", 0.0) or 0.0),
+                            0.1,
+                        )
+                        right_context_s = max(
+                            float(getattr(self.config, "overlap_duration", 0.0) or 0.0),
+                            0.0,
+                        )
+
                         self._rnnt_streamer = _ParakeetRNNTStreamer(
-                            model_name=self.config.parakeet_rnnt_model_name,
-                            device=self.config.parakeet_rnnt_device,
-                            left_context_s=self.config.parakeet_rnnt_left_context_s,
-                            chunk_s=max(float(self.config.chunk_duration or 0.0), 0.1),
-                            right_context_s=max(float(self.config.overlap_duration or 0.0), 0.0),
-                            max_buffer_s=float(self.config.max_buffer_duration or 40.0),
+                            model_name=model_name,
+                            device=device,
+                            left_context_s=left_context_s,
+                            chunk_s=chunk_s,
+                            right_context_s=right_context_s,
+                            max_buffer_s=max_buffer_s,
                             batch_size=1,
                         )
                         logger.info("Initialized Parakeet RNNT streaming backend")
                     except Exception as rnnt_err:
-                        logger.warning(f"Parakeet RNNT streaming unavailable, using legacy chunking: {rnnt_err}")
+                        logger.warning(
+                            f"Parakeet RNNT streaming unavailable, using legacy chunking: {rnnt_err}"
+                        )
             except ImportError as e:
                 if "nemo" in str(e).lower():
-                    logger.warning(f"Nemo toolkit not installed, attempting to fallback to MLX variant")
+                    logger.warning(
+                        "Nemo toolkit not installed, attempting to fallback to MLX variant"
+                    )
                     # Try to fallback to MLX variant
                     try:
-                        from .Audio_Transcription_Parakeet_MLX import transcribe_with_parakeet_mlx
-                        logger.info("Falling back to Parakeet MLX variant due to missing Nemo")
-                        self.config.model_variant = 'mlx'
+                        from .Audio_Transcription_Parakeet_MLX import (
+                            transcribe_with_parakeet_mlx,
+                        )
+
+                        logger.info(
+                            "Falling back to Parakeet MLX variant due to missing Nemo"
+                        )
+                        self.config.model_variant = "mlx"
                         self.model = "mlx"  # Placeholder to indicate MLX is ready
                         return  # Success with fallback
                     except ImportError:
-                        logger.error("MLX fallback failed - MLX dependencies not available")
-                raise RuntimeError(f"Nemo toolkit not installed for {variant} variant and MLX fallback unavailable. "
-                                         f"Install Nemo with: pip install nemo_toolkit[asr] "
-                                         f"OR install MLX with: pip install mlx mlx-lm")
-                raise
+                        logger.error(
+                            "MLX fallback failed - MLX dependencies not available"
+                        )
+                raise RuntimeError(
+                    f"Nemo toolkit not installed for {variant} variant and MLX fallback unavailable. "
+                    f"Install Nemo with: pip install nemo_toolkit[asr] "
+                    f"OR install MLX with: pip install mlx mlx-lm"
+                )
 
     def reset(self):
         """Reset transcriber buffers and Parakeet RNNT streaming state."""
@@ -1950,7 +1990,16 @@ async def handle_unified_websocket(
                 config.auto_detect_language = config_data.get("auto_detect_language", False)
                 config.chunk_duration = config_data.get("chunk_duration", 2.0)
                 config.enable_partial = config_data.get("enable_partial", True)
-                config.enable_vad = config_data.get("enable_vad", False)
+                raw_vad = config_data.get("enable_vad", config.enable_vad)
+                if isinstance(raw_vad, str):
+                    normalized_vad = raw_vad.strip().lower()
+                    raw_vad = normalized_vad in {"1", "true", "yes", "on"}
+                elif raw_vad is not None and not isinstance(raw_vad, (bool, int)):
+                    logger.debug(
+                        f"Unexpected type for enable_vad in config: {type(raw_vad).__name__}; "
+                        f"coercing to bool(raw_vad)={bool(raw_vad)}"
+                    )
+                config.enable_vad = bool(raw_vad)
                 config.vad_threshold = _clamp_float(
                     config_data.get("vad_threshold", config.vad_threshold),
                     default=config.vad_threshold,

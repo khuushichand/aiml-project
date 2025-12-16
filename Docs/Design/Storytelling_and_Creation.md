@@ -16,7 +16,7 @@ https://github.com/joonspk-research/generative_agents
 https://github.com/Xerophayze/Kokoro-Story
 https://github.com/icip-cas/PPTAgent
     https://huggingface.co/datasets/Forceless/Zenodo10K
-
+https://github.com/Alibaba-Quark/LiveAvatar
 
 
 ### Storytelling

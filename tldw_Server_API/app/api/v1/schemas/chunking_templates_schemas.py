@@ -4,6 +4,7 @@ Pydantic schemas for chunking template API endpoints.
 """
 
 from typing import Optional, List, Dict, Any
+from uuid import UUID
 from datetime import datetime
 from pydantic import BaseModel, Field
 try:
@@ -94,7 +95,7 @@ class ChunkingTemplateUpdate(BaseModel):
 class ChunkingTemplateResponse(ChunkingTemplateBase):
     """Schema for chunking template response."""
     id: int = Field(..., description="Template database ID")
-    uuid: str = Field(..., description="Template UUID")
+    uuid: UUID = Field(..., description="Template UUID")
     template_json: str = Field(..., description="Template configuration as JSON string")
     is_builtin: bool = Field(False, description="Whether this is a built-in template")
     created_at: datetime = Field(..., description="Creation timestamp")

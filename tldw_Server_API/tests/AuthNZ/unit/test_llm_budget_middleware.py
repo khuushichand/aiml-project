@@ -46,22 +46,27 @@ def mock_middleware_dependencies(monkeypatch):
         async def fake_get_key_limits(_key_id: int):
             return {"is_virtual": True}
 
-        async def fake_is_key_over_budget(_key_id: int):
-            return {
-                "over": over,
-                "reasons": ["day_tokens"] if over else [],
-                "day": {"tokens": day_tokens, "usd": day_usd},
-                "month": {"tokens": 50000, "usd": 50.0},
-                "limits": {
-                    "llm_budget_day_tokens": 10000,
-                    "llm_budget_day_usd": 5.0,
-                    "llm_budget_month_tokens": 300000,
-                    "llm_budget_month_usd": 150.0,
-                },
-            }
+        class StubAuthGovernor:
+            async def check_llm_budget_for_api_key(self, principal, key_id):
+                return {
+                    "over": over,
+                    "reasons": ["day_tokens"] if over else [],
+                    "day": {"tokens": day_tokens, "usd": day_usd},
+                    "month": {"tokens": 50000, "usd": 50.0},
+                    "limits": {
+                        "is_virtual": True,
+                        "llm_budget_day_tokens": 10000,
+                        "llm_budget_day_usd": 5.0,
+                        "llm_budget_month_tokens": 300000,
+                        "llm_budget_month_usd": 150.0,
+                    },
+                }
+
+        async def fake_get_auth_governor():
+            return StubAuthGovernor()
 
         monkeypatch.setattr(mw, "get_key_limits", fake_get_key_limits)
-        monkeypatch.setattr(mw, "is_key_over_budget", fake_is_key_over_budget)
+        monkeypatch.setattr(mw, "get_auth_governor", fake_get_auth_governor)
 
     return set_budget_status
 
@@ -118,8 +123,15 @@ def test_middleware_endpoint_allowlist_forbidden(monkeypatch, mock_middleware_de
     async def fake_is_key_over_budget(_key_id: int):
         return {"over": False, "reasons": []}
 
+    class StubAuthGovernor:
+        async def check_llm_budget_for_api_key(self, principal, key_id):
+            return {"over": False, "reasons": []}
+
+    async def fake_get_auth_governor():
+        return StubAuthGovernor()
+
     monkeypatch.setattr(mw, "get_key_limits", fake_get_key_limits)
-    monkeypatch.setattr(mw, "is_key_over_budget", fake_is_key_over_budget)
+    monkeypatch.setattr(mw, "get_auth_governor", fake_get_auth_governor)
 
     app = _build_app_with_middleware()
     client = TestClient(app)
@@ -146,8 +158,15 @@ def test_middleware_provider_allowlist_forbidden(monkeypatch, mock_middleware_de
     async def fake_is_key_over_budget(_key_id: int):
         return {"over": False, "reasons": []}
 
+    class StubAuthGovernor:
+        async def check_llm_budget_for_api_key(self, principal, key_id):
+            return {"over": False, "reasons": []}
+
+    async def fake_get_auth_governor():
+        return StubAuthGovernor()
+
     monkeypatch.setattr(mw, "get_key_limits", fake_get_key_limits)
-    monkeypatch.setattr(mw, "is_key_over_budget", fake_is_key_over_budget)
+    monkeypatch.setattr(mw, "get_auth_governor", fake_get_auth_governor)
 
     app = _build_app_with_middleware()
     client = TestClient(app)
@@ -174,8 +193,15 @@ def test_middleware_model_allowlist_forbidden(monkeypatch, mock_middleware_depen
     async def fake_is_key_over_budget(_key_id: int):
         return {"over": False, "reasons": []}
 
+    class StubAuthGovernor:
+        async def check_llm_budget_for_api_key(self, principal, key_id):
+            return {"over": False, "reasons": []}
+
+    async def fake_get_auth_governor():
+        return StubAuthGovernor()
+
     monkeypatch.setattr(mw, "get_key_limits", fake_get_key_limits)
-    monkeypatch.setattr(mw, "is_key_over_budget", fake_is_key_over_budget)
+    monkeypatch.setattr(mw, "get_auth_governor", fake_get_auth_governor)
 
     app = _build_app_with_middleware()
     client = TestClient(app)
@@ -203,8 +229,15 @@ def test_middleware_endpoint_allowlist_allowed(monkeypatch, mock_middleware_depe
     async def fake_is_key_over_budget(_key_id: int):
         return {"over": False, "reasons": []}
 
+    class StubAuthGovernor:
+        async def check_llm_budget_for_api_key(self, principal, key_id):
+            return {"over": False, "reasons": []}
+
+    async def fake_get_auth_governor():
+        return StubAuthGovernor()
+
     monkeypatch.setattr(mw, "get_key_limits", fake_get_key_limits)
-    monkeypatch.setattr(mw, "is_key_over_budget", fake_is_key_over_budget)
+    monkeypatch.setattr(mw, "get_auth_governor", fake_get_auth_governor)
 
     app = _build_app_with_middleware()
     client = TestClient(app)
@@ -229,8 +262,15 @@ def test_middleware_provider_allowlist_allowed(monkeypatch, mock_middleware_depe
     async def fake_is_key_over_budget(_key_id: int):
         return {"over": False, "reasons": []}
 
+    class StubAuthGovernor:
+        async def check_llm_budget_for_api_key(self, principal, key_id):
+            return {"over": False, "reasons": []}
+
+    async def fake_get_auth_governor():
+        return StubAuthGovernor()
+
     monkeypatch.setattr(mw, "get_key_limits", fake_get_key_limits)
-    monkeypatch.setattr(mw, "is_key_over_budget", fake_is_key_over_budget)
+    monkeypatch.setattr(mw, "get_auth_governor", fake_get_auth_governor)
 
     app = _build_app_with_middleware()
     client = TestClient(app)
@@ -255,8 +295,15 @@ def test_middleware_model_allowlist_allowed(monkeypatch, mock_middleware_depende
     async def fake_is_key_over_budget(_key_id: int):
         return {"over": False, "reasons": []}
 
+    class StubAuthGovernor:
+        async def check_llm_budget_for_api_key(self, principal, key_id):
+            return {"over": False, "reasons": []}
+
+    async def fake_get_auth_governor():
+        return StubAuthGovernor()
+
     monkeypatch.setattr(mw, "get_key_limits", fake_get_key_limits)
-    monkeypatch.setattr(mw, "is_key_over_budget", fake_is_key_over_budget)
+    monkeypatch.setattr(mw, "get_auth_governor", fake_get_auth_governor)
 
     app = _build_app_with_middleware()
     client = TestClient(app)
@@ -316,11 +363,15 @@ def test_middleware_budget_check_failure_fails_closed(monkeypatch, mock_middlewa
         return {"is_virtual": True}
 
     # Make the budget check raise to simulate an internal failure
-    async def fake_is_key_over_budget(_key_id: int):
-        raise RuntimeError("simulated budget failure")
+    class StubAuthGovernor:
+        async def check_llm_budget_for_api_key(self, principal, key_id):
+            raise RuntimeError("simulated budget failure")
+
+    async def fake_get_auth_governor():
+        return StubAuthGovernor()
 
     monkeypatch.setattr(mw, "get_key_limits", fake_get_key_limits)
-    monkeypatch.setattr(mw, "is_key_over_budget", fake_is_key_over_budget)
+    monkeypatch.setattr(mw, "get_auth_governor", fake_get_auth_governor)
 
     app = _build_app_with_middleware()
     client = TestClient(app)

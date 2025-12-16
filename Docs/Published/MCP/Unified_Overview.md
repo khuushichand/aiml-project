@@ -22,7 +22,7 @@ See also:
 - Health & Metrics
   - `GET /api/v1/mcp/health` - Returns `{ "status": "healthy" }` (503 when unhealthy)
   - `GET /api/v1/mcp/status` - Server status summary
-  - `GET /api/v1/mcp/metrics/prometheus` - Prometheus text exposition (admin unless `MCP_PROMETHEUS_PUBLIC=1`)
+- `GET /api/v1/mcp/metrics/prometheus` - Prometheus text exposition (requires `system.logs` permission or admin-style claims)
 
 - WebSocket
   - `WS /api/v1/mcp/ws` - Full JSON-RPC over WS

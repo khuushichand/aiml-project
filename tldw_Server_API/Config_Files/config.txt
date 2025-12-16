@@ -6,10 +6,10 @@ allow_remote_setup_access = false
 
 [Server]
 disable_cors = false
-allow_remote_webui_access = true
+allow_remote_webui_access = false
 # Optional: restrict which remote clients can access /webui
 # Provide CIDR ranges or individual IPs, comma-separated
-webui_ip_allowlist = 192.168.1.0/24, 192.168.5.0/24, 10.0.0.5
+webui_ip_allowlist =
 
 [Audit]
 # Auto-switch audit exports to streaming when max_rows exceeds this threshold to avoid large in-memory buffers.
@@ -428,13 +428,35 @@ require_hard_citations = false
 # Env override: RAG_LOW_CONFIDENCE_BEHAVIOR=continue|ask|decline (default continue)
 low_confidence_behavior = continue
 
-# Agentic cache backend for ephemeral chunks: memory|sqlite
+# Agentic cache backend for ephemeral chunks used by the RAG agentic pipeline.
 # Env override: RAG_AGENTIC_CACHE_BACKEND=memory|sqlite (default memory)
 agentic_cache_backend = memory
 
-# TTL (seconds) for agentic cache entries
-# Env override: RAG_AGENTIC_CACHE_TTL_SEC (default 600)
+# TTL (seconds) for agentic cache entries used by RAG.
+# Env override: RAG_AGENTIC_CACHE_TTL_SEC=<seconds> (default 600)
+# 600 seconds (10 minutes) is chosen as a pragmatic default that roughly matches a
+# typical focused user interaction window for agentic RAG flows: long enough to
+# reuse expensive planning/results across follow-up questions in the same session,
+# but short enough to avoid unbounded growth in ephemeral cache state for idle tabs
+# and background jobs.
 agentic_cache_ttl_sec = 600
+
+[ResourceGovernor]
+# Global Resource Governor enable flag (env: RG_ENABLED)
+enabled = true
+# Policy store: file-backed YAML or AuthNZ DB (env: RG_POLICY_STORE)
+policy_store = file
+# Backend implementation: memory | redis (env: RG_BACKEND)
+backend = memory
+# Redis failover behavior when RG backend is redis (env: RG_REDIS_FAIL_MODE)
+redis_fail_mode = fallback_memory
+# Default policy path (relative to the project root unless an absolute path is provided).
+# The RG_POLICY_PATH environment variable overrides this when set; in containerized deployments,
+# ensure the policy file path is mounted into the container (e.g., under /app/tldw_Server_API/Config_Files).
+policy_path = tldw_Server_API/Config_Files/resource_governor_policies.yaml
+# Deprecated: per-module RG enable flags were removed in v1.1; integrations are
+# controlled by the global `enabled` flag. Kept for config compatibility only.
+enable_audio = false
 
 [Diarization]
 # VAD backend:
@@ -540,7 +562,7 @@ mistral_model = open-mistral-nemo
 mistral_streaming = True
 mistral_temperature = 0.7
 mistral_max_tokens = 4096
-mistral__api_timeout = 90
+mistral_api_timeout = 90
 mistral_api_retry = 3
 mistral_api_retry_delay = 1
 openai_model = gpt-4.1-2025-04-14
@@ -564,8 +586,8 @@ custom_openai_api_top_p = 0.9
 custom_openai_api_min_p = 0.05
 custom_openai_api_max_tokens = 4096
 custom_openai_api_timeout = 90
-custom_openai_api__api_retry = 3
-custom_openai_api__api_retry_delay = 1
+custom_openai_api_api_retry = 3
+custom_openai_api_api_retry_delay = 1
 custom_openai2_api_model = <model_name_here>
 custom_openai2_api_streaming = True
 custom_openai2_api_temperature = 0.7
@@ -806,6 +828,50 @@ default_alltalk_tts_output_format = mp3
 alltalk_api_ip = http://127.0.0.1:7851/v1/audio/speech
 kokoro_model_path = ./App_Function_Libraries/models/kokoro_models/
 default_kokoro_tts_speed = 1.0
+default_kokoro_tts_voice = af_sky
+default_kokoro_tts_output_format = wav
+default_custom_openai_tts_voice = shimmer
+default_custom_openai_tts_speed = 1
+default_custom_openai_tts_model = tts-1-hd
+default_custom_openai_tts_output_format = mp3
+# Placeholder; override with your custom OpenAI-compatible endpoint
+default_custom_openai_api_ip = http://localhost:8000/v1
+# VibeVoice TTS Provider Configuration
+# VibeVoice is a local, voice-cloning TTS engine. Configure model paths, inference parameters (CFG scale, diffusion steps),
+# streaming behavior, and speaker context for optimal quality and performance.
+default_custom_openai_api_streaming = True
+
+[VibeVoice]
+vibevoice_variant = 1.5B
+vibevoice_model_path = microsoft/VibeVoice-1.5B
+# Device: auto, cpu, cuda, or specific GPU name
+vibevoice_device = auto
+vibevoice_use_fp16 = True
+vibevoice_batch_size = 1
+vibevoice_use_quantization = False
+vibevoice_auto_cleanup = True
+vibevoice_auto_download = True
+vibevoice_attention_type = auto
+vibevoice_enable_sage = False
+# CFG scale for classifier-free guidance (higher = more adherence to prompt, typically 1.0-2.0)
+vibevoice_cfg_scale = 1.3
+# Diffusion steps: more steps = higher quality but slower inference (typical: 10-30)
+vibevoice_diffusion_steps = 20
+vibevoice_temperature = 1.0
+vibevoice_top_p = 0.95
+vibevoice_top_k = 50
+# Streaming chunk size (seconds) and internal buffer size (samples) control latency vs. smoothness
+vibevoice_stream_chunk_size = 0.25
+vibevoice_stream_buffer_size = 4096
+vibevoice_sample_rate = 22050
+vibevoice_default_speaker = 1
+vibevoice_context = True
+vibevoice_context_window = 512
+vibevoice_background_music = False
+vibevoice_enable_singing = False
+vibevoice_model_dir = ./models/vibevoice
+vibevoice_cache_dir = ./cache/vibevoice
+vibevoice_voices_dir = ./voices
 
 # When true, enforce strict duration requirements for uploaded voice
 # samples based on provider-specific ranges in VoiceManager. Out-of-range
@@ -832,9 +898,7 @@ TTS_VOICE_STRICT_DURATION = false
 # Bounded fail-open allowance (minutes) per connection when quota store is down
 # failopen_cap_minutes = 5.0
 
-# [Audio]
-# Alternative section to specify the same setting if [Audio-Quota] is not used
-# failopen_cap_minutes = 5.0
+# Alternatively, place the same setting in [Audio] section if you prefer (optional; env var takes precedence)
 
 # ---------------------------------------------
 # API Route Toggles (optional)
@@ -868,41 +932,6 @@ enable = tools
 
 # Optionally extend the curated experimental set (comma-separated)
 experimental_routes =
-default_kokoro_tts_voice = sky
-default_kokoro_tts_model = pht
-default_kokoro_tts_output_format = wav
-default_custom_openai_tts_voice = shimmer
-default_custom_openai_tts_speed = 1
-default_custom_openai_tts_model = tts-1-hd
-default_custom_openai_tts_output_format = mp3
-default_custom_openai_api_ip = http://
-default_custom_openai_api_streaming = True
-vibevoice_variant = 1.5B
-vibevoice_model_path = microsoft/VibeVoice-1.5B
-vibevoice_device = auto
-vibevoice_use_fp16 = True
-vibevoice_batch_size = 1
-vibevoice_use_quantization = False
-vibevoice_auto_cleanup = True
-vibevoice_auto_download = True
-vibevoice_attention_type = auto
-vibevoice_enable_sage = False
-vibevoice_cfg_scale = 1.3
-vibevoice_diffusion_steps = 20
-vibevoice_temperature = 1.0
-vibevoice_top_p = 0.95
-vibevoice_top_k = 50
-vibevoice_stream_chunk_size = 0.25
-vibevoice_stream_buffer_size = 4096
-vibevoice_sample_rate = 22050
-vibevoice_default_speaker = 1
-vibevoice_context = True
-vibevoice_context_window = 512
-vibevoice_background_music = False
-vibevoice_enable_singing = False
-vibevoice_model_dir = ./models/vibevoice
-vibevoice_cache_dir = ./cache/vibevoice
-vibevoice_voices_dir = ./voices
 
 [Search-Engines]
 search_provider_default = google

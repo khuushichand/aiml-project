@@ -23,7 +23,13 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, rbac_rate_limit, require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    check_rate_limit,
+    rbac_rate_limit,
+    require_permissions,
+    require_token_scope,
+)
+from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_READ
 
 # Unified Pipeline
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import (
@@ -695,6 +701,7 @@ async def list_vlm_backends():
     dependencies=[
         Depends(check_rate_limit),
         Depends(rbac_rate_limit("rag.search")),
+        Depends(require_permissions(MEDIA_READ)),
         Depends(require_token_scope("any", require_if_present=False, endpoint_id="rag.search", count_as="call")),
     ]
 )
@@ -1040,7 +1047,10 @@ async def rag_implicit_feedback(
     be applied to all queries in the batch.
     """,
     response_description="Batch processing results",
-    dependencies=[Depends(check_rate_limit)]
+    dependencies=[
+        Depends(check_rate_limit),
+        Depends(require_permissions(MEDIA_READ)),
+    ]
 )
 async def unified_batch_endpoint(
     request_raw: Request,
@@ -1118,7 +1128,10 @@ async def unified_batch_endpoint(
     - No query expansion
     """,
     response_description="Search results",
-    dependencies=[Depends(check_rate_limit)]
+    dependencies=[
+        Depends(check_rate_limit),
+        Depends(require_permissions(MEDIA_READ)),
+    ]
 )
 async def simple_search_endpoint(
     request: Request,
@@ -1174,7 +1187,10 @@ async def simple_search_endpoint(
     "/search/stream",
     summary="Unified RAG Streaming Search",
     description="Stream generated answer chunks with optional incremental claim overlay events (NDJSON)",
-    dependencies=[Depends(check_rate_limit)]
+    dependencies=[
+        Depends(check_rate_limit),
+        Depends(require_permissions(MEDIA_READ)),
+    ]
 )
 async def unified_search_stream_endpoint(
     request_raw: Request,
@@ -1385,7 +1401,7 @@ async def unified_search_stream_endpoint(
     - Performance analysis
     """,
     response_description="Full search results with analysis",
-    dependencies=[Depends(check_rate_limit)]
+    dependencies=[Depends(check_rate_limit), Depends(require_permissions(MEDIA_READ))]
 )
 async def advanced_search_endpoint(
     request: Request,

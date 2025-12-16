@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Set
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status as http_status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -16,7 +16,14 @@ from loguru import logger
 import tiktoken
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
+    require_roles,
+    require_permissions,
+    rbac_rate_limit,
+)
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import (
     VectorStoreAdapter,
     VectorStoreConfig,
@@ -49,6 +56,8 @@ from tldw_Server_API.app.core.Embeddings.vector_store_meta_db import (
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+
+RBAC_VECTOR_ADMIN = rbac_rate_limit("vector.admin")
 
 # Embeddings batch generator hook. Tests may monkeypatch this attribute directly or
 # replace the provider resolver via _get_embeddings_fn(). We intentionally avoid
@@ -112,20 +121,6 @@ def _allowed_providers() -> Optional[List[str]]:
     except Exception:
         pass
     return None
-
-
-def require_admin(user: User) -> None:
-    """Admin guard for vector store admin endpoints.
-
-    In single-user mode, the sole user is treated as admin.
-    """
-    try:
-        if is_single_user_mode():
-            return
-    except Exception:
-        pass
-    if not user or not getattr(user, 'is_admin', False):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
 
 
 def _allowed_models() -> Optional[List[str]]:
@@ -442,12 +437,15 @@ async def list_vector_stores(
     return {'data': stores}
 
 
-@router.get("/vector_stores/admin/users")
+@router.get(
+    "/vector_stores/admin/users",
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+        Depends(RBAC_VECTOR_ADMIN),
+    ],
+)
 async def list_vector_store_users(current_user: User = Depends(get_request_user)):
-    # Admin or single-user fixed id has access
-    if not (getattr(current_user, 'is_admin', False) or str(getattr(current_user,'id','')) == str(settings.get("SINGLE_USER_FIXED_ID","1"))):
-        raise HTTPException(status_code=403, detail="Admin privileges required")
-
     base_dir: pathlib.Path = settings.get("USER_DB_BASE_DIR")
     users = []
     try:
@@ -890,12 +888,18 @@ class HNSWEfSearchRequest(BaseModel):
     ef_search: int = Field(..., gt=0, description="hnsw.ef_search value to set for this session")
 
 
-@router.get("/vector_stores/{store_id}/admin/index_info")
+@router.get(
+    "/vector_stores/{store_id}/admin/index_info",
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+        Depends(RBAC_VECTOR_ADMIN),
+    ],
+)
 async def get_index_info(
     store_id: str = Path(...),
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
-    require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
     await adapter.initialize()
     get_fn = getattr(adapter, 'get_index_info', None)
@@ -911,12 +915,18 @@ async def get_index_info(
     }
 
 
-@router.post("/vector_stores/admin/hnsw_ef_search")
+@router.post(
+    "/vector_stores/admin/hnsw_ef_search",
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+        Depends(RBAC_VECTOR_ADMIN),
+    ],
+)
 async def set_hnsw_ef_search(
     payload: HNSWEfSearchRequest = Body(...),
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
-    require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
     await adapter.initialize()
     set_fn = getattr(adapter, 'set_ef_search', None)
@@ -934,13 +944,19 @@ class RebuildIndexRequest(BaseModel):
     lists: Optional[int] = Field(100, ge=1, description="IVFFLAT lists")
 
 
-@router.post("/vector_stores/{store_id}/admin/rebuild_index")
+@router.post(
+    "/vector_stores/{store_id}/admin/rebuild_index",
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+        Depends(RBAC_VECTOR_ADMIN),
+    ],
+)
 async def rebuild_index(
     store_id: str = Path(...),
     payload: RebuildIndexRequest = Body(...),
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
-    require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
     await adapter.initialize()
     rebuild_fn = getattr(adapter, 'rebuild_index', None)
@@ -964,13 +980,19 @@ class DeleteByFilterRequest(BaseModel):
     filter: Dict[str, Any] = Field(..., description="Metadata filter expression")
 
 
-@router.post("/vector_stores/{store_id}/admin/delete_by_filter")
+@router.post(
+    "/vector_stores/{store_id}/admin/delete_by_filter",
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+        Depends(RBAC_VECTOR_ADMIN),
+    ],
+)
 async def delete_by_filter(
     store_id: str = Path(...),
     payload: DeleteByFilterRequest = Body(...),
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
-    require_admin(current_user)
     # Guardrails: reject empty/overly broad deletes
     def _is_safe_filter(obj) -> bool:
         # Minimal safety: must be a non-empty dict with at least one concrete condition.
@@ -1016,9 +1038,15 @@ async def delete_by_filter(
     return {"deleted": int(deleted or 0)}
 
 
-@router.get("/vector_stores/admin/health")
+@router.get(
+    "/vector_stores/admin/health",
+    dependencies=[
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+        Depends(RBAC_VECTOR_ADMIN),
+    ],
+)
 async def vector_stores_health(current_user: User = Depends(get_request_user)):
-    require_admin(current_user)
     adapter = await _get_adapter_for_user(current_user, 1536)
     await adapter.initialize()
     fn = getattr(adapter, 'health', None)
@@ -1386,22 +1414,19 @@ async def list_vector_batches(
     status: Optional[str] = Query(None),
     limit: int = Query(50, gt=0, le=500),
     offset: int = Query(0, ge=0),
-    user_id: Optional[str] = Query(None, description="Admin-only: override user id to view their batches"),
-    current_user: User = Depends(get_request_user)
+    user_id: Optional[str] = Query(
+        None, description="Admin-only: override user id to view their batches"
+    ),
+    current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
-    # Default to current user
-    requested_user_id = str(getattr(current_user,'id','1'))
-    # If an override is requested, require admin
+    requested_user_id = str(getattr(current_user, "id", "1"))
     if user_id is not None and user_id != requested_user_id:
-        # Allow in single-user mode; otherwise require admin
-        allow_override = False
-        try:
-            if is_single_user_mode():
-                allow_override = True
-        except Exception:
-            pass
-        if not allow_override and not getattr(current_user, 'is_admin', False):
-            raise HTTPException(status_code=403, detail="Admin privileges required to view other users' batches")
+        if not principal.is_admin:
+            raise HTTPException(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                detail="Admin privileges required",
+            )
         requested_user_id = str(user_id)
     rows = db_list_batches(user_id=requested_user_id, status=status, limit=limit, offset=offset)
     return { 'data': rows, 'pagination': { 'limit': limit, 'offset': offset, 'count': len(rows) } }

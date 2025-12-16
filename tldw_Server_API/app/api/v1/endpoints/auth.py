@@ -4,7 +4,7 @@
 # Imports
 from typing import Dict, Any, Optional
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 #
 # 3rd-party imports
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
@@ -44,7 +44,8 @@ from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.input_validation import get_input_validator
 from tldw_Server_API.app.services.registration_service import RegistrationService
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings, get_profile
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditEventType,
@@ -228,14 +229,23 @@ async def mint_self_virtual_key(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to mint self virtual key: {e}")
-        raise HTTPException(status_code=500, detail="Failed to mint token")
+        if settings.PII_REDACT_LOGS:
+            logger.exception("Failed to mint self virtual key [redacted]")
+        else:
+            logger.exception(
+                "Failed to mint self virtual key for user_id={} scope={} ttl_minutes={} error_type={}",
+                current_user.get("id"),
+                body.scope,
+                body.ttl_minutes,
+                type(e).__name__,
+            )
+        raise HTTPException(status_code=500, detail="Failed to mint token") from e
 
 @router.post("/login", response_model=TokenResponse, dependencies=[Depends(check_auth_rate_limit)])
 async def login(
     request: Request,
     response: Response,
-    _diag=Depends(_login_runtime_diag),
+    _diag=Depends(_login_runtime_diag),  # noqa: B008
     form_data: OAuth2PasswordRequestForm = Depends(),
     db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
@@ -261,6 +271,7 @@ async def login(
     """
     start_time = time.perf_counter()
     log_counter("auth_login_attempt")
+    auth_gov = await get_auth_governor()
     try:
         # Get client info
         client_ip = request.client.host if request.client else "unknown"
@@ -275,14 +286,30 @@ async def login(
         is_locked = False
         lockout_expires = None
         if getattr(rate_limiter, 'enabled', False):
-            is_locked, lockout_expires = await rate_limiter.check_lockout(client_ip)
+            is_locked, lockout_expires = await auth_gov.check_lockout(
+                client_ip,
+                attempt_type="login",
+                rate_limiter=rate_limiter,
+            )
         if is_locked:
             logger.warning(f"Login attempt from locked IP: {client_ip}")
             log_counter("auth_login_locked_ip")
+            retry_after_seconds = 900
+            if isinstance(lockout_expires, datetime):
+                try:
+                    from datetime import timezone as _tz
+
+                    now = datetime.now(lockout_expires.tzinfo or _tz.utc)
+                    retry_after_seconds = max(0, int((lockout_expires - now).total_seconds()))
+                except Exception as exc:
+                    # Fallback to default retry_after_seconds, but keep it observable.
+                    logger.debug(
+                        f"login: failed to compute lockout expiry; using default Retry-After: {exc}"
+                    )
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Too many failed login attempts. Please try again later.",
-                headers={"Retry-After": str(int((lockout_expires - datetime.utcnow()).total_seconds()))}
+                detail="Too many failed login attempts. Please try again later.",
+                headers={"Retry-After": str(retry_after_seconds)}
             )
 
         # Sanitize input (lightweight). For login, avoid strict validation to not block
@@ -320,9 +347,10 @@ async def login(
 
             # Track failed attempt by IP (only when rate limiting is enabled)
             if getattr(rate_limiter, 'enabled', False):
-                await rate_limiter.record_failed_attempt(
+                await auth_gov.record_auth_failure(
                     identifier=client_ip,
-                    attempt_type="login"
+                    attempt_type="login",
+                    rate_limiter=rate_limiter,
                 )
 
             log_counter("auth_login_user_not_found")
@@ -391,13 +419,15 @@ async def login(
             ip_result = {"is_locked": False, "remaining_attempts": 5}
             user_result = {"is_locked": False, "remaining_attempts": 5}
             if getattr(rate_limiter, 'enabled', False):
-                ip_result = await rate_limiter.record_failed_attempt(
+                ip_result = await auth_gov.record_auth_failure(
                     identifier=client_ip,
-                    attempt_type="login"
+                    attempt_type="login",
+                    rate_limiter=rate_limiter,
                 )
-                user_result = await rate_limiter.record_failed_attempt(
+                user_result = await auth_gov.record_auth_failure(
                     identifier=user['username'],
-                    attempt_type="login"
+                    attempt_type="login",
+                    rate_limiter=rate_limiter,
                 )
 
             # Provide informative error if locked out
@@ -512,8 +542,12 @@ async def login(
 
         # Reset failed login attempts on successful login
         if getattr(rate_limiter, 'enabled', False):
-            await rate_limiter.reset_failed_attempts(client_ip, "login")
-            await rate_limiter.reset_failed_attempts(user['username'], "login")
+            try:
+                await rate_limiter.reset_failed_attempts(client_ip, "login")
+                await rate_limiter.reset_failed_attempts(user['username'], "login")
+            except Exception as rl_exc:
+                # Guardrails must not break successful logins; log and continue.
+                logger.debug(f"rate_limiter.reset_failed_attempts failed: {rl_exc}")
 
         # Audit log successful login
         await _safe_audit_log_login(
@@ -858,7 +892,7 @@ async def refresh_token(
 async def register(
     request: RegisterRequest,
     response: Response,
-    _diag=Depends(_register_runtime_diag),
+    _diag=Depends(_register_runtime_diag),  # noqa: B008
     registration_service: RegistrationService = Depends(get_registration_service_dep)
 ) -> RegistrationResponse:
     """
@@ -878,7 +912,24 @@ async def register(
     """
     start_time = time.perf_counter()
     log_counter("auth_register_attempt")
+    settings = get_settings()
     try:
+        # Hard constraint for local-single-user profile: do not allow
+        # registration of additional users beyond the bootstrapped admin.
+        profile = get_profile()
+        if isinstance(profile, str) and profile.strip().lower() in {"local-single-user", "single_user"}:
+            if getattr(settings, "PII_REDACT_LOGS", False):
+                logger.warning("Registration attempt rejected in local-single-user profile [redacted]")
+            else:
+                logger.warning(
+                    "Registration attempt rejected in local-single-user profile for username={}",
+                    request.username,
+                )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User registration is not allowed in local-single-user profile",
+            )
+
         # Register the user
         user_info = await registration_service.register_user(
             username=request.username,
@@ -892,7 +943,6 @@ async def register(
         # If using SQLite for AuthNZ, generate a per-user API key so UI can present it
         api_key_value = None
         try:
-            settings = get_settings()
             if isinstance(settings.DATABASE_URL, str) and settings.DATABASE_URL.startswith("sqlite"):
                 api_mgr = await get_api_key_manager()
                 key_result = await api_mgr.create_api_key(
@@ -976,6 +1026,11 @@ async def register(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+    except HTTPException:
+        # Propagate explicit HTTPException responses (for example the
+        # local-single-user profile guard) without wrapping them as 500.
+        _finalize_register_diag(request, response)
+        raise
     except Exception as e:
         # Check if it's a transaction error wrapping a duplicate user error
         error_msg = str(e).lower()
@@ -1045,14 +1100,9 @@ async def get_current_user_info(
     Returns:
         UserResponse with current user details
     """
-    # Ensure UUID is a string
-    user_uuid = current_user.get('uuid')
-    if user_uuid and not isinstance(user_uuid, str):
-        user_uuid = str(user_uuid)
-
     return UserResponse(
         id=current_user['id'],
-        uuid=user_uuid or '',  # Provide empty string if missing
+        uuid=current_user.get('uuid') or None,
         username=current_user['username'],
         email=current_user['email'],
         role=current_user['role'],

@@ -36,7 +36,8 @@ from tldw_Server_API.app.core.Sandbox.streams import get_hub
 from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditEventCategory, AuditSeverity, AuditContext
-from tldw_Server_API.app.core.AuthNZ.permissions import RoleChecker
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 import mimetypes
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 import hmac
@@ -1371,7 +1372,8 @@ async def admin_list_runs(
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     sort: Optional[str] = Query("desc", pattern="^(asc|desc)$"),
-    current_user: User = Depends(RoleChecker("admin")),
+    principal: AuthPrincipal = Depends(auth_deps.require_roles("admin")),
+    current_user: User = Depends(get_request_user),
 ) -> SandboxAdminRunListResponse:
     items_raw = _service._orch.list_runs(  # type: ignore[attr-defined]
         image_digest=image_digest,
@@ -1420,7 +1422,8 @@ async def admin_list_runs(
 )
 async def admin_get_run_details(
     run_id: str = Path(..., min_length=1),
-    current_user: User = Depends(RoleChecker("admin")),
+    principal: AuthPrincipal = Depends(auth_deps.require_roles("admin")),
+    current_user: User = Depends(get_request_user),
 ) -> SandboxAdminRunDetails:
     st = _service.get_run(run_id)
     if not st:
@@ -1516,7 +1519,8 @@ async def admin_list_idempotency(
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     sort: Optional[str] = Query("desc", pattern="^(asc|desc)$"),
-    current_user: User = Depends(RoleChecker("admin")),
+    principal: AuthPrincipal = Depends(auth_deps.require_roles("admin")),
+    current_user: User = Depends(get_request_user),
 ) -> SandboxAdminIdempotencyListResponse:
     items_raw = _service._orch._store.list_idempotency(  # type: ignore[attr-defined]
         endpoint=endpoint,
@@ -1561,7 +1565,8 @@ async def admin_usage(
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     sort: Optional[str] = Query("desc", pattern="^(asc|desc)$"),
-    current_user: User = Depends(RoleChecker("admin")),
+    principal: AuthPrincipal = Depends(auth_deps.require_roles("admin")),
+    current_user: User = Depends(get_request_user),
 ) -> SandboxAdminUsageResponse:
     items_raw = _service._orch._store.list_usage(  # type: ignore[attr-defined]
         user_id=user_id,

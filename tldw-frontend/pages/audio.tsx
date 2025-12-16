@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -12,8 +12,16 @@ function httpToWs(url: string) {
   return url.replace(/^http/, 'ws');
 }
 
+const tabs = [
+  { key: 'tts', label: 'TTS' },
+  { key: 'stt', label: 'Streaming STT' },
+  { key: 'chat', label: 'Voice Chat (WS)' },
+] as const;
+
+type TabKey = (typeof tabs)[number]['key'];
+
 export default function AudioPage() {
-  const [tab, setTab] = useState<'tts'|'stt'>('tts');
+  const [tab, setTab] = useState<TabKey>('tts');
   return (
     <Layout>
       <div className="mx-auto max-w-3xl space-y-4">
@@ -25,10 +33,16 @@ export default function AudioPage() {
         />
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-gray-900">Audio</h1>
-          <div className="w-1/2"><Tabs items={[{key:'tts',label:'TTS'},{key:'stt',label:'Streaming STT'}]} value={tab} onChange={(k)=>setTab(k as any)} /></div>
+          <div className="w-1/2">
+            <Tabs
+              items={tabs}
+              value={tab}
+              onChange={(k)=>setTab(k as TabKey)}
+            />
+          </div>
         </div>
         <div className="rounded-md border bg-white p-4 transition-all duration-150">
-          {tab === 'tts' ? <TTSSection/> : <StreamingSTTSection/>}
+          {tab === 'tts' ? <TTSSection/> : tab === 'stt' ? <StreamingSTTSection/> : <VoiceChatStreamSection/>}
         </div>
       </div>
     </Layout>
@@ -42,6 +56,7 @@ function TTSSection() {
   const [text, setText] = useState('Hello from TLDW Server');
   const [loading, setLoading] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const blobUrlRef = useRef<string | null>(null);
   const [respInfo, setRespInfo] = useState<any>(null);
 
   const fetchVoices = async () => {
@@ -54,6 +69,12 @@ function TTSSection() {
     } catch {}
   };
   useEffect(() => { fetchVoices(); }, []);
+
+  useEffect(() => {
+    return () => {
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+    };
+  }, []);
 
   const speak = async () => {
     setLoading(true);
@@ -71,7 +92,9 @@ function TTSSection() {
       }
       const buf = await resp.arrayBuffer();
       const blob = new Blob([buf], { type: resp.headers.get('Content-Type') || 'audio/mpeg' });
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
       const urlBlob = URL.createObjectURL(blob);
+      blobUrlRef.current = urlBlob;
       if (audioRef.current) {
         audioRef.current.src = urlBlob;
         await audioRef.current.play();
@@ -133,6 +156,40 @@ function StreamingSTTSection() {
   const [autoStop, setAutoStop] = useState(true);
   const autoStoppedRef = useRef<boolean>(false);
   const [autoStopOnFinal, setAutoStopOnFinal] = useState(true);
+  const recordingRef = useRef(false);
+  const streamRef = useRef<MediaStream | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const procRef = useRef<ScriptProcessorNode | null>(null);
+
+  const cleanupAudio = () => {
+    recordingRef.current = false;
+    if (procRef.current) {
+      try {
+        procRef.current.disconnect();
+      } catch {}
+      procRef.current = null;
+    }
+    if (sourceRef.current) {
+      try {
+        sourceRef.current.disconnect();
+      } catch {}
+      sourceRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (ctxRef.current) {
+      try {
+        ctxRef.current.close();
+      } catch {}
+      ctxRef.current = null;
+    }
+    if (animTimer.current) {
+      cancelAnimationFrame(animTimer.current);
+      animTimer.current = null;
+    }
+  };
 
   const addDebug = (s: string) => {
     const line = `${new Date().toLocaleTimeString()} ${s}`;
@@ -184,7 +241,13 @@ function StreamingSTTSection() {
         } catch { addDebug(`RX: ${String(ev.data).slice(0,100)}`); }
       };
       ws.onerror = (e) => { addDebug('WebSocket error'); };
-      ws.onclose = () => { setConnected(false); setRecording(false); addDebug('WebSocket closed'); };
+      ws.onclose = () => {
+        cleanupAudio();
+        recordingRef.current = false;
+        setConnected(false);
+        setRecording(false);
+        addDebug('WebSocket closed');
+      };
     } catch (e: any) {
       show({ title: 'Connect failed', description: e?.message || 'Failed', variant: 'danger' });
     }
@@ -194,10 +257,13 @@ function StreamingSTTSection() {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { show({title:'Not connected',variant:'warning'}); return; }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+      streamRef.current = stream;
       const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
       ctxRef.current = ctx;
       const source = ctx.createMediaStreamSource(stream);
+      sourceRef.current = source;
       const proc = ctx.createScriptProcessor(16384, 1, 1);
+      procRef.current = proc;
       source.connect(proc); proc.connect(ctx.destination);
       // Setup analyser for visualization
       const analyser = ctx.createAnalyser(); analyser.fftSize = 2048;
@@ -231,7 +297,7 @@ function StreamingSTTSection() {
       startTimeRef.current = Date.now();
       const targetSamples = sampleRate * (model === 'whisper' ? 5 : 2);
       proc.onaudioprocess = (ev: AudioProcessingEvent) => {
-        if (!recording) return;
+        if (!recordingRef.current) return;
         const input = ev.inputBuffer.getChannelData(0);
         // Resample if needed (naive interpolation)
         let data = input;
@@ -248,7 +314,9 @@ function StreamingSTTSection() {
           }
           data = out;
         }
-        bufferRef.current.push(...data);
+        for (let i = 0; i < data.length; i++) {
+          bufferRef.current.push(data[i]);
+        }
         if (bufferRef.current.length >= targetSamples) {
           const chunk = new Float32Array(bufferRef.current.slice(0, targetSamples));
           const overlap = Math.floor(targetSamples*0.1);
@@ -259,27 +327,32 @@ function StreamingSTTSection() {
             let sum = 0; for (let i=0;i<chunk.length;i++){ const v = chunk[i]; sum += v*v; }
             const rms = Math.sqrt(sum / chunk.length);
             const now = Date.now();
-          if (rms < vadThreshold) {
-            // silence chunk
-            if (autoCommit && lastActiveRef.current && (now - lastActiveRef.current) > silenceMs) {
-              wsRef.current?.send(JSON.stringify({ type: 'commit' }));
-              addDebug(`Auto-commit after ${silenceMs}ms silence`);
-              lastActiveRef.current = now; // prevent repeated commits
+            if (rms < vadThreshold) {
+              // silence chunk
+              if (autoCommit && lastActiveRef.current && (now - lastActiveRef.current) > silenceMs) {
+                if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                  wsRef.current.send(JSON.stringify({ type: 'commit' }));
+                }
+                addDebug(`Auto-commit after ${silenceMs}ms silence`);
+                lastActiveRef.current = now; // prevent repeated commits
+              }
+              if (autoStop && !autoStoppedRef.current && lastActiveRef.current && (now - lastActiveRef.current) > silenceMs * 2) {
+                autoStoppedRef.current = true;
+                addDebug(`Auto-stop after ${(silenceMs*2)}ms silence`);
+                stop();
+              }
+              addDebug(`VAD: skip chunk rms=${rms.toFixed(4)}`);
+              return;
             }
-            if (autoStop && !autoStoppedRef.current && lastActiveRef.current && (now - lastActiveRef.current) > silenceMs * 2) {
-              autoStoppedRef.current = true;
-              addDebug(`Auto-stop after ${(silenceMs*2)}ms silence`);
-              stop();
-            }
-            addDebug(`VAD: skip chunk rms=${rms.toFixed(4)}`);
-            return;
+            // voice detected
+            lastActiveRef.current = now;
           }
-          // voice detected
-          lastActiveRef.current = now;
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'audio', data: b64 }));
           }
-          wsRef.current?.send(JSON.stringify({ type: 'audio', data: b64 }));
         }
       };
+      recordingRef.current = true;
       setRecording(true);
       show({ title: 'Recording started', variant: 'success' });
     } catch (e: any) {
@@ -287,19 +360,25 @@ function StreamingSTTSection() {
     }
   };
 
-  const stop = () => {
-    setRecording(false);
-    if (ctxRef.current) { try { ctxRef.current.close(); } catch {} ctxRef.current = null; }
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: 'commit' }));
-    if (animTimer.current) { cancelAnimationFrame(animTimer.current); animTimer.current = null; }
-    autoStoppedRef.current = false;
-    show({ title: 'Recording stopped', variant: 'info' });
-  };
+	  const stop = () => {
+	    recordingRef.current = false;
+	    setRecording(false);
+      cleanupAudio();
+	    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'commit' }));
+      }
+	    autoStoppedRef.current = false;
+	    show({ title: 'Recording stopped', variant: 'info' });
+	  };
 
-  const disconnect = () => {
-    try { wsRef.current?.close(); } catch {}
-    wsRef.current = null; setConnected(false); setRecording(false);
-  };
+	  const disconnect = () => {
+      cleanupAudio();
+	    try { wsRef.current?.close(); } catch {}
+	    wsRef.current = null;
+      setConnected(false);
+      setRecording(false);
+      recordingRef.current = false;
+	  };
 
   return (
     <div className="space-y-3">
@@ -374,6 +453,402 @@ function StreamingSTTSection() {
       <div className="rounded border bg-gray-50 p-3">
         <div className="text-xs text-gray-500">Debug</div>
         <div className="max-h-40 overflow-auto font-mono text-xs">{debugView.map((l,i)=>(<div key={i}>{l}</div>))}</div>
+      </div>
+    </div>
+  );
+}
+
+function VoiceChatStreamSection() {
+  const { show } = useToast();
+  const [connected, setConnected] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [sttModel, setSttModel] = useState<'parakeet'|'canary'|'whisper'>('whisper');
+  const [llmProvider, setLlmProvider] = useState('openai');
+  const [llmModel, setLlmModel] = useState('gpt-4o-mini');
+  const [ttsVoice, setTtsVoice] = useState('af_heart');
+  const [ttsFormat, setTtsFormat] = useState<'mp3'|'opus'|'pcm'>('mp3');
+  const [sessionId, setSessionId] = useState('');
+  const [actionName, setActionName] = useState('');
+  const [partial, setPartial] = useState('');
+  const [transcripts, setTranscripts] = useState<string[]>([]);
+  const [assistant, setAssistant] = useState('');
+  const [status, setStatus] = useState('');
+  const [assistantInfo, setAssistantInfo] = useState<any>(null);
+  const wsRef = useRef<WebSocket|null>(null);
+  const ctxRef = useRef<AudioContext|null>(null);
+  const bufferRef = useRef<number[]>([]);
+  // Accumulates raw TTS audio chunks (ArrayBuffers) from the server.
+  const ttsChunksRef = useRef<ArrayBuffer[]>([]);
+  const audioUrlRef = useRef<string|null>(null);
+  const audioRef = useRef<HTMLAudioElement|null>(null);
+  const recordingRef = useRef(false);
+  const streamRef = useRef<MediaStream|null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode|null>(null);
+  const procRef = useRef<ScriptProcessorNode|null>(null);
+  const sampleRate = 16000;
+
+  const cleanupAudio = () => {
+    recordingRef.current = false;
+    bufferRef.current = [];
+    if (procRef.current) {
+      try { procRef.current.disconnect(); } catch {}
+      procRef.current = null;
+    }
+    if (sourceRef.current) {
+      try { sourceRef.current.disconnect(); } catch {}
+      sourceRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (ctxRef.current) {
+      try { ctxRef.current.close(); } catch {}
+      ctxRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      cleanupAudio();
+      try { wsRef.current?.close(); } catch {}
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+    };
+  }, []);
+
+  const resetTtsBuffers = () => {
+    if (audioUrlRef.current) { URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = null; }
+    ttsChunksRef.current = [];
+  };
+
+  // For TTS format "pcm", the server streams raw 16‑bit mono PCM
+  // (audio/L16; rate=24000; channels=1). Browsers cannot play raw
+  // PCM directly via <audio>, so wrap it in a minimal RIFF/WAVE
+  // header client‑side before creating the Blob.
+  const wrapPcmChunksAsWav = (chunks: ArrayBuffer[], sampleRate: number, channels: number, bitsPerSample: number): ArrayBuffer => {
+    const bytesPerSample = bitsPerSample / 8;
+    const totalBytes = chunks.reduce((acc, buf) => acc + buf.byteLength, 0);
+    const headerSize = 44;
+    const buffer = new ArrayBuffer(headerSize + totalBytes);
+    const view = new DataView(buffer);
+    let offset = 0;
+
+    const writeString = (s: string) => {
+      for (let i = 0; i < s.length; i += 1) {
+        view.setUint8(offset, s.charCodeAt(i));
+        offset += 1;
+      }
+    };
+    const writeUint32LE = (value: number) => {
+      view.setUint32(offset, value, true);
+      offset += 4;
+    };
+    const writeUint16LE = (value: number) => {
+      view.setUint16(offset, value, true);
+      offset += 2;
+    };
+
+    const blockAlign = channels * bytesPerSample;
+    const byteRate = sampleRate * blockAlign;
+
+    writeString('RIFF');
+    writeUint32LE(36 + totalBytes);
+    writeString('WAVE');
+    writeString('fmt ');
+    writeUint32LE(16); // PCM subchunk size
+    writeUint16LE(1); // audio format = PCM
+    writeUint16LE(channels);
+    writeUint32LE(sampleRate);
+    writeUint32LE(byteRate);
+    writeUint16LE(blockAlign);
+    writeUint16LE(bitsPerSample);
+    writeString('data');
+    writeUint32LE(totalBytes);
+
+    const out = new Uint8Array(buffer);
+    let dataOffset = headerSize;
+    for (const buf of chunks) {
+      out.set(new Uint8Array(buf), dataOffset);
+      dataOffset += buf.byteLength;
+    }
+
+    return buffer;
+  };
+
+  const playTts = () => {
+    if (!ttsChunksRef.current.length) return;
+    let blob: Blob;
+    if (ttsFormat === 'pcm') {
+      // Server sends raw PCM (audio/L16; rate=24000; channels=1); wrap as WAV for browser playback.
+      const wavBuffer = wrapPcmChunksAsWav(ttsChunksRef.current, 24000, 1, 16);
+      blob = new Blob([wavBuffer], { type: 'audio/wav' });
+    } else {
+      const mime = ttsFormat === 'mp3' ? 'audio/mpeg' : ttsFormat === 'opus' ? 'audio/opus' : 'audio/wav';
+      blob = new Blob(ttsChunksRef.current, { type: mime });
+    }
+    audioUrlRef.current = URL.createObjectURL(blob);
+    if (audioRef.current) {
+      audioRef.current.src = audioUrlRef.current;
+      audioRef.current.play().catch(() => {});
+    }
+  };
+
+  const connect = async () => {
+    try {
+      let wsUrl = httpToWs(`${getApiBaseUrl()}/audio/chat/stream`);
+      try {
+        const token = localStorage.getItem('access_token');
+        const xk = localStorage.getItem('x_api_key');
+        const urlObj = new URL(wsUrl);
+        if (token) urlObj.searchParams.set('token', token);
+        if (xk) urlObj.searchParams.set('x-api-key', xk);
+        wsUrl = urlObj.toString();
+      } catch {}
+
+      const ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+      wsRef.current = ws;
+      ws.onopen = () => {
+        setConnected(true);
+        setStatus('Connected');
+        setPartial('');
+        setTranscripts([]);
+        setAssistant('');
+        setAssistantInfo(null);
+        resetTtsBuffers();
+        const cfg: any = {
+          type: 'config',
+          session_id: sessionId || undefined,
+          stt: { model: sttModel, sample_rate: sampleRate, enable_vad: true },
+          llm: { provider: llmProvider, model: llmModel },
+          tts: { voice: ttsVoice, format: ttsFormat },
+        };
+        if (actionName) cfg.metadata = { action: actionName };
+        ws.send(JSON.stringify(cfg));
+      };
+      ws.onmessage = async (ev) => {
+        if (typeof ev.data === 'string') {
+          let msg: any;
+          try { msg = JSON.parse(ev.data); } catch { return; }
+          switch (msg.type) {
+            case 'partial':
+              setPartial(msg.text || '');
+              break;
+            case 'full_transcript':
+              setTranscripts((t)=>[...t, msg.text || '']);
+              setPartial('');
+              setAssistant('');
+              setAssistantInfo(null);
+              resetTtsBuffers();
+              break;
+            case 'llm_delta':
+              setAssistant((t)=>t + (msg.delta || ''));
+              break;
+            case 'llm_message':
+              setAssistant(msg.text || '');
+              break;
+            case 'assistant_summary':
+              setAssistantInfo(msg);
+              break;
+            case 'tts_start':
+              resetTtsBuffers();
+              setStatus('Streaming TTS…');
+              break;
+            case 'tts_done':
+              playTts();
+              setStatus('Turn complete');
+              break;
+            case 'warning':
+              setStatus(msg.message || 'Warning');
+              break;
+            case 'error':
+              setStatus(msg.message || 'Error');
+              show({ title: 'Voice chat error', description: msg.message || 'Streaming failed', variant: 'danger' });
+              break;
+            case 'action_result':
+              setAssistantInfo((prev)=>({ ...(prev || {}), action: msg }));
+              setStatus(`Action: ${msg.status || 'ok'}`);
+              break;
+            default:
+              break;
+          }
+        } else {
+          const buf = ev.data instanceof Blob ? await ev.data.arrayBuffer() : ev.data;
+          if (buf) ttsChunksRef.current.push(buf);
+        }
+      };
+      ws.onerror = () => {
+        setStatus('WebSocket error');
+        show({
+          title: 'WebSocket error',
+          description: 'Voice chat connection failed or interrupted',
+          variant: 'danger',
+        });
+      };
+      ws.onclose = () => {
+        cleanupAudio();
+        setConnected(false);
+        setRecording(false);
+        setStatus('Disconnected');
+      };
+    } catch (e: any) {
+      show({ title: 'Connect failed', description: e?.message || 'Failed', variant: 'danger' });
+    }
+  };
+
+  const start = async () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      show({ title: 'Not connected', description: 'Connect first', variant: 'warning' });
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+      streamRef.current = stream;
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      ctxRef.current = ctx;
+      const source = ctx.createMediaStreamSource(stream);
+      sourceRef.current = source;
+      const proc = ctx.createScriptProcessor(8192, 1, 1);
+      procRef.current = proc;
+      source.connect(proc); proc.connect(ctx.destination);
+      bufferRef.current = [];
+      proc.onaudioprocess = (ev: AudioProcessingEvent) => {
+        if (!recordingRef.current) return;
+        let data = ev.inputBuffer.getChannelData(0);
+        if (ctx.sampleRate !== sampleRate) {
+          const ratio = sampleRate / ctx.sampleRate;
+          const newLen = Math.floor(data.length * ratio);
+          const out = new Float32Array(newLen);
+          for (let i=0;i<newLen;i++){
+            const srcIndex = i/ratio;
+            const lo = Math.floor(srcIndex);
+            const hi = Math.min(lo+1, data.length-1);
+            const frac = srcIndex - lo;
+            out[i] = data[lo]*(1-frac)+data[hi]*frac;
+          }
+          data = out;
+        }
+        for (let i = 0; i < data.length; i++) {
+          bufferRef.current.push(data[i]);
+        }
+        const target = sampleRate * 2;
+        if (bufferRef.current.length >= target) {
+          const chunk = new Float32Array(bufferRef.current.slice(0, target));
+          bufferRef.current = bufferRef.current.slice(target);
+          const b64 = arrayBufferToBase64(chunk.buffer);
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'audio', data: b64 }));
+          }
+        }
+      };
+      recordingRef.current = true;
+      setRecording(true);
+      setStatus('Recording…');
+    } catch (e: any) {
+      cleanupAudio();
+      setRecording(false);
+      show({ title: 'Mic failed', description: e?.message || 'Permission error', variant: 'danger' });
+    }
+  };
+
+  const stop = () => {
+    recordingRef.current = false;
+    setRecording(false);
+    cleanupAudio();
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'commit' }));
+    }
+  };
+
+  const disconnect = () => {
+    stop();
+    try {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'stop' }));
+      }
+    } catch {}
+    try { wsRef.current?.close(); } catch {}
+    wsRef.current = null;
+    setConnected(false);
+    setRecording(false);
+    setStatus('Disconnected');
+  };
+
+  const commit = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'commit' }));
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">STT Model</label>
+          <select
+            className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+            value={sttModel}
+            onChange={(e)=>setSttModel(e.target.value as any)}
+          >
+            <option value="whisper">Whisper</option>
+            <option value="parakeet">Parakeet</option>
+            <option value="canary">Canary</option>
+          </select>
+        </div>
+        <Input label="Session ID (optional)" value={sessionId} onChange={(e)=>setSessionId(e.target.value)} />
+        <Input label="LLM Provider" value={llmProvider} onChange={(e)=>setLlmProvider(e.target.value)} />
+        <Input label="LLM Model" value={llmModel} onChange={(e)=>setLlmModel(e.target.value)} />
+        <Input label="TTS Voice" value={ttsVoice} onChange={(e)=>setTtsVoice(e.target.value)} />
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">TTS Format</label>
+          <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={ttsFormat} onChange={(e)=>setTtsFormat(e.target.value as any)}>
+            <option value="mp3">mp3</option>
+            <option value="opus">opus</option>
+            <option value="pcm">pcm</option>
+          </select>
+        </div>
+        <Input label="Action (optional)" value={actionName} onChange={(e)=>setActionName(e.target.value)} placeholder="action/tool name" />
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {!connected ? (
+          <Button onClick={connect}>Connect</Button>
+        ) : (
+          <Button variant="secondary" onClick={disconnect}>Disconnect</Button>
+        )}
+        {!recording ? (
+          <Button onClick={start} disabled={!connected}>Start</Button>
+        ) : (
+          <Button variant="secondary" onClick={stop}>Stop & Commit</Button>
+        )}
+        <Button variant="ghost" onClick={commit} disabled={!connected}>Commit</Button>
+      </div>
+      <div className="rounded border bg-gray-50 p-3">
+        <div className="text-xs text-gray-500">Status</div>
+        <div className="rounded bg-white p-2 text-sm min-h-10">{status || 'Idle'}</div>
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="rounded border bg-gray-50 p-3">
+          <div className="text-xs text-gray-500">Partial</div>
+          <div className="rounded bg-white p-2 text-sm min-h-12">{partial}</div>
+        </div>
+        <div className="rounded border bg-gray-50 p-3">
+          <div className="text-xs text-gray-500">Assistant (streaming)</div>
+          <div className="whitespace-pre-wrap rounded bg-white p-2 text-sm min-h-12 max-h-48 overflow-auto">{assistant}</div>
+        </div>
+      </div>
+      <div className="rounded border bg-gray-50 p-3">
+        <div className="text-xs text-gray-500">Transcripts</div>
+        <div className="whitespace-pre-wrap rounded bg-white p-2 text-sm min-h-16 max-h-60 overflow-auto">{transcripts.map((t,i)=>(<div key={i} className="mb-2"><strong className="text-gray-500">User:</strong> {t}</div>))}</div>
+      </div>
+      {assistantInfo && (
+        <div className="rounded border bg-gray-50 p-3 text-xs">
+          <div className="mb-1 text-gray-500">Assistant summary</div>
+          <JsonViewer data={assistantInfo} />
+        </div>
+      )}
+      <div className="rounded border bg-gray-50 p-3">
+        <div className="mb-1 text-xs text-gray-500">TTS Preview</div>
+        <audio ref={audioRef} controls className="w-full" />
       </div>
     </div>
   );

@@ -219,8 +219,15 @@ class TestAuthEndpointsIntegration:
         app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
-    async def test_register_success(self, mock_db_pool, registration_service):
+    async def test_register_success(self, mock_db_pool, registration_service, monkeypatch):
         """Test successful user registration."""
+        # Ensure registration runs under multi-user profile (local-single-user
+        # profile forbids self-registration at the endpoint layer).
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        monkeypatch.setenv("AUTH_MODE", "multi_user")
+        monkeypatch.delenv("PROFILE", raising=False)
+        reset_settings()
+
         # Mock database to simulate no existing user
         mock_db_pool.fetchrow = AsyncMock(return_value=None)
         mock_db_pool.execute = AsyncMock()
@@ -258,8 +265,13 @@ class TestAuthEndpointsIntegration:
         app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
-    async def test_register_duplicate_user(self, mock_db_pool, registration_service):
+    async def test_register_duplicate_user(self, mock_db_pool, registration_service, monkeypatch):
         """Test registration with duplicate username."""
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        monkeypatch.setenv("AUTH_MODE", "multi_user")
+        monkeypatch.delenv("PROFILE", raising=False)
+        reset_settings()
+
         registration_service.register_user = AsyncMock(
             side_effect=DuplicateUserError("Username already exists")
         )
@@ -286,8 +298,13 @@ class TestAuthEndpointsIntegration:
         app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
-    async def test_register_weak_password(self, registration_service):
+    async def test_register_weak_password(self, registration_service, monkeypatch):
         """Test registration with weak password."""
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        monkeypatch.setenv("AUTH_MODE", "multi_user")
+        monkeypatch.delenv("PROFILE", raising=False)
+        reset_settings()
+
         registration_service.register_user = AsyncMock(
             side_effect=WeakPasswordError("Password must be at least 8 characters")
         )
@@ -317,43 +334,42 @@ class TestAuthEndpointsIntegration:
         app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
-    async def test_refresh_token_success(self, mock_db_pool, jwt_service, session_manager, test_user, valid_refresh_token):
-        """Test successful token refresh."""
-        mock_db_pool.fetchrow = AsyncMock(return_value=test_user)
+    async def test_refresh_token_success(self, isolated_test_environment):
+        """Test successful token refresh using real auth flow."""
+        client, db_name = isolated_test_environment
 
-        # Mock session manager to not blacklist the token
-        session_manager.is_token_blacklisted = AsyncMock(return_value=False)
-        session_manager.refresh_session = AsyncMock(return_value={
-            "session_id": 1,
-            "user_id": test_user['id'],
-            "expires_at": datetime.utcnow().isoformat()
-        })
-
-        from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-            get_db_transaction,
-            get_jwt_service_dep,
-            get_session_manager_dep
+        # Register a user and obtain a refresh token via login
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "refreshuser",
+                "email": "refresh@example.com",
+                "password": "Str0ngP@ssw0rd!"
+            }
         )
-        app.dependency_overrides[get_db_transaction] = lambda: mock_db_pool
-        app.dependency_overrides[get_jwt_service_dep] = lambda: jwt_service
-        app.dependency_overrides[get_session_manager_dep] = lambda: session_manager
+        assert register_response.status_code == 200, register_response.text
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test"
-        ) as client:
-            response = await client.post(
-                "/api/v1/auth/refresh",
-                json={"refresh_token": valid_refresh_token}
-            )
+        login_response = client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": "refreshuser",
+                "password": "Str0ngP@ssw0rd!"
+            }
+        )
+        assert login_response.status_code == 200, login_response.text
+        refresh_token = login_response.json()["refresh_token"]
 
-        assert response.status_code == 200
-        data = response.json()
+        # Refresh the token via the API
+        refresh_response = client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": refresh_token}
+        )
+
+        assert refresh_response.status_code == 200
+        data = refresh_response.json()
         assert "access_token" in data
         assert "refresh_token" in data
         assert data["token_type"] == "bearer"
-
-        app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
     async def test_refresh_token_invalid(self, isolated_test_environment, jwt_service):

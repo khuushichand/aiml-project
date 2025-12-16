@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 import pytest
@@ -6,21 +5,78 @@ from fastapi.testclient import TestClient
 
 
 @pytest.mark.asyncio
-async def test_policy_snapshot_endpoint(monkeypatch):
-    base = Path(__file__).resolve().parents[3]
+async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    try:
+        from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+        await reset_db_pool()
+        reset_settings()
+    except Exception:
+        pass
+    try:
+        from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
+
+        await ensure_authnz_schema_ready_once()
+    except Exception:
+        pass
+
+
+async def _create_admin_user_and_key(*, username: str, email: str) -> str:
+    from uuid import uuid4
+
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB
+
+    pool = await get_db_pool()
+    users_db = UsersDB(pool)
+    await users_db.initialize()
+    created_user = await users_db.create_user(
+        username=username,
+        email=email,
+        password_hash="x",
+        role="admin",
+        is_active=True,
+        is_superuser=True,
+        storage_quota_mb=5120,
+        uuid_value=uuid4(),
+    )
+    user_id = int(created_user["id"])
+    mgr = APIKeyManager(pool)
+    await mgr.initialize()
+    key_rec = await mgr.create_api_key(user_id=user_id, name=f"{username}-key")
+    return str(key_rec["key"])
+
+
+def _reset_rg_state(app) -> None:
+    for attr in ("rg_governor", "rg_policy_loader", "rg_policy_store", "rg_policy_version", "rg_policy_count"):
+        try:
+            if hasattr(app.state, attr):
+                setattr(app.state, attr, None)
+        except Exception:
+            continue
+
+
+@pytest.mark.asyncio
+async def test_policy_snapshot_endpoint(monkeypatch, tmp_path):
+    base = Path(__file__).resolve().parents[2]
     stub = base / "Config_Files" / "resource_governor_policies.yaml"
+
+    db_path = tmp_path / "authnz_rg_endpoint.db"
+    await _init_authnz_sqlite(db_path, monkeypatch)
+    api_key = await _create_admin_user_and_key(username="rg-endpoint-admin", email="rg-endpoint-admin@example.com")
 
     monkeypatch.setenv("RG_POLICY_STORE", "db")
     monkeypatch.setenv("RG_POLICY_PATH", str(stub))
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
-    monkeypatch.setenv("AUTH_MODE", "single_user")
-    # Ensure deterministic single-user API key in tests and use it for auth
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-12345")
     monkeypatch.setenv("TEST_MODE", "1")
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{base / 'Databases' / 'users_test_rg_endpoint.db'}")
 
     from tldw_Server_API.app.main import app
-    headers = {"X-API-KEY": "test-api-key-12345"}
+    _reset_rg_state(app)
+    headers = {"X-API-KEY": api_key}
     # Seed a few known policies via admin API to ensure snapshot exists in DB store
     with TestClient(app) as client:
         seeds = {
@@ -45,25 +101,26 @@ async def test_policy_snapshot_endpoint(monkeypatch):
         assert isinstance(ids, list) and len(ids) >= 3
         assert any(i == "chat.default" for i in ids)
 
-        # Basic get (admin-gated; single_user treated as admin)
+        # Basic get (admin-gated)
         # Ensure endpoint is reachable; result may be 404 in file store
         g = client.get(f"/api/v1/resource-governor/policy/{ids[0]}", headers=headers)
         assert g.status_code in (200, 404)
 
 
 @pytest.mark.asyncio
-async def test_policy_admin_upsert_and_delete_sqlite(monkeypatch):
+async def test_policy_admin_upsert_and_delete_sqlite(monkeypatch, tmp_path):
     # Use DB policy store so admin writes update the snapshot on refresh
-    base = Path(__file__).resolve().parents[3]
+    db_path = tmp_path / "authnz_rg_admin.db"
+    await _init_authnz_sqlite(db_path, monkeypatch)
+    api_key = await _create_admin_user_and_key(username="rg-admin", email="rg-admin@example.com")
+
     monkeypatch.setenv("RG_POLICY_STORE", "db")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
-    monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-12345")
     monkeypatch.setenv("TEST_MODE", "1")
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{base / 'Databases' / 'users_test_rg_admin.db'}")
 
     from tldw_Server_API.app.main import app
-    headers = {"X-API-KEY": "test-api-key-12345"}
+    _reset_rg_state(app)
+    headers = {"X-API-KEY": api_key}
     with TestClient(app) as client:
         # Upsert a policy
         new_policy_id = "test.policy"
@@ -86,6 +143,35 @@ async def test_policy_admin_upsert_and_delete_sqlite(monkeypatch):
         assert de.status_code == 200
         r2 = client.get("/api/v1/resource-governor/policy?include=ids", headers=headers)
         assert new_policy_id not in (r2.json().get("policy_ids") or [])
+
+        # Optimistic delete: conflict when version mismatches.
+        versioned_policy_id = "test.policy.versioned"
+        up1 = client.put(
+            f"/api/v1/resource-governor/policy/{versioned_policy_id}",
+            headers=headers,
+            json={"payload": {"requests": {"rpm": 1}}, "version": 1},
+        )
+        assert up1.status_code == 200
+        up2 = client.put(
+            f"/api/v1/resource-governor/policy/{versioned_policy_id}",
+            headers=headers,
+            json={"payload": {"requests": {"rpm": 2}}, "version": 1},
+        )
+        assert up2.status_code == 200
+        de_conflict = client.delete(
+            f"/api/v1/resource-governor/policy/{versioned_policy_id}",
+            headers=headers,
+            params={"version": 1},
+        )
+        assert de_conflict.status_code == 409
+        de_ok = client.delete(
+            f"/api/v1/resource-governor/policy/{versioned_policy_id}",
+            headers=headers,
+            params={"version": 2},
+        )
+        assert de_ok.status_code == 200
+        r3 = client.get("/api/v1/resource-governor/policy?include=ids", headers=headers)
+        assert versioned_policy_id not in (r3.json().get("policy_ids") or [])
 
         # List policies (admin)
         lst = client.get("/api/v1/resource-governor/policies", headers=headers)

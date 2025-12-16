@@ -4,9 +4,9 @@ from __future__ import annotations
 
 # Imports
 from typing import Optional, Dict, Any, List, Union, Literal
-from datetime import datetime
+from uuid import UUID
+from datetime import datetime, date
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
-from datetime import date
 
 #######################################################################################################################
 #
@@ -27,7 +27,7 @@ class UserUpdateRequest(BaseModel):
 class UserSummary(BaseModel):
     """Summary information about a user"""
     id: int
-    uuid: str
+    uuid: UUID
     username: str
     email: str
     role: str

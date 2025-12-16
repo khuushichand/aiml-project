@@ -632,6 +632,14 @@ async def scrape_and_summarize_multiple(
     results = []
     errors = []
 
+    # Apply polite scraping rate limits (and optional Resource Governor backoff)
+    # for each outbound fetch. This is intentionally best-effort and must never
+    # block scraping when the limiter cannot be constructed.
+    try:
+        rate_limiter = RateLimiter()
+    except Exception:
+        rate_limiter = None
+
     # Create a tqdm progress bar
     progress_bar = tqdm(total=len(urls_list), desc="Scraping and Summarizing")
 
@@ -639,6 +647,11 @@ async def scrape_and_summarize_multiple(
     for i, url in enumerate(urls_list):
         custom_title = custom_titles[i] if i < len(custom_titles) else None
         try:
+            if rate_limiter is not None:
+                try:
+                    await rate_limiter.acquire()
+                except Exception:
+                    pass
             # Scrape the article
             article = await scrape_article(url, custom_cookies=custom_cookies)
             if article and article['extraction_successful']:

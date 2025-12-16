@@ -7,9 +7,12 @@ Provides health checks, cache statistics, and system monitoring.
 
 from typing import Dict, Any, Optional
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, status
 
+from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
+
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_permissions
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 
 # Import RAG components
 from ....core.RAG.rag_service.advanced_cache import RAGCache
@@ -188,7 +191,11 @@ async def readiness_check() -> Dict[str, Any]:
         )
 
 
-@router.get("/cache/stats", summary="Get cache statistics")
+@router.get(
+    "/cache/stats",
+    summary="Get cache statistics",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def get_cache_statistics() -> Dict[str, Any]:
     """
     Get detailed cache statistics.
@@ -232,7 +239,11 @@ async def get_cache_statistics() -> Dict[str, Any]:
         )
 
 
-@router.post("/cache/clear", summary="Clear cache")
+@router.post(
+    "/cache/clear",
+    summary="Clear cache",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def clear_cache() -> Dict[str, str]:
     """
     Clear all cache entries.
@@ -258,7 +269,11 @@ async def clear_cache() -> Dict[str, str]:
         )
 
 
-@router.get("/cache/warm", summary="Get cache warming status")
+@router.get(
+    "/cache/warm",
+    summary="Get cache warming status",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def get_cache_warming_status() -> Dict[str, Any]:
     """Get status of cache warming operations."""
     try:
@@ -286,7 +301,11 @@ async def get_cache_warming_status() -> Dict[str, Any]:
         )
 
 
-@router.get("/metrics/summary", summary="Get metrics summary")
+@router.get(
+    "/metrics/summary",
+    summary="Get metrics summary",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def get_metrics_summary() -> Dict[str, Any]:
     """Get summary of RAG pipeline metrics."""
     try:
@@ -321,7 +340,11 @@ async def get_metrics_summary() -> Dict[str, Any]:
         )
 
 
-@router.get("/costs/summary", summary="Get cost tracking summary")
+@router.get(
+    "/costs/summary",
+    summary="Get cost tracking summary",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def get_cost_summary() -> Dict[str, Any]:
     """Get summary of LLM API costs."""
     try:
@@ -363,7 +386,11 @@ async def get_cost_summary() -> Dict[str, Any]:
         )
 
 
-@router.get("/batch/jobs", summary="Get batch job statuses")
+@router.get(
+    "/batch/jobs",
+    summary="Get batch job statuses",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
 async def get_batch_jobs() -> Dict[str, Any]:
     """Get status of all batch processing jobs."""
     try:

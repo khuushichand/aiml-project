@@ -2,14 +2,19 @@
 Unified MCP API Endpoints
 
 Production-ready endpoints for the unified MCP module with enhanced security and monitoring.
+
+Environment:
+    - ``MCP_SINGLE_USER_COMPAT_SHIM``: When set to ``0``/``false``/``off``, disables
+      the single-user API key compatibility shim so that all API keys are validated
+      via the multi-user API key manager path regardless of AUTH_MODE/PROFILE.
 """
 
 import ipaddress
 import os
 import secrets
+from dataclasses import dataclass
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, WebSocket, HTTPException, Depends, Query, Header, Security, status, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -22,17 +27,23 @@ from tldw_Server_API.app.core.MCP_unified import (
 from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
 from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
 from fastapi import Response
-from tldw_Server_API.app.core.MCP_unified.auth import (
-    JWTManager,
-    UserRole,
-    RBACPolicy
-)
+from tldw_Server_API.app.core.MCP_unified.auth import UserRole
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get_jwt_manager
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode, get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import (
+    is_single_user_mode,
+    is_single_user_profile_mode,
+    get_settings,
+)
 from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    require_permissions,
+    get_auth_principal,
+)
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
@@ -94,6 +105,44 @@ class AuthTokenResponse(BaseModel):
     refresh_token: Optional[str] = None
 
 
+def _get_derived_user_id(user: Optional[TokenData]) -> Optional[str]:
+    """Return user.sub when available, otherwise None."""
+    return user.sub if user else None
+
+
+def _should_use_single_user_api_key_compat() -> bool:
+    """
+    Decide whether to use the single-user API key compatibility shim.
+
+    Behaviour:
+    - When MCP_SINGLE_USER_COMPAT_SHIM is explicitly disabled (\"0\"/\"false\"/\"off\"),
+      the shim is turned off regardless of AUTH_MODE/PROFILE and API keys are
+      always validated via the multi-user API key manager path.
+    - Otherwise (default), the shim is enabled only when the runtime profile
+      indicates a single-user-style deployment, mirroring the existing behaviour.
+    """
+    flag = os.getenv("MCP_SINGLE_USER_COMPAT_SHIM", "").strip().lower()
+    if flag in {"0", "false", "off"}:
+        return False
+    try:
+        return is_single_user_profile_mode()
+    except Exception:
+        logger.debug(
+            "MCP unified: single-user profile detection failed; defaulting compat shim to False",
+            extra={"auth_method": "single_user_compat_shim"},
+            exc_info=True,
+        )
+        return False
+
+
+@dataclass
+class McpAuthContext:
+    """Resolved authentication context for MCP HTTP endpoints."""
+    user: Optional[TokenData]
+    api_key_info: Optional[Dict[str, Any]]
+    raw_api_key: Optional[str]
+
+
 # Dependency functions
 
 async def get_current_user(
@@ -101,7 +150,22 @@ async def get_current_user(
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     request: Request = None,
 ) -> Optional[TokenData]:
-    """Get current user (AuthNZ JWT, MCP JWT, or API key)."""
+    """Get current user (AuthNZ JWT, MCP JWT, or API key).
+
+    The resolution order deliberately mirrors the main AuthNZ stack:
+    1) AuthNZ access JWT (multi-user).
+    2) MCP JWT (for tools integrations).
+    3) API key:
+       - Single-user mode: treat SINGLE_USER_API_KEY (and, in TEST_MODE,
+         SINGLE_USER_TEST_API_KEY) as an admin-style principal.
+       - Multi-user: validate via APIKeyManager and map to a user id.
+
+    When the multi-user API key path succeeds, this helper also attaches the
+    resolved API key metadata to ``request.state.mcp_api_key_info`` so that
+    downstream handlers (for example, :func:`get_mcp_auth_context` and
+    ``_attach_api_key_metadata``) can reuse the information without re-validating
+    the same key or double-counting usage/audit events.
+    """
     # Try AuthNZ JWT first (multi-user)
     try:
         if credentials and credentials.credentials:
@@ -109,65 +173,217 @@ async def get_current_user(
             payload = jwt_service.decode_access_token(credentials.credentials)
             uid = str(payload.get("user_id") or payload.get("sub"))
             if uid:
-                return TokenData(sub=uid, username=payload.get("username"), roles=[], permissions=[], token_type="access")
-    except Exception as e:
-        logger.debug(f"AuthNZ JWT check failed: {e}")
+                return TokenData(
+                    sub=uid,
+                    username=payload.get("username"),
+                    roles=payload.get("roles", []),
+                    permissions=payload.get("permissions", []),
+                    token_type="access",
+                )
+    except Exception:
+        logger.debug(
+            "AuthNZ JWT check failed; falling back to MCP JWT / API key",
+            extra={"auth_method": "authnz_jwt"},
+            exc_info=True,
+        )
 
     # MCP JWT fallback
     try:
         if credentials and credentials.credentials:
             jwt_manager = get_jwt_manager()
             return jwt_manager.verify_token(credentials.credentials)
-    except Exception as e:
-        logger.debug(f"MCP token verification failed: {e}")
+    except Exception:
+        logger.debug(
+            "MCP token verification failed; falling back to API key",
+            extra={"auth_method": "mcp_jwt"},
+            exc_info=True,
+        )
 
     # API key fallback
     try:
         if x_api_key:
-            # Single-user mode: accept the configured SINGLE_USER_API_KEY directly
+            # Single-user mode: accept the configured SINGLE_USER_API_KEY directly,
+            # mirroring the semantics in get_request_user/get_auth_principal.
             try:
-                if is_single_user_mode():
+                if _should_use_single_user_api_key_compat():
                     settings = get_settings()
-                    if x_api_key == settings.SINGLE_USER_API_KEY:
+                    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {
+                        "1",
+                        "true",
+                        "yes",
+                        "on",
+                    }
+                    if test_mode:
+                        # Guard against accidental production use of TEST_MODE-based
+                        # SINGLE_USER_TEST_API_KEY shortcuts. Only honor TEST_MODE
+                        # in clear dev/test contexts (debug or explicit env/pytest).
+                        try:
+                            cfg = get_config()
+                        except Exception:
+                            cfg = None
+                        env = (
+                            os.getenv("ENVIRONMENT")
+                            or os.getenv("APP_ENV")
+                            or os.getenv("ENV")
+                            or ""
+                        ).lower()
+                        is_dev_ctx = bool(cfg and getattr(cfg, "debug_mode", False))
+                        if os.getenv("PYTEST_CURRENT_TEST") is not None:
+                            is_dev_ctx = True
+                        try:
+                            import sys as _sys
+
+                            if "pytest" in _sys.modules:
+                                is_dev_ctx = True
+                        except Exception:
+                            pass
+                        if env in {"dev", "development", "test", "ci"}:
+                            is_dev_ctx = True
+                        if not is_dev_ctx:
+                            logger.error(
+                                "TEST_MODE enabled outside dev/test context; refusing SINGLE_USER_TEST_API_KEY",
+                                extra={"audit": True, "env": env, "debug_mode": bool(cfg and getattr(cfg, 'debug_mode', False))},
+                            )
+                            test_mode = False
+                    allowed: set[str] = set()
+                    if settings.SINGLE_USER_API_KEY:
+                        allowed.add(settings.SINGLE_USER_API_KEY)
+                    if test_mode:
+                        test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                        if test_key:
+                            allowed.add(test_key)
+                    if x_api_key in {a for a in allowed if a}:
+                        roles = [UserRole.ADMIN.value]
+                        perms = ["*"] if test_mode else []
                         return TokenData(
                             sub=str(settings.SINGLE_USER_FIXED_ID),
                             username="single_user",
-                            roles=["admin"],
-                            permissions=[],
+                            roles=roles,
+                            permissions=perms,
                             token_type="access",
                         )
-                    # TEST_MODE convenience: honor SINGLE_USER_TEST_API_KEY for deterministic automation
-                    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
-                    if test_mode:
-                        allowed = {
-                            os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345"),
-                            settings.SINGLE_USER_API_KEY,
-                        }
-                        if x_api_key in {a for a in allowed if a}:
-                            return TokenData(
-                                sub=str(settings.SINGLE_USER_FIXED_ID),
-                                username="single_user",
-                                roles=[UserRole.ADMIN.value],
-                                permissions=["*"],
-                                token_type="access",
-                            )
             except Exception:
                 # Fall through to multi-user API key validation
-                pass
+                logger.debug(
+                    "Single-user API key check failed, falling through to multi-user validation",
+                    extra={"auth_method": "single_user_api_key"},
+                    exc_info=True,
+                )
             api_mgr = await get_api_key_manager()
             client_ip = request.client.host if request and getattr(request, "client", None) else None
             info = await api_mgr.validate_api_key(x_api_key, ip_address=client_ip)
             if info and info.get("user_id"):
-                return TokenData(sub=str(info["user_id"]), username=None, roles=["api_client"], permissions=[], token_type="access")
-    except Exception as e:
-        logger.debug(f"API key check failed: {e}")
+                # Attach API key metadata to the request state so downstream
+                # handlers can reuse it without re-validating (avoids double
+                # usage/audit updates when get_current_user is used as a
+                # dependency alongside per-endpoint validate_api_key calls).
+                try:
+                    if request is not None:
+                        request.state.mcp_api_key_info = info
+                except Exception:
+                    logger.debug(
+                        "MCP unified: failed to attach API key info to request state",
+                        extra={"auth_method": "api_key"},
+                        exc_info=True,
+                    )
+                return TokenData(
+                    sub=str(info["user_id"]),
+                    username=None,
+                    roles=["api_client"],
+                    permissions=[],
+                    token_type="access",
+                )
+    except Exception:
+        logger.debug(
+            "API key check failed in MCP unified get_current_user",
+            extra={"auth_method": "api_key"},
+            exc_info=True,
+        )
 
     return None
 
 
+async def get_mcp_auth_context(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    request: Request = None,
+) -> McpAuthContext:
+    """Resolve MCP auth context (user + API key metadata) for HTTP endpoints.
+
+    Reuses :func:`get_current_user` for primary auth and surfaces any API key
+    metadata attached to ``request.state.mcp_api_key_info`` by the multi-user
+    API key path. HTTP handlers should rely on the resulting
+    :class:`McpAuthContext` (and helper functions like ``_attach_api_key_metadata``)
+    rather than re-validating API keys themselves.
+    """
+    user = await get_current_user(credentials, x_api_key, request)
+    api_key_info: Optional[Dict[str, Any]] = None
+    try:
+        if request is not None:
+            api_key_info = getattr(request.state, "mcp_api_key_info", None)
+    except Exception:
+        logger.debug(
+            "MCP unified: failed to read API key info from request state",
+            exc_info=True,
+        )
+        api_key_info = None
+    return McpAuthContext(user=user, api_key_info=api_key_info, raw_api_key=x_api_key)
+
+
+async def _attach_api_key_metadata(
+    auth: McpAuthContext,
+    http_request: Optional[Request],
+    *,
+    log_on_error: bool = False,
+    log_prefix: str = "HTTP",
+) -> Dict[str, Any]:
+    """Attach API-key-derived metadata (org/team) for MCP HTTP endpoints.
+
+    Prefers any API key info already attached to the auth context and falls back
+    to validating the raw API key when needed.
+
+    Re-validation can trigger usage and audit side effects via the API key
+    manager (for example, incrementing usage counters or emitting audit logs),
+    so this helper intentionally avoids re-validating when cached API key info
+    is already available on the auth context.
+    """
+    metadata: Dict[str, Any] = {}
+    api_key_info: Optional[Dict[str, Any]] = None
+
+    if auth.api_key_info is not None:
+        api_key_info = auth.api_key_info
+
+    if auth.raw_api_key and api_key_info is None:
+        try:
+            api_mgr = await get_api_key_manager()
+            client_ip = (
+                http_request.client.host
+                if http_request and getattr(http_request, "client", None)
+                else None
+            )
+            api_key_info = await api_mgr.validate_api_key(auth.raw_api_key, ip_address=client_ip)
+        except Exception:
+            if log_on_error:
+                logger.debug(
+                    "MCP unified {} API key metadata attach failed",
+                    log_prefix,
+                    exc_info=True,
+                )
+            api_key_info = None
+
+    if api_key_info:
+        if api_key_info.get("org_id") is not None:
+            metadata["org_id"] = api_key_info.get("org_id")
+        if api_key_info.get("team_id") is not None:
+            metadata["team_id"] = api_key_info.get("team_id")
+
+    return metadata
+
+
 async def require_user(
     credentials: HTTPAuthorizationCredentials = Security(security),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    request: Request = None,
 ) -> TokenData:
     """Require authenticated user"""
     if not credentials and not x_api_key:
@@ -176,27 +392,10 @@ async def require_user(
             detail="Authentication required",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    # Reuse get_current_user to resolve any auth form
-    user = await get_current_user(credentials, x_api_key)
+    # Reuse get_current_user to resolve any auth form, including client IP / API-key metadata
+    user = await get_current_user(credentials, x_api_key, request)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-    return user
-
-
-async def require_admin(
-    user: TokenData = Depends(require_user)
-) -> TokenData:
-    """Require admin role"""
-    try:
-        if is_single_user_mode():
-            return user
-    except Exception:
-        pass
-    if UserRole.ADMIN.value not in user.roles:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role required"
-        )
     return user
 
 
@@ -253,8 +452,7 @@ async def websocket_endpoint(
 async def mcp_request(
     request: MCPRequest,
     client_id: Optional[str] = Query(None, description="Client identifier"),
-    user: Optional[TokenData] = Depends(get_current_user),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    auth: McpAuthContext = Depends(get_mcp_auth_context),
     mcp_session_id: Optional[str] = Header(None, alias="mcp-session-id"),
     config: Optional[str] = Query(None, description="Base64-encoded JSON safe config for this request"),
     response: Response = None,
@@ -274,31 +472,13 @@ async def mcp_request(
         await server.initialize()
 
     # Process request
-    # Attach org/team metadata when auth via API key
-    metadata: Dict[str, Any] = {}
-    if x_api_key:
-        try:
-            api_mgr = await get_api_key_manager()
-            client_ip = http_request.client.host if http_request and getattr(http_request, "client", None) else None
-            info = await api_mgr.validate_api_key(x_api_key, ip_address=client_ip)
-            if info:
-                if info.get('org_id') is not None:
-                    metadata['org_id'] = info.get('org_id')
-                if info.get('team_id') is not None:
-                    metadata['team_id'] = info.get('team_id')
-        except Exception:
-            pass
+    # Attach org/team metadata when auth via API key. Prefer any metadata attached
+    # by get_current_user to avoid re-validating the same key and double-counting
+    # usage/audit; fall back to a direct lookup when needed.
+    metadata = await _attach_api_key_metadata(auth, http_request)
 
-    # Derive user id with a robust single-user fallback
-    derived_user_id: Optional[str] = user.sub if user else None
-    if derived_user_id is None:
-        try:
-            if x_api_key and is_single_user_mode():
-                settings = get_settings()
-                if x_api_key == settings.SINGLE_USER_API_KEY:
-                    derived_user_id = str(settings.SINGLE_USER_FIXED_ID)
-        except Exception:
-            pass
+    # Derive user id from the authenticated token user when present.
+    derived_user_id = _get_derived_user_id(auth.user)
 
     # Parse optional safe config (base64-encoded JSON)
     safe_config: Dict[str, Any] = {}
@@ -322,17 +502,11 @@ async def mcp_request(
     except Exception:
         pass
 
-    if user:
-        if user.roles:
-            metadata.setdefault("roles", user.roles)
-        if user.permissions:
-            metadata.setdefault("permissions", user.permissions)
-    elif derived_user_id is not None:
-        try:
-            if is_single_user_mode():
-                metadata.setdefault("roles", [UserRole.ADMIN.value])
-        except Exception:
-            pass
+    if auth.user:
+        if auth.user.roles:
+            metadata.setdefault("roles", auth.user.roles)
+        if auth.user.permissions:
+            metadata.setdefault("permissions", auth.user.permissions)
 
     if mcp_session_id:
         metadata["session_id"] = mcp_session_id
@@ -367,8 +541,7 @@ async def mcp_request(
 async def mcp_request_batch(
     requests: list[MCPRequest],
     client_id: Optional[str] = Query(None, description="Client identifier"),
-    user: Optional[TokenData] = Depends(get_current_user),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    auth: McpAuthContext = Depends(get_mcp_auth_context),
     mcp_session_id: Optional[str] = Header(None, alias="mcp-session-id"),
     config: Optional[str] = Query(None, description="Base64-encoded JSON safe config for this request"),
     response: Response = None,
@@ -384,31 +557,18 @@ async def mcp_request_batch(
     if not server.initialized:
         await server.initialize()
 
-    # Attach org/team metadata when auth via API key
-    metadata: Dict[str, Any] = {}
-    if x_api_key:
-        try:
-            api_mgr = await get_api_key_manager()
-            client_ip = http_request.client.host if http_request and getattr(http_request, "client", None) else None
-            info = await api_mgr.validate_api_key(x_api_key, ip_address=client_ip)
-            if info:
-                if info.get('org_id') is not None:
-                    metadata['org_id'] = info.get('org_id')
-                if info.get('team_id') is not None:
-                    metadata['team_id'] = info.get('team_id')
-        except Exception as e:
-            logger.debug(f"Batch API key metadata attach failed: {e}")
+    # Attach org/team metadata when auth via API key. Prefer any metadata attached
+    # by get_current_user to avoid re-validating the same key and double-counting
+    # usage/audit; fall back to a direct lookup when needed.
+    metadata = await _attach_api_key_metadata(
+        auth,
+        http_request,
+        log_on_error=True,
+        log_prefix="batch",
+    )
 
-    # Derive user id with a robust single-user fallback
-    derived_user_id: Optional[str] = user.sub if user else None
-    if derived_user_id is None:
-        try:
-            if x_api_key and is_single_user_mode():
-                settings = get_settings()
-                if x_api_key == settings.SINGLE_USER_API_KEY:
-                    derived_user_id = str(settings.SINGLE_USER_FIXED_ID)
-        except Exception:
-            pass
+    # Derive user id from the authenticated token user when present.
+    derived_user_id = _get_derived_user_id(auth.user)
 
     # Optional safe config
     safe_config: Dict[str, Any] = {}
@@ -423,17 +583,11 @@ async def mcp_request_batch(
             logger.debug(f"Batch failed to parse safe config: {e}")
 
     # Build context and process via protocol directly to leverage batch support
-    if user:
-        if user.roles:
-            metadata.setdefault("roles", user.roles)
-        if user.permissions:
-            metadata.setdefault("permissions", user.permissions)
-    elif derived_user_id is not None:
-        try:
-            if is_single_user_mode():
-                metadata.setdefault("roles", [UserRole.ADMIN.value])
-        except Exception:
-            pass
+    if auth.user:
+        if auth.user.roles:
+            metadata.setdefault("roles", auth.user.roles)
+        if auth.user.permissions:
+            metadata.setdefault("permissions", auth.user.permissions)
 
     ctx = RequestContext(
         request_id="http_batch",
@@ -469,17 +623,17 @@ async def get_server_status(
     if not server.initialized:
         await server.initialize()
 
-    status = await server.get_status()
-    return ServerStatusResponse(**status)
+    server_status = await server.get_status()
+    return ServerStatusResponse(**server_status)
 
 
 @router.get("/metrics", response_model=ServerMetricsResponse)
 async def get_server_metrics(
-    _: TokenData = Depends(require_admin),
+    _principal: AuthPrincipal = Depends(require_permissions(SYSTEM_LOGS)),
     _guard: None = Depends(enforce_http_security),
 ):
     """
-    Get detailed server metrics (requires admin).
+    Get detailed server metrics (requires `system.logs` permission or admin).
 
     Returns:
     - Connection metrics
@@ -498,35 +652,17 @@ async def get_server_metrics(
 
 @router.get("/metrics/prometheus")
 async def get_prometheus_metrics(
-    credentials: HTTPAuthorizationCredentials = Security(security),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    _principal: AuthPrincipal = Depends(require_permissions(SYSTEM_LOGS)),
     _guard: None = Depends(enforce_http_security),
 ):
     """
     Prometheus scrape endpoint for MCP metrics.
 
-    Security: By default, requires admin authentication. Set MCP_PROMETHEUS_PUBLIC=1
-    to allow unauthenticated internal-only scraping. When public, ensure it is
-    exposed only on trusted networks or behind an ingress/proxy that enforces
-    authentication in production environments.
+    Security: Requires an authenticated principal with the `system.logs`
+    permission (or admin-style claims via require_permissions). External
+    ingress or Prometheus-side configuration should be used to handle any
+    additional network-level access controls.
     """
-    import os
-    public = os.getenv("MCP_PROMETHEUS_PUBLIC", "").lower() in {"1", "true", "yes"}
-    if not public:
-        # Require admin
-        user = await get_current_user(credentials, x_api_key)
-        if not user:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-        try:
-            if is_single_user_mode():
-                pass
-            else:
-                if UserRole.ADMIN.value not in (user.roles or []):
-                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
-        except Exception:
-            # If settings not available, fall back to role check only
-            if UserRole.ADMIN.value not in (user.roles or []):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
     collector = get_metrics_collector()
     content = collector.get_prometheus_metrics()
     # Use standard Prometheus content type regardless of availability
@@ -556,7 +692,6 @@ async def list_tools(
     catalog: Optional[str] = Query(None, description="Filter by tool catalog name"),
     catalog_id: Optional[int] = Query(None, description="Filter by tool catalog id"),
     user: Optional[TokenData] = Depends(get_current_user),
-    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
     _guard: None = Depends(enforce_http_security),
 ):
     """
@@ -578,16 +713,8 @@ async def list_tools(
     if not server.initialized:
         await server.initialize()
 
-    # Derive user id with a robust single-user fallback
-    derived_user_id: Optional[str] = user.sub if user else None
-    if derived_user_id is None:
-        try:
-            if x_api_key and is_single_user_mode():
-                settings = get_settings()
-                if x_api_key == settings.SINGLE_USER_API_KEY:
-                    derived_user_id = str(settings.SINGLE_USER_FIXED_ID)
-        except Exception:
-            pass
+    # Derive user id from the authenticated token user when present.
+    derived_user_id = _get_derived_user_id(user)
 
     metadata: Dict[str, Any] = {}
     if user:
@@ -595,12 +722,6 @@ async def list_tools(
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
-    elif derived_user_id is not None:
-        try:
-            if is_single_user_mode():
-                metadata["roles"] = [UserRole.ADMIN.value]
-        except Exception:
-            pass
 
     response = await server.handle_http_request(
         request,
@@ -652,9 +773,11 @@ async def execute_tool(
     if user.permissions:
         metadata["permissions"] = user.permissions
 
+    derived_user_id = _get_derived_user_id(user)
+
     response = await server.handle_http_request(
         mcp_request,
-        user_id=user.sub,
+        user_id=derived_user_id,
         metadata=metadata or None
     )
 
@@ -724,22 +847,19 @@ async def list_modules(
     if not server.initialized:
         await server.initialize()
 
+    # Derive user id from the authenticated token user when present.
+    derived_user_id = _get_derived_user_id(user)
+
     metadata: Dict[str, Any] = {}
     if user:
         if user.roles:
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
-    else:
-        try:
-            if is_single_user_mode():
-                metadata["roles"] = [UserRole.ADMIN.value]
-        except Exception:
-            pass
 
     response = await server.handle_http_request(
         request,
-        user_id=user.sub if user else None,
+        user_id=derived_user_id,
         metadata=metadata or None
     )
 
@@ -756,11 +876,11 @@ async def list_modules(
 
 @router.get("/modules/health")
 async def get_modules_health(
-    user: TokenData = Depends(require_admin),
+    principal: AuthPrincipal = Depends(require_permissions(SYSTEM_LOGS)),
     _guard: None = Depends(enforce_http_security),
 ):
     """
-    Get detailed health status of all modules (requires admin).
+    Get detailed health status of all modules; requires `system.logs` permission (or admin).
 
     Returns health checks and metrics for each module.
     """
@@ -771,12 +891,12 @@ async def get_modules_health(
         await server.initialize()
 
     meta: Dict[str, Any] = {"admin_override": True}
-    if user.roles:
-        meta["roles"] = user.roles
-    if user.permissions:
-        meta["permissions"] = user.permissions
+    if principal.roles:
+        meta["roles"] = principal.roles
+    if principal.permissions:
+        meta["permissions"] = principal.permissions
 
-    response = await server.handle_http_request(request, user_id=user.sub, metadata=meta)
+    response = await server.handle_http_request(request, user_id=principal.principal_id, metadata=meta)
 
     if response.error:
         if response.error.code == -32001:
@@ -805,22 +925,19 @@ async def list_resources(
     if not server.initialized:
         await server.initialize()
 
+    # Derive user id from the authenticated token user when present.
+    derived_user_id = _get_derived_user_id(user)
+
     metadata: Dict[str, Any] = {}
     if user:
         if user.roles:
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
-    else:
-        try:
-            if is_single_user_mode():
-                metadata["roles"] = [UserRole.ADMIN.value]
-        except Exception:
-            pass
 
     response = await server.handle_http_request(
         request,
-        user_id=user.sub if user else None,
+        user_id=derived_user_id,
         metadata=metadata or None
     )
 
@@ -851,22 +968,19 @@ async def list_prompts(
     if not server.initialized:
         await server.initialize()
 
+    # Derive user id from the authenticated token user when present.
+    derived_user_id = _get_derived_user_id(user)
+
     metadata: Dict[str, Any] = {}
     if user:
         if user.roles:
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
-    else:
-        try:
-            if is_single_user_mode():
-                metadata["roles"] = [UserRole.ADMIN.value]
-        except Exception:
-            pass
 
     response = await server.handle_http_request(
         request,
-        user_id=user.sub if user else None,
+        user_id=derived_user_id,
         metadata=metadata or None
     )
 
@@ -1025,15 +1139,20 @@ async def health_check(
     if not server.initialized:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Server not initialized"
+            detail="Server not initialized",
         )
 
-    status = await server.get_status()
+    server_status = await server.get_status()
 
-    if status["status"] != "healthy":
+    status_value = "unhealthy"
+    if isinstance(server_status, dict):
+        raw_status = server_status.get("status", "unhealthy")
+        status_value = raw_status if isinstance(raw_status, str) else "unhealthy"
+
+    if status_value != "healthy":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Server status: {status['status']}"
+            detail=f"Server status: {status_value}",
         )
 
     return {"status": "healthy"}

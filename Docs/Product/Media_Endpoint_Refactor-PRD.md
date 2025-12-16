@@ -194,7 +194,7 @@ This table serves as a migration checklist to ensure the compatibility shim cont
   - `ConflictError` → 409 for resource conflicts.
   - Transient Redis/cache errors are logged and treated as cache misses (no change to HTTP status); no secrets in error messages.
 - Security & AuthNZ
-  - Preserve `Depends(get_request_user)`, `PermissionChecker(MEDIA_CREATE)`, `rbac_rate_limit("media.create")`, and `guard_backpressure_and_quota` on routes that modify data.
+  - Preserve `Depends(get_request_user)`, `Depends(require_permissions(MEDIA_CREATE))`, `rbac_rate_limit("media.create")`, and `guard_backpressure_and_quota` on routes that modify data.
   - Keep file extension allowlists per media type and size caps.
   - Maintain URL safety checks and content-type based filtering.
 

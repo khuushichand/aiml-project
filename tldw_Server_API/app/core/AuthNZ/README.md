@@ -74,7 +74,7 @@ Note: This README follows the project-wide template to help contributors quickly
 - Error Handling & Security:
   - Custom exceptions in `exceptions.py`; consistent HTTP errors from endpoints.
   - Input validation in `input_validation.py`; CSRF middleware for WebUI flows.
-  - Admin routes protected via `require_admin` and role/permission checks; service accounts supported.
+- Admin routes should be protected via claim-first dependencies (`get_auth_principal` + `require_roles("admin")` / `require_permissions(...)`); legacy `require_admin` shims remain for backwards compatibility only.
 
 ## 3. Developer-Related/Relevant Information for Contributors
 
@@ -86,7 +86,7 @@ Note: This README follows the project-wide template to help contributors quickly
   - Keys/budgets: `api_key_manager.py`, `virtual_keys.py`, `quotas.py`.
   - Ops/monitoring: `monitoring.py`, `alerting.py`, `scheduler.py`.
 - Extension Points:
-  - Add endpoints under `app/api/v1/endpoints/` and use dependencies from `API_Deps/auth_deps.py` (`get_current_user`, `get_current_active_user`, `require_admin`, `check_rate_limit`).
+  - Add endpoints under `app/api/v1/endpoints/` and use dependencies from `API_Deps/auth_deps.py` (`get_auth_principal`, `require_roles`, `require_permissions`, `check_rate_limit`); avoid introducing new `require_admin` call sites.
   - Extend roles/permissions using RBAC tables; seed updates go into `migrations.py` seeding section.
   - Add budgets or allowlists by extending `virtual_keys.py`/`api_key_manager.py` and updating schema + tests.
   - Add periodic tasks in `scheduler.py` (e.g., cleanup of expired tokens/lockouts).

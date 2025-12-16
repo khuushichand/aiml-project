@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, Optional
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ConfigDict
@@ -10,20 +10,49 @@ try:
 except Exception:  # Fallback to v1 naming
     from pydantic import validator as field_validator  # type: ignore
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    require_roles,
+    get_auth_principal,
+)
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditContext
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from fastapi.responses import StreamingResponse
 import asyncio
 import json as _json
-from pydantic import BaseModel
 
-router = APIRouter()
+router = APIRouter(
+    dependencies=[Depends(require_roles("admin"))],
+)
 
 
 def _is_truthy(v: Optional[str]) -> bool:
     return str(v or "").lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _make_admin_user_from_principal(principal: AuthPrincipal) -> dict[str, Any]:
+    """Derive the minimal jobs-admin user dict from an AuthPrincipal.
+
+    For user-backed principals, the id field reflects the numeric user_id so
+    existing domain allowlist and RLS semantics continue to apply. For
+    non-user principals (e.g., service or API-key callers) where user_id may
+    be None, id is left as None and username falls back to subject or
+    principal_id (or kind) for audit/diagnostics. Downstream RBAC and RLS
+    enforcement must rely only on the id field; username is informational.
+    """
+    user_id = principal.user_id
+    if user_id is not None:
+        # Prefer a stable, human-readable label when available.
+        username = principal.subject or principal.principal_id or f"user:{user_id}"
+    else:
+        # Preserve RLS/allowlist behavior by not fabricating a synthetic id.
+        # Use subject/principal_id/kind for human-readable/audit labels instead.
+        username = principal.subject or principal.principal_id or principal.kind or "service"
+    return {
+        "id": user_id,
+        "username": str(username),
+    }
 
 
 def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
@@ -32,19 +61,10 @@ def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
     Enabled when JOBS_DOMAIN_SCOPED_RBAC=true. If JOBS_REQUIRE_DOMAIN_FILTER=true,
     a domain filter must be provided. If an allowlist is configured for the user
     via JOBS_DOMAIN_ALLOWLIST_<USER_ID>, the requested domain must be in it.
-    Single-user admin mode bypasses these checks.
     """
     try:
         if not _is_truthy(os.getenv("JOBS_DOMAIN_SCOPED_RBAC")):
             return
-        # Single-user admin bypass, unless forced for tests
-        if not _is_truthy(os.getenv("JOBS_RBAC_FORCE")):
-            try:
-                from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
-                if is_single_user_mode():
-                    return
-            except Exception:
-                pass
         # Be robust to user being a Pydantic model or dict
         try:
             uid_val = getattr(user, "id", None)
@@ -73,6 +93,44 @@ def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
         return
 
 
+def _enforce_domain_scope_from_principal(principal: AuthPrincipal, domain: Optional[str]) -> None:
+    """
+    Domain-scoped RBAC enforcement using AuthPrincipal (feature-flagged path).
+
+    When JOBS_DOMAIN_RBAC_PRINCIPAL=1, jobs admin endpoints call this helper
+    instead of passing a user dict directly to _enforce_domain_scope as part
+    of the principal-driven RBAC migration.
+    The underlying semantics (JOBS_DOMAIN_SCOPED_RBAC, JOBS_REQUIRE_DOMAIN_FILTER,
+    JOBS_DOMAIN_ALLOWLIST_*, JOBS_RBAC_FORCE) remain unchanged.
+    """
+    if not _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+        return
+    user = _make_admin_user_from_principal(principal)
+    _enforce_domain_scope(user, domain)
+
+
+def _enforce_domain_scope_unified(
+    principal: AuthPrincipal,
+    domain: Optional[str],
+) -> dict[str, Any]:
+    """
+    Unified domain-scoped RBAC enforcement for jobs admin endpoints.
+
+    All jobs-admin endpoints in this module use this helper alongside the
+    router-level require_roles(\"admin\") guard. It always derives the
+    admin_user from the AuthPrincipal so callers can reuse the same user
+    mapping for downstream operations (e.g., Postgres RLS). When
+    JOBS_DOMAIN_RBAC_PRINCIPAL is enabled, enforcement is driven from the
+    AuthPrincipal; otherwise the legacy user-dict path is used.
+    """
+    admin_user = _make_admin_user_from_principal(principal)
+    if _is_truthy(os.getenv("JOBS_DOMAIN_RBAC_PRINCIPAL")):
+        _enforce_domain_scope_from_principal(principal, domain)
+    else:
+        _enforce_domain_scope(admin_user, domain)
+    return admin_user
+
+
 def _set_pg_rls_for_user(user: dict, domain: Optional[str]) -> None:
     """Set per-request RLS context for Postgres sessions using contextvars.
 
@@ -87,7 +145,7 @@ def _set_pg_rls_for_user(user: dict, domain: Optional[str]) -> None:
 
 
 class PruneRequest(BaseModel):
-    statuses: List[str] = Field(default_factory=lambda: ["completed", "failed", "cancelled"], description="Statuses to prune")
+    statuses: list[str] = Field(default_factory=lambda: ["completed", "failed", "cancelled"], description="Statuses to prune")
     older_than_days: int = Field(ge=1, le=3650, default=30, description="Delete jobs older than N days")
     # Optional scope filters
     domain: Optional[str] = Field(default=None, description="Limit prune to a specific domain")
@@ -177,8 +235,8 @@ class PruneResponse(BaseModel):
 )
 async def prune_jobs_endpoint(
     request: Request,
-    user=Depends(require_admin),
     audit_service=Depends(get_audit_service_for_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> PruneResponse:
     """Delete jobs matching statuses and older than threshold.
 
@@ -190,8 +248,11 @@ async def prune_jobs_endpoint(
             raw_body = await request.json()
         except Exception:
             raw_body = {}
-        # Enforce domain-scoped RBAC (403) even if request body is incomplete
-        _enforce_domain_scope(user, (raw_body or {}).get("domain"))
+        # Enforce domain-scoped RBAC (403) even if request body is incomplete.
+        # When JOBS_DOMAIN_RBAC_PRINCIPAL is enabled, drive enforcement from
+        # AuthPrincipal; otherwise fall back to the legacy user dict path.
+        domain_val = (raw_body or {}).get("domain")
+        admin_user = _enforce_domain_scope_unified(principal, domain_val)
         # Confirm header for destructive action (skip when dry_run or in TEST_MODE)
         if not bool((raw_body or {}).get("dry_run")):
             is_test = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}
@@ -212,7 +273,7 @@ async def prune_jobs_endpoint(
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         if backend == "postgres":
-            _set_pg_rls_for_user(user, req.domain)
+            _set_pg_rls_for_user(admin_user, req.domain)
         jm = JobManager(backend=backend, db_url=db_url)
         deleted = jm.prune_jobs(
             statuses=req.statuses,
@@ -234,7 +295,7 @@ async def prune_jobs_endpoint(
         # Best-effort audit logging for admin prune action
         try:
             ctx = AuditContext(
-                user_id=str(user.get("id")),
+                user_id=str(admin_user.get("id") or principal.principal_id),
                 endpoint="/api/v1/jobs/prune",
                 method="POST",
             )
@@ -278,12 +339,15 @@ class QueueFlagsResponse(BaseModel):
 
 
 @router.post("/jobs/queue/control", response_model=QueueFlagsResponse)
-async def queue_control_endpoint(req: QueueControlRequest, user=Depends(require_admin)) -> QueueFlagsResponse:
-    _enforce_domain_scope(user, req.domain)
+async def queue_control_endpoint(
+    req: QueueControlRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> QueueFlagsResponse:
+    admin_user = _enforce_domain_scope_unified(principal, req.domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     if backend == "postgres":
-        _set_pg_rls_for_user(user, req.domain)
+        _set_pg_rls_for_user(admin_user, req.domain)
     jm = JobManager(backend=backend, db_url=db_url)
     try:
         flags = jm.set_queue_control(req.domain, req.queue, req.action)
@@ -293,12 +357,16 @@ async def queue_control_endpoint(req: QueueControlRequest, user=Depends(require_
 
 
 @router.get("/jobs/queue/status", response_model=QueueFlagsResponse)
-async def queue_status_endpoint(domain: str, queue: str, user=Depends(require_admin)) -> QueueFlagsResponse:
-    _enforce_domain_scope(user, domain)
+async def queue_status_endpoint(
+    domain: str,
+    queue: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> QueueFlagsResponse:
+    admin_user = _enforce_domain_scope_unified(principal, domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     if backend == "postgres":
-        _set_pg_rls_for_user(user, domain)
+        _set_pg_rls_for_user(admin_user, domain)
     jm = JobManager(backend=backend, db_url=db_url)
     flags = jm._get_queue_flags(domain, queue)
     return QueueFlagsResponse(**flags)
@@ -320,12 +388,15 @@ class AffectedResponse(BaseModel):
 
 
 @router.post("/jobs/reschedule", response_model=AffectedResponse)
-async def reschedule_jobs_endpoint(req: RescheduleRequest, user=Depends(require_admin)) -> AffectedResponse:
-    _enforce_domain_scope(user, req.domain)
+async def reschedule_jobs_endpoint(
+    req: RescheduleRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> AffectedResponse:
+    admin_user = _enforce_domain_scope_unified(principal, req.domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     if backend == "postgres":
-        _set_pg_rls_for_user(user, req.domain)
+        _set_pg_rls_for_user(admin_user, req.domain)
     jm = JobManager(backend=backend, db_url=db_url)
     try:
         n = jm.reschedule_jobs(domain=req.domain, queue=req.queue, job_type=req.job_type, status=req.status, set_now=req.set_now, delta_seconds=req.delta_seconds, dry_run=req.dry_run)
@@ -343,12 +414,15 @@ class RetryNowRequest(BaseModel):
 
 
 @router.post("/jobs/retry-now", response_model=AffectedResponse)
-async def retry_now_jobs_endpoint(req: RetryNowRequest, user=Depends(require_admin)) -> AffectedResponse:
-    _enforce_domain_scope(user, req.domain)
+async def retry_now_jobs_endpoint(
+    req: RetryNowRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> AffectedResponse:
+    admin_user = _enforce_domain_scope_unified(principal, req.domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     if backend == "postgres":
-        _set_pg_rls_for_user(user, req.domain)
+        _set_pg_rls_for_user(admin_user, req.domain)
     jm = JobManager(backend=backend, db_url=db_url)
     n = jm.retry_now_jobs(domain=req.domain, queue=req.queue, job_type=req.job_type, only_failed=req.only_failed, dry_run=req.dry_run)
     return AffectedResponse(affected=int(n))
@@ -370,11 +444,17 @@ class AttachmentItem(BaseModel):
 
 
 @router.post("/jobs/{job_id}/attachments", response_model=AttachmentItem)
-async def add_job_attachment_endpoint(job_id: int, req: AttachmentRequest, user=Depends(require_admin)) -> AttachmentItem:
+async def add_job_attachment_endpoint(
+    job_id: int,
+    req: AttachmentRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    domain: Optional[str] = None,
+) -> AttachmentItem:
+    admin_user = _enforce_domain_scope_unified(principal, domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     if backend == "postgres":
-        _set_pg_rls_for_user(user, None)
+        _set_pg_rls_for_user(admin_user, domain)
     jm = JobManager(backend=backend, db_url=db_url)
     try:
         rid = jm.add_job_attachment(job_id, kind=req.kind, content_text=req.content_text, url=req.url)
@@ -388,11 +468,16 @@ async def add_job_attachment_endpoint(job_id: int, req: AttachmentRequest, user=
 
 
 @router.get("/jobs/{job_id}/attachments", response_model=list[AttachmentItem])
-async def list_job_attachments_endpoint(job_id: int, user=Depends(require_admin)) -> list[AttachmentItem]:
+async def list_job_attachments_endpoint(
+    job_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    domain: Optional[str] = None,
+) -> list[AttachmentItem]:
+    admin_user = _enforce_domain_scope_unified(principal, domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     if backend == "postgres":
-        _set_pg_rls_for_user(user, None)
+        _set_pg_rls_for_user(admin_user, domain)
     jm = JobManager(backend=backend, db_url=db_url)
     items = jm.list_job_attachments(job_id, limit=500)
     return [AttachmentItem(**i) for i in items]
@@ -409,10 +494,17 @@ class SlaPolicyRequest(BaseModel):
 
 
 @router.post("/jobs/sla/policy")
-async def upsert_sla_policy_endpoint(req: SlaPolicyRequest, user=Depends(require_admin)) -> dict:
-    _enforce_domain_scope(user, req.domain)
+async def upsert_sla_policy_endpoint(
+    req: SlaPolicyRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict:
+    admin_user = _enforce_domain_scope_unified(principal, req.domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    # When Postgres RLS is enabled, scope SLA policy mutations to the same domain
+    # context as jobs to keep admin behavior consistent across tables.
+    if backend == "postgres":
+        _set_pg_rls_for_user(admin_user, req.domain)
     jm = JobManager(backend=backend, db_url=db_url)
     jm.upsert_sla_policy(
         domain=req.domain,
@@ -426,8 +518,13 @@ async def upsert_sla_policy_endpoint(req: SlaPolicyRequest, user=Depends(require
 
 
 @router.get("/jobs/sla/policies")
-async def list_sla_policies_endpoint(domain: Optional[str] = None, queue: Optional[str] = None, job_type: Optional[str] = None, user=Depends(require_admin)) -> list[dict]:
-    _enforce_domain_scope(user, domain)
+async def list_sla_policies_endpoint(
+    domain: Optional[str] = None,
+    queue: Optional[str] = None,
+    job_type: Optional[str] = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> list[dict]:
+    admin_user = _enforce_domain_scope_unified(principal, domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     jm = JobManager(backend=backend, db_url=db_url)
@@ -435,6 +532,8 @@ async def list_sla_policies_endpoint(domain: Optional[str] = None, queue: Option
     conn = jm._connect()
     try:
         if jm.backend == "postgres":
+            # Apply Postgres RLS context so listings respect the same domain policies as jobs.
+            _set_pg_rls_for_user(admin_user, domain)
             with jm._pg_cursor(conn) as cur:
                 where = ["1=1"]; params: list = []
                 if domain:
@@ -477,7 +576,12 @@ class CryptoRotateResponse(BaseModel):
 
 
 @router.post("/jobs/crypto/rotate", response_model=CryptoRotateResponse)
-async def rotate_crypto_endpoint(request: Request, body: CryptoRotateRequest, user=Depends(require_admin)) -> CryptoRotateResponse:
+async def rotate_crypto_endpoint(
+    request: Request,
+    body: CryptoRotateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> CryptoRotateResponse:
+    admin_user = _enforce_domain_scope_unified(principal, body.domain)
     # Require confirmation for destructive changes
     if not body.dry_run:
         hdr = str(request.headers.get("x-confirm", "")).lower()
@@ -485,6 +589,8 @@ async def rotate_crypto_endpoint(request: Request, body: CryptoRotateRequest, us
             raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    if backend == "postgres":
+        _set_pg_rls_for_user(admin_user, body.domain)
     jm = JobManager(backend=backend, db_url=db_url)
     try:
         n = jm.rotate_encryption_keys(
@@ -538,25 +644,25 @@ class JobEvent(BaseModel):
     created_at: str
 
 
-@router.get("/jobs/events", response_model=List[JobEvent])
+@router.get("/jobs/events", response_model=list[JobEvent])
 async def list_job_events(
     after_id: int = 0,
     limit: int = 200,
     domain: Optional[str] = None,
     queue: Optional[str] = None,
     job_type: Optional[str] = None,
-    user=Depends(require_admin),
-):
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> list[JobEvent]:
     """Return job events from the append-only outbox with a cursor (after_id).
 
     Intended for reliable polling by dashboards or external sinks.
     """
-    _enforce_domain_scope(user, domain)
+    admin_user = _enforce_domain_scope_unified(principal, domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     if backend == "postgres":
         # Admin list; allow admin bypass with optional domain filter
-        _set_pg_rls_for_user(user, domain)
+        _set_pg_rls_for_user(admin_user, domain)
     jm = JobManager(backend=backend, db_url=db_url)
     conn = jm._connect()
     try:
@@ -632,17 +738,17 @@ async def stream_job_events(
     domain: Optional[str] = None,
     queue: Optional[str] = None,
     job_type: Optional[str] = None,
-    user=Depends(require_admin),
-):
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> StreamingResponse:
     """Server-Sent Events stream of job events from the outbox.
 
     This is a simple tailer that polls the outbox and emits events without loss.
     """
-    _enforce_domain_scope(user, domain)
+    admin_user = _enforce_domain_scope_unified(principal, domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     if backend == "postgres":
-        _set_pg_rls_for_user(user, domain)
+        _set_pg_rls_for_user(admin_user, domain)
     jm = JobManager(backend=backend, db_url=db_url)
 
     from tldw_Server_API.app.core.Streaming.streams import SSEStream
@@ -861,7 +967,7 @@ class TTLSweepResponse(BaseModel):
 )
 async def ttl_sweep_endpoint(
     request: Request,
-    user=Depends(require_admin),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> TTLSweepResponse:
     try:
         # Correlation IDs and diagnostics
@@ -873,26 +979,27 @@ async def ttl_sweep_endpoint(
             raw = await request.json()
         except Exception:
             raw = {}
-        _enforce_domain_scope(user, (raw or {}).get("domain"))
+        raw_domain = (raw or {}).get("domain")
+        domain_val = str(raw_domain or "").strip() or None
+        admin_user = _enforce_domain_scope_unified(principal, domain_val)
         # Confirm header for destructive action (check before model validation for consistent 400s)
         hdr = str(request.headers.get("x-confirm", "")).lower()
         if hdr not in {"1", "true", "yes", "y", "on"}:
-            # Special-case: when domain-scoped RBAC is enforced and request is scoped,
-            # allow a no-op (affected=0) response without destructive changes. This
-            # preserves the guardrail while enabling RBAC-focused checks.
-            try:
-                from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
-            except Exception:
-                is_single_user_mode = lambda: True  # type: ignore
+            # Special-case: when domain-scoped RBAC is enforced and request is scoped
+            # in TEST_MODE, allow a no-op (affected=0) response without destructive
+            # changes. This preserves the guardrail while enabling RBAC-focused checks
+            # in tests and non-production environments while keeping production
+            # behavior (400 without X-Confirm) unchanged.
             domain_scoped = _is_truthy(os.getenv("JOBS_DOMAIN_SCOPED_RBAC"))
             forced = _is_truthy(os.getenv("JOBS_RBAC_FORCE"))
-            if domain_scoped and forced and (raw or {}).get("domain"):
+            is_test = _is_truthy(os.getenv("TEST_MODE"))
+            if is_test and domain_scoped and forced and (raw or {}).get("domain"):
                 return TTLSweepResponse(affected=0)
             raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         if backend == "postgres":
-            _set_pg_rls_for_user(user, (raw or {}).get("domain"))
+            _set_pg_rls_for_user(admin_user, domain_val)
         jm = JobManager(backend=backend, db_url=db_url)
         # Now validate the request model
         req = TTLSweepRequest(**(raw or {}))
@@ -1003,14 +1110,14 @@ class IntegritySweepResponse(BaseModel):
 )
 async def integrity_sweep_endpoint(
     req: IntegritySweepRequest,
-    user=Depends(require_admin),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     try:
-        _enforce_domain_scope(user, req.domain)
+        admin_user = _enforce_domain_scope_unified(principal, req.domain)
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         if backend == "postgres":
-            _set_pg_rls_for_user(user, domain)
+            _set_pg_rls_for_user(admin_user, req.domain)
         jm = JobManager(backend=backend, db_url=db_url)
         stats = jm.integrity_sweep(fix=req.fix, domain=req.domain, queue=req.queue, job_type=req.job_type)
         return IntegritySweepResponse(**stats)
@@ -1047,16 +1154,16 @@ async def get_jobs_stats(
     domain: Optional[str] = None,
     queue: Optional[str] = None,
     job_type: Optional[str] = None,
-    user=Depends(require_admin),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """Aggregate counts grouped by domain/queue/job_type for the WebUI."""
     try:
-        _enforce_domain_scope(user, domain)
+        admin_user = _enforce_domain_scope_unified(principal, domain)
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         if backend == "postgres":
             # Correct RLS scoping for Postgres path
-            _set_pg_rls_for_user(user, domain)
+            _set_pg_rls_for_user(admin_user, domain)
         jm = JobManager(backend=backend, db_url=db_url)
         stats = jm.get_queue_stats(domain=domain, queue=queue, job_type=job_type)
         return [QueueStatsResponse(**s) for s in stats]
@@ -1075,14 +1182,26 @@ class ArchiveMetaResponse(BaseModel):
 
 
 @router.get("/jobs/archive/meta", response_model=ArchiveMetaResponse)
-async def get_archive_meta(job_id: int, _=Depends(require_admin)):
-    """Return archive compression metadata for a given job id (if archived)."""
+async def get_archive_meta(
+    job_id: int,
+    domain: Optional[str] = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> ArchiveMetaResponse:
+    """Return archive compression metadata for a given job id (if archived).
+
+    When domain-scoped RBAC is enabled, this endpoint applies the same
+    domain allowlist semantics and Postgres RLS context as other jobs admin
+    surfaces. Global admins without domain RBAC enabled can inspect any
+    archived job.
+    """
+    admin_user = _enforce_domain_scope_unified(principal, domain)
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
     jm = JobManager(backend=backend, db_url=db_url)
     conn = jm._connect()
     try:
         if jm.backend == "postgres":
+            _set_pg_rls_for_user(admin_user, domain)
             with jm._pg_cursor(conn) as cur:
                 cur.execute(
                     "SELECT payload, result, payload_compressed, result_compressed FROM jobs_archive WHERE id = %s",
@@ -1147,14 +1266,14 @@ async def list_jobs_endpoint(
     limit: int = 100,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
-    user=Depends(require_admin),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     try:
-        _enforce_domain_scope(user, domain)
+        admin_user = _enforce_domain_scope_unified(principal, domain)
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         if backend == "postgres":
-            _set_pg_rls_for_user(user, domain)
+            _set_pg_rls_for_user(admin_user, domain)
         jm = JobManager(backend=backend, db_url=db_url)
         rows = jm.list_jobs(
             domain=domain,
@@ -1205,15 +1324,15 @@ class StaleGroup(BaseModel):
 async def stale_processing_endpoint(
     domain: Optional[str] = None,
     queue: Optional[str] = None,
-    user=Depends(require_admin),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     try:
-        _enforce_domain_scope(user, domain)
+        admin_user = _enforce_domain_scope_unified(principal, domain)
         # Use explicit backend/db_url selection for consistency with other admin endpoints
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         if backend == "postgres":
-            _set_pg_rls_for_user(user, domain)
+            _set_pg_rls_for_user(admin_user, domain)
         jm = JobManager(backend=backend, db_url=db_url)
         conn = jm._connect()
         out: list[StaleGroup] = []
@@ -1273,10 +1392,10 @@ class BatchCancelResponse(BaseModel):
 async def batch_cancel_endpoint(
     req: BatchCancelRequest,
     request: Request,
-    user=Depends(require_admin),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     try:
-        _enforce_domain_scope(user, req.domain)
+        admin_user = _enforce_domain_scope_unified(principal, req.domain)
         # Require confirm header unless dry_run
         if not req.dry_run:
             hdr = str(request.headers.get("x-confirm", "")).lower()
@@ -1285,7 +1404,7 @@ async def batch_cancel_endpoint(
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         if backend == "postgres":
-            _set_pg_rls_for_user(user, req.domain)
+            _set_pg_rls_for_user(admin_user, req.domain)
         jm = JobManager(backend=backend, db_url=db_url)
         conn = jm._connect()
         try:
@@ -1487,10 +1606,10 @@ class BatchRescheduleResponse(BaseModel):
 async def batch_reschedule_endpoint(
     req: BatchRescheduleRequest,
     request: Request,
-    user=Depends(require_admin),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     try:
-        _enforce_domain_scope(user, req.domain)
+        admin_user = _enforce_domain_scope_unified(principal, req.domain)
         if not req.dry_run:
             hdr = str(request.headers.get("x-confirm", "")).lower()
             if hdr not in {"1", "true", "yes", "y", "on"}:
@@ -1498,7 +1617,7 @@ async def batch_reschedule_endpoint(
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         if backend == "postgres":
-            _set_pg_rls_for_user(user, req.domain)
+            _set_pg_rls_for_user(admin_user, req.domain)
         jm = JobManager(backend=backend, db_url=db_url)
         conn = jm._connect()
         try:
@@ -1689,10 +1808,10 @@ class BatchRequeueQuarantinedResponse(BaseModel):
 async def batch_requeue_quarantined_endpoint(
     req: BatchRequeueQuarantinedRequest,
     request: Request,
-    user=Depends(require_admin),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     try:
-        _enforce_domain_scope(user, req.domain)
+        admin_user = _enforce_domain_scope_unified(principal, req.domain)
         if not req.dry_run:
             hdr = str(request.headers.get("x-confirm", "")).lower()
             if hdr not in {"1", "true", "yes", "y", "on"}:
@@ -1700,7 +1819,7 @@ async def batch_requeue_quarantined_endpoint(
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         if backend == "postgres":
-            _set_pg_rls_for_user(user, req.domain)
+            _set_pg_rls_for_user(admin_user, req.domain)
         jm = JobManager(backend=backend, db_url=db_url)
         conn = jm._connect()
         try:

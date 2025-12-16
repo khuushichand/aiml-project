@@ -60,7 +60,7 @@ Sample YAML (checked in):
 
 ## Security Notes
 
-- Keep the Prometheus endpoint admin-gated by default; only make it public (`MCP_PROMETHEUS_PUBLIC=1`) behind internal networks or ingress auth.
+- Keep the Prometheus endpoint gated by `require_permissions(SYSTEM_LOGS)` / admin-style principals. Do not expose it unauthenticated; use credentials or an ingress/auth proxy for Prometheus scraping on internal networks.
 
 ## References
 

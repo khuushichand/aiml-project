@@ -26,7 +26,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.services.registration_service import RegistrationService
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, get_profile
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
@@ -139,6 +139,45 @@ class UserCreateRequest(BaseModel):
 
 #######################################################################################################################
 #
+# Shared registration guards
+
+def _get_registration_settings(request: Request) -> Any:
+    """
+    Return settings after enforcing registration/profile invariants.
+
+    In the local-single-user/single_user profile, creating additional
+    users beyond the bootstrapped admin is a hard constraint: all
+    registration flows are forbidden regardless of ENABLE_REGISTRATION.
+    """
+    settings = get_settings()
+
+    # Profile-based hard block: no self-registration in local-single-user
+    profile = get_profile()
+    if isinstance(profile, str) and profile.strip().lower() in {"local-single-user", "single_user"}:
+        client_ip = request.client.host if request.client else "unknown"
+        logger.warning(
+            "Registration-related endpoint rejected in local-single-user profile from IP: {}",
+            client_ip,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User registration is not allowed in local-single-user profile",
+        )
+
+    # Global registration toggle
+    if not settings.ENABLE_REGISTRATION:
+        client_ip = request.client.host if request.client else "unknown"
+        logger.warning(f"Registration attempt while disabled from IP: {client_ip}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User registration is currently disabled"
+        )
+
+    return settings
+
+
+#######################################################################################################################
+#
 # Registration Endpoint
 
 @router.post(
@@ -172,15 +211,7 @@ async def register_user(
     Raises:
         HTTPException: Various status codes for different error conditions
     """
-    settings = get_settings()
-
-    # Check if registration is enabled
-    if not settings.ENABLE_REGISTRATION:
-        logger.warning(f"Registration attempt while disabled from IP: {request.client.host}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User registration is currently disabled"
-        )
+    settings = _get_registration_settings(request)
 
     # Initialize registration service
     await registration_service.initialize()
@@ -342,6 +373,7 @@ async def register_user(
     description="Check if a registration code is valid without using it"
 )
 async def validate_registration_code(
+    request: Request,
     code: str,
     registration_service: RegistrationService = Depends(get_registration_service_dep),
     db=Depends(get_db_transaction)
@@ -355,13 +387,7 @@ async def validate_registration_code(
     Returns:
         MessageResponse indicating if code is valid
     """
-    settings = get_settings()
-
-    if not settings.ENABLE_REGISTRATION:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Registration is currently disabled"
-        )
+    settings = _get_registration_settings(request)
 
     if not settings.REQUIRE_REGISTRATION_CODE:
         return MessageResponse(
@@ -402,6 +428,7 @@ async def validate_registration_code(
     summary="Check username/email availability"
 )
 async def check_availability(
+    request: Request,
     username: Optional[str] = None,
     email: Optional[str] = None,
     db=Depends(get_db_transaction)
@@ -416,6 +443,9 @@ async def check_availability(
     Returns:
         MessageResponse indicating availability
     """
+    # Enforce profile/registration invariants for availability checks as well.
+    _get_registration_settings(request)
+
     if not username and not email:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -424,14 +454,18 @@ async def check_availability(
 
     try:
         if username:
-            # Validate username format
-            validator = UserCreateRequest.__fields__['username'].validator
+            # Validate username format using model validation (Pydantic v2 compatible)
             try:
-                validator(username)
-            except ValueError as e:
+                UserCreateRequest.model_validate({
+                    'username': username,
+                    'email': 'placeholder@example.com',
+                    'password': 'placeholder123',
+                    'confirm_password': 'placeholder123'
+                })
+            except Exception as e:
                 return MessageResponse(
                     success=False,
-                    message=str(e)
+                    message=f"Invalid username: {e}"
                 )
 
             existing = await db.fetchone(

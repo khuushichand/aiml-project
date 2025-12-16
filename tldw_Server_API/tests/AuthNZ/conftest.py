@@ -377,7 +377,7 @@ async def isolated_test_environment(monkeypatch):
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
-                uuid UUID UNIQUE NOT NULL,
+                uuid UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
                 username VARCHAR(255) UNIQUE NOT NULL,
                 email VARCHAR(255) UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
@@ -396,6 +396,8 @@ async def isolated_test_environment(monkeypatch):
                 email_verified_at TIMESTAMP,
                 two_factor_enabled BOOLEAN DEFAULT FALSE,
                 two_factor_secret TEXT,
+                totp_secret TEXT,
+                backup_codes TEXT,
                 created_by INTEGER REFERENCES users(id),
                 password_changed_at TIMESTAMP
             )
@@ -516,6 +518,60 @@ async def isolated_test_environment(monkeypatch):
             )
         """)
 
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS token_blacklist (
+                id SERIAL PRIMARY KEY,
+                jti VARCHAR(255) UNIQUE NOT NULL,
+                user_id INTEGER,
+                token_type VARCHAR(50),
+                revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                reason VARCHAR(255),
+                revoked_by INTEGER,
+                ip_address VARCHAR(45),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_jti ON token_blacklist(jti)")
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_expires ON token_blacklist(expires_at)")
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_user ON token_blacklist(user_id)")
+
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                action VARCHAR(255) NOT NULL,
+                resource_type VARCHAR(128),
+                resource_id INTEGER,
+                ip_address VARCHAR(45),
+                user_agent TEXT,
+                status VARCHAR(32),
+                details TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id)")
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action)")
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)")
+
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS token_blacklist (
+                id SERIAL PRIMARY KEY,
+                jti VARCHAR(255) UNIQUE NOT NULL,
+                user_id INTEGER,
+                token_type VARCHAR(50),
+                revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                reason VARCHAR(255),
+                revoked_by INTEGER,
+                ip_address VARCHAR(45),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_jti ON token_blacklist(jti)")
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_expires ON token_blacklist(expires_at)")
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_user ON token_blacklist(user_id)")
+
         # RBAC core tables (minimal for tests)
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS roles (
@@ -547,6 +603,15 @@ async def isolated_test_environment(monkeypatch):
                 UNIQUE(user_id, role_id)
             )
         """)
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_permissions (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+                granted BOOLEAN NOT NULL DEFAULT TRUE,
+                expires_at TIMESTAMP,
+                PRIMARY KEY (user_id, permission_id)
+            )
+        """)
 
         # Create indexes
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
@@ -554,6 +619,7 @@ async def isolated_test_environment(monkeypatch):
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id)")
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_user_permissions_user ON user_permissions(user_id)")
 
         # Seed minimal roles expected by tests
         await test_conn.execute("""
@@ -566,6 +632,49 @@ async def isolated_test_environment(monkeypatch):
             ('user','Standard user', TRUE)
             ON CONFLICT (name) DO NOTHING
         """)
+        # Seed baseline permissions for default roles to align with application migrations
+        perm_defs = [
+            ("media.read", "Read media", "media"),
+            ("media.create", "Create media", "media"),
+        ]
+        for name, desc, cat in perm_defs:
+            await test_conn.execute(
+                """
+                INSERT INTO permissions (name, description, category)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (name) DO NOTHING
+                """,
+                name,
+                desc,
+                cat,
+            )
+
+        role_rows = await test_conn.fetch("SELECT id, name FROM roles WHERE name IN ('admin','user')")
+        perm_rows = await test_conn.fetch("SELECT id, name FROM permissions WHERE name IN ('media.read','media.create')")
+        role_id = {r["name"]: r["id"] for r in role_rows or []}
+        perm_id = {p["name"]: p["id"] for p in perm_rows or []}
+
+        for pname in ("media.read", "media.create"):
+            if "user" in role_id and pname in perm_id:
+                await test_conn.execute(
+                    """
+                    INSERT INTO role_permissions (role_id, permission_id)
+                    VALUES ($1, $2)
+                    ON CONFLICT (role_id, permission_id) DO NOTHING
+                    """,
+                    role_id["user"],
+                    perm_id[pname],
+                )
+            if "admin" in role_id and pname in perm_id:
+                await test_conn.execute(
+                    """
+                    INSERT INTO role_permissions (role_id, permission_id)
+                    VALUES ($1, $2)
+                    ON CONFLICT (role_id, permission_id) DO NOTHING
+                    """,
+                    role_id["admin"],
+                    perm_id[pname],
+                )
 
         logger.info(f"Created schema in test database: {db_name}")
     finally:
@@ -715,7 +824,7 @@ async def setup_test_database(monkeypatch):
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
-                uuid UUID UNIQUE NOT NULL,
+                uuid UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
                 username VARCHAR(255) UNIQUE NOT NULL,
                 email VARCHAR(255) UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
@@ -734,6 +843,8 @@ async def setup_test_database(monkeypatch):
                 email_verified_at TIMESTAMP,
                 two_factor_enabled BOOLEAN DEFAULT FALSE,
                 two_factor_secret TEXT,
+                totp_secret TEXT,
+                backup_codes TEXT,
                 created_by INTEGER REFERENCES users(id),
                 password_changed_at TIMESTAMP
             )
@@ -853,6 +964,33 @@ async def setup_test_database(monkeypatch):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS rate_limits (
+                identifier TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                request_count INTEGER NOT NULL,
+                window_start TIMESTAMPTZ NOT NULL,
+                PRIMARY KEY (identifier, endpoint, window_start)
+            )
+        """)
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS failed_attempts (
+                identifier TEXT NOT NULL,
+                attempt_type TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL,
+                window_start TIMESTAMPTZ NOT NULL,
+                PRIMARY KEY (identifier, attempt_type)
+            )
+        """)
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS account_lockouts (
+                identifier TEXT PRIMARY KEY,
+                locked_until TIMESTAMPTZ NOT NULL,
+                reason TEXT
+            )
+        """)
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_rate_limits_identifier ON rate_limits(identifier)")
 
         # Create indexes
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")

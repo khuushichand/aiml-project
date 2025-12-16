@@ -6,6 +6,9 @@ Owner: Core (LLM, Audio, MCP, AuthNZ, WebUI)
 
 Target Version: v0.2.x (Stage 1), v0.3.x (Stage 2-3)
 
+https://github.com/VectorSpaceLab/general-agentic-memory
+
+
 ## Summary
 
 Introduce a first-class Persona agent (text + optional voice + avatar) that chats naturally, remembers context, and uses server tools (via MCP Unified) to help with ingestion, search, analysis, and exports. Actions are transparent, previewed, and require confirmation for impactful operations.

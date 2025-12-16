@@ -20,14 +20,15 @@ defaults:
   algorithm:
     requests: token_bucket   # token_bucket | sliding_window
     tokens: token_bucket     # preferred for model tokens
-  scopes_order: [global, tenant, user, conversation, client, ip, service]
+  scopes_order: [global, tenant, user, api_key, conversation, client, ip, service, entity]
 
 policies:
   # Chat API: per-user and per-conversation controls
   chat.default:
     requests: { rpm: 120, burst: 2.0 }
     tokens:   { per_min: 60000, burst: 1.5 }
-    scopes: [global, user, conversation]
+    # Include api_key so ingress enforcement works before auth deps resolve user_id.
+    scopes: [global, user, api_key, conversation]
     fail_mode: fail_closed
 
   # MCP ingestion/read paths
@@ -36,10 +37,22 @@ policies:
     scopes: [global, client]
     fail_mode: fallback_memory  # acceptable local over-admission during outages
 
+  # AuthNZ guardrails (login, reset-password, etc.)
+  # NOTE: These policies are used by module-level RG integrations (not ingress route_map).
+  authnz.default:
+    requests: { rpm: 60, burst: 1.0 }
+    scopes: [global, entity]
+
   # Embeddings service (OpenAI-compatible)
   embeddings.default:
     requests: { rpm: 60, burst: 1.2 }
-    scopes: [user]
+    scopes: [user, api_key]
+
+  # Embeddings server (worker / internal service)
+  embeddings_server.default:
+    requests: { rpm: 120, burst: 2.0 }
+    scopes: [service]
+    fail_mode: fallback_memory
 
   # Audio: concurrency via streams + durable minutes cap
   audio.default:
@@ -47,8 +60,9 @@ policies:
     # are not denied by middleware. Concurrency/minutes are enforced separately.
     requests: { rpm: 300, burst: 2.0 }
     streams: { max_concurrent: 2, ttl_sec: 90 }
+    jobs:    { max_concurrent: 2, ttl_sec: 600 }
     minutes: { daily_cap: 120, rounding: ceil }
-    scopes: [user, ip]
+    scopes: [user, api_key, ip]
     fail_mode: fail_closed
 
   # SlowAPI façade defaults (ingress IP-based when auth scopes unavailable)
@@ -56,10 +70,109 @@ policies:
     requests: { rpm: 300, burst: 2.0 }
     scopes: [ip]
 
+  # Character Chat / Characters module (legacy per-user limiter compat)
+  character_chat.default:
+    requests: { rpm: 60, burst: 1.0 }
+    scopes: [user, api_key]
+
   # Evaluations module
   evals.default:
+    # Ingress middleware enforces `requests` for `/api/v1/evaluations/*`.
+    # The Evaluations module reserves `evaluations` (+ optional `tokens`) at
+    # endpoint-level to enforce durable caps via `ResourceDailyLedger`.
     requests: { rpm: 30, burst: 1.0 }
-    scopes: [user]
+    evaluations: { daily_cap: 500 }
+    tokens: { per_min: 1000000, burst: 1.0, daily_cap: 500000 }
+    scopes: [user, api_key]
+
+  # Web scraping service (internal service scope).
+  # Used by the research/websearch module to fetch external pages.
+  # Limits are moderate (60 rpm) to avoid hammering upstream sites while
+  # keeping local scrapers responsive. `fail_mode=fallback_memory` keeps
+  # scraping available during RG store outages by falling back to in-memory
+  # limits for this internal-only traffic.
+  web_scraping.default:
+    requests: { rpm: 60, burst: 1.0 }
+    scopes: [service]
+    fail_mode: fallback_memory
+
+  # Research / websearch endpoints.
+  # Applied at ingress for `/api/v1/research/*` (per-user/api_key). The
+  # 30 rpm default balances responsiveness with protection against abusive
+  # fan‑out across third‑party search/content providers. Tokens are not
+  # accounted here; upstream provider quotas remain the primary guardrail.
+  research.default:
+    requests: { rpm: 30, burst: 1.0 }
+    scopes: [user, api_key]
+
+  # Workflows (ad-hoc runs, schedules, admin).
+  # Ingress limits bound request rate, while `workflows_runs.daily_cap`
+  # integrates with the Workflows daily ledger/RG helpers to enforce a
+  # durable per-user daily runs cap. The default cap (1000) aligns with
+  # the WORKFLOWS_QUOTA_DAILY_PER_USER env fallback used by the API.
+  workflows.default:
+    requests: { rpm: 60, burst: 1.0 }
+    workflows_runs: { daily_cap: 1000 }
+    scopes: [user, api_key]
+
+  # Prompt Studio API (projects/prompts/tests/optimization).
+  # Policies are applied primarily at ingress for `/api/v1/prompt-studio/*`.
+  # Request limits are intentionally high so most safety/abuse controls are
+  # handled by AuthNZ module‑level limits (per‑operation) rather than RG.
+  prompt_studio.default:
+    # Keep high to avoid interfering with per-operation AuthNZ limits.
+    requests: { rpm: 300, burst: 2.0 }
+    scopes: [user, api_key]
+
+  # RAG unified/health endpoints.
+  # Covers `/api/v1/rag/*` including unified search and health checks. The
+  # 120 rpm default is tuned for interactive usage and small teams; scale
+  # out by overriding in DB-backed policy stores for larger deployments.
+  rag.default:
+    requests: { rpm: 120, burst: 1.2 }
+    scopes: [user, api_key]
+
+  # Media ingestion/processing endpoints.
+  # Applies to `/api/v1/media/*` for uploads, conversions, and analysis.
+  # Media processing is CPU/IO heavy, so limits are slightly conservative
+  # (60 rpm, modest burst) to prevent local saturation while still allowing
+  # concurrent ingestion workflows in development.
+  media.default:
+    requests: { rpm: 60, burst: 1.2 }
+    scopes: [user, api_key]
+
+  # Chatbooks import/export endpoints (SlowAPI compat → RG).
+  # Covers `/api/v1/chatbooks/*` used for conversation backup/restore and bulk
+  # user-data transfer (export/import). Limits are intentionally conservative
+  # (5 rpm, no burst) to prevent accidental or abusive bulk operations that
+  # can create heavy DB/file I/O and large payloads. Preview/download are
+  # slightly higher to support iterative validation and retrieval of prepared
+  # artifacts. Include `ip` in scope as an additional safety valve for shared
+  # API keys and to align with legacy SlowAPI behavior.
+  chatbooks.export:
+    requests: { rpm: 5, burst: 1.0 }
+    scopes: [user, api_key, ip]
+
+  chatbooks.import:
+    requests: { rpm: 5, burst: 1.0 }
+    scopes: [user, api_key, ip]
+
+  chatbooks.preview:
+    requests: { rpm: 10, burst: 1.0 }
+    scopes: [user, api_key, ip]
+
+  chatbooks.download:
+    requests: { rpm: 20, burst: 1.0 }
+    scopes: [user, api_key, ip]
+
+  # Watchlists API endpoints (sources/groups/tags/jobs/runs).
+  # Applied at ingress for `/api/v1/watchlists/*`. Watchlists can trigger
+  # background fetch/scrape work and external fan-out, so defaults are tuned
+  # for interactive usage (60 rpm) without enabling bulk abuse. Include `ip`
+  # in scope to add a per-client throttle when API keys are shared.
+  watchlists.default:
+    requests: { rpm: 60, burst: 1.0 }
+    scopes: [user, api_key, ip]
 
 # Route/tag mapping helpers. Middleware may use these to resolve policy_id.
 route_map:
@@ -67,15 +180,39 @@ route_map:
     chat: chat.default
     mcp.ingestion: mcp.ingestion
     embeddings: embeddings.default
+    embeddings_server: embeddings_server.default
     audio: audio.default
     evals: evals.default
     slowapi: slowapi.default
+    character_chat: character_chat.default
+    web_scraping: web_scraping.default
+    research: research.default
+    workflows: workflows.default
+    prompt_studio: prompt_studio.default
+    rag: rag.default
+    media: media.default
+    watchlists: watchlists.default
+    authentication: authnz.default
+    "character-chat-sessions": character_chat.default
   by_path:
     "/api/v1/chat/*": chat.default
     "/api/v1/mcp/*": mcp.ingestion
     "/api/v1/embeddings*": embeddings.default
     "/api/v1/audio/*": audio.default
     "/api/v1/evaluations/*": evals.default
+    "/api/v1/research/*": research.default
+    "/api/v1/workflows/*": workflows.default
+    "/api/v1/scheduler/workflows/*": workflows.default
+    "/api/v1/prompt-studio/*": prompt_studio.default
+    "/api/v1/rag/*": rag.default
+    "/api/v1/media/*": media.default
+    "/api/v1/chatbooks/export": chatbooks.export
+    "/api/v1/chatbooks/import": chatbooks.import
+    "/api/v1/chatbooks/preview": chatbooks.preview
+    "/api/v1/chatbooks/download/*": chatbooks.download
+    "/api/v1/watchlists/*": watchlists.default
+    "/api/v1/chats/*": character_chat.default
+    "/api/v1/auth/*": authnz.default
 
 # Observability note: Do not include entity label in metrics by default.
 # Use RG_METRICS_ENTITY_LABEL=true to enable hashed entity label if necessary.

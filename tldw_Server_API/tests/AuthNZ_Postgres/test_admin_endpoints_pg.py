@@ -10,8 +10,10 @@ from fastapi.testclient import TestClient
 async def test_admin_endpoints_pg(test_db_pool):
     # App and overrides
     from tldw_Server_API.app.main import app
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
+    from starlette.requests import Request
 
     # Disable CSRF for test client
     from tldw_Server_API.app.core.config import settings as app_settings
@@ -101,10 +103,35 @@ async def test_admin_endpoints_pg(test_db_pool):
     )
     user_id = await pool.fetchval("SELECT id FROM users WHERE username = $1", "pgadmin")
 
-    # Override admin requirement
-    async def _pass_admin():
-        return {"id": user_id, "role": "admin", "username": "pgadmin"}
-    app.dependency_overrides[require_admin] = _pass_admin
+    # Override AuthPrincipal to treat this user as admin for claim-first gates
+    async def _principal_override(request: Request):  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=user_id,
+            api_key_id=None,
+            subject="pgadmin",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        if request is not None:
+            try:
+                request.state.auth = AuthContext(
+                    principal=principal,
+                    ip=None,
+                    user_agent=None,
+                    request_id=None,
+                )
+            except Exception:
+                # Best-effort; do not fail tests if state attachment fails
+                pass
+        return principal
+
+    app.dependency_overrides[get_auth_principal] = _principal_override
 
     with TestClient(app) as client:
         # Create org
@@ -138,14 +165,23 @@ async def test_admin_endpoints_pg(test_db_pool):
         arr = r.json()
         assert any(k['id'] == vk['id'] for k in arr)
 
-    app.dependency_overrides.pop(require_admin, None)
+        # Fetch user details via admin endpoint (AuthnzUsersRepo-backed)
+        r = client.get(f"/api/v1/admin/users/{user_id}")
+        assert r.status_code == 200, r.text
+        detail = r.json()
+        assert detail.get("id") == user_id
+        assert detail.get("username") == "pgadmin"
+        assert "password_hash" not in detail
+
+    app.dependency_overrides.pop(get_auth_principal, None)
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_org_member_list_pagination_filters_pg(test_db_pool):
     from tldw_Server_API.app.main import app
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
     from tldw_Server_API.app.core.config import settings as app_settings
 
     pool = test_db_pool
@@ -180,16 +216,39 @@ async def test_org_member_list_pagination_filters_pg(test_db_pool):
         """
     )
 
-    # Insert admin user and override
+    # Insert admin user and override principal for claim-first gates
     admin_id = await pool.fetchval(
         "INSERT INTO users (uuid, username, email, password_hash, is_active) VALUES ($1, $2, $3, $4, TRUE) RETURNING id",
         str(uuid4()), "pg-root-admin", "pg-root-admin@example.com", "x",
     )
 
-    async def _pass_admin():
-        return {"id": admin_id, "role": "admin", "username": "pg-root-admin"}
+    async def _principal_override(request=None):  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=admin_id,
+            api_key_id=None,
+            subject="pg-root-admin",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        if request is not None:
+            try:
+                request.state.auth = AuthContext(
+                    principal=principal,
+                    ip=None,
+                    user_agent=None,
+                    request_id=None,
+                )
+            except Exception:
+                pass
+        return principal
 
-    app.dependency_overrides[require_admin] = _pass_admin
+    app.dependency_overrides[get_auth_principal] = _principal_override
 
     total_members = 140
     user_ids: list[int] = []
@@ -277,4 +336,4 @@ async def test_org_member_list_pagination_filters_pg(test_db_pool):
         assert all(item['role'] == 'lead' and item['status'] == 'invited' for item in combined)
         assert {item['user_id'] for item in combined} == lead_invited_ids
 
-    app.dependency_overrides.pop(require_admin, None)
+    app.dependency_overrides.pop(get_auth_principal, None)

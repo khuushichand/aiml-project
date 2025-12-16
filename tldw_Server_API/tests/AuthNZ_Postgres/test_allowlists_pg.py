@@ -4,10 +4,17 @@ from fastapi.testclient import TestClient
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_provider_model_allowlists_postgres(test_db_pool):
+async def test_provider_model_allowlists_postgres(test_db_pool, monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.config import settings as app_settings
+    from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+    from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as user_db_handling
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as reset_auth_settings
+
+    # Ensure multi-user mode for AuthNZ (virtual keys + budgets)
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    reset_auth_settings()
 
     pool = test_db_pool
     app_settings['CSRF_ENABLED'] = False
@@ -48,6 +55,15 @@ async def test_provider_model_allowlists_postgres(test_db_pool):
     # Manager to ensure api_keys columns (explicit pool)
     mgr = APIKeyManager(pool)
     await mgr.initialize()
+
+    # Ensure the API-key auth path used by the app reuses this manager (and
+    # thus the same Postgres pool) instead of creating a separate singleton
+    # bound to a different DATABASE_URL.
+    async def _get_mgr_override():
+        return mgr
+
+    monkeypatch.setattr(auth_deps, "get_api_key_manager", _get_mgr_override)
+    monkeypatch.setattr(user_db_handling, "get_api_key_manager", _get_mgr_override)
 
     # Insert user
     import uuid
@@ -90,11 +106,18 @@ async def test_provider_model_allowlists_postgres(test_db_pool):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_missing_provider_header_allows_when_allowlist_present_postgres(test_db_pool):
+async def test_missing_provider_header_allows_when_allowlist_present_postgres(test_db_pool, monkeypatch):
     """If allowed_providers is set but X-LLM-Provider header is missing, middleware should not 403."""
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.config import settings as app_settings
+    from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+    from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as user_db_handling
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as reset_auth_settings
+
+    # Ensure multi-user mode for AuthNZ
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    reset_auth_settings()
 
     pool = test_db_pool
     app_settings['CSRF_ENABLED'] = False
@@ -143,6 +166,12 @@ async def test_missing_provider_header_allows_when_allowlist_present_postgres(te
     # Create virtual key with provider/model allowlists
     mgr = APIKeyManager(pool)
     await mgr.initialize()
+
+    async def _get_mgr_override():
+        return mgr
+
+    monkeypatch.setattr(auth_deps, "get_api_key_manager", _get_mgr_override)
+    monkeypatch.setattr(user_db_handling, "get_api_key_manager", _get_mgr_override)
     res = await mgr.create_virtual_key(
         user_id=user_id,
         name="vk-allowlist-missing-provider",
@@ -165,11 +194,18 @@ async def test_missing_provider_header_allows_when_allowlist_present_postgres(te
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_non_json_body_skips_model_enforcement_postgres(test_db_pool):
+async def test_non_json_body_skips_model_enforcement_postgres(test_db_pool, monkeypatch):
     """With non-JSON content-type, model allowlist is skipped; ensure no 403/402 from middleware."""
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.config import settings as app_settings
+    from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+    from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as user_db_handling
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as reset_auth_settings
+
+    # Ensure multi-user mode for AuthNZ
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    reset_auth_settings()
 
     pool = test_db_pool
     app_settings['CSRF_ENABLED'] = False
@@ -184,6 +220,12 @@ async def test_non_json_body_skips_model_enforcement_postgres(test_db_pool):
 
     mgr = APIKeyManager(pool)
     await mgr.initialize()
+
+    async def _get_mgr_override():
+        return mgr
+
+    monkeypatch.setattr(auth_deps, "get_api_key_manager", _get_mgr_override)
+    monkeypatch.setattr(user_db_handling, "get_api_key_manager", _get_mgr_override)
     res = await mgr.create_virtual_key(
         user_id=user_id,
         name="vk-allowlist-nonjson",
@@ -210,11 +252,18 @@ async def test_non_json_body_skips_model_enforcement_postgres(test_db_pool):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_invalid_json_body_skips_model_enforcement_postgres(test_db_pool):
+async def test_invalid_json_body_skips_model_enforcement_postgres(test_db_pool, monkeypatch):
     """Invalid JSON should not trigger model allowlist enforcement; ensure not 403/402."""
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.config import settings as app_settings
+    from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+    from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as user_db_handling
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as reset_auth_settings
+
+    # Ensure multi-user mode for AuthNZ
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    reset_auth_settings()
 
     pool = test_db_pool
     app_settings['CSRF_ENABLED'] = False
@@ -229,6 +278,12 @@ async def test_invalid_json_body_skips_model_enforcement_postgres(test_db_pool):
 
     mgr = APIKeyManager(pool)
     await mgr.initialize()
+
+    async def _get_mgr_override():
+        return mgr
+
+    monkeypatch.setattr(auth_deps, "get_api_key_manager", _get_mgr_override)
+    monkeypatch.setattr(user_db_handling, "get_api_key_manager", _get_mgr_override)
     res = await mgr.create_virtual_key(
         user_id=user_id,
         name="vk-allowlist-badjson",

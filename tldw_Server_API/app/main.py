@@ -763,6 +763,15 @@ async def lifespan(app: FastAPI):
         None: Yields once to allow the application to run; when resumed performs orderly shutdown and resource cleanup.
     """
     _startup_trace("lifespan: entered")
+    # Ensure in-process restarts (common in tests) reset readiness and job acquisition gates.
+    # In production, the process typically exits after shutdown; in tests we reuse the app object.
+    try:
+        READINESS_STATE["ready"] = True
+        from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+
+        _JM.set_acquire_gate(False)
+    except Exception:
+        pass
     # Determine if heavy (non-critical) startup should be deferred to background
     # Read environment knobs with precedence:
     # - DISABLE_HEAVY_STARTUP=true  => force synchronous (no deferral)
@@ -856,12 +865,15 @@ async def lifespan(app: FastAPI):
             await ensure_authnz_schema_ready_once()
         except Exception as _e:
             logger.debug(f"App Startup: Skipped AuthNZ SQLite migration ensure: {_e}")
-        # Postgres-only: ensure additive extras (tool catalogs, privilege snapshots)
+        # Postgres-only: ensure additive extras (tool catalogs, privilege snapshots, usage tables, VK counters)
         try:
             if getattr(db_pool, "pool", None):
                 from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
                     ensure_tool_catalogs_tables_pg,
                     ensure_privilege_snapshots_table_pg,
+                    ensure_api_keys_tables_pg,
+                    ensure_usage_tables_pg,
+                    ensure_virtual_key_counters_pg,
                 )
 
                 ok_catalogs = await ensure_tool_catalogs_tables_pg(db_pool)
@@ -870,6 +882,15 @@ async def lifespan(app: FastAPI):
                 ok_priv_snapshots = await ensure_privilege_snapshots_table_pg(db_pool)
                 if ok_priv_snapshots:
                     logger.info("App Startup: Ensured PG privilege_snapshots table")
+                ok_api_keys_pg = await ensure_api_keys_tables_pg(db_pool)
+                if ok_api_keys_pg:
+                    logger.info("App Startup: Ensured PG api_keys tables")
+                ok_usage_pg = await ensure_usage_tables_pg(db_pool)
+                if ok_usage_pg:
+                    logger.info("App Startup: Ensured PG usage tables")
+                ok_vk_pg = await ensure_virtual_key_counters_pg(db_pool)
+                if ok_vk_pg:
+                    logger.info("App Startup: Ensured PG virtual-key counters tables")
         except Exception as _pg_e:
             logger.debug(f"App Startup: PG extras ensure failed/skipped: {_pg_e}")
         # Ensure RBAC seed exists in single-user mode (idempotent; both backends)
@@ -2402,6 +2423,16 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("App Shutdown: No test DB instance found to close")
 
+    # Reset the global jobs acquire gate after shutdown completes.
+    # The gate is a process-wide flag meant to prevent new acquisitions during shutdown.
+    # Leaving it enabled breaks in-process reuse patterns (e.g., pytest running workers after a TestClient closes).
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+
+        _JM.set_acquire_gate(False)
+    except Exception:
+        pass
+
 
 #
 ############################# End of Test DB Handling###################
@@ -2797,11 +2828,19 @@ from starlette.responses import JSONResponse  # noqa: E402
 import os as _os  # noqa: E402
 
 try:
-    _rg_env_enabled = (_os.getenv("RG_ENABLE_SIMPLE_MIDDLEWARE") or "").strip().lower() in {"1", "true", "yes"}
-    # Only enable RGSimpleMiddleware when explicitly requested via env, or when running the
-    # minimal test app mode. Do not enable solely due to pytest detection to avoid unintended
-    # 429 responses in tests that don't expect global rate limiting.
-    if _rg_env_enabled or _MINIMAL_TEST_APP:
+    # Determine whether to enable RGSimpleMiddleware.
+    # - When global RG is enabled (RG_ENABLED / config), ingress enforcement is on by default.
+    # - Tests that want RG ingress should set RG_ENABLED=1 explicitly; we avoid
+    #   enabling middleware purely due to pytest/minimal-test settings to prevent
+    #   unintended 429s in unrelated suites.
+    from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag  # noqa: E402
+
+    try:
+        _rg_global_enabled = bool(_rg_enabled_flag(False))
+    except Exception:
+        _rg_global_enabled = False
+
+    if _rg_global_enabled:
         from tldw_Server_API.app.core.Resource_Governance.middleware_simple import (
             RGSimpleMiddleware as _RGMw,
         )  # noqa: E402
@@ -2813,7 +2852,7 @@ try:
             already = False
         if not already:
             app.add_middleware(_RGMw)
-            logger.info("RGSimpleMiddleware enabled (env/minimal mode)")
+            logger.info("RGSimpleMiddleware enabled (RG_ENABLED)")
 except Exception as _rg_mw_err:  # pragma: no cover - best effort
     logger.debug(f"RGSimpleMiddleware not enabled: {_rg_mw_err}")
 
@@ -2968,20 +3007,37 @@ import os as _os_mod
 
 # Skip global rate limiter when running tests: honor either TESTING=true or TEST_MODE=true
 if _os_mod.getenv("TESTING", "").lower() != "true" and _os_mod.getenv("TEST_MODE", "").lower() != "true":
+    # If ResourceGovernor ingress middleware is present, keep SlowAPI off.
+    # SlowAPI decorators remain as legacy config carriers for non-RG deployments.
+    _rg_simple_present = False
     try:
-        from slowapi import _rate_limit_exceeded_handler
-        from slowapi.errors import RateLimitExceeded
-        from slowapi.middleware import SlowAPIMiddleware
+        from tldw_Server_API.app.core.Resource_Governance.middleware_simple import (  # noqa: E402
+            RGSimpleMiddleware as _RGMw,
+        )
 
-        # Use the central limiter instance so decorators and middleware share the same limiter
-        from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter as _global_limiter
+        _rg_simple_present = any(
+            getattr(m, "cls", None) is _RGMw for m in getattr(app, "user_middleware", [])
+        )
+    except Exception:
+        _rg_simple_present = False
 
-        app.state.limiter = _global_limiter
-        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-        app.add_middleware(SlowAPIMiddleware)
-        logger.info("Global rate limiter initialized (SlowAPI)")
-    except Exception as _e:
-        logger.warning(f"Global rate limiter not initialized: {_e}")
+    if _rg_simple_present:
+        logger.info("RGSimpleMiddleware present: skipping global SlowAPI middleware")
+    else:
+        try:
+            from slowapi import _rate_limit_exceeded_handler
+            from slowapi.errors import RateLimitExceeded
+            from slowapi.middleware import SlowAPIMiddleware
+
+            # Use the central limiter instance so decorators and middleware share the same limiter
+            from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter as _global_limiter
+
+            app.state.limiter = _global_limiter
+            app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+            app.add_middleware(SlowAPIMiddleware)
+            logger.info("Global rate limiter initialized (SlowAPI)")
+        except Exception as _e:
+            logger.warning(f"Global rate limiter not initialized: {_e}")
 else:
     logger.info("Test mode detected: Skipping global rate limiter initialization (TESTING/TEST_MODE)")
 
@@ -3281,8 +3337,16 @@ WEBUI_DIR = BASE_DIR.parent / "WebUI"
 if WEBUI_DIR.exists():
     # First, define a dynamic config endpoint for single user mode (registered conditionally below)
     async def get_webui_config():
-        """Dynamically generate WebUI configuration with API key in single user mode."""
-        from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
+        """Dynamically generate WebUI configuration with API key in single user mode.
+
+        This endpoint also exposes the inferred deployment PROFILE as a UX hint so
+        the WebUI can adjust copy/affordances without affecting auth behavior.
+        """
+        from tldw_Server_API.app.core.AuthNZ.settings import (
+            get_settings,
+            get_profile,
+            is_single_user_mode,
+        )
         from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers_async
         from fastapi.responses import JSONResponse
         from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -3297,6 +3361,16 @@ if WEBUI_DIR.exists():
         import os as _os
 
         _is_prod_env = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
+        profile_hint = None
+        try:
+            profile_hint = get_profile()
+        except Exception:
+            # Coordination-only; failures here must not impact auth
+            profile_hint = None
+
+        if profile_hint:
+            config["profile"] = profile_hint
+
         if is_single_user_mode():
             settings = get_settings()
             config["mode"] = "single-user"

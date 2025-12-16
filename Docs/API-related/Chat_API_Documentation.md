@@ -250,7 +250,7 @@ Image metrics now track per-image sizes when multiple images are included in a s
 - Endpoints (read-only operational state):
   - `GET /api/v1/chat/queue/status` - Queue size, concurrency, processed/rejected counts
   - `GET /api/v1/chat/queue/activity?limit=50` - Recent processed job summaries (most recent last)
-- RBAC: Requires permission `system.logs`. In single-user mode, all actions are permitted.
+- RBAC: Requires permission `system.logs` via `AuthPrincipal` claims (applies to both single-user and multi-user profiles).
 - Intended for administrators/operations; avoid exposing in multi-tenant environments without RBAC.
 
 ## WebUI

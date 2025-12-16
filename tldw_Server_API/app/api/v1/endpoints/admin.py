@@ -68,6 +68,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_rbac_schemas import (
     PermissionCreateRequest,
     PermissionResponse,
     UserRoleListResponse,
+    OverrideEffect,
     UserOverrideUpsertRequest,
     UserOverridesResponse,
     UserOverrideEntry,
@@ -80,9 +81,10 @@ from tldw_Server_API.app.api.v1.schemas.admin_rbac_schemas import (
     RoleEffectivePermissionsResponse,
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    require_admin,
+    require_roles,
     get_db_transaction,
-    get_storage_service_dep
+    get_storage_service_dep,
+    get_auth_principal,
 )
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter as get_authnz_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
@@ -93,6 +95,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DuplicateUserError,
     QuotaExceededError
 )
+from tldw_Server_API.app.core.exceptions import ResourceNotFoundError
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.rbac import get_effective_permissions
@@ -112,8 +115,8 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     update_org_member_role,
     list_org_memberships_for_user,
 )
+from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError, DuplicateTeamError, DuplicateRoleError
-from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError
 from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrganizationCreateRequest,
     OrganizationResponse,
@@ -131,6 +134,8 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrganizationWatchlistsSettingsUpdate,
     OrganizationWatchlistsSettingsResponse,
 )
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
 from tldw_Server_API.app.core.Usage.pricing_catalog import reset_pricing_catalog
 from tldw_Server_API.app.core.Chat.chat_service import (
     invalidate_model_alias_caches,
@@ -166,6 +171,17 @@ import ipaddress
 # Provide an alias to the public function for backward compatibility in tests.
 _is_postgres_backend = is_postgres_backend
 
+
+def _get_rbac_repo() -> AuthnzRbacRepo:
+    """
+    Factory for AuthnzRbacRepo used by admin RBAC endpoints.
+
+    Keeping construction behind a small helper makes it easy to monkeypatch
+    in tests and provides a single place to attach request-scoped state if
+    we later bind the repo to a specific backend handle.
+    """
+    return AuthnzRbacRepo()
+
 # Best-effort coordination for test-time SQLite migrations
 _authnz_migration_lock = asyncio.Lock()
 
@@ -176,7 +192,7 @@ _authnz_migration_lock = asyncio.Lock()
 router = APIRouter(
     prefix="/admin",
     tags=["admin"],
-    dependencies=[Depends(require_admin)],  # All endpoints require admin role
+    dependencies=[Depends(require_roles("admin"))],  # All endpoints require admin role
     responses={403: {"description": "Not authorized"}}
 )
 
@@ -251,7 +267,6 @@ async def list_users(
     role: Optional[str] = None,
     is_active: Optional[bool] = None,
     search: Optional[str] = None,
-    db=Depends(get_db_transaction)
 ) -> UserListResponse:
     """
     List all users with pagination and filters
@@ -267,131 +282,41 @@ async def list_users(
         Paginated list of users
     """
     # TEST_MODE diagnostics: annotate DB backend and admin dependency success
+    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        try:
+            pool = await get_db_pool()
+            db_backend = "postgres" if getattr(pool, "pool", None) is not None else "sqlite"
+            response.headers["X-TLDW-Admin-DB"] = db_backend
+            response.headers["X-TLDW-Admin-Req"] = "ok"
+            auth_hdr = request.headers.get("Authorization")
+            logger.info(
+                "Admin list_users TEST_MODE: Authorization present={}",
+                bool(auth_hdr),
+            )
+        except Exception as diag_exc:  # noqa: BLE001 - diagnostics only, do not fail request
+            response.headers["X-TLDW-Admin-Diag-Error"] = str(diag_exc)
+            logger.debug(
+                "Admin list_users TEST_MODE diagnostics failed: {}",
+                diag_exc,
+            )
+
     try:
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
-            try:
-                from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-                pool = await get_db_pool()
-                db_backend = "postgres" if getattr(pool, "pool", None) is not None else "sqlite"
-                response.headers["X-TLDW-Admin-DB"] = db_backend
-                response.headers["X-TLDW-Admin-Req"] = "ok"
-                # Log presence of Authorization header for debugging
-                from loguru import logger as _logger
-                auth_hdr = request.headers.get("Authorization")
-                _logger.info(f"Admin list_users TEST_MODE: Authorization present={bool(auth_hdr)}")
-            except Exception as _e:
-                response.headers["X-TLDW-Admin-Diag-Error"] = str(_e)
-    except Exception:
-        pass
-    try:
-        is_pg = await is_postgres_backend()
         offset = (page - 1) * limit
-
-        # Build query conditions
-        conditions = []
-        params = []
-        param_count = 0
-
-        if role:
-            param_count += 1
-            conditions.append(f"role = ${param_count}" if is_pg else "role = ?")
-            params.append(role)
-
-        if is_active is not None:
-            param_count += 1
-            conditions.append(f"is_active = ${param_count}" if is_pg else "is_active = ?")
-            params.append(is_active)
-
-        if search:
-            param_count += 1
-            search_pattern = f"%{search}%"
-            if is_pg:
-                conditions.append(f"(username ILIKE ${param_count} OR email ILIKE ${param_count})")
-            else:
-                conditions.append("(username LIKE ? OR email LIKE ?)")
-                params.append(search_pattern)  # Add twice for SQLite
-            params.append(search_pattern)
-
-        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
-
-        # Get total count
-        if is_pg:
-            # PostgreSQL
-            count_query = f"SELECT COUNT(*) FROM users{where_clause}"
-            total = await db.fetchval(count_query, *params)
-
-            # Get users
-            query = f"""
-                SELECT id, uuid, username, email, role, is_active, is_verified,
-                       created_at, last_login, storage_quota_mb, storage_used_mb
-                FROM users{where_clause}
-                ORDER BY created_at DESC
-                LIMIT ${param_count + 1} OFFSET ${param_count + 2}
-            """
-            params.extend([limit, offset])
-            rows = await db.fetch(query, *params)
-        else:
-            # SQLite
-            count_query = f"SELECT COUNT(*) FROM users{where_clause}"
-            cursor = await db.execute(count_query, params)
-            total = (await cursor.fetchone())[0]
-
-            # Get users
-            query = f"""
-                SELECT id, uuid, username, email, role, is_active, is_verified,
-                       created_at, last_login, storage_quota_mb, storage_used_mb
-                FROM users{where_clause}
-                ORDER BY created_at DESC
-                LIMIT ? OFFSET ?
-            """
-            params.extend([limit, offset])
-            cursor = await db.execute(query, params)
-            rows = await cursor.fetchall()
-
-        # Normalize rows into Pydantic-friendly dicts (works for Postgres and SQLite)
-        users = []
-        for row in rows:
-            if hasattr(row, 'keys') or isinstance(row, dict):  # Mapping/Record (Postgres path)
-                r = dict(row)
-                user_dict = {
-                    "id": int(r.get("id")),
-                    "uuid": str(r.get("uuid")) if r.get("uuid") is not None else None,
-                    "username": r.get("username"),
-                    "email": r.get("email"),
-                    "role": r.get("role"),
-                    "is_active": bool(r.get("is_active")),
-                    "is_verified": bool(r.get("is_verified")),
-                    "created_at": r.get("created_at"),
-                    "last_login": r.get("last_login"),
-                    "storage_quota_mb": int(r.get("storage_quota_mb") or 0),
-                    "storage_used_mb": float(r.get("storage_used_mb") or 0.0),
-                }
-                users.append(user_dict)
-            else:  # Tuple (SQLite path)
-                user_dict = {
-                    "id": int(row[0]),
-                    "uuid": str(row[1]) if row[1] is not None else None,
-                    "username": row[2],
-                    "email": row[3],
-                    "role": row[4],
-                    "is_active": bool(row[5]),
-                    "is_verified": bool(row[6]),
-                    "created_at": row[7],
-                    "last_login": row[8],
-                    "storage_quota_mb": int(row[9] or 0),
-                    "storage_used_mb": float(row[10] or 0.0),
-                }
-                users.append(user_dict)
-
-        result = UserListResponse(
+        repo = await AuthnzUsersRepo.from_pool()
+        users, total = await repo.list_users(
+            offset=offset,
+            limit=limit,
+            role=role,
+            is_active=is_active,
+            search=search,
+        )
+        return UserListResponse(
             users=users,
             total=total,
             page=page,
             limit=limit,
-            pages=(total + limit - 1) // limit
+            pages=(total + limit - 1) // limit if limit else 0,
         )
-        return result
-
     except Exception as e:
         logger.error(f"Failed to list users: {e}")
         try:
@@ -401,7 +326,7 @@ async def list_users(
             pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve users"
+            detail="Failed to retrieve users",
         )
 
 
@@ -1158,65 +1083,42 @@ async def set_notes_title_settings(payload: NotesTitleSettingsUpdate) -> Dict[st
 @router.get("/users/{user_id}")
 async def get_user_details(
     user_id: int,
-    db=Depends(get_db_transaction)
 ) -> Dict[str, Any]:
     """
-    Get detailed information about a specific user
+    Get detailed information about a specific user.
+
+    Delegates to the AuthnzUsersRepo so that backend differences and schema
+    details are encapsulated in the AuthNZ data access layer.
 
     Args:
         user_id: User ID
 
     Returns:
-        User details including all fields
+        User details excluding sensitive fields (e.g., password_hash)
     """
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            # PostgreSQL
-            user = await db.fetchrow(
-                "SELECT * FROM users WHERE id = $1",
-                user_id
-            )
-        else:
-            # SQLite
-            cursor = await db.execute(
-                "SELECT * FROM users WHERE id = ?",
-                (user_id,)
-            )
-            user = await cursor.fetchone()
-
+        repo = await AuthnzUsersRepo.from_pool()
+        user = await repo.get_user_by_id(user_id)
         if not user:
             raise UserNotFoundError(f"User {user_id}")
 
-        # Convert to dict
-        if not isinstance(user, dict):
-            columns = ['id', 'uuid', 'username', 'email', 'password_hash', 'role',
-                      'is_active', 'is_verified', 'is_locked', 'locked_until',
-                      'failed_login_attempts', 'created_at', 'updated_at',
-                      'last_login', 'email_verified_at', 'password_changed_at',
-                      'preferences', 'storage_quota_mb', 'storage_used_mb']
-            user = dict(zip(columns[:len(user)], user))
+        # Remove sensitive fields; repository normalizes backend-specific types
+        user_dict: Dict[str, Any] = dict(user)
+        user_dict.pop("password_hash", None)
 
-        # Remove sensitive fields
-        user.pop('password_hash', None)
+        return user_dict
 
-        # Convert UUID to string if needed
-        if 'uuid' in user and user['uuid'] and not isinstance(user['uuid'], str):
-            user['uuid'] = str(user['uuid'])
-
-        return user
-
-    except UserNotFoundError:
+    except UserNotFoundError as err:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"User {user_id} not found"
-        )
+            detail=f"User {user_id} not found",
+        ) from err
     except Exception as e:
         logger.error(f"Failed to get user {user_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve user details"
-        )
+            detail="Failed to retrieve user details",
+        ) from e
 
 
 @router.put("/users/{user_id}")
@@ -2028,32 +1930,20 @@ async def revoke_permission_from_role(role_id: int, permission_id: int, db=Depen
 
 
 @router.get("/users/{user_id}/roles", response_model=UserRoleListResponse)
-async def get_user_roles_admin(user_id: int, db=Depends(get_db_transaction)) -> UserRoleListResponse:
+async def get_user_roles_admin(user_id: int) -> UserRoleListResponse:
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            rows = await db.fetch(
-                """
-                SELECT r.id, r.name, r.description, COALESCE(r.is_system,0) as is_system
-                FROM roles r JOIN user_roles ur ON r.id = ur.role_id
-                WHERE ur.user_id = $1 AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
-                ORDER BY r.name
-                """,
-                user_id,
+        repo = _get_rbac_repo()
+        loop = asyncio.get_event_loop()
+        rows = await loop.run_in_executor(None, repo.get_user_roles, int(user_id))
+        roles = [
+            RoleResponse(
+                id=int(r.get("id")),
+                name=str(r.get("name")),
+                description=str(r.get("description") or ""),
+                is_system=bool(r.get("is_system")),
             )
-            roles = [RoleResponse(**dict(r)) for r in rows]
-        else:
-            cur = await db.execute(
-                """
-                SELECT r.id, r.name, r.description, COALESCE(r.is_system,0)
-                FROM roles r JOIN user_roles ur ON r.id = ur.role_id
-                WHERE ur.user_id = ? AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
-                ORDER BY r.name
-                """,
-                (user_id,),
-            )
-            rows = await cur.fetchall()
-            roles = [RoleResponse(id=row[0], name=row[1], description=row[2], is_system=bool(row[3])) for row in rows]
+            for r in rows
+        ]
         return UserRoleListResponse(user_id=user_id, roles=roles)
     except Exception as e:
         logger.error(f"Failed to get user roles for {user_id}: {e}")
@@ -2097,31 +1987,19 @@ async def remove_role_from_user(user_id: int, role_id: int, db=Depends(get_db_tr
 
 
 @router.get("/users/{user_id}/overrides", response_model=UserOverridesResponse)
-async def list_user_overrides(user_id: int, db=Depends(get_db_transaction)) -> UserOverridesResponse:
+async def list_user_overrides(user_id: int) -> UserOverridesResponse:
     try:
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            rows = await db.fetch(
-                """
-                SELECT p.id as permission_id, p.name as permission_name, up.granted, up.expires_at
-                FROM user_permissions up JOIN permissions p ON up.permission_id = p.id
-                WHERE up.user_id = $1
-                ORDER BY p.name
-                """,
-                user_id,
+        repo = _get_rbac_repo()
+        rows = repo.get_user_overrides(user_id=int(user_id))
+        entries = [
+            UserOverrideEntry(
+                permission_id=int(r.get("permission_id")),
+                permission_name=str(r.get("permission_name")),
+                granted=bool(r.get("granted")),
+                expires_at=str(r.get("expires_at")) if r.get("expires_at") else None,
             )
-            entries = [UserOverrideEntry(permission_id=r['permission_id'], permission_name=r['permission_name'], granted=bool(r['granted']), expires_at=str(r['expires_at']) if r['expires_at'] else None) for r in rows]
-        else:
-            cur = await db.execute(
-                """
-                SELECT p.id, p.name, up.granted, up.expires_at
-                FROM user_permissions up JOIN permissions p ON up.permission_id = p.id
-                WHERE up.user_id = ? ORDER BY p.name
-                """,
-                (user_id,),
-            )
-            rows = await cur.fetchall()
-            entries = [UserOverrideEntry(permission_id=row[0], permission_name=row[1], granted=bool(row[2]), expires_at=row[3]) for row in rows]
+            for r in rows
+        ]
         return UserOverridesResponse(user_id=user_id, overrides=entries)
     except Exception as e:
         logger.error(f"Failed to list overrides for user {user_id}: {e}")
@@ -2169,7 +2047,7 @@ async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest,
         if not perm_id:
             raise HTTPException(status_code=400, detail="permission_id or permission_name required")
 
-        granted = 1 if payload.effect == 'allow' else 0
+        granted = payload.effect == OverrideEffect.allow
         if _is_pg:
             await db.execute(
                 """
@@ -2223,71 +2101,16 @@ async def delete_user_override(user_id: int, permission_id: int, db=Depends(get_
 
 
 @router.get("/users/{user_id}/effective-permissions", response_model=EffectivePermissionsResponse)
-async def get_effective_permissions_admin(user_id: int, db=Depends(get_db_transaction)) -> EffectivePermissionsResponse:
-    """Compute effective permissions for a user using the request-scoped DB.
+async def get_effective_permissions_admin(user_id: int) -> EffectivePermissionsResponse:
+    """Compute effective permissions for a user.
 
-    This avoids relying on global user DB singletons which may point at a different
-    database in test environments (e.g., single-user SQLite).
+    Delegates to the central RBAC helper, which in turn uses the AuthNZ
+    repository layer (`AuthnzRbacRepo` / `UserDatabase_v2`) so that both
+    SQLite and Postgres backends share the same logic.
     """
     try:
-        perms: set[str] = set()
-        # Role-derived permissions
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            rows = await db.fetch(
-                """
-                SELECT DISTINCT p.name
-                FROM permissions p
-                JOIN role_permissions rp ON p.id = rp.permission_id
-                JOIN user_roles ur ON rp.role_id = ur.role_id
-                WHERE ur.user_id = $1 AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
-                """,
-                user_id,
-            )
-            perms |= {str(r['name']) for r in rows}
-            drows = await db.fetch(
-                """
-                SELECT p.name, up.granted
-                FROM permissions p
-                JOIN user_permissions up ON p.id = up.permission_id
-                WHERE up.user_id = $1 AND (up.expires_at IS NULL OR up.expires_at > CURRENT_TIMESTAMP)
-                """,
-                user_id,
-            )
-            for r in drows:
-                if bool(r['granted']):
-                    perms.add(str(r['name']))
-                else:
-                    perms.discard(str(r['name']))
-        else:
-            cur = await db.execute(
-                """
-                SELECT DISTINCT p.name
-                FROM permissions p
-                JOIN role_permissions rp ON p.id = rp.permission_id
-                JOIN user_roles ur ON rp.role_id = ur.role_id
-                WHERE ur.user_id = ? AND (ur.expires_at IS NULL OR ur.expires_at > CURRENT_TIMESTAMP)
-                """,
-                (user_id,),
-            )
-            rows = await cur.fetchall()
-            perms |= {str(r[0]) for r in rows}
-            cur2 = await db.execute(
-                """
-                SELECT p.name, up.granted
-                FROM permissions p
-                JOIN user_permissions up ON p.id = up.permission_id
-                WHERE up.user_id = ? AND (up.expires_at IS NULL OR up.expires_at > CURRENT_TIMESTAMP)
-                """,
-                (user_id,),
-            )
-            drows = await cur2.fetchall()
-            for name, granted in drows:
-                if bool(granted):
-                    perms.add(str(name))
-                else:
-                    perms.discard(str(name))
-
+        loop = asyncio.get_event_loop()
+        perms = await loop.run_in_executor(None, get_effective_permissions, user_id)
         return EffectivePermissionsResponse(user_id=user_id, permissions=sorted(perms))
     except Exception as e:
         logger.error(f"Failed to compute effective permissions for user {user_id}: {e}")
@@ -2295,7 +2118,7 @@ async def get_effective_permissions_admin(user_id: int, db=Depends(get_db_transa
 
 
 @router.get("/roles/{role_id}/permissions/effective", response_model=RoleEffectivePermissionsResponse)
-async def get_role_effective_permissions(role_id: int, db=Depends(get_db_transaction)) -> RoleEffectivePermissionsResponse:
+async def get_role_effective_permissions(role_id: int) -> RoleEffectivePermissionsResponse:
     """Return a convenience view combining a role's granted permissions and tool permissions.
 
     - permissions: non-tool permission names (e.g., media.read)
@@ -2303,59 +2126,18 @@ async def get_role_effective_permissions(role_id: int, db=Depends(get_db_transac
     - all_permissions: union of both, sorted
     """
     try:
-        is_pg = await is_postgres_backend()
-        # Fetch role information
-        role_name: Optional[str] = None
-        # Defensive: normalize role_id to plain int
-        if isinstance(role_id, (tuple, list)):
-            role_id = role_id[0]
-        role_id = int(role_id)
-        if is_pg:
-            r = await db.fetchrow("SELECT id, name FROM roles WHERE id = $1", role_id)
-            if not r:
-                raise HTTPException(status_code=404, detail="Role not found")
-            role_name = r['name']
-            rows = await db.fetch(
-                """
-                SELECT p.name
-                FROM permissions p
-                JOIN role_permissions rp ON p.id = rp.permission_id
-                WHERE rp.role_id = $1
-                ORDER BY p.name
-                """,
-                role_id,
-            )
-            names = [str(rr['name']) for rr in rows]
-        else:
-            cur = await db.execute("SELECT id, name FROM roles WHERE id = ?", (role_id,))
-            r = await cur.fetchone()
-            if not r:
-                raise HTTPException(status_code=404, detail="Role not found")
-            role_name = str(r[1])
-            cur2 = await db.execute(
-                """
-                SELECT p.name
-                FROM permissions p
-                JOIN role_permissions rp ON p.id = rp.permission_id
-                WHERE rp.role_id = ?
-                ORDER BY p.name
-                """,
-                (role_id,),
-            )
-            rows2 = await cur2.fetchall()
-            names = [str(x[0]) for x in rows2]
-
-        tool_prefix = 'tools.execute:'
-        tool_permissions = [n for n in names if n.startswith(tool_prefix)]
-        permissions = [n for n in names if not n.startswith(tool_prefix)]
-        all_permissions = sorted(set(tool_permissions) | set(permissions))
+        repo = _get_rbac_repo()
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, repo.get_role_effective_permissions, int(role_id))
         return RoleEffectivePermissionsResponse(
             role_id=role_id,
-            role_name=role_name or "",
-            permissions=permissions,
-            tool_permissions=tool_permissions,
-            all_permissions=all_permissions,
+            role_name=data.get("role_name", ""),
+            permissions=data.get("permissions", []),
+            tool_permissions=data.get("tool_permissions", []),
+            all_permissions=data.get("all_permissions", []),
         )
+    except ResourceNotFoundError:
+        raise HTTPException(status_code=404, detail="Role not found")
     except HTTPException:
         raise
     except Exception as e:
@@ -2693,8 +2475,8 @@ async def upsert_user_rate_limit(user_id: int, payload: RateLimitUpsertRequest, 
 @router.delete("/users/{user_id}")
 async def delete_user(
     user_id: int,
-    current_user: Dict[str, Any] = Depends(require_admin),
-    db=Depends(get_db_transaction)
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
 ) -> Dict[str, str]:
     """
     Delete a user (soft delete by default)
@@ -2707,7 +2489,7 @@ async def delete_user(
     """
     try:
         # Prevent self-deletion
-        if user_id == current_user["id"]:
+        if principal.user_id is not None and str(user_id) == str(principal.user_id):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot delete your own account"
@@ -2750,8 +2532,8 @@ async def delete_user(
 @router.post("/registration-codes", response_model=RegistrationCodeResponse)
 async def create_registration_code(
     request: RegistrationCodeRequest,
-    current_user: Dict[str, Any] = Depends(require_admin),
-    db=Depends(get_db_transaction)
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
 ) -> RegistrationCodeResponse:
     """
     Create a new registration code
@@ -2770,6 +2552,7 @@ async def create_registration_code(
         expires_at = datetime.utcnow() + timedelta(days=request.expiry_days)
 
         is_pg = await is_postgres_backend()
+        creator_id = int(principal.user_id) if principal.user_id is not None else None
         if is_pg:
             # PostgreSQL
             result = await db.fetchrow("""
@@ -2777,16 +2560,30 @@ async def create_registration_code(
                 (code, max_uses, expires_at, created_by, role_to_grant, metadata)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING id, code, max_uses, times_used, expires_at, created_at, role_to_grant
-            """, code, request.max_uses, expires_at, current_user["id"],
-                request.role_to_grant, __import__('json').dumps(request.metadata or {}))
+            """,
+                code,
+                request.max_uses,
+                expires_at,
+                creator_id,
+                request.role_to_grant,
+                json.dumps(request.metadata or {}),
+            )
         else:
             # SQLite
             cursor = await db.execute("""
                 INSERT INTO registration_codes
                 (code, max_uses, expires_at, created_by, role_to_grant, metadata)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (code, request.max_uses, expires_at.isoformat(), current_user["id"],
-                  request.role_to_grant, __import__('json').dumps(request.metadata or {})))
+            """,
+                (
+                    code,
+                    request.max_uses,
+                    expires_at.isoformat(),
+                    creator_id,
+                    request.role_to_grant,
+                    json.dumps(request.metadata or {}),
+                ),
+            )
 
             code_id = cursor.lastrowid
             await db.commit()
@@ -2800,14 +2597,21 @@ async def create_registration_code(
 
         logger.info(f"Admin created registration code: {code[:8]}...")
 
+        if isinstance(result, tuple):
+            created_at = result[5]
+        else:
+            created_at = result["created_at"]
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
+
         return RegistrationCodeResponse(
-            id=result[0] if isinstance(result, tuple) else result['id'],
+            id=result[0] if isinstance(result, tuple) else result["id"],
             code=code,
             max_uses=request.max_uses,
             times_used=0,
             expires_at=expires_at,
-            created_at=datetime.utcnow(),
-            role_to_grant=request.role_to_grant
+            created_at=created_at,
+            role_to_grant=request.role_to_grant,
         )
 
     except Exception as e:

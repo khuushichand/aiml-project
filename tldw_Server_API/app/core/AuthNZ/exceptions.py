@@ -260,6 +260,17 @@ class DatabaseLockError(DatabaseError):
         super().__init__("Database is temporarily locked. Please try again.")
 
 
+class AuthnzMonitoringError(DatabaseError):
+    """Monitoring-related database failure in AuthNZ."""
+
+    def __init__(self, operation: str, detail: Optional[str] = None):
+        message = f"AuthNZ monitoring operation failed: {operation}"
+        if detail:
+            message = f"{message} - {detail}"
+        super().__init__(message)
+        self.operation = operation
+
+
 class MigrationError(DatabaseError):
     """Database migration failed"""
     def __init__(self, version: Optional[str] = None, detail: Optional[str] = None):

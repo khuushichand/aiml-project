@@ -17,6 +17,10 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool, reset_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError
+from tldw_Server_API.app.core.AuthNZ.repos.token_blacklist_repo import (
+    AuthnzTokenBlacklistRepo,
+)
+from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRepo
 
 #######################################################################################################################
 #
@@ -215,65 +219,8 @@ class TokenBlacklist:
         """Create token blacklist table if it doesn't exist"""
         try:
             db_pool = await self._ensure_db_pool()
-            using_postgres = getattr(db_pool, "pool", None) is not None
-            async with db_pool.transaction() as conn:
-                if using_postgres:
-                    # PostgreSQL
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS token_blacklist (
-                            id SERIAL PRIMARY KEY,
-                            jti VARCHAR(255) UNIQUE NOT NULL,
-                            user_id INTEGER,
-                            token_type VARCHAR(50),
-                            revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            expires_at TIMESTAMP NOT NULL,
-                            reason VARCHAR(255),
-                            revoked_by INTEGER,
-                            ip_address VARCHAR(45),
-                            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                        )
-                    """)
-
-                    # Create indexes
-                    await conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_blacklist_jti ON token_blacklist(jti)"
-                    )
-                    await conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_blacklist_expires ON token_blacklist(expires_at)"
-                    )
-                    await conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_blacklist_user ON token_blacklist(user_id)"
-                    )
-
-                else:
-                    # SQLite
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS token_blacklist (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            jti TEXT UNIQUE NOT NULL,
-                            user_id INTEGER,
-                            token_type TEXT,
-                            revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            expires_at TIMESTAMP NOT NULL,
-                            reason TEXT,
-                            revoked_by INTEGER,
-                            ip_address TEXT,
-                            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                        )
-                    """)
-
-                    # Create indexes
-                    await conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_blacklist_jti ON token_blacklist(jti)"
-                    )
-                    await conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_blacklist_expires ON token_blacklist(expires_at)"
-                    )
-                    await conn.execute(
-                        "CREATE INDEX IF NOT EXISTS idx_blacklist_user ON token_blacklist(user_id)"
-                    )
-
-                    await conn.commit()
+            repo = AuthnzTokenBlacklistRepo(db_pool)
+            await repo.ensure_schema()
 
         except Exception as e:
             logger.error(f"Failed to create token blacklist table: {e}")
@@ -381,52 +328,29 @@ class TokenBlacklist:
         # Add to database for persistence
         try:
             db_pool = await self._ensure_db_pool()
-            using_postgres = getattr(db_pool, "pool", None) is not None
-            async with db_pool.transaction() as conn:
-                if using_postgres:
-                    # PostgreSQL
-                    await conn.execute("""
-                        INSERT INTO token_blacklist
-                        (jti, user_id, token_type, expires_at, reason, revoked_by, ip_address)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
-                        ON CONFLICT (jti) DO NOTHING
-                    """, jti, user_id, token_type, normalized_expiry, reason, revoked_by, ip_address)
-                else:
-                    # SQLite
-                    try:
-                        await conn.execute(
-                            """
-                            INSERT OR IGNORE INTO token_blacklist
-                            (jti, user_id, token_type, expires_at, reason, revoked_by, ip_address)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (jti, user_id, token_type, normalized_expiry.isoformat(), reason, revoked_by, ip_address),
-                        )
-                        await conn.commit()
-                    except Exception as sqlite_err:
-                        # Some test paths initialize a fresh users.db with foreign_keys enabled
-                        # but without a corresponding users row. Fall back to a NULL user_id when
-                        # a FK violation occurs to preserve blacklist semantics under SQLite.
-                        if "FOREIGN KEY constraint failed" in str(sqlite_err):
-                            try:
-                                await conn.execute(
-                                    """
-                                    INSERT OR IGNORE INTO token_blacklist
-                                    (jti, user_id, token_type, expires_at, reason, revoked_by, ip_address)
-                                    VALUES (?, NULL, ?, ?, ?, ?, ?)
-                                    """,
-                                    (jti, token_type, normalized_expiry.isoformat(), reason, revoked_by, ip_address),
-                                )
-                                await conn.commit()
-                            except Exception:
-                                raise
-                        else:
-                            raise
+            repo = AuthnzTokenBlacklistRepo(db_pool)
+            await repo.insert_blacklisted_token(
+                jti=jti,
+                user_id=user_id,
+                token_type=token_type,
+                expires_at=normalized_expiry,
+                reason=reason,
+                revoked_by=revoked_by,
+                ip_address=ip_address,
+            )
 
             if self.settings.PII_REDACT_LOGS:
-                logger.info(f"Token blacklisted for authenticated user (details redacted) - Reason: {reason}")
+                logger.info(
+                    "Token blacklisted for authenticated user (details redacted) - Reason: {}",
+                    reason,
+                )
             else:
-                logger.info(f"Token {jti} blacklisted for user {user_id} - Reason: {reason}")
+                logger.info(
+                    "Token {} blacklisted for user {} - Reason: {}",
+                    jti,
+                    user_id,
+                    reason,
+                )
             return True
 
         except Exception as e:
@@ -475,45 +399,15 @@ class TokenBlacklist:
         # Check database
         try:
             db_pool = await self._ensure_db_pool()
-            async with db_pool.acquire() as conn:
-                if hasattr(conn, 'fetchval'):
-                    # PostgreSQL
-                    row = await conn.fetchrow(
-                        """
-                        SELECT expires_at
-                        FROM token_blacklist
-                        WHERE jti = $1 AND expires_at > $2
-                        ORDER BY expires_at DESC
-                        LIMIT 1
-                        """,
-                        jti,
-                        datetime.utcnow(),
-                    )
-                    if row:
-                        expires_at = row["expires_at"]
-                    else:
-                        expires_at = None
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        """
-                        SELECT expires_at
-                        FROM token_blacklist
-                        WHERE jti = ? AND expires_at > ?
-                        ORDER BY expires_at DESC
-                        LIMIT 1
-                        """,
-                        (jti, datetime.utcnow().isoformat())
-                    )
-                    result = await cursor.fetchone()
-                    expires_at = result[0] if result else None
+            repo = AuthnzTokenBlacklistRepo(db_pool)
+            now = datetime.utcnow()
+            expires_at = await repo.get_active_expiry_for_jti(jti=jti, now=now)
 
-                if expires_at:
-                    # Add to local cache using stored expiry
-                    self._cache_add(jti, expires_at)
-                    return True
-                # If DB indicates no match, make sure cache is clean for this JTI
-                self._cache_remove(jti)
+            if expires_at:
+                self._cache_add(jti, expires_at)
+                return True
+
+            self._cache_remove(jti)
 
         except Exception as e:
             logger.error(f"Database error checking blacklist: {e}")
@@ -546,75 +440,22 @@ class TokenBlacklist:
 
         try:
             db_pool = await self._ensure_db_pool()
-            using_postgres = getattr(db_pool, "pool", None) is not None
-            # Get all active sessions for user
-            async with db_pool.acquire() as conn:
-                if using_postgres and hasattr(conn, 'fetch'):
-                    # PostgreSQL
-                    rows = await conn.fetch(
-                        """
-                        SELECT id, access_jti, refresh_jti, expires_at, refresh_expires_at
-                        FROM sessions
-                        WHERE user_id = $1
-                        """,
-                        user_id
-                    )
-                    sessions = [dict(row) for row in rows]
-                else:
-                    # SQLite
-                    await self._ensure_session_revocation_columns(conn)
-                    cursor = await conn.execute(
-                        """
-                        SELECT id, access_jti, refresh_jti, expires_at, refresh_expires_at
-                        FROM sessions
-                        WHERE user_id = ?
-                        """,
-                        (user_id,)
-                    )
-                    sqlite_rows = await cursor.fetchall()
-                    sessions = [
-                        {
-                            "id": sqlite_row[0],
-                            "access_jti": sqlite_row[1],
-                            "refresh_jti": sqlite_row[2],
-                            "expires_at": sqlite_row[3],
-                            "refresh_expires_at": sqlite_row[4],
-                        }
-                        for sqlite_row in sqlite_rows
-                    ]
+            repo = AuthnzSessionsRepo(db_pool)
 
-                # Mark sessions as revoked
-                if using_postgres:
-                    # PostgreSQL
-                    await conn.execute(
-                        """
-                        UPDATE sessions
-                        SET is_revoked = TRUE,
-                            is_active = FALSE,
-                            revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP),
-                            revoked_by = COALESCE($2, revoked_by),
-                            revoke_reason = COALESCE($3, revoke_reason)
-                        WHERE user_id = $1
-                        """,
-                        user_id,
-                        revoked_by,
-                        reason,
-                    )
-                else:
-                    # SQLite
-                    await conn.execute(
-                        """
-                        UPDATE sessions
-                        SET is_revoked = 1,
-                            is_active = 0,
-                            revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP),
-                            revoked_by = COALESCE(?, revoked_by),
-                            revoke_reason = COALESCE(?, revoke_reason)
-                        WHERE user_id = ?
-                        """,
-                        (revoked_by, reason, user_id)
-                    )
-                    await conn.commit()
+            # For SQLite-based pools, ensure legacy session tables have the
+            # revocation columns before we attempt to update them.
+            if getattr(db_pool, "pool", None) is None:
+                async with db_pool.acquire() as conn:
+                    await self._ensure_session_revocation_columns(conn)
+
+            # Snapshot the sessions' token metadata for blacklist use
+            sessions = await repo.fetch_session_token_metadata_for_user(user_id)
+            # Mark sessions as revoked with audit metadata
+            await repo.mark_sessions_revoked_for_user_with_audit(
+                user_id=user_id,
+                revoked_by=revoked_by,
+                reason=reason,
+            )
 
             def _to_datetime(value: Optional[Any]) -> Optional[datetime]:
                 if value is None:
@@ -695,24 +536,9 @@ class TokenBlacklist:
 
         try:
             db_pool = await self._ensure_db_pool()
-            using_postgres = getattr(db_pool, "pool", None) is not None
-            async with db_pool.transaction() as conn:
-                if using_postgres:
-                    # PostgreSQL
-                    result = await conn.execute(
-                        "DELETE FROM token_blacklist WHERE expires_at < $1",
-                        datetime.utcnow()
-                    )
-                    # PostgreSQL returns number of affected rows
-                    count = int(result.split()[-1]) if isinstance(result, str) else 0
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        "DELETE FROM token_blacklist WHERE expires_at < ?",
-                        (datetime.utcnow().isoformat(),)
-                    )
-                    await conn.commit()
-                    count = cursor.rowcount
+            repo = AuthnzTokenBlacklistRepo(db_pool)
+            now = datetime.utcnow()
+            count = await repo.cleanup_expired(now=now)
 
             if count > 0:
                 logger.info(f"Cleaned up {count} expired tokens from blacklist")
@@ -743,67 +569,9 @@ class TokenBlacklist:
 
         try:
             db_pool = await self._ensure_db_pool()
-            async with db_pool.acquire() as conn:
-                if user_id:
-                    if hasattr(conn, 'fetchrow'):
-                        # PostgreSQL
-                        stats = await conn.fetchrow("""
-                            SELECT
-                                COUNT(*) as total,
-                                COUNT(CASE WHEN token_type = 'access' THEN 1 END) as access_tokens,
-                                COUNT(CASE WHEN token_type = 'refresh' THEN 1 END) as refresh_tokens,
-                                MIN(revoked_at) as earliest_revocation,
-                                MAX(revoked_at) as latest_revocation
-                            FROM token_blacklist
-                            WHERE user_id = $1 AND expires_at > $2
-                        """, user_id, datetime.utcnow())
-                    else:
-                        # SQLite
-                        cursor = await conn.execute("""
-                            SELECT
-                                COUNT(*) as total,
-                                SUM(CASE WHEN token_type = 'access' THEN 1 ELSE 0 END) as access_tokens,
-                                SUM(CASE WHEN token_type = 'refresh' THEN 1 ELSE 0 END) as refresh_tokens,
-                                MIN(revoked_at) as earliest_revocation,
-                                MAX(revoked_at) as latest_revocation
-                            FROM token_blacklist
-                            WHERE user_id = ? AND expires_at > ?
-                        """, (user_id, datetime.utcnow().isoformat()))
-                        stats = await cursor.fetchone()
-                else:
-                    if hasattr(conn, 'fetchrow'):
-                        # PostgreSQL - global stats
-                        stats = await conn.fetchrow("""
-                            SELECT
-                                COUNT(*) as total,
-                                COUNT(DISTINCT user_id) as unique_users,
-                                COUNT(CASE WHEN token_type = 'access' THEN 1 END) as access_tokens,
-                                COUNT(CASE WHEN token_type = 'refresh' THEN 1 END) as refresh_tokens
-                            FROM token_blacklist
-                            WHERE expires_at > $1
-                        """, datetime.utcnow())
-                    else:
-                        # SQLite - global stats
-                        cursor = await conn.execute("""
-                            SELECT
-                                COUNT(*) as total,
-                                COUNT(DISTINCT user_id) as unique_users,
-                                SUM(CASE WHEN token_type = 'access' THEN 1 ELSE 0 END) as access_tokens,
-                                SUM(CASE WHEN token_type = 'refresh' THEN 1 ELSE 0 END) as refresh_tokens
-                            FROM token_blacklist
-                            WHERE expires_at > ?
-                        """, (datetime.utcnow().isoformat(),))
-                        stats = await cursor.fetchone()
-
-                # Convert to dictionary
-                if stats:
-                    return dict(stats) if hasattr(stats, 'keys') else {
-                        "total": stats[0],
-                        "unique_users": stats[1] if not user_id else 1,
-                        "access_tokens": stats[2] if not user_id else stats[1],
-                        "refresh_tokens": stats[3] if not user_id else stats[2]
-                    }
-
+            repo = AuthnzTokenBlacklistRepo(db_pool)
+            now = datetime.utcnow()
+            return await repo.get_blacklist_stats(now=now, user_id=user_id)
         except Exception as e:
             logger.error(f"Failed to get blacklist stats: {e}")
 
@@ -811,7 +579,7 @@ class TokenBlacklist:
             "total": 0,
             "unique_users": 0,
             "access_tokens": 0,
-            "refresh_tokens": 0
+            "refresh_tokens": 0,
         }
 
 

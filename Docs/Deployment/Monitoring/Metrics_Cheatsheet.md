@@ -6,7 +6,7 @@ The server exports metrics across HTTP, DB, LLM, RAG, embeddings, uploads, syste
 - JSON: `GET /api/v1/metrics/json`
 - Health: `GET /api/v1/metrics/health`
 - Chat metrics (JSON): `GET /api/v1/metrics/chat` (includes `token_costs`)
-- Reset metrics: `POST /api/v1/metrics/reset` (admin-only; clears in-memory counters)
+- Reset metrics: `POST /api/v1/metrics/reset` (admin-only; clears in-memory counters; enforced by AuthNZ)
 
 ## HTTP
 - `http_requests_total{method,endpoint,status}`: Counter of HTTP requests.
@@ -141,9 +141,10 @@ Notes:
 - System: `mcp_memory_usage_bytes`, `mcp_cpu_usage_percent`.
 Notes:
 - JSON metrics: `GET /api/v1/mcp/metrics` (admin-only).
-- Prometheus scrape (unauthenticated, for internal networks): `GET /api/v1/mcp/metrics/prometheus`.
-  - Security: expose only on trusted networks or behind an authing proxy.
+- Prometheus scrape (requires `system.logs` permission via AuthPrincipal): `GET /api/v1/mcp/metrics/prometheus`.
+  - Security: access is enforced via authentication and the `system.logs` permission on the AuthPrincipal; the endpoint can be safely exposed to Prometheus scrapers that authenticate with a suitably privileged principal, though restricting network exposure or using an authing proxy remains recommended for defense in depth.
   - If Prometheus client is not installed, the endpoint returns a placeholder comment.
+  - Migration note: existing Prometheus scrapers must authenticate using a principal that holds the `system.logs` permission (for example, via an API key or JWT with that claim). Without this permission, the endpoint returns `403 Forbidden` and no metrics are exposed.
 
 ## Grafana Provisioning
 
@@ -223,6 +224,25 @@ scrape_configs:
     metrics_path: /api/v1/mcp/metrics/prometheus
     static_configs:
       - targets: ['tldw-server.local:8000']
+```
+
+Prometheus scrape_config example (with authentication):
+```yaml
+scrape_configs:
+  - job_name: 'tldw-mcp'
+    metrics_path: /api/v1/mcp/metrics/prometheus
+    static_configs:
+      - targets: ['tldw-server.local:8000']
+    # Option 1: Bearer token (API key or JWT)
+    authorization:
+      type: Bearer
+      credentials: '<api_key_or_jwt_with_system.logs_permission>'
+
+    # Option 2: Custom header (if using header-based API key)
+    # relabel_configs:
+    #   - source_labels: [__address__]
+    #     target_label: __param_api_key
+    #     replacement: '<your_api_key>'
 ```
 
 Sample PromQL queries:

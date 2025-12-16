@@ -5,6 +5,7 @@
 # Imports
 from __future__ import annotations
 #
+import asyncio
 import os
 import time
 import threading
@@ -310,19 +311,183 @@ class TokenBucketLimiter:
     def __call__(self, fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
-            # Bypass rate limiting during tests or unless explicitly enabled
-            try:
-                if os.getenv("TESTING", "").lower() == "true" or \
-                   os.getenv("EMBEDDINGS_RATE_LIMIT", "off").lower() != "on":
-                    return fn(*args, **kwargs)
-            except Exception:
-                # If env checks fail for any reason, fall back to limiting
-                pass
+            # When ResourceGovernor is enabled, prefer ResourceGovernor as
+            # the primary enforcement path. The legacy in-process token bucket
+            # is retired; when RG is disabled, this decorator becomes a no-op.
+            if not _rg_embeddings_server_enabled():
+                return fn(*args, **kwargs)
 
-            self._acquire()
-            return fn(*args, **kwargs)
+            # RG enforcement with simple backoff based on retry_after.
+            while True:
+                decision = _maybe_enforce_with_rg_embeddings_server_sync()
+                if decision is None:
+                    raise RuntimeError(
+                        "Embeddings server rate limiting unavailable (ResourceGovernor not initialized)"
+                    )
+                if decision.get("allowed", False):
+                    return fn(*args, **kwargs)
+                retry_after = decision.get("retry_after")
+                wait_s = 1.0
+                try:
+                    if isinstance(retry_after, (int, float)) and retry_after > 0:
+                        wait_s = float(retry_after)
+                except Exception:
+                    wait_s = 1.0
+                time.sleep(wait_s)
 
         return wrapper
+
+
+# --- Resource Governor plumbing (optional) for embeddings server -------------
+_rg_emb_server_governor = None
+_rg_emb_server_loader = None
+_rg_emb_server_lock = asyncio.Lock()
+
+try:  # pragma: no cover - RG is optional
+    from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
+        MemoryResourceGovernor,
+        RedisResourceGovernor,
+        RGRequest,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.policy_loader import (  # type: ignore
+        PolicyLoader,
+        PolicyReloadConfig,
+        default_policy_loader,
+    )
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
+except Exception:  # pragma: no cover - safe fallback when RG not installed
+    MemoryResourceGovernor = None  # type: ignore
+    RedisResourceGovernor = None  # type: ignore
+    RGRequest = None  # type: ignore
+    PolicyLoader = None  # type: ignore
+    PolicyReloadConfig = None  # type: ignore
+    default_policy_loader = None  # type: ignore
+    rg_enabled = None  # type: ignore
+
+
+def _rg_embeddings_server_enabled() -> bool:
+    """Return True when RG should gate standalone embeddings server requests."""
+    if rg_enabled is not None:
+        try:
+            return bool(rg_enabled(True))  # type: ignore[func-returns-value]
+        except Exception:
+            return False
+    return False
+
+
+async def _get_embeddings_server_rg_governor():
+    """Lazily initialize a ResourceGovernor instance for the embeddings server."""
+    global _rg_emb_server_governor, _rg_emb_server_loader
+    if not _rg_embeddings_server_enabled():
+        return None
+    if RGRequest is None or PolicyLoader is None:
+        return None
+    if _rg_emb_server_governor is not None:
+        return _rg_emb_server_governor
+    async with _rg_emb_server_lock:
+        if _rg_emb_server_governor is not None:
+            return _rg_emb_server_governor
+        try:
+            loader = (
+                default_policy_loader()
+                if default_policy_loader
+                else PolicyLoader(
+                    os.getenv(
+                        "RG_POLICY_PATH",
+                        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+                    ),
+                    PolicyReloadConfig(
+                        enabled=True,
+                        interval_sec=int(
+                            os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10"
+                        ),
+                    ),
+                )
+            )
+            await loader.load_once()
+            _rg_emb_server_loader = loader
+            backend = os.getenv("RG_BACKEND", "memory").lower()
+            if backend == "redis" and RedisResourceGovernor is not None:
+                gov = RedisResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            else:
+                gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            _rg_emb_server_governor = gov
+            return gov
+        except Exception as exc:  # pragma: no cover - optional path
+            logging.debug(
+                "Embeddings server RG governor init failed: %s",
+                exc,
+            )
+            return None
+
+
+async def _maybe_enforce_with_rg_embeddings_server_async() -> Optional[Dict[str, object]]:
+    """
+    Attempt to enforce embeddings server request limits via ResourceGovernor.
+
+    Returns a decision dict when RG is used, or None when RG is unavailable/disabled.
+    """
+    gov = await _get_embeddings_server_rg_governor()
+    if gov is None:
+        return None
+    policy_id = os.getenv("RG_EMBEDDINGS_SERVER_POLICY_ID", "embeddings_server.default")
+    op_id = f"emb-server-{time.time_ns()}"
+    try:
+        decision, handle = await gov.reserve(
+            RGRequest(
+                entity="service:embeddings_server",
+                categories={"requests": {"units": 1}},
+                tags={
+                    "policy_id": policy_id,
+                    "module": "embeddings_server",
+                },
+            ),
+            op_id=op_id,
+        )
+        if decision.allowed:
+            if handle:
+                try:
+                    await gov.commit(handle, None, op_id=op_id)
+                except Exception:
+                    logging.debug("Embeddings server RG commit failed", exc_info=True)
+            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
+        return {
+            "allowed": False,
+            "retry_after": decision.retry_after or 1,
+            "policy_id": policy_id,
+        }
+    except Exception as exc:
+        logging.debug(
+            "Embeddings server RG reserve failed: %s",
+            exc,
+        )
+        return None
+
+
+def _maybe_enforce_with_rg_embeddings_server_sync() -> Optional[Dict[str, object]]:
+    """
+    Synchronous helper for RG enforcement around create_embeddings_batch.
+
+    Uses asyncio.run when no event loop is running in the current thread; if a
+    loop is already running, skips RG to avoid blocking and returns None.
+    """
+    if not _rg_embeddings_server_enabled():
+        return None
+    try:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop in this thread; safe to use asyncio.run.
+            return asyncio.run(_maybe_enforce_with_rg_embeddings_server_async())
+        # Running inside an event loop; avoid blocking.
+        logging.debug(
+            "Embeddings server RG sync helper invoked inside running event loop; "
+            "skipping RG enforcement to avoid blocking."
+        )
+        return None
+    except Exception:
+        # Best-effort: treat RG as unavailable on any unexpected error.
+        return None
 
 
 def exponential_backoff(max_retries: int = 3, base_delay: int = 1):

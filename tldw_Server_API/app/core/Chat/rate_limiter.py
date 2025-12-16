@@ -4,10 +4,11 @@
 # Imports
 import asyncio
 import time
+import os
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
-import os
+
 from loguru import logger
 
 #######################################################################################################################
@@ -121,6 +122,10 @@ class TokenBucket:
 class ConversationRateLimiter:
     """
     Rate limiter with per-conversation, per-user, and global limits.
+
+    Legacy shim – when ResourceGovernor is enabled, chat ingress should be
+    governed via RG and this in-process limiter should be treated as a
+    fallback-only compatibility path.
     """
 
     def __init__(self, config: RateLimitConfig):
@@ -164,22 +169,18 @@ class ConversationRateLimiter:
             bucket_dict[key] = TokenBucket(capacity, refill_rate)
         return bucket_dict[key]
 
-    async def check_rate_limit(
+    async def _check_legacy_rate_limit(
         self,
         user_id: str,
         conversation_id: Optional[str] = None,
-        estimated_tokens: int = 0
+        estimated_tokens: int = 0,
     ) -> Tuple[bool, Optional[str]]:
         """
-        Check if request is within rate limits.
+        Legacy in-process rate limit evaluation using token buckets.
 
-        Args:
-            user_id: User identifier
-            conversation_id: Optional conversation identifier
-            estimated_tokens: Estimated token count for the request
-
-        Returns:
-            Tuple of (allowed, error_message)
+        This path is retained as a compatibility shim when ResourceGovernor is
+        enabled and remains the primary enforcement mechanism when RG is
+        disabled or unavailable.
         """
         # Opportunistic idle cleanup every 5 minutes
         now = time.time()
@@ -198,7 +199,7 @@ class ConversationRateLimiter:
             self.user_buckets,
             user_id,
             int(self.config.per_user_rpm * self.config.burst_multiplier),
-            self.config.per_user_rpm / 60
+            self.config.per_user_rpm / 60,
         )
 
         if not await user_bucket.consume():
@@ -212,7 +213,7 @@ class ConversationRateLimiter:
                 self.conversation_buckets,
                 conversation_id,
                 int(self.config.per_conversation_rpm * self.config.burst_multiplier),
-                self.config.per_conversation_rpm / 60
+                self.config.per_conversation_rpm / 60,
             )
 
             if not await conv_bucket.consume():
@@ -227,7 +228,7 @@ class ConversationRateLimiter:
                 self.user_token_buckets,
                 user_id,
                 int(self.config.per_user_tokens_per_minute * self.config.burst_multiplier),
-                self.config.per_user_tokens_per_minute / 60
+                self.config.per_user_tokens_per_minute / 60,
             )
 
             if not await token_bucket.consume(estimated_tokens):
@@ -245,11 +246,60 @@ class ConversationRateLimiter:
         stats.token_count += estimated_tokens
         stats.last_request_time = time.time()
         if conversation_id:
-            stats.conversation_request_counts[conversation_id] = \
+            stats.conversation_request_counts[conversation_id] = (
                 stats.conversation_request_counts.get(conversation_id, 0) + 1
+            )
 
         # Record in sliding window
         self.request_windows[user_id].append((time.time(), estimated_tokens))
+
+        return True, None
+
+    async def check_rate_limit(
+        self,
+        user_id: str,
+        conversation_id: Optional[str] = None,
+        estimated_tokens: int = 0
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Check if request is within rate limits.
+
+        Args:
+            user_id: User identifier
+            conversation_id: Optional conversation identifier
+            estimated_tokens: Estimated token count for the request
+
+        Returns:
+            Tuple of (allowed, error_message)
+        """
+        if not _rg_chat_primary_enabled():
+            # Legacy limiter has been retired; when RG is disabled, rate
+            # limiting is treated as disabled for this shim.
+            return True, None
+
+        # RG-only enforcement (legacy fallback retired).
+        try:
+            rg_decision = await _maybe_enforce_with_rg_chat(  # type: ignore[name-defined]
+                user_id=user_id,
+                conversation_id=conversation_id,
+                estimated_tokens=estimated_tokens,
+            )
+        except NameError:
+            rg_decision = None
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Chat RG enforcement failed: {}", exc)
+            rg_decision = None
+
+        if rg_decision is None:
+            return False, "Rate limit enforcement unavailable (ResourceGovernor not initialized)"
+
+        if not rg_decision.get("allowed", False):
+            policy_id = rg_decision.get("policy_id", "chat.default")
+            retry_after = rg_decision.get("retry_after")
+            base_msg = f"Rate limit exceeded (ResourceGovernor policy={policy_id})"
+            if isinstance(retry_after, (int, float)) and retry_after >= 0:
+                return False, f"{base_msg}; retry_after={int(retry_after)}s"
+            return False, base_msg
 
         return True, None
 
@@ -437,3 +487,164 @@ def initialize_rate_limiter(config: Optional[RateLimitConfig] = None) -> Convers
         pass
     _rate_limiter = ConversationRateLimiter(config)
     return _rate_limiter
+
+
+# --- Resource Governor plumbing (optional) ---------------------------------
+_rg_chat_governor = None
+_rg_chat_loader = None
+_rg_chat_lock = asyncio.Lock()
+
+try:  # pragma: no cover - RG is optional
+    from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
+        MemoryResourceGovernor,
+        RedisResourceGovernor,
+        RGRequest,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.policy_loader import (  # type: ignore
+        PolicyLoader,
+        PolicyReloadConfig,
+        default_policy_loader,
+    )
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
+except Exception:  # pragma: no cover - safe fallback when RG not installed
+    MemoryResourceGovernor = None  # type: ignore
+    RedisResourceGovernor = None  # type: ignore
+    RGRequest = None  # type: ignore
+    PolicyLoader = None  # type: ignore
+    PolicyReloadConfig = None  # type: ignore
+    default_policy_loader = None  # type: ignore
+    rg_enabled = None  # type: ignore
+
+
+def _rg_chat_enabled() -> bool:
+    """Return True when RG should gate chat requests."""
+    if rg_enabled is not None:
+        try:
+            return bool(rg_enabled(True))  # type: ignore[func-returns-value]
+        except Exception:
+            return False
+    return False
+
+
+def _rg_chat_primary_enabled() -> bool:
+    """
+    Return True when ResourceGovernor should be treated as the primary
+    source of truth for chat rate limiting decisions.
+    """
+    return _rg_chat_enabled()
+
+
+async def _get_chat_rg_governor():
+    """Lazily initialize a ResourceGovernor instance for Chat."""
+    global _rg_chat_governor, _rg_chat_loader
+    if not _rg_chat_enabled():
+        return None
+    if RGRequest is None or PolicyLoader is None:
+        return None
+    if _rg_chat_governor is not None:
+        return _rg_chat_governor
+    async with _rg_chat_lock:
+        if _rg_chat_governor is not None:
+            return _rg_chat_governor
+        try:
+            loader = (
+                default_policy_loader()
+                if default_policy_loader
+                else PolicyLoader(
+                    os.getenv(
+                        "RG_POLICY_PATH",
+                        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+                    ),
+                    PolicyReloadConfig(
+                        enabled=True,
+                        interval_sec=int(
+                            os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10"
+                        ),
+                    ),
+                )
+            )
+            await loader.load_once()
+            _rg_chat_loader = loader
+            backend = os.getenv("RG_BACKEND", "memory").lower()
+            if backend == "redis" and RedisResourceGovernor is not None:
+                gov = RedisResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            else:
+                gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            _rg_chat_governor = gov
+            return gov
+        except Exception as exc:  # pragma: no cover - optional path
+            logger.debug(
+                "Chat RG governor init failed: {}",
+                exc,
+            )
+            return None
+
+
+async def _maybe_enforce_with_rg_chat(
+    *,
+    user_id: str,
+    conversation_id: Optional[str],
+    estimated_tokens: int,
+) -> Optional[Dict[str, object]]:
+    """
+    Optionally enforce Chat limits via ResourceGovernor.
+
+    Requests are enforced at ingress via `RGSimpleMiddleware`. This helper is
+    used for token accounting and MUST NOT reserve
+    `requests` to avoid double-enforcement on RG-governed routes.
+
+    Returns a decision dict when RG is used, or None when RG is unavailable or
+    disabled.
+    """
+    gov = await _get_chat_rg_governor()
+    if gov is None:
+        return None
+    policy_id = os.getenv("RG_CHAT_POLICY_ID", "chat.default")
+    op_id = f"chat-{user_id}-{conversation_id or 'none'}-{time.time_ns()}"
+    try:
+        try:
+            tokens_units = int(estimated_tokens or 0)
+        except Exception:
+            tokens_units = 0
+        tokens_units = max(0, tokens_units)
+
+        # Only enforce token budgets here; request-rate limiting happens at ingress.
+        categories: Dict[str, Dict[str, int]] = {}
+        if tokens_units > 0:
+            categories["tokens"] = {"units": tokens_units}
+        else:
+            # No token units to enforce; allow and bypass legacy limiter.
+            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
+
+        decision, handle = await gov.reserve(
+            RGRequest(
+                entity=f"user:{user_id}",
+                categories=categories,
+                tags={
+                    "policy_id": policy_id,
+                    "module": "chat",
+                    "endpoint": "/api/v1/chat/completions",
+                },
+            ),
+            op_id=op_id,
+        )
+        if decision.allowed:
+            if handle:
+                try:
+                    # Treat reserve as consumption; commit with the same units
+                    # to keep semantics simple for now.
+                    actuals: Dict[str, int] = {}
+                    if tokens_units > 0:
+                        actuals["tokens"] = tokens_units
+                    await gov.commit(handle, actuals=actuals, op_id=op_id)
+                except Exception:
+                    logger.debug("Chat RG commit failed", exc_info=True)
+            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
+        return {
+            "allowed": False,
+            "retry_after": decision.retry_after or 1,
+            "policy_id": policy_id,
+        }
+    except Exception as exc:
+        logger.debug("Chat RG reserve failed; falling back to legacy limiter: {}", exc)
+        return None

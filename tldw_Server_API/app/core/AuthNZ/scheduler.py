@@ -19,6 +19,9 @@ from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
+from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
+from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import AuthnzMonitoringRepo
+from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import AuthnzRateLimitsRepo
 from tldw_Server_API.app.core.Metrics import set_gauge
 
 #######################################################################################################################
@@ -366,23 +369,8 @@ class AuthNZScheduler:
             retention_days = self.settings.AUDIT_LOG_RETENTION_DAYS
             cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
 
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    result = await conn.execute(
-                        "DELETE FROM audit_logs WHERE created_at < $1",
-                        cutoff_date
-                    )
-                    # Extract count from result
-                    count = int(result.split()[-1]) if isinstance(result, str) else 0
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        "DELETE FROM audit_logs WHERE created_at < ?",
-                        (cutoff_date.isoformat(),)
-                    )
-                    count = cursor.rowcount
-                    await conn.commit()
+            repo = AuthnzMonitoringRepo(db_pool)
+            count = await repo.delete_audit_logs_before(cutoff_date)
 
             if count > 0:
                 logger.info(f"Pruned {count} audit log entries older than {retention_days} days")
@@ -394,20 +382,9 @@ class AuthNZScheduler:
         try:
             db_pool = await get_db_pool()
             cutoff = datetime.utcnow() - timedelta(days=self.settings.USAGE_LOG_RETENTION_DAYS)
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    result = await conn.execute(
-                        "DELETE FROM usage_log WHERE ts < $1",
-                        cutoff
-                    )
-                    count = int(result.split()[-1]) if isinstance(result, str) else 0
-                else:
-                    cursor = await conn.execute(
-                        "DELETE FROM usage_log WHERE ts < ?",
-                        (cutoff.isoformat(),)
-                    )
-                    count = cursor.rowcount
-                    await conn.commit()
+
+            repo = AuthnzUsageRepo(db_pool)
+            count = await repo.prune_usage_log_before(cutoff)
             if count:
                 logger.info(f"Pruned {count} usage_log rows older than {self.settings.USAGE_LOG_RETENTION_DAYS} days")
         except Exception as e:
@@ -418,20 +395,9 @@ class AuthNZScheduler:
         try:
             db_pool = await get_db_pool()
             cutoff = datetime.utcnow() - timedelta(days=self.settings.LLM_USAGE_LOG_RETENTION_DAYS)
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    result = await conn.execute(
-                        "DELETE FROM llm_usage_log WHERE ts < $1",
-                        cutoff
-                    )
-                    count = int(result.split()[-1]) if isinstance(result, str) else 0
-                else:
-                    cursor = await conn.execute(
-                        "DELETE FROM llm_usage_log WHERE ts < ?",
-                        (cutoff.isoformat(),)
-                    )
-                    count = cursor.rowcount
-                    await conn.commit()
+
+            repo = AuthnzUsageRepo(db_pool)
+            count = await repo.prune_llm_usage_log_before(cutoff)
             if count:
                 logger.info(f"Pruned {count} llm_usage_log rows older than {self.settings.LLM_USAGE_LOG_RETENTION_DAYS} days")
         except Exception as e:
@@ -444,14 +410,9 @@ class AuthNZScheduler:
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _gs
             retention_days = _gs().USAGE_DAILY_RETENTION_DAYS
             cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    result = await conn.execute("DELETE FROM usage_daily WHERE day < $1::date", cutoff_date.date())
-                    count = int(result.split()[-1]) if isinstance(result, str) else 0
-                else:
-                    cursor = await conn.execute("DELETE FROM usage_daily WHERE day < ?", (cutoff_date.date().isoformat(),))
-                    count = cursor.rowcount
-                    await conn.commit()
+
+            repo = AuthnzUsageRepo(db_pool)
+            count = await repo.prune_usage_daily_before(cutoff_date.date())
             if count:
                 logger.info(f"Pruned {count} usage_daily rows older than {retention_days} days")
         except Exception as e:
@@ -464,14 +425,9 @@ class AuthNZScheduler:
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _gs
             retention_days = _gs().LLM_USAGE_DAILY_RETENTION_DAYS
             cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    result = await conn.execute("DELETE FROM llm_usage_daily WHERE day < $1::date", cutoff_date.date())
-                    count = int(result.split()[-1]) if isinstance(result, str) else 0
-                else:
-                    cursor = await conn.execute("DELETE FROM llm_usage_daily WHERE day < ?", (cutoff_date.date().isoformat(),))
-                    count = cursor.rowcount
-                    await conn.commit()
+
+            repo = AuthnzUsageRepo(db_pool)
+            count = await repo.prune_llm_usage_daily_before(cutoff_date.date())
             if count:
                 logger.info(f"Pruned {count} llm_usage_daily rows older than {retention_days} days")
         except Exception as e:
@@ -622,32 +578,12 @@ class AuthNZScheduler:
         try:
             db_pool = await get_db_pool()
 
-            async with db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
-                    # PostgreSQL
-                    result = await conn.execute(
-                        """
-                        UPDATE registration_codes
-                        SET is_active = FALSE
-                        WHERE is_active = TRUE
-                        AND expires_at < $1
-                        """,
-                        datetime.utcnow()
-                    )
-                    count = int(result.split()[-1]) if isinstance(result, str) else 0
-                else:
-                    # SQLite
-                    cursor = await conn.execute(
-                        """
-                        UPDATE registration_codes
-                        SET is_active = 0
-                        WHERE is_active = 1
-                        AND expires_at < ?
-                        """,
-                        (datetime.utcnow().isoformat(),)
-                    )
-                    count = cursor.rowcount
-                    await conn.commit()
+            from tldw_Server_API.app.core.AuthNZ.repos.registration_codes_repo import (
+                AuthnzRegistrationCodesRepo,
+            )
+
+            repo = AuthnzRegistrationCodesRepo(db_pool)
+            count = await repo.deactivate_expired_codes(datetime.utcnow())
 
             if count > 0:
                 logger.info(f"Deactivated {count} expired registration codes")
@@ -767,27 +703,12 @@ class AuthNZScheduler:
         try:
             db_pool = await get_db_pool()
             time_window = datetime.utcnow() - timedelta(minutes=15)
-            is_postgres = getattr(db_pool, "pool", None) is not None
-            cutoff = time_window if is_postgres else time_window.isoformat()
-
-            # Find IPs/users hitting rate limits
             rate_threshold = self.settings.RATE_LIMIT_PER_MINUTE * 15  # 15 minute threshold
-
-            results = await db_pool.fetchall(
-                """
-                SELECT
-                    identifier,
-                    endpoint,
-                    SUM(request_count) as total_requests,
-                    COUNT(*) as window_count
-                FROM rate_limits
-                WHERE window_start > ?
-                GROUP BY identifier, endpoint
-                HAVING SUM(request_count) > ?
-                ORDER BY total_requests DESC
-                LIMIT 20
-                """,
-                (cutoff, rate_threshold),
+            repo = AuthnzRateLimitsRepo(db_pool)
+            results = await repo.list_recent_violations(
+                cutoff=time_window,
+                rate_threshold=rate_threshold,
+                limit=20,
             )
 
             if results:

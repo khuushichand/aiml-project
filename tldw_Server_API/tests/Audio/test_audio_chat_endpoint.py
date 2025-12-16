@@ -50,7 +50,16 @@ def client(monkeypatch):
             timing=SpeechChatTiming(stt_ms=1.0, llm_ms=2.0, tts_ms=3.0),
             token_usage=None,
             metadata={"from_test": True},
+            action_result=None,
         )
+
+    # Bypass AuthNZ for these endpoint-level tests by overriding the
+    # request-user dependency with a lightweight single-user stub.
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+
+    async def _fake_get_request_user() -> User:
+        # Minimal single-user stub; auth details are exercised elsewhere.
+        return User(id=1, username="single_user")
 
     monkeypatch.setattr(
         speech_chat_service,
@@ -59,6 +68,7 @@ def client(monkeypatch):
     )
 
     app = FastAPI()
+    app.dependency_overrides[get_request_user] = _fake_get_request_user
     app.include_router(audio_router, prefix="/api/v1/audio")
     with TestClient(app) as c:
         yield c
@@ -83,3 +93,25 @@ def test_audio_chat_endpoint_success(client: TestClient):
     assert body["assistant_text"] == "stub reply"
     assert body["output_audio"]
     assert body["output_audio_mime_type"].startswith("audio/")
+    assert "action_result" in body
+    assert body["action_result"] is None
+
+
+def test_audio_chat_endpoint_concurrency_limit(monkeypatch, client: TestClient):
+    # Patch can_start_stream to force a quota failure
+    from tldw_Server_API.app.api.v1.endpoints import audio as audio_module
+
+    async def _deny(_user_id: int):
+        return False, "Concurrent streams limit reached (1)"
+
+    monkeypatch.setattr(audio_module, "can_start_stream", _deny)
+
+    payload = {
+        "session_id": None,
+        "input_audio": _encode_silence_base64(),
+        "input_audio_format": "wav",
+        "llm_config": {"model": "gpt-4o-mini", "api_provider": "openai"},
+    }
+    r = client.post("/api/v1/audio/chat", json=payload, headers={"X-API-KEY": TEST_API_KEY})
+    assert r.status_code == 429
+    assert "Concurrent" in r.text

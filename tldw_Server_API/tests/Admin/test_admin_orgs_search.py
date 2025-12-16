@@ -4,20 +4,45 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 
 pytestmark = pytest.mark.integration
 
 
 def _override_admin_dep(app):
-    # Override admin dependency for tests
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_admin
+    # Override auth principal for tests to satisfy admin role checks
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+    from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
-    async def _pass_admin():
-        return {"id": 1, "role": "admin", "username": "admin"}
+    async def _principal_override(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject="admin",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.configure"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        try:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=None,
+                user_agent=None,
+                request_id=None,
+            )
+        except Exception:
+            # Best-effort; not all test paths require request.state.auth
+            pass
+        return principal
 
-    app.dependency_overrides[require_admin] = _pass_admin
-    return require_admin
+    app.dependency_overrides[get_auth_principal] = _principal_override
+    return get_auth_principal
 
 
 def test_admin_orgs_list_with_total_and_search(monkeypatch, tmp_path, authnz_schema_ready_sync):

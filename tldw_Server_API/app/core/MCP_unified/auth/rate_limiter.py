@@ -4,20 +4,46 @@ Rate limiting for unified MCP module
 Supports both in-memory and distributed (Redis) rate limiting.
 """
 
-import time
-import os
 import asyncio
 import inspect
-from typing import Optional, Dict, Any
+import os
+import time
+from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
-from abc import ABC, abstractmethod
+from typing import Any, Dict, Optional
+
 from loguru import logger
 
 from ..config import get_config
 from tldw_Server_API.app.core.Infrastructure.redis_factory import (
     create_async_redis_client,
 )
+
+try:
+    from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
+        MemoryResourceGovernor,
+        RedisResourceGovernor,
+        RGRequest,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.metrics_rg import (  # type: ignore
+        record_shadow_mismatch,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.policy_loader import (  # type: ignore
+        PolicyLoader,
+        PolicyReloadConfig,
+        default_policy_loader,
+    )
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
+except Exception:  # pragma: no cover - RG optional
+    MemoryResourceGovernor = None  # type: ignore
+    RedisResourceGovernor = None  # type: ignore
+    RGRequest = None  # type: ignore
+    record_shadow_mismatch = None  # type: ignore
+    PolicyLoader = None  # type: ignore
+    PolicyReloadConfig = None  # type: ignore
+    default_policy_loader = None  # type: ignore
+    rg_enabled = None  # type: ignore
 
 
 class RateLimitExceeded(Exception):
@@ -107,6 +133,35 @@ class TokenBucketRateLimiter(BaseRateLimiter):
             self.allowance[key] -= 1.0
             return (True, 0)
 
+    async def peek_allowed(self, key: str) -> tuple[bool, int]:
+        """Check if request is allowed without consuming tokens or mutating state."""
+        async with self._lock:
+            current = time.time()
+            if self.rate <= 0 or self.per <= 0:
+                return (True, 0)
+
+            allowance = self.allowance.get(key)
+            if allowance is None:
+                # No prior history means a fresh bucket would allow a request.
+                return (True, 0)
+
+            last_check = self.last_check.get(key)
+            if last_check is None:
+                # Defensive: treat as freshly checked.
+                last_check = current
+
+            time_passed = current - last_check
+            allowance = allowance + time_passed * (self.rate / self.per)
+            if allowance > self.burst:
+                allowance = float(self.burst)
+
+            if allowance < 1.0:
+                tokens_needed = 1.0 - allowance
+                retry_after = int(tokens_needed * (self.per / self.rate)) + 1
+                return (False, retry_after)
+
+            return (True, 0)
+
     async def reset(self, key: str):
         """Reset rate limit for a key"""
         async with self._lock:
@@ -182,6 +237,26 @@ class SlidingWindowRateLimiter(BaseRateLimiter):
 
             # Add current timestamp
             timestamps.append(current)
+            return (True, 0)
+
+    async def peek_allowed(self, key: str) -> tuple[bool, int]:
+        """Check if request is allowed without recording a request."""
+        async with self._lock:
+            current = time.time()
+            window_start = current - self.window
+
+            timestamps = self.requests.get(key)
+            if not timestamps:
+                return (True, 0)
+
+            # Prune old timestamps outside the window (no request is recorded).
+            while timestamps and timestamps[0] < window_start:
+                timestamps.popleft()
+
+            if len(timestamps) >= self.rate:
+                retry_after = int(timestamps[0] + self.window - current) + 1
+                return (False, retry_after)
+
             return (True, 0)
 
     async def reset(self, key: str):
@@ -389,6 +464,21 @@ class DistributedRateLimiter(BaseRateLimiter):
             logger.error(f"Redis rate limit error: {e}; falling back to in-memory limiter")
             return await self._use_fallback(key)
 
+    async def peek_allowed(self, key: str) -> tuple[bool, int]:
+        """Best-effort allow/deny check without recording a request in Redis."""
+        try:
+            usage = await self.get_usage(key)
+            remaining = usage.get("remaining")
+            if remaining is None:
+                remaining = usage.get("tokens_remaining")
+            if remaining is None:
+                return (True, 0)
+            if int(remaining) > 0:
+                return (True, 0)
+            return (False, int(self.window or 1))
+        except Exception:
+            return (True, 0)
+
     async def reset(self, key: str):
         """Reset rate limit for a key in Redis"""
         has_redis = await self._ensure_redis()
@@ -553,14 +643,51 @@ class RateLimiter:
         if not self.config.rate_limit_enabled:
             return
 
+        if not _rg_mcp_enabled():
+            # Legacy limiter has been retired; when RG is disabled, treat this
+            # shim as unlimited.
+            return
+
         self._ensure_cleanup_task()
 
         limiter = limiter or self.default_limiter
-        allowed, retry_after = await limiter.is_allowed(key)
+        category = _derive_category(limiter, self)
 
-        if not allowed:
-            logger.warning(f"Rate limit exceeded for key: {key}")
-            raise RateLimitExceeded(retry_after)
+        # RG-only enforcement (legacy fallback retired).
+        rg_decision = await _maybe_enforce_with_rg_mcp(key=key, category=category)
+        if rg_decision is not None:
+            # Shadow-mode comparison (best-effort): evaluate the legacy limiter
+            # alongside the governor and record mismatches. Enforcement remains RG.
+            try:
+                if record_shadow_mismatch is not None:
+                    rg_allowed = bool(rg_decision.get("allowed", False))
+                    legacy_allowed = None
+                    peek_fn = getattr(limiter, "peek_allowed", None)
+                    if callable(peek_fn):
+                        maybe_result = peek_fn(key)
+                        if inspect.isawaitable(maybe_result):
+                            legacy_allowed, _legacy_retry = await maybe_result
+                        else:
+                            legacy_allowed, _legacy_retry = maybe_result
+                    if isinstance(legacy_allowed, bool):
+                        legacy_dec = "allow" if legacy_allowed else "deny"
+                        rg_dec = "allow" if rg_allowed else "deny"
+                        if legacy_dec != rg_dec:
+                            record_shadow_mismatch(
+                                module="mcp",
+                                route=f"mcp:{category}",
+                                policy_id=str(rg_decision.get("policy_id", f"mcp.{category}")),
+                                legacy=legacy_dec,
+                                rg=rg_dec,
+                            )
+            except Exception:
+                # Observability only; never affect enforcement.
+                pass
+            if not rg_decision["allowed"]:
+                raise RateLimitExceeded(rg_decision.get("retry_after") or 1)
+            return
+
+        raise RateLimitExceeded(1)
 
     async def get_usage(self, key: str) -> Dict[str, Any]:
         """Get rate limit usage for a key"""
@@ -634,3 +761,91 @@ async def shutdown_rate_limiter() -> None:
             await _rate_limiter.shutdown()
     except Exception:
         pass
+
+
+# --- Resource Governor plumbing (optional) ---
+_rg_mcp_governor = None
+_rg_mcp_loader = None
+_rg_mcp_lock = asyncio.Lock()
+
+
+def _rg_mcp_enabled() -> bool:
+    if rg_enabled:
+        try:
+            return bool(rg_enabled(True))  # type: ignore[func-returns-value]
+        except Exception:
+            return False
+    return False
+
+
+def _derive_category(limiter: BaseRateLimiter, owner: RateLimiter) -> str:
+    try:
+        if limiter is owner.ingestion_limiter:
+            return "ingestion"
+        if limiter is owner.read_limiter:
+            return "read"
+    except Exception:
+        pass
+    return "default"
+
+
+async def _get_mcp_rg_governor():
+    global _rg_mcp_governor, _rg_mcp_loader
+    if not _rg_mcp_enabled():
+        return None
+    if RGRequest is None or PolicyLoader is None:
+        return None
+    if _rg_mcp_governor is not None:
+        return _rg_mcp_governor
+    async with _rg_mcp_lock:
+        if _rg_mcp_governor is not None:
+            return _rg_mcp_governor
+        try:
+            loader = default_policy_loader() if default_policy_loader else PolicyLoader(
+                os.getenv("RG_POLICY_PATH", "tldw_Server_API/Config_Files/resource_governor_policies.yaml"),
+                PolicyReloadConfig(enabled=True, interval_sec=int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10")),
+            )
+            await loader.load_once()
+            _rg_mcp_loader = loader
+            backend = os.getenv("RG_BACKEND", "memory").lower()
+            if backend == "redis" and RedisResourceGovernor is not None:
+                gov = RedisResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            else:
+                gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            _rg_mcp_governor = gov
+            return gov
+        except Exception as exc:  # pragma: no cover - optional
+            logger.debug(f"MCP RG governor init failed: {exc}")
+            return None
+
+
+async def _maybe_enforce_with_rg_mcp(*, key: str, category: str) -> Optional[Dict[str, object]]:
+    gov = await _get_mcp_rg_governor()
+    if gov is None:
+        return None
+    policy_id = f"mcp.{category}"
+    op_id = f"mcp-{category}-{key}-{time.time_ns()}"
+    try:
+        decision, handle = await gov.reserve(
+            RGRequest(
+                entity=f"client:{key}",
+                categories={"requests": {"units": 1}},
+                tags={"policy_id": policy_id, "module": "mcp", "category": category},
+            ),
+            op_id=op_id,
+        )
+        if decision.allowed:
+            if handle:
+                try:
+                    await gov.commit(handle, None, op_id=op_id)
+                except Exception:
+                    logger.debug("MCP RG commit failed", exc_info=True)
+            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
+        return {
+            "allowed": False,
+            "retry_after": decision.retry_after or 1,
+            "policy_id": policy_id,
+        }
+    except Exception as exc:
+        logger.debug(f"MCP RG reserve failed: {exc}")
+        return None

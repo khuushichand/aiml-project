@@ -1,0 +1,66 @@
+from datetime import datetime, timezone
+
+import pytest
+
+
+pytestmark = pytest.mark.integration
+
+
+@pytest.mark.asyncio
+async def test_legacy_audio_usage_daily_backfilled_into_resource_daily_ledger(tmp_path, monkeypatch):
+    """
+    Simulate an upgrade where audio_usage_daily already contains usage for
+    today and verify that the first ResourceDailyLedger initialization
+    backfills that usage so daily caps remain accurate.
+    """
+    db_path = tmp_path / "users_audio_legacy.db"
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
+    from tldw_Server_API.app.core.Usage import audio_quota
+    from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import ResourceDailyLedger
+
+    await reset_db_pool()
+    pool = await get_db_pool()
+    try:
+        # Seed legacy audio_usage_daily with prior usage for today
+        await pool.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audio_usage_daily (
+                user_id INTEGER NOT NULL,
+                day TEXT NOT NULL,
+                minutes_used REAL NOT NULL DEFAULT 0,
+                jobs_started INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, day)
+            )
+            """
+        )
+        await pool.execute(
+            """
+            INSERT INTO audio_usage_daily (user_id, day, minutes_used, jobs_started)
+            VALUES (?, ?, ?, 0)
+            """,
+            7,
+            datetime.now(timezone.utc).date().strftime("%Y-%m-%d"),
+            2.5,
+        )
+
+        # Reset any cached ledger state in the module
+        audio_quota._daily_ledger = None  # type: ignore[attr-defined]
+        audio_quota._audio_minutes_legacy_backfill_done = False  # type: ignore[attr-defined]
+
+        # Trigger ledger initialization + backfill
+        ledger = await audio_quota._get_daily_ledger()
+        assert ledger is not None
+
+        # Verify ResourceDailyLedger now reflects the legacy usage
+        check_ledger = ResourceDailyLedger(db_pool=pool)
+        await check_ledger.initialize()
+        today = datetime.now(timezone.utc).date().strftime("%Y-%m-%d")
+        total_units = await check_ledger.total_for_day("user", "7", "minutes", day_utc=today)
+        # 2.5 minutes ≈ 150 seconds
+        assert 145 <= total_units <= 155, f"Expected ~150 seconds from backfill, got {total_units}"
+    finally:
+        await pool.close()
+

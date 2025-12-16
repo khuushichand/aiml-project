@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from starlette.status import HTTP_403_FORBIDDEN, HTTP_500_INTERNAL_SERVER_ERROR
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.connectors import (
@@ -17,10 +18,14 @@ from tldw_Server_API.app.api.v1.schemas.connectors import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_current_active_user,
-    require_admin,
+    get_auth_principal,
+    require_roles,
     get_db_transaction,
+    get_user_org_policy,
+    get_org_policy_from_principal,
+    require_permissions,
 )
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.External_Sources import (
     get_connector_by_name,
 )
@@ -48,6 +53,11 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensu
 router = APIRouter(prefix="/connectors", tags=["connectors"])
 
 
+def get_connectors_job_counter() -> Callable[[int], int]:
+    """Dependency to supply the connectors job counter (overrideable in tests)."""
+    return count_connectors_jobs_today
+
+
 @router.get("/providers", response_model=List[ConnectorProvider])
 async def list_providers() -> List[ConnectorProvider]:
     return [
@@ -71,26 +81,27 @@ async def oauth_callback(
     state: Optional[str] = None,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
+    org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
 ) -> ConnectorAccount:
     conn = get_connector_by_name(provider)
-    # Enforce org-level account linking role only in multi-user mode
-    if not is_single_user_mode():
-        try:
-            memberships = current_user.get("org_memberships") or []
-            # pick active org or first membership
-            org_id = memberships[0]["org_id"] if memberships else 1
-            pol = await get_policy(db, org_id)
-            if not pol:
-                pol = get_default_policy_from_env(org_id)
-            role = str(current_user.get("role", "member")).lower()
-            required = str(pol.get("account_linking_role", "admin")).lower()
-            # Admin bypass
-            if role != "admin" and required and role != required:
-                raise HTTPException(status_code=403, detail="Account linking not permitted for your role")
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.debug(f"Policy enforcement error on callback: {e}")
+    pol = org_policy
+
+    # Enforce org-level account linking role based on org policy; single-user
+    # callers pass via their role/admin claims rather than global mode checks.
+    try:
+        role = str(current_user.get("role", "member")).lower()
+        required = str(pol.get("account_linking_role", "admin")).lower()
+        # Admin bypass
+        if role != "admin" and required and role != required:
+            raise HTTPException(status_code=403, detail="Account linking not permitted for your role")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Policy enforcement error on callback for provider '{provider}': {e}")
+        raise HTTPException(
+            status_code=403,
+            detail="Account linking denied: policy enforcement failed",
+        ) from e
 
     # Exchange code with redirect derived from env base + this path
     import os as _os
@@ -114,27 +125,24 @@ async def oauth_callback(
             pass
     elif provider == 'notion':
         notion_workspace_id = tokens.get('workspace_id')
-    # Enforce additional org policy constraints at callback in multi-user mode
-    if not is_single_user_mode():
-        try:
-            memberships = current_user.get("org_memberships") or []
-            org_id = memberships[0]["org_id"] if memberships else 1
-            pol = await get_policy(db, org_id)
-            if not pol:
-                pol = get_default_policy_from_env(org_id)
-            ok, why = evaluate_policy_constraints(
-                pol,
-                provider=provider,
-                remote_path=None,
-                notion_workspace_id=notion_workspace_id,
-                account_email=acct_email,
-            )
-            if not ok:
-                raise HTTPException(status_code=403, detail=why or "Account not permitted by org policy")
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.debug(f"Callback constraint evaluation failed: {e}")
+    # Enforce additional org policy constraints at callback across modes using
+    # the same org policy surface.
+    try:
+        ok, why = evaluate_policy_constraints(
+            pol,
+            provider=provider,
+            remote_path=None,
+            notion_workspace_id=notion_workspace_id,
+            account_email=acct_email,
+        )
+    except Exception as e:
+        logger.exception(f"Callback constraint evaluation failed for provider '{provider}': {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Account linking denied: policy evaluation failed",
+        ) from e
+    if not ok:
+        raise HTTPException(status_code=403, detail=why or "Account not permitted by org policy")
 
     acct = await create_account(
         db,
@@ -202,6 +210,7 @@ async def add_source(
     payload: ConnectorSourceCreateRequest,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
+    org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
 ) -> ConnectorSource:
     # payload keys: account_id, provider, remote_id, type, path, options
     account_id = int(payload.account_id)
@@ -211,21 +220,18 @@ async def add_source(
     path = payload.path
     options = payload.options or {}
 
-    # Enforce org policy on provider/path only in multi-user mode
-    if not is_single_user_mode():
-        try:
-            memberships = current_user.get("org_memberships") or []
-            org_id = memberships[0]["org_id"] if memberships else 1
-            pol = await get_policy(db, org_id)
-            if not pol:
-                pol = get_default_policy_from_env(org_id)
-            ok, why = evaluate_policy_constraints(pol, provider=provider, remote_path=path)
-            if not ok:
-                raise HTTPException(status_code=403, detail=why or "Source denied by org policy")
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.debug(f"Policy evaluation failed: {e}")
+    # Enforce org policy on provider/path for all modes; single-user callers
+    # rely on their admin/role claims rather than mode flags.
+    try:
+        ok, why = evaluate_policy_constraints(org_policy, provider=provider, remote_path=path)
+    except Exception as e:
+        logger.exception(f"Policy evaluation failed for provider '{provider}': {e}")
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Source denied: policy evaluation failed",
+        ) from e
+    if not ok:
+        raise HTTPException(status_code=HTTP_403_FORBIDDEN, detail=why or "Source denied by org policy")
 
     row = await create_source(
         db,
@@ -304,27 +310,26 @@ async def import_source(
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
     request: Request = None,
+    org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
+    count_jobs_fn: Callable[[int], int] = Depends(get_connectors_job_counter),
 ) -> ImportJob:
-    # Enforce per-role daily quota from org policy (multi-user only)
-    if not is_single_user_mode():
+    # Enforce per-role daily quota from org policy for all modes; single-user
+    # admin callers naturally bypass via their configured role/quotas.
+    role = str(current_user.get("role", "member")).lower()
+    qpr = org_policy.get("quotas_per_role") or {}
+    limits = qpr.get(role) or {}
+    max_jobs = int(limits.get("max_jobs_per_day") or 0)
+    if max_jobs > 0:
         try:
-            role = str(current_user.get("role", "member")).lower()
-            memberships = current_user.get("org_memberships") or []
-            org_id = memberships[0]["org_id"] if memberships else 1
-            pol = await get_policy(db, org_id)
-            if not pol:
-                pol = get_default_policy_from_env(org_id)
-            qpr = pol.get("quotas_per_role") or {}
-            limits = qpr.get(role) or {}
-            max_jobs = int(limits.get("max_jobs_per_day") or 0)
-            if max_jobs > 0:
-                today_count = count_connectors_jobs_today(int(current_user.get("id")))
-                if today_count >= max_jobs:
-                    raise HTTPException(status_code=429, detail="Daily import quota reached for your role")
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.debug(f"Quota check error: {e}")
+            today_count = count_jobs_fn(int(current_user.get("id")))
+        except Exception as exc:
+            logger.exception(f"Quota check failed for user_id={current_user.get('id')}: {exc}")
+            raise HTTPException(
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Daily import quota check failed",
+            ) from exc
+        if today_count >= max_jobs:
+            raise HTTPException(status_code=429, detail="Daily import quota reached for your role")
     # Correlate request → job
     rid = ensure_request_id(request) if request is not None else None
     tp = ensure_traceparent(request) if request is not None else ""
@@ -354,7 +359,15 @@ async def get_job_status(job_id: int) -> Dict[str, Any]:
 
 
 # Admin: Org-level policy
-@router.get("/admin/policy", response_model=ConnectorPolicy, dependencies=[Depends(require_admin)])
+@router.get(
+    "/admin/policy",
+    response_model=ConnectorPolicy,
+    dependencies=[
+        Depends(get_auth_principal),
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+    ],
+)
 async def get_org_policy(
     org_id: int = Query(..., ge=1),
     db=Depends(get_db_transaction),
@@ -379,7 +392,15 @@ async def get_org_policy(
     )
 
 
-@router.put("/admin/policy", response_model=ConnectorPolicy, dependencies=[Depends(require_admin)])
+@router.put(
+    "/admin/policy",
+    response_model=ConnectorPolicy,
+    dependencies=[
+        Depends(get_auth_principal),
+        Depends(require_roles("admin")),
+        Depends(require_permissions(SYSTEM_CONFIGURE)),
+    ],
+)
 async def upsert_org_policy(
     policy: ConnectorPolicy,
     db=Depends(get_db_transaction),

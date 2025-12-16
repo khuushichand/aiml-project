@@ -1,14 +1,43 @@
 # rate_limiter.py
 # Per-user rate limiting for embeddings service
 
+import asyncio
+import os
 import time
 import threading
-from typing import Dict, Optional
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
+from typing import Dict, Optional
 
 from loguru import logger
+
 from tldw_Server_API.app.core.Embeddings.audit_adapter import log_security_violation
+
+try:
+    # Resource Governor (optional; enabled via RG flags)
+    from tldw_Server_API.app.core.Resource_Governance import (
+        MemoryResourceGovernor,
+        RedisResourceGovernor,
+        RGRequest,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.metrics_rg import (
+        record_shadow_mismatch,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+        PolicyLoader,
+        PolicyReloadConfig,
+        default_policy_loader,
+    )
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
+except Exception:  # pragma: no cover - RG is optional for embeddings
+    MemoryResourceGovernor = None  # type: ignore
+    RedisResourceGovernor = None  # type: ignore
+    RGRequest = None  # type: ignore
+    record_shadow_mismatch = None  # type: ignore
+    PolicyLoader = None  # type: ignore
+    PolicyReloadConfig = None  # type: ignore
+    default_policy_loader = None  # type: ignore
+    rg_enabled = None  # type: ignore
 
 
 class UserRateLimiter:
@@ -40,6 +69,11 @@ class UserRateLimiter:
 
         # Track requests per user: user_id -> deque of timestamps
         self.user_requests: Dict[str, deque] = defaultdict(lambda: deque())
+        # Shadow-only request history used for RG comparisons. This is kept
+        # separate from the enforcement queue so that enabling RG does not
+        # mutate legacy limiter state while still allowing “what would legacy
+        # do?” drift metrics to remain meaningful.
+        self._shadow_user_requests: Dict[str, deque] = defaultdict(lambda: deque())
 
         # Track user tiers: user_id -> tier
         self.user_tiers: Dict[str, str] = {}
@@ -166,6 +200,110 @@ class UserRateLimiter:
                     f"User {user_id} approaching rate limit: "
                     f"{current_count + cost}/{limit}"
                 )
+
+            return True, None
+
+    def peek_rate_limit(
+        self,
+        user_id: str,
+        cost: int = 1,
+    ) -> tuple[bool, Optional[int]]:
+        """
+        Side-effect-light rate limit check (no consumption).
+
+        This is intended for RG shadow comparisons where we want to know whether
+        the legacy limiter *would* allow a request without counting it.
+
+        This method evaluates the primary (enforcement) in-memory state.
+        """
+        with self._lock:
+            current_time = time.time()
+            window_start = current_time - self.window_seconds
+
+            user_queue = self.user_requests[user_id]
+            while user_queue and user_queue[0] < window_start:
+                user_queue.popleft()
+
+            limit = self.get_user_limit(user_id)
+            burst_limit = int(limit * self.burst_allowance)
+            current_count = len(user_queue)
+
+            if current_count + cost > burst_limit:
+                if user_queue:
+                    retry_after = int(user_queue[0] + self.window_seconds - current_time) + 1
+                else:
+                    retry_after = 1
+                return False, retry_after
+
+            return True, None
+
+    def peek_shadow_rate_limit(
+        self,
+        user_id: str,
+        cost: int = 1,
+    ) -> tuple[bool, Optional[int]]:
+        """
+        Side-effect-light rate limit check against shadow state.
+
+        This is used for RG shadow comparisons: we want to know whether legacy
+        *would* allow a request given the shadow traffic pattern, without
+        recording a new request when RG denies.
+        """
+        with self._lock:
+            current_time = time.time()
+            window_start = current_time - self.window_seconds
+
+            user_queue = self._shadow_user_requests[user_id]
+            while user_queue and user_queue[0] < window_start:
+                user_queue.popleft()
+
+            limit = self.get_user_limit(user_id)
+            burst_limit = int(limit * self.burst_allowance)
+            current_count = len(user_queue)
+
+            if current_count + cost > burst_limit:
+                if user_queue:
+                    retry_after = int(user_queue[0] + self.window_seconds - current_time) + 1
+                else:
+                    retry_after = 1
+                return False, retry_after
+
+            return True, None
+
+    def shadow_check_rate_limit(
+        self,
+        user_id: str,
+        cost: int = 1,
+    ) -> tuple[bool, Optional[int]]:
+        """
+        Legacy limiter evaluation intended for RG shadow comparisons.
+
+        This mirrors ``check_rate_limit`` without emitting audit/log noise or
+        updating global stats counters. It updates *shadow-only* state so
+        repeated comparisons reflect the traffic pattern being simulated
+        without mutating the primary enforcement limiter state.
+        """
+        with self._lock:
+            current_time = time.time()
+            window_start = current_time - self.window_seconds
+
+            user_queue = self._shadow_user_requests[user_id]
+            while user_queue and user_queue[0] < window_start:
+                user_queue.popleft()
+
+            limit = self.get_user_limit(user_id)
+            burst_limit = int(limit * self.burst_allowance)
+            current_count = len(user_queue)
+
+            if current_count + cost > burst_limit:
+                if user_queue:
+                    retry_after = int(user_queue[0] + self.window_seconds - current_time) + 1
+                else:
+                    retry_after = 1
+                return False, retry_after
+
+            for _ in range(cost):
+                user_queue.append(current_time)
 
             return True, None
 
@@ -376,12 +514,17 @@ class AsyncRateLimiter:
     def __init__(self, rate_limiter: Optional[UserRateLimiter] = None):
         self.rate_limiter = rate_limiter or get_rate_limiter()
         self.executor = None
+        # Shadow-mode flag for comparing legacy vs RG behavior without breaking callers
+        self.shadow_enabled = (
+            os.getenv("RG_SHADOW_EMBEDDINGS", "0").lower() in {"1", "true", "yes", "on"}
+        )
 
     async def check_rate_limit_async(
         self,
         user_id: str,
         cost: int = 1,
-        ip_address: Optional[str] = None
+        ip_address: Optional[str] = None,
+        tokens_units: int = 0,
     ) -> tuple[bool, Optional[int]]:
         """
         Async version of check_rate_limit.
@@ -394,14 +537,59 @@ class AsyncRateLimiter:
         Returns:
             Tuple of (allowed, retry_after_seconds)
         """
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            self.executor,
-            self.rate_limiter.check_rate_limit,
-            user_id,
-            cost,
-            ip_address
+        # Prefer Resource Governor when configured; use the legacy limiter only
+        # as a fallback when RG is unavailable.
+        rg_decision = await _maybe_enforce_with_rg(
+            user_id=user_id,
+            cost=cost,
+            tokens_units=int(tokens_units or 0),
         )
+
+        if rg_decision is not None:
+            rg_allowed = bool(rg_decision.get("allowed", False))
+
+            # Shadow comparison (best-effort): simulate legacy decision and record
+            # mismatches between legacy allow/deny and RG allow/deny.
+            if self.shadow_enabled and record_shadow_mismatch is not None:
+                try:
+                    loop = asyncio.get_running_loop()
+                    if rg_allowed:
+                        legacy_allowed, _legacy_retry = await loop.run_in_executor(
+                            self.executor,
+                            self.rate_limiter.shadow_check_rate_limit,
+                            user_id,
+                            cost,
+                        )
+                    else:
+                        legacy_allowed, _legacy_retry = await loop.run_in_executor(
+                            self.executor,
+                            self.rate_limiter.peek_shadow_rate_limit,
+                            user_id,
+                            cost,
+                        )
+
+                    legacy_dec = "allow" if legacy_allowed else "deny"
+                    rg_dec = "allow" if rg_allowed else "deny"
+                    if legacy_dec != rg_dec:
+                        record_shadow_mismatch(
+                            module="embeddings",
+                            route="/api/v1/embeddings",
+                            policy_id=str(rg_decision.get("policy_id", "embeddings.default")),
+                            legacy=legacy_dec,
+                            rg=rg_dec,
+                        )
+                except Exception:
+                    # Observability only: never affect enforcement path.
+                    pass
+
+            return rg_allowed, rg_decision.get("retry_after")
+
+        if _rg_embeddings_enabled():
+            # Legacy limiter fallback retired.
+            return False, 1
+
+        # RG disabled → treat as unlimited.
+        return True, None
 
     async def record_usage_async(self, user_id: str, cost: int = 1):
         """Record usage asynchronously (for post-processing)"""
@@ -428,3 +616,109 @@ def get_async_rate_limiter() -> AsyncRateLimiter:
     if _async_rate_limiter is None:
         _async_rate_limiter = AsyncRateLimiter()
     return _async_rate_limiter
+
+
+# --- Resource Governor plumbing (optional) ---
+_rg_embeddings_governor = None
+_rg_embeddings_loader = None
+_rg_embeddings_lock = asyncio.Lock()
+
+
+def _rg_embeddings_enabled() -> bool:
+    if rg_enabled:
+        try:
+            return bool(rg_enabled(True))  # type: ignore[func-returns-value]
+        except Exception:
+            return False
+    return False
+
+
+async def _get_embeddings_rg_governor():
+    """Lazily initialize a ResourceGovernor for embeddings if enabled."""
+    global _rg_embeddings_governor, _rg_embeddings_loader
+    if not _rg_embeddings_enabled():
+        return None
+    if RGRequest is None or PolicyLoader is None:
+        return None
+    if _rg_embeddings_governor is not None:
+        return _rg_embeddings_governor
+    async with _rg_embeddings_lock:
+        if _rg_embeddings_governor is not None:
+            return _rg_embeddings_governor
+        try:
+            loader = default_policy_loader() if default_policy_loader else PolicyLoader(
+                os.getenv("RG_POLICY_PATH", "tldw_Server_API/Config_Files/resource_governor_policies.yaml"),
+                PolicyReloadConfig(enabled=True, interval_sec=int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10")),
+            )
+            await loader.load_once()
+            _rg_embeddings_loader = loader
+            backend = os.getenv("RG_BACKEND", "memory").lower()
+            if backend == "redis" and RedisResourceGovernor is not None:
+                gov = RedisResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            else:
+                gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
+            _rg_embeddings_governor = gov
+            return gov
+        except Exception as exc:  # pragma: no cover - optional path
+            logger.debug(f"Embeddings RG governor init failed: {exc}")
+            return None
+
+
+async def _maybe_enforce_with_rg(
+    user_id: str,
+    cost: int,
+    tokens_units: int = 0,
+) -> Optional[Dict[str, object]]:
+    """
+    Attempt to enforce embeddings limits via Resource Governor.
+
+    Requests are enforced at ingress via `RGSimpleMiddleware`. This helper is
+    used for token accounting (and legacy fallback) and MUST NOT reserve
+    `requests` to avoid double-enforcement on RG-governed routes.
+
+    Returns a decision dict when RG is used, or None when RG is unavailable/disabled.
+    """
+    gov = await _get_embeddings_rg_governor()
+    if gov is None:
+        return None
+    policy_id = os.getenv("RG_EMBEDDINGS_POLICY_ID", "embeddings.default")
+    op_id = f"emb-{user_id}-{time.time_ns()}"
+    try:
+        try:
+            tu = int(tokens_units or 0)
+        except Exception:
+            tu = 0
+        tu = max(0, tu)
+
+        # Only enforce token budgets here; request-rate limiting happens at ingress.
+        categories: Dict[str, Dict[str, int]] = {}
+        if tu > 0:
+            categories["tokens"] = {"units": tu}
+        else:
+            # No token units to enforce; allow and bypass legacy limiter.
+            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
+
+        decision, handle = await gov.reserve(
+            RGRequest(
+                entity=f"user:{user_id}",
+                categories=categories,
+                tags={"policy_id": policy_id, "module": "embeddings"},
+            ),
+            op_id=op_id,
+        )
+        if decision.allowed:
+            # Treat reserve as consumption and finalize immediately to keep semantics simple.
+            if handle:
+                try:
+                    await gov.commit(handle, None, op_id=op_id)
+                except Exception:
+                    logger.debug("Embeddings RG commit failed", exc_info=True)
+            return {"allowed": True, "retry_after": None, "policy_id": policy_id}
+        return {
+            "allowed": False,
+            "retry_after": decision.retry_after or 1,
+            "policy_id": policy_id,
+        }
+    except Exception as exc:
+        logger.debug(f"Embeddings RG reserve failed; falling back to legacy: {exc}")
+        return None

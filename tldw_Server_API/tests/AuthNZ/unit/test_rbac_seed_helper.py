@@ -1,0 +1,103 @@
+import pytest
+
+
+pytestmark = pytest.mark.unit
+
+
+@pytest.mark.asyncio
+async def test_ensure_baseline_rbac_seed_sqlite_idempotent():
+    import aiosqlite
+
+    from tldw_Server_API.app.core.AuthNZ.rbac_seed import ensure_baseline_rbac_seed
+
+    async with aiosqlite.connect(":memory:") as conn:
+        conn.row_factory = aiosqlite.Row
+        await conn.execute(
+            """
+            CREATE TABLE roles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                description TEXT,
+                is_system INTEGER DEFAULT 0
+            )
+            """
+        )
+        await conn.execute(
+            """
+            CREATE TABLE permissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                description TEXT,
+                category TEXT
+            )
+            """
+        )
+        await conn.execute(
+            """
+            CREATE TABLE role_permissions (
+                role_id INTEGER NOT NULL,
+                permission_id INTEGER NOT NULL,
+                PRIMARY KEY (role_id, permission_id)
+            )
+            """
+        )
+        await conn.commit()
+
+        await ensure_baseline_rbac_seed(conn, include_mcp_permissions=True)
+        await ensure_baseline_rbac_seed(conn, include_mcp_permissions=True)
+
+        cur = await conn.execute("SELECT name FROM roles")
+        roles = {row[0] for row in await cur.fetchall()}
+        assert {"admin", "user", "viewer"} <= roles
+
+        expected_permissions = {
+            "media.read",
+            "media.create",
+            "media.delete",
+            "system.configure",
+            "users.manage_roles",
+            "modules.read",
+            "tools.execute:*",
+        }
+        cur = await conn.execute("SELECT name FROM permissions")
+        perms = {row[0] for row in await cur.fetchall()}
+        assert expected_permissions <= perms
+
+        cur = await conn.execute("SELECT id, name FROM roles WHERE name IN ('admin','user','viewer')")
+        role_id = {row[1]: row[0] for row in await cur.fetchall()}
+
+        cur = await conn.execute(
+            """
+            SELECT id, name
+            FROM permissions
+            WHERE name IN (
+                'media.read','media.create','media.delete','system.configure',
+                'users.manage_roles','modules.read','tools.execute:*'
+            )
+            """
+        )
+        perm_id = {row[1]: row[0] for row in await cur.fetchall()}
+
+        cur = await conn.execute(
+            "SELECT permission_id FROM role_permissions WHERE role_id = ?",
+            (role_id["user"],),
+        )
+        user_perm_ids = {row[0] for row in await cur.fetchall()}
+        assert perm_id["media.read"] in user_perm_ids
+        assert perm_id["media.create"] in user_perm_ids
+        assert perm_id["modules.read"] in user_perm_ids
+
+        cur = await conn.execute(
+            "SELECT permission_id FROM role_permissions WHERE role_id = ?",
+            (role_id["viewer"],),
+        )
+        viewer_perm_ids = {row[0] for row in await cur.fetchall()}
+        assert perm_id["media.read"] in viewer_perm_ids
+
+        cur = await conn.execute(
+            "SELECT permission_id FROM role_permissions WHERE role_id = ?",
+            (role_id["admin"],),
+        )
+        admin_perm_ids = {row[0] for row in await cur.fetchall()}
+        for name in expected_permissions:
+            assert perm_id[name] in admin_perm_ids

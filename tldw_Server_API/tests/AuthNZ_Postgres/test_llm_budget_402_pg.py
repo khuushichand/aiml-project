@@ -4,10 +4,18 @@ from fastapi.testclient import TestClient
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_llm_budget_middleware_returns_402_postgres(test_db_pool):
+async def test_llm_budget_middleware_returns_402_postgres(test_db_pool, monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
+    from tldw_Server_API.app.core.AuthNZ import api_key_manager as api_key_manager_module
+    from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as user_db_handling
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.config import settings as app_settings
+    from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as reset_auth_settings
+
+    # Ensure multi-user mode for AuthNZ + budgets
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    reset_auth_settings()
 
     pool = test_db_pool
     app_settings['CSRF_ENABLED'] = False
@@ -50,6 +58,15 @@ async def test_llm_budget_middleware_returns_402_postgres(test_db_pool):
     # Create a virtual key with small daily token budget
     mgr = APIKeyManager(pool)
     await mgr.initialize()
+
+    async def _get_mgr_override():
+        return mgr
+
+    # Ensure all API-key auth paths (AuthPrincipal resolver, budget middleware, etc.)
+    # reuse the same manager instance bound to the Postgres test pool.
+    monkeypatch.setattr(auth_deps, "get_api_key_manager", _get_mgr_override)
+    monkeypatch.setattr(api_key_manager_module, "get_api_key_manager", _get_mgr_override)
+    monkeypatch.setattr(user_db_handling, "get_api_key_manager", _get_mgr_override)
     res = await mgr.create_virtual_key(
         user_id=user_id,
         name="vk-budget-pg",

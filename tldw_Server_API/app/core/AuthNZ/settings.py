@@ -28,6 +28,19 @@ class Settings(BaseSettings):
     """Configuration with persistent secret management for user registration system"""
 
     # ===== Core Settings =====
+    PROFILE: Optional[str] = Field(
+        default=None,
+        description=(
+            "Deployment profile hint (e.g., local-single-user, multi-user-postgres). "
+            "AUTH_MODE remains the canonical switch for behavior; PROFILE is "
+            "used for coordination/UX, feature gating, and future drift reduction. "
+            "Callers may use PROFILE to apply additional *restrictions* in certain "
+            "flows (for example, disabling self-registration in local-single-user "
+            "deployments), but it must never be used to bypass or relax auth "
+            "decisions relative to AUTH_MODE and claims."
+        ),
+    )
+
     AUTH_MODE: Literal["single_user", "multi_user"] = Field(
         default="single_user",
         description="Authentication mode: single_user (API key) or multi_user (JWT)"
@@ -180,6 +193,17 @@ class Settings(BaseSettings):
     DEFAULT_USER_ROLE: str = Field(
         default="user",
         description="Default role for new users"
+    )
+
+    SINGLE_USER_DEFAULT_PERMISSIONS: list[str] = Field(
+        default_factory=lambda: [
+            "system.configure",
+            "media.read",
+            "media.create",
+            "media.update",
+            "media.delete",
+        ],
+        description="Default permissions granted to the single-user principal in single_user mode",
     )
 
     REGISTRATION_CODE_DEFAULT_EXPIRY_DAYS: int = Field(
@@ -619,9 +643,14 @@ class Settings(BaseSettings):
                     logger.info("Using SINGLE_USER_API_KEY from environment for single-user mode")
                 elif in_test_context:
                     # Deterministic key so tests can authenticate reliably.
-                    test_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+                    test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                    if not test_key:
+                        raise ValueError(
+                            "SINGLE_USER_API_KEY is not configured for single-user mode.\n"
+                            "In test contexts, set SINGLE_USER_TEST_API_KEY explicitly (no default is assumed)."
+                        )
                     self.SINGLE_USER_API_KEY = test_key
-                    logger.debug("Using deterministic SINGLE_USER_API_KEY for test context")
+                    logger.debug("Using SINGLE_USER_TEST_API_KEY for deterministic test context")
                 else:
                     raise ValueError(
                         "SINGLE_USER_API_KEY is required for single-user mode but is not configured.\n"
@@ -634,9 +663,10 @@ class Settings(BaseSettings):
             elif in_test_context and (
                 self.SINGLE_USER_API_KEY in {"CHANGE_ME_TO_SECURE_API_KEY", "default-secret-key-for-single-user", "change-me-in-production"}
             ):
-                test_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
-                self.SINGLE_USER_API_KEY = test_key
-                logger.debug("Normalized SINGLE_USER_API_KEY to deterministic test key for pytest context")
+                test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                if test_key:
+                    self.SINGLE_USER_API_KEY = test_key
+                    logger.debug("Normalized SINGLE_USER_API_KEY to SINGLE_USER_TEST_API_KEY for pytest context")
             elif self.SINGLE_USER_API_KEY == "change-me-in-production":
                 raise ValueError(
                     "Default API key detected! Please set SINGLE_USER_API_KEY via environment or .env.\n"
@@ -879,7 +909,26 @@ def get_settings() -> Settings:
                 _settings.RATE_LIMIT_ENABLED = False
         except Exception:
             pass
-        logger.info(f"Settings initialized - Auth mode: {_settings.AUTH_MODE}")
+        # Log a lightweight profile hint for coordination/UX and optional
+        # hardening. AUTH_MODE remains the canonical behavioral switch; PROFILE
+        # (explicit or inferred) must not be used to bypass or relax auth
+        # decisions. It may be used as an additional tightening signal (e.g.,
+        # disabling self-registration in local-single-user deployments) so long
+        # as AUTH_MODE + claims remain the lower bound for permissions.
+        try:
+            profile_hint = getattr(_settings, "PROFILE", None)
+            if not (isinstance(profile_hint, str) and profile_hint.strip()):
+                profile_hint = _infer_profile_from_settings(_settings)
+            if isinstance(profile_hint, str) and profile_hint.strip():
+                logger.info(
+                    "Settings initialized - Auth mode: %s, profile=%s",
+                    _settings.AUTH_MODE,
+                    profile_hint.strip(),
+                )
+            else:
+                logger.info("Settings initialized - Auth mode: %s", _settings.AUTH_MODE)
+        except Exception:
+            logger.info("Settings initialized - Auth mode: %s", _settings.AUTH_MODE)
     return _settings
 
 
@@ -904,13 +953,97 @@ def get_settings_generation() -> int:
 
 # ===== Utility Functions =====
 def is_multi_user_mode() -> bool:
-    """Check if system is in multi-user mode"""
+    """Return True when the effective runtime mode is multi-user.
+
+    AUTH_MODE remains the canonical switch; PROFILE is advisory and
+    may be used by higher-level helpers for UX/coordination. This
+    helper deliberately ignores PROFILE so that existing behavior is
+    preserved while we phase in profile-aware helpers elsewhere.
+    """
     return get_settings().AUTH_MODE == "multi_user"
 
 
 def is_single_user_mode() -> bool:
-    """Check if system is in single-user mode"""
+    """Return True when the effective runtime mode is single-user.
+
+    AUTH_MODE remains the canonical switch; PROFILE is advisory and
+    must not be used to bypass or relax auth behavior. Profile-aware
+    helpers may use PROFILE as an additional tightening signal for
+    deployment-specific flows (for example, forbidding self-registration
+    in local-single-user) but must never grant privileges beyond those
+    implied by AUTH_MODE and claims.
+    """
     return get_settings().AUTH_MODE == "single_user"
+
+
+def _infer_profile_from_settings(settings: Settings) -> Optional[str]:
+    """Derive a coarse deployment profile from AUTH_MODE + DATABASE_URL.
+
+    This helper is used when PROFILE is unset to provide a stable hint
+    for coordination/UX and optional hardening that only *restricts*
+    behavior (for example, disabling self-registration in single-user
+    desktop deployments). It must not be used to bypass or relax auth
+    or permission decisions relative to AUTH_MODE and claims.
+    """
+    try:
+        mode = settings.AUTH_MODE
+        db_url = str(settings.DATABASE_URL or "")
+    except Exception:
+        return None
+
+    db_lower = db_url.lower()
+
+    if mode == "single_user":
+        # Treat all single-user deployments as a local/desktop profile,
+        # regardless of underlying DB, to preserve existing behavior.
+        return "local-single-user"
+
+    if mode == "multi_user":
+        if db_lower.startswith(("postgres://", "postgresql://")):
+            return "multi-user-postgres"
+        if "sqlite" in db_lower:
+            return "multi-user-sqlite"
+
+    return None
+
+
+def get_profile() -> Optional[str]:
+    """Return the effective deployment profile string, if any.
+
+    Resolution order:
+    1. Explicit PROFILE setting/env (if set and non-empty).
+    2. Derived from AUTH_MODE + DATABASE_URL via `_infer_profile_from_settings`.
+
+    Callers should treat this primarily as a coordination/UX hint; auth
+    and permission decisions remain driven by claims and AUTH_MODE
+    helpers. It is acceptable to use PROFILE as an additional tightening
+    signal for deployment-specific flows (for example, disabling
+    self-registration in local-single-user deployments), but it must
+    never be used to bypass or relax auth decisions or to grant
+    permissions beyond those implied by AUTH_MODE and claims.
+    """
+    settings = get_settings()
+    try:
+        value = getattr(settings, "PROFILE", None)
+    except Exception:
+        value = None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+
+    inferred = _infer_profile_from_settings(settings)
+    if isinstance(inferred, str) and inferred.strip():
+        return inferred.strip()
+    return None
+
+
+def is_single_user_profile_mode() -> bool:
+    """Return True when PROFILE hints at a single-user deployment."""
+    profile = get_profile()
+    if profile:
+        lowered = profile.strip().lower()
+        if lowered in {"single_user", "local-single-user", "desktop"}:
+            return True
+    return False
 
 
 def get_database_url() -> str:

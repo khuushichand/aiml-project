@@ -13,6 +13,7 @@ from loguru import logger
 from .governor import ResourceGovernor, RGRequest, RGDecision, MemoryResourceGovernor
 from .metrics_rg import ensure_rg_metrics_registered, _labels, rg_metrics_entity_label_enabled
 from .tenant import hash_entity
+from .daily_caps import check_daily_cap
 try:
     # Metrics are optional during early startup
     from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
@@ -828,7 +829,30 @@ class RedisResourceGovernor(ResourceGovernor):
                         del self._stub_backoff_until[key_b]
                     except Exception:
                         pass
-                per_category[category] = {"allowed": allowed, "limit": limit, "retry_after": retry_after}
+                # Optional durable daily caps (v1.1) backed by ResourceDailyLedger.
+                try:
+                    daily_cap = int((pol.get(category) or {}).get("daily_cap") or 0)
+                except Exception:
+                    daily_cap = 0
+                daily_details: Dict[str, Any] = {}
+                if daily_cap > 0:
+                    daily_allowed, daily_ra, daily_details = await check_daily_cap(
+                        entity_scope=entity_scope,
+                        entity_value=entity_value,
+                        category=category,
+                        daily_cap=daily_cap,
+                        units=units,
+                    )
+                    if not daily_allowed:
+                        allowed = False
+                    retry_after = max(int(retry_after or 0), int(daily_ra or 0))
+
+                per_category[category] = {
+                    "allowed": allowed,
+                    "limit": limit,
+                    "retry_after": retry_after,
+                    **(daily_details or {}),
+                }
                 # Final smoothing guard retained inside _allow_requests_sliding_check_only.
             elif category == "tokens":
                 per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
@@ -838,16 +862,17 @@ class RedisResourceGovernor(ResourceGovernor):
                 retry_after = 0
                 cat_fail = self._effective_fail_mode(pol, category)
                 counts: list[int] = []
-                for sc, ev in (("global", "*"), (entity_scope, entity_value)):
-                    if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
-                        continue
-                    key = self._keys.win(policy_id, category, sc, ev)
-                    ok, ra, _cnt = await self._allow_requests_sliding_check_only(
-                        key=key, limit=limit, window=window, units=units, now=now, fail_mode=cat_fail
-                    )
-                    counts.append(int(_cnt))
-                    allowed = allowed and ok
-                    retry_after = max(retry_after, ra)
+                if limit > 0:
+                    for sc, ev in (("global", "*"), (entity_scope, entity_value)):
+                        if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
+                            continue
+                        key = self._keys.win(policy_id, category, sc, ev)
+                        ok, ra, _cnt = await self._allow_requests_sliding_check_only(
+                            key=key, limit=limit, window=window, units=units, now=now, fail_mode=cat_fail
+                        )
+                        counts.append(int(_cnt))
+                        allowed = allowed and ok
+                        retry_after = max(retry_after, ra)
                 # Special-case: allow initial large batch when no prior usage in window
                 try:
                     if not allowed and limit > 0 and int(units or 0) > int(limit) and counts and max(counts) == 0:
@@ -916,7 +941,29 @@ class RedisResourceGovernor(ResourceGovernor):
                     except Exception:
                         # Non-fatal: keep original decision
                         pass
-                per_category[category] = {"allowed": allowed, "limit": limit, "retry_after": retry_after}
+                # Optional durable daily caps (v1.1) for tokens via ResourceDailyLedger.
+                daily_details: Dict[str, Any] = {}
+                try:
+                    daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
+                except Exception:
+                    daily_cap = 0
+                if daily_cap > 0:
+                    daily_allowed, daily_ra, daily_details = await check_daily_cap(
+                        entity_scope=entity_scope,
+                        entity_value=entity_value,
+                        category="tokens",
+                        daily_cap=daily_cap,
+                        units=units,
+                    )
+                    if not daily_allowed:
+                        allowed = False
+                    retry_after = max(int(retry_after or 0), int(daily_ra or 0))
+                per_category[category] = {
+                    "allowed": allowed,
+                    "limit": limit,
+                    "retry_after": retry_after,
+                    **(daily_details or {}),
+                }
             elif category in ("streams", "jobs"):
                 limit = int((pol.get(category) or {}).get("max_concurrent") or 0)
                 ttl_sec = int((pol.get(category) or {}).get("ttl_sec") or 60)
@@ -966,7 +1013,31 @@ class RedisResourceGovernor(ResourceGovernor):
                         retry_after = max(retry_after, ttl_sec)
                 per_category[category] = {"allowed": allowed, "limit": limit, "retry_after": retry_after, "ttl_sec": ttl_sec}
             else:
-                per_category[category] = {"allowed": True, "retry_after": 0}
+                allowed = True
+                retry_after = 0
+                details_other: Dict[str, Any] = {"allowed": True, "retry_after": 0}
+                try:
+                    daily_cap = int((pol.get(category) or {}).get("daily_cap") or 0)
+                except Exception:
+                    daily_cap = 0
+                if daily_cap > 0:
+                    daily_allowed, daily_ra, daily_details = await check_daily_cap(
+                        entity_scope=entity_scope,
+                        entity_value=entity_value,
+                        category=category,
+                        daily_cap=daily_cap,
+                        units=units,
+                    )
+                    if not daily_allowed:
+                        allowed = False
+                    retry_after = max(int(retry_after or 0), int(daily_ra or 0))
+                    try:
+                        details_other.update({"limit": int(daily_cap), **(daily_details or {})})
+                    except Exception:
+                        details_other["limit"] = int(daily_cap)
+                details_other["allowed"] = allowed
+                details_other["retry_after"] = retry_after
+                per_category[category] = details_other
 
             if overall_allowed and not per_category[category]["allowed"]:
                 overall_allowed = False
@@ -1387,6 +1458,9 @@ class RedisResourceGovernor(ResourceGovernor):
                         continue
                     if category in ("requests", "tokens"):
                         limit = int((pol.get(category) or {}).get("rpm") or 0) if category == "requests" else int((pol.get(category) or {}).get("per_min") or 0)
+                        # Treat tokens.per_min<=0 as unbounded: do not enforce or reserve per-minute windows.
+                        if category == "tokens" and limit <= 0:
+                            continue
                         window = 60
                         # Saturate tokens to policy limit on real Redis to avoid full denial on initial over-ask
                         units_eff = min(units, limit) if category == "tokens" and limit > 0 else units
@@ -1431,6 +1505,8 @@ class RedisResourceGovernor(ResourceGovernor):
                         continue
                     if category in ("requests", "tokens"):
                         limit = int((pol.get(category) or {}).get("rpm") or 0) if category == "requests" else int((pol.get(category) or {}).get("per_min") or 0)
+                        if category == "tokens" and limit <= 0:
+                            continue
                         window = 60
                         # Evaluate across scopes and collect counts
                         counts: list[int] = []
@@ -1479,6 +1555,10 @@ class RedisResourceGovernor(ResourceGovernor):
                     if units <= 0:
                         continue
                     if category in ("requests", "tokens"):
+                        if category == "tokens":
+                            limit = int((pol.get("tokens") or {}).get("per_min") or 0)
+                            if limit <= 0:
+                                continue
                         added_members.setdefault(category, {})
                         for sc, ev in (("global", "*"), (entity_scope, entity_value)):
                             if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
@@ -1505,6 +1585,8 @@ class RedisResourceGovernor(ResourceGovernor):
                         continue
                     if category in ("requests", "tokens"):
                         limit = int((pol.get(category) or {}).get("rpm") or 0) if category == "requests" else int((pol.get(category) or {}).get("per_min") or 0)
+                        if category == "tokens" and limit <= 0:
+                            continue
                         window = 60
                         cat_fail = self._effective_fail_mode(pol, category)
                         added_members.setdefault(category, {})

@@ -41,7 +41,6 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     SessionError
 )
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 
 #######################################################################################################################
 #
@@ -70,14 +69,9 @@ async def get_current_user_profile(
     Returns:
         UserResponse with user details
     """
-    # Convert UUID to string if it's a UUID object
-    user_uuid = current_user.get('uuid', '')
-    if user_uuid and not isinstance(user_uuid, str):
-        user_uuid = str(user_uuid)
-
     return UserResponse(
         id=current_user['id'],
-        uuid=user_uuid,
+        uuid=current_user.get('uuid') or None,
         username=current_user['username'],
         email=current_user.get('email', ''),
         role=current_user.get('role', 'user'),
@@ -113,20 +107,13 @@ async def update_user_profile(
 
         if request.email and request.email != current_user.get('email'):
             # Update email
-            is_pg = await is_postgres_backend()
-            if is_pg:
-                # PostgreSQL
-                await db.execute(
-                    "UPDATE users SET email = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
-                    request.email.lower(), current_user['id']
-                )
-            else:
-                # SQLite
-                await db.execute(
-                    "UPDATE users SET email = ?, updated_at = datetime('now') WHERE id = ?",
-                    (request.email.lower(), current_user['id'])
-                )
-                await db.commit()
+            # Use Postgres-style placeholders; test adapters and SQLite shims
+            # normalize `$N` to `?` automatically.
+            await db.execute(
+                "UPDATE users SET email = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+                request.email.lower(),
+                current_user['id'],
+            )
 
             updates_made = True
             current_user['email'] = request.email.lower()
@@ -178,15 +165,12 @@ async def change_password(
     """
     try:
         # Fetch user's password hash from database
-        is_pg_fetch = await is_postgres_backend()
-        if is_pg_fetch:
-            # PostgreSQL
+        if hasattr(db, "fetchval"):
             password_hash = await db.fetchval(
                 "SELECT password_hash FROM users WHERE id = $1",
                 current_user['id']
             )
         else:
-            # SQLite
             cursor = await db.execute(
                 "SELECT password_hash FROM users WHERE id = ?",
                 (current_user['id'],)
@@ -228,44 +212,22 @@ async def change_password(
         new_hash = password_service.hash_password(request.new_password)
 
         # Update password in database
-        is_pg = await is_postgres_backend()
-        if is_pg:
-            # PostgreSQL
-            await db.execute(
-                """
-                UPDATE users
-                SET password_hash = $1,
-                    password_changed_at = CURRENT_TIMESTAMP,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = $2
-                """,
-                new_hash, current_user['id']
-            )
-
-            # Add to password history
-            await db.execute(
-                "INSERT INTO password_history (user_id, password_hash) VALUES ($1, $2)",
-                current_user['id'], new_hash
-            )
-        else:
-            # SQLite
-            await db.execute(
-                """
-                UPDATE users
-                SET password_hash = ?,
-                    password_changed_at = datetime('now'),
-                    updated_at = datetime('now')
-                WHERE id = ?
-                """,
-                (new_hash, current_user['id'])
-            )
-
-            # Add to password history
-            await db.execute(
-                "INSERT INTO password_history (user_id, password_hash) VALUES (?, ?)",
-                (current_user['id'], new_hash)
-            )
-            await db.commit()
+        await db.execute(
+            """
+            UPDATE users
+            SET password_hash = $1,
+                password_changed_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $2
+            """,
+            new_hash,
+            current_user['id'],
+        )
+        await db.execute(
+            "INSERT INTO password_history (user_id, password_hash) VALUES ($1, $2)",
+            current_user['id'],
+            new_hash,
+        )
 
         logger.info(f"Password changed for user {current_user['username']} (ID: {current_user['id']})")
 

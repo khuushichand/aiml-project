@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, require_admin
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, require_roles
 from tldw_Server_API.app.api.v1.schemas.mlx import MLXLoadRequest, MLXUnloadRequest
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError, ChatProviderError
 from tldw_Server_API.app.core.LLM_Calls.providers.mlx_provider import (
@@ -19,11 +19,10 @@ router = APIRouter()
 @router.post(
     "/llm/providers/mlx/load",
     summary="Load or swap the active MLX model",
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
 )
 async def load_mlx_model(
     payload: MLXLoadRequest,
-    admin=Depends(require_admin),
 ):
     registry = get_mlx_registry()
     overrides = payload.model_dump(exclude_none=True)
@@ -43,11 +42,10 @@ async def load_mlx_model(
 @router.post(
     "/llm/providers/mlx/unload",
     summary="Unload the active MLX model",
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
 )
 async def unload_mlx_model(
     payload: MLXUnloadRequest,
-    admin=Depends(require_admin),
 ):
     registry = get_mlx_registry()
     try:
@@ -60,9 +58,9 @@ async def unload_mlx_model(
 @router.get(
     "/llm/providers/mlx/status",
     summary="Get MLX provider status",
-    dependencies=[Depends(check_rate_limit)],
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
 )
-async def get_mlx_status(admin=Depends(require_admin)):
+async def get_mlx_status():
     registry = get_mlx_registry()
     try:
         return registry.status()

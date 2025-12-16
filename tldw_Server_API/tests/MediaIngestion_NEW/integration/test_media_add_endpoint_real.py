@@ -92,8 +92,11 @@ def test_list_and_search_media_after_add(client_with_auth: TestClient, tmp_path)
                 files=[("files", (p.name, f, "text/plain"))],
             )
 
-    # List media
-    lst = client.get("/api/v1/media", params={"page": 1, "results_per_page": 5})
+    # List media, requesting keywords in the listing payload
+    lst = client.get(
+        "/api/v1/media",
+        params={"page": 1, "results_per_page": 5, "include_keywords": True},
+    )
     assert lst.status_code == 200
     data = lst.json()
     # Strict schema checks for list response
@@ -102,11 +105,20 @@ def test_list_and_search_media_after_add(client_with_auth: TestClient, tmp_path)
     assert "pagination" in data and isinstance(data["pagination"], dict)
     for key in ("page", "results_per_page", "total_pages", "total_items"):
         assert key in data["pagination"]
-    # Validate an item shape if present
+    # Validate an item shape if present (with keywords)
     if data["items"]:
         item = data["items"][0]
-        for k in ("id", "title", "type", "url"):
+        for k in ("id", "title", "type", "url", "keywords"):
             assert k in item
+    # When not requesting keywords explicitly, items should not include the field
+    lst_default = client.get(
+        "/api/v1/media",
+        params={"page": 1, "results_per_page": 5},
+    )
+    assert lst_default.status_code == 200
+    default_items = lst_default.json().get("items", [])
+    if default_items:
+        assert "keywords" not in default_items[0]
     # Search media using POST /search
     search = client.post(
         "/api/v1/media/search",
@@ -139,18 +151,27 @@ def test_add_various_chunk_methods_persist(client_with_auth: TestClient, tmp_pat
                 data={
                     "title": title,
                     "media_type": "document",
+                    "keywords": ["test-keyword-1", "test-keyword-2"],
                     "chunk_method": method,
                 },
                 files=[("files", (p.name, f, "text/plain"))],
             )
         assert r.status_code in (200, 207), r.text
 
-    # Verify both present in list
-    lst = client.get("/api/v1/media", params={"page": 1, "results_per_page": 20})
+    # Verify both present in list and expose keywords when requested
+    lst = client.get(
+        "/api/v1/media",
+        params={"page": 1, "results_per_page": 20, "include_keywords": True},
+    )
     assert lst.status_code == 200
     items = lst.json().get("items", [])
     names = set(i.get("title") for i in items)
     assert "Words Doc" in names and "Paragraphs Doc" in names
+    # Locate one of the docs and ensure keywords are attached
+    words_doc = next((i for i in items if i.get("title") == "Words Doc"), None)
+    assert words_doc is not None
+    assert "keywords" in words_doc
+    assert isinstance(words_doc["keywords"], list)
 
 
 def test_add_document_with_invalid_payload_returns_422_or_400(client_with_auth: TestClient):
