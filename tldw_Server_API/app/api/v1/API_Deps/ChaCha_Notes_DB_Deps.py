@@ -43,6 +43,7 @@ DEFAULT_CHACHA_DB_SUBDIR = "chachanotes_user_dbs"  # This will be a sub-director
 _CHACHA_EXECUTOR: ThreadPoolExecutor | None = None
 _CHACHA_EXECUTOR_SHUTDOWN: bool = False
 _CHACHA_EXECUTOR_LOCK = threading.Lock()
+_CHACHA_EXECUTOR_MAX_WORKERS = max(1, int(os.getenv("CHACHA_EXECUTOR_MAX_WORKERS", "4")))
 _CHACHA_WATCHDOG_SECS = float(os.getenv("CHACHA_INIT_WATCHDOG_SECS", "5"))
 _CHACHA_HEALTH_LOCK = threading.Lock()
 _CHACHA_HEALTH: Dict[str, Any] = {
@@ -70,7 +71,10 @@ def _get_chacha_executor() -> ThreadPoolExecutor:
     global _CHACHA_EXECUTOR, _CHACHA_EXECUTOR_SHUTDOWN
     with _CHACHA_EXECUTOR_LOCK:
         if _CHACHA_EXECUTOR is None or _CHACHA_EXECUTOR_SHUTDOWN:
-            _CHACHA_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chacha-db")
+            _CHACHA_EXECUTOR = ThreadPoolExecutor(
+                max_workers=_CHACHA_EXECUTOR_MAX_WORKERS,
+                thread_name_prefix="chacha-db",
+            )
             _CHACHA_EXECUTOR_SHUTDOWN = False
         return _CHACHA_EXECUTOR
 
