@@ -41,6 +41,7 @@ from tldw_Server_API.app.core.Utils.Utils import get_project_root
 _HAS_CACHETOOLS = True
 DEFAULT_CHACHA_DB_SUBDIR = "chachanotes_user_dbs"  # This will be a sub-directory within the user's main DB directory
 _CHACHA_EXECUTOR: ThreadPoolExecutor | None = None
+_CHACHA_EXECUTOR_SHUTDOWN: bool = False
 _CHACHA_EXECUTOR_LOCK = threading.Lock()
 _CHACHA_WATCHDOG_SECS = float(os.getenv("CHACHA_INIT_WATCHDOG_SECS", "5"))
 _CHACHA_HEALTH_LOCK = threading.Lock()
@@ -66,11 +67,12 @@ def _get_chacha_executor() -> ThreadPoolExecutor:
     Python process; recreating the executor on-demand avoids order-dependent
     failures like "cannot schedule new futures after shutdown".
     """
-    global _CHACHA_EXECUTOR
+    global _CHACHA_EXECUTOR, _CHACHA_EXECUTOR_SHUTDOWN
     with _CHACHA_EXECUTOR_LOCK:
         executor = _CHACHA_EXECUTOR
-        if executor is None or getattr(executor, "_shutdown", False):
+        if executor is None or _CHACHA_EXECUTOR_SHUTDOWN:
             _CHACHA_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chacha-db")
+            _CHACHA_EXECUTOR_SHUTDOWN = False
         return _CHACHA_EXECUTOR
 
 
@@ -487,10 +489,11 @@ def close_all_chacha_db_instances():
 
 def shutdown_chacha_executor(wait: bool = False) -> None:
     """Shut down the ChaChaNotes executor to avoid lingering threads on shutdown."""
-    global _CHACHA_EXECUTOR
+    global _CHACHA_EXECUTOR, _CHACHA_EXECUTOR_SHUTDOWN
     with _CHACHA_EXECUTOR_LOCK:
         executor = _CHACHA_EXECUTOR
         _CHACHA_EXECUTOR = None
+        _CHACHA_EXECUTOR_SHUTDOWN = True
     if executor is None:
         return
     try:

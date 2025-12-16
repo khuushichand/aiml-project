@@ -2445,7 +2445,7 @@ async def list_embedding_models():
 async def get_embedding_model_info(
     model_id: str,
     provider: Optional[str] = Query(None, description="Provider override"),
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     model = model_id
     resolved_provider = guess_provider_for_model(model, provider)
@@ -2579,7 +2579,7 @@ async def bump_job_priority(
             "ttl_seconds": int(req.ttl_seconds or 600),
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to set priority override: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to set priority override: {e}") from e
     finally:
         try:
             if client is not None:
@@ -2620,7 +2620,7 @@ class CollectionStatsResponse(BaseModel):
 )
 async def warmup_model(
     payload: ModelActionRequest,
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     provider = guess_provider_for_model(payload.model, payload.provider)
     if not is_model_allowed(provider, payload.model):
@@ -2649,7 +2649,7 @@ async def warmup_model(
 )
 async def download_model(
     payload: ModelActionRequest,
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     provider = guess_provider_for_model(payload.model, payload.provider)
     if not is_model_allowed(provider, payload.model):
@@ -2677,7 +2677,7 @@ async def download_model(
     dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def clear_cache(
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     """Clear the embedding cache - requires admin privileges"""
 
@@ -2710,7 +2710,7 @@ async def clear_cache(
 )
 async def create_collection(
     payload: CollectionCreateRequest,
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ) -> CollectionResponse:
     name = (payload.name or "").strip()
     if not name:
@@ -2779,7 +2779,7 @@ async def list_collections(current_user: User = Depends(get_request_user)) -> Li
 )
 async def delete_collection(
     collection_name: str,
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ) -> Response:
     manager = _chroma_manager_for_user(current_user)
     try:
@@ -2797,7 +2797,7 @@ async def delete_collection(
 )
 async def get_collection_stats(
     collection_name: str,
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ) -> CollectionStatsResponse:
     manager = _chroma_manager_for_user(current_user)
     try:
@@ -2915,7 +2915,7 @@ async def health_check():
     dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def get_circuit_breakers(
-    _current_user: User = Depends(get_request_user)
+    _current_user: User = Depends(get_request_user),
 ):
     """Get detailed circuit breaker status - requires admin privileges"""
 
@@ -2928,7 +2928,7 @@ async def get_circuit_breakers(
 )
 async def reset_circuit_breaker(
     provider: str,
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     """Reset specific circuit breaker - requires admin privileges"""
 
@@ -2961,7 +2961,7 @@ async def reset_circuit_breaker(
     dependencies=[Depends(require_roles("admin")), Depends(require_permissions(SYSTEM_CONFIGURE))],
 )
 async def get_metrics(
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     """Get detailed service metrics - requires admin privileges"""
 
@@ -3160,8 +3160,8 @@ class DLQRequeueRequest(BaseModel):
 )
 async def requeue_dlq_item(
     req: DLQRequeueRequest,
-    current_user: User = Depends(get_request_user)
-    ):
+    current_user: User = Depends(get_request_user),
+) -> Dict[str, Any]:
     dlq_stream = _dlq_stream_name(req.stage)
     live_stream = _live_stream_name(req.stage)
     client = await _get_redis_client()
@@ -3260,8 +3260,8 @@ class DLQRequeueBulkRequest(BaseModel):
 )
 async def requeue_dlq_bulk(
     req: DLQRequeueBulkRequest,
-    current_user: User = Depends(get_request_user)
-    ):
+    current_user: User = Depends(get_request_user),
+) -> Dict[str, Any]:
     dlq_stream = _dlq_stream_name(req.stage)
     live_stream = _live_stream_name(req.stage)
     client = await _get_redis_client()
@@ -3360,7 +3360,7 @@ async def requeue_dlq_bulk(
     dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def get_dlq_stats(
-    current_user: User = Depends(get_request_user)
+    current_user: User = Depends(get_request_user),
 ):
     client = await _get_redis_client()
     try:

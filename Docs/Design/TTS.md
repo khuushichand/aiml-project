@@ -78,6 +78,10 @@ https://github.com/devnen/Chatterbox-TTS-Server
 https://github.com/PyAV-Org/PyAV
 https://github.com/santinic/audiblez
 https://github.com/nazdridoy/kokoro-tts
+https://huggingface.co/FunAudioLLM/Fun-CosyVoice3-0.5B-2512
+https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512
+https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512
+https://huggingface.co/ResembleAI/chatterbox-turbo
 https://decodingml.substack.com/p/deploying-agents-as-real-time-apis
 https://github.com/Nighthawk42/mOrpheus
 https://github.com/RobViren/kvoicewalk

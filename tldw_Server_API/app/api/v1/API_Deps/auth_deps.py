@@ -660,7 +660,7 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
             headers=extra_headers,
-        )
+        ) from e
 
     # Successful JWT authentication: normalize the User model to a public dict.
     if hasattr(user_obj, "model_dump"):
@@ -712,6 +712,9 @@ def require_permissions(*permissions: str) -> Callable[[AuthPrincipal], Awaitabl
 
     Admin principals (principal.is_admin) are allowed regardless of specific
     permissions. On failure, raises HTTP 403 with a descriptive message.
+
+    Note: Uses AND semantics - the principal must have all specified
+    permissions (unlike require_roles, which uses OR semantics for roles).
     """
 
     perms = [str(p) for p in permissions if str(p).strip()]
@@ -737,8 +740,11 @@ def require_roles(*roles: str) -> Callable[[AuthPrincipal], Awaitable[AuthPrinci
     Dependency factory that enforces required role claims on the principal.
 
     Admin principals (principal.is_admin) are allowed regardless of specific
-    roles. On failure, raises HTTP 403 with a descriptive message. Existing
-    401/403 semantics are treated as part of the public error contract.
+    roles. On failure, raises HTTP 403 with a descriptive message.
+
+    Note: Uses OR semantics - the principal must have at least one of the
+    specified roles (unlike require_permissions, which requires all listed
+    permissions).
     """
 
     role_list = [str(r) for r in roles if str(r).strip()]
