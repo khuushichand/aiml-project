@@ -69,8 +69,7 @@ def _get_chacha_executor() -> ThreadPoolExecutor:
     """
     global _CHACHA_EXECUTOR, _CHACHA_EXECUTOR_SHUTDOWN
     with _CHACHA_EXECUTOR_LOCK:
-        executor = _CHACHA_EXECUTOR
-        if executor is None or _CHACHA_EXECUTOR_SHUTDOWN:
+        if _CHACHA_EXECUTOR is None or _CHACHA_EXECUTOR_SHUTDOWN:
             _CHACHA_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chacha-db")
             _CHACHA_EXECUTOR_SHUTDOWN = False
         return _CHACHA_EXECUTOR
@@ -488,7 +487,22 @@ def close_all_chacha_db_instances():
 
 
 def shutdown_chacha_executor(wait: bool = False) -> None:
-    """Shut down the ChaChaNotes executor to avoid lingering threads on shutdown."""
+    """
+    Shut down the ChaChaNotes executor to avoid lingering threads on shutdown.
+
+    Captures the current executor under lock, clears the global reference,
+    marks shutdown, then releases the lock before shutting down the captured
+    executor. This pattern avoids deadlock and allows _get_chacha_executor()
+    to safely create a new executor if called again (e.g., in test scenarios).
+
+    Args:
+        wait: If True, block until all pending futures complete. If False,
+            return immediately after cancelling pending futures.
+
+    Note:
+        Uses cancel_futures=True to aggressively terminate pending work.
+        Safe to call multiple times; subsequent calls are no-ops.
+    """
     global _CHACHA_EXECUTOR, _CHACHA_EXECUTOR_SHUTDOWN
     with _CHACHA_EXECUTOR_LOCK:
         executor = _CHACHA_EXECUTOR
