@@ -122,3 +122,123 @@ class OrganizationWatchlistsSettingsUpdate(BaseModel):
 class OrganizationWatchlistsSettingsResponse(BaseModel):
     org_id: int
     require_include_default: Optional[bool] = None
+
+
+# ============================
+# Self-service org schemas
+# ============================
+
+class OrgSelfCreateRequest(BaseModel):
+    """Request to create a new organization (self-service)."""
+    name: str = Field(..., min_length=2, max_length=100)
+    slug: Optional[str] = Field(None, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$", max_length=50)
+
+
+class OrgUpdateRequest(BaseModel):
+    """Request to update an organization."""
+    name: Optional[str] = Field(None, min_length=2, max_length=100)
+    slug: Optional[str] = Field(None, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$", max_length=50)
+
+
+class OrgDetailResponse(BaseModel):
+    """Detailed organization response with membership info."""
+    id: int
+    name: str
+    slug: Optional[str] = None
+    owner_user_id: Optional[int] = None
+    is_active: bool = True
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    member_count: Optional[int] = None
+    team_count: Optional[int] = None
+    user_role: Optional[str] = None
+
+
+class OwnershipTransferRequest(BaseModel):
+    """Request to transfer org ownership."""
+    new_owner_user_id: int = Field(..., description="User ID of the new owner")
+
+
+class TeamListResponse(BaseModel):
+    """List of teams."""
+    items: List[TeamResponse]
+    total: int
+
+
+class TeamUpdateRequest(BaseModel):
+    """Request to update a team."""
+    name: Optional[str] = Field(None, min_length=2, max_length=100)
+    slug: Optional[str] = Field(None, max_length=50)
+    description: Optional[str] = Field(None, max_length=500)
+
+
+class TeamMemberListResponse(BaseModel):
+    """List of team members."""
+    items: List[TeamMemberResponse]
+    total: int
+
+
+# ============================
+# Organization invite schemas
+# ============================
+
+class OrgInviteCreateRequest(BaseModel):
+    """Request to create an organization invite."""
+    team_id: Optional[int] = Field(None, description="Optional team ID for team-specific invite")
+    role_to_grant: str = Field("member", pattern=r"^(admin|lead|member)$")
+    max_uses: int = Field(1, ge=1, le=1000)
+    expiry_days: int = Field(7, ge=1, le=365)
+    description: Optional[str] = Field(None, max_length=500)
+
+
+class OrgInviteResponse(BaseModel):
+    """Organization invite details."""
+    id: int
+    code: str
+    org_id: int
+    org_name: Optional[str] = None
+    team_id: Optional[int] = None
+    team_name: Optional[str] = None
+    role_to_grant: str
+    max_uses: int
+    uses_count: int
+    is_active: bool
+    expires_at: Optional[str] = None
+    created_at: Optional[str] = None
+    created_by: int
+    description: Optional[str] = None
+
+
+class OrgInviteListResponse(BaseModel):
+    """List of organization invites."""
+    items: List[OrgInviteResponse]
+    total: int
+
+
+class OrgInvitePreviewResponse(BaseModel):
+    """Public preview of an invite (no auth required)."""
+    org_name: Optional[str] = None
+    org_slug: Optional[str] = None
+    team_name: Optional[str] = None
+    role_to_grant: str
+    is_valid: bool
+    status: str
+    message: Optional[str] = None
+    expires_at: Optional[str] = None
+
+
+class OrgInviteRedeemRequest(BaseModel):
+    """Request to redeem an invite code."""
+    code: str = Field(..., min_length=8)
+
+
+class OrgInviteRedeemResponse(BaseModel):
+    """Result of redeeming an invite."""
+    success: bool
+    org_id: Optional[int] = None
+    org_name: Optional[str] = None
+    team_id: Optional[int] = None
+    team_name: Optional[str] = None
+    role: Optional[str] = None
+    was_already_member: bool = False
+    message: Optional[str] = None

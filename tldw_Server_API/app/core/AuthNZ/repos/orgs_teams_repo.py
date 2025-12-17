@@ -384,6 +384,106 @@ class AuthnzOrgsTeamsRepo:
             raise
 
     # -------------------------------------------------------------------------
+    # Single-record getters
+    # -------------------------------------------------------------------------
+
+    async def get_team(self, team_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get a team by ID.
+
+        Returns team dict with id, org_id, name, slug, description, is_active, etc.
+        Returns None if not found.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres(conn):
+                    row = await conn.fetchrow(
+                        """
+                        SELECT id, org_id, name, slug, description, is_active, created_at, updated_at
+                        FROM teams WHERE id = $1
+                        """,
+                        team_id
+                    )
+                    if not row:
+                        return None
+                    d = dict(row)
+                    from datetime import datetime
+                    for key in ("created_at", "updated_at"):
+                        if isinstance(d.get(key), datetime):
+                            d[key] = d[key].isoformat()
+                    return d
+                else:
+                    cur = await conn.execute(
+                        """
+                        SELECT id, org_id, name, slug, description, is_active, created_at, updated_at
+                        FROM teams WHERE id = ?
+                        """,
+                        (team_id,)
+                    )
+                    row = await cur.fetchone()
+                    if not row:
+                        return None
+                    return {
+                        "id": row[0],
+                        "org_id": row[1],
+                        "name": row[2],
+                        "slug": row[3],
+                        "description": row[4],
+                        "is_active": bool(row[5]),
+                        "created_at": row[6],
+                        "updated_at": row[7],
+                    }
+        except Exception as exc:
+            logger.error(f"AuthnzOrgsTeamsRepo.get_team failed: {exc}")
+            raise
+
+    async def get_org_member(self, org_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific org membership.
+
+        Returns membership dict with org_id, user_id, role, status, added_at.
+        Returns None if user is not a member.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres(conn):
+                    row = await conn.fetchrow(
+                        """
+                        SELECT org_id, user_id, role, status, added_at
+                        FROM org_members WHERE org_id = $1 AND user_id = $2
+                        """,
+                        org_id, user_id
+                    )
+                    if not row:
+                        return None
+                    d = dict(row)
+                    from datetime import datetime
+                    if isinstance(d.get("added_at"), datetime):
+                        d["added_at"] = d["added_at"].isoformat()
+                    return d
+                else:
+                    cur = await conn.execute(
+                        """
+                        SELECT org_id, user_id, role, status, added_at
+                        FROM org_members WHERE org_id = ? AND user_id = ?
+                        """,
+                        (org_id, user_id)
+                    )
+                    row = await cur.fetchone()
+                    if not row:
+                        return None
+                    return {
+                        "org_id": row[0],
+                        "user_id": row[1],
+                        "role": row[2],
+                        "status": row[3],
+                        "added_at": row[4],
+                    }
+        except Exception as exc:
+            logger.error(f"AuthnzOrgsTeamsRepo.get_org_member failed: {exc}")
+            raise
+
+    # -------------------------------------------------------------------------
     # Team membership helpers
     # -------------------------------------------------------------------------
 

@@ -180,6 +180,8 @@ def test_media_rls_enforces_scope_postgres():
                 media_type="text",
                 chunks=None,
                 keywords=[],
+                visibility="org",
+                owner_user_id=606,
             )
 
         with scoped_context(
@@ -216,6 +218,8 @@ def test_media_rls_enforces_scope_postgres():
                 media_type="text",
                 chunks=None,
                 keywords=[],
+                visibility="team",
+                owner_user_id=303,
             )
 
         with scoped_context(

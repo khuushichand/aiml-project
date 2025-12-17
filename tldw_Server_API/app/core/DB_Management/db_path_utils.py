@@ -26,6 +26,7 @@ class DatabasePaths:
     PERSONALIZATION_DB_NAME = "Personalization.db"
     WORKFLOWS_DB_NAME = "workflows.db"
     WORKFLOWS_SCHEDULER_DB_NAME = "workflows_scheduler.db"
+    KANBAN_DB_NAME = "Kanban.db"
 
     # Subdirectories
     PROMPTS_SUBDIR = "prompts_user_dbs"
@@ -158,6 +159,13 @@ class DatabasePaths:
         return workflows_dir / DatabasePaths.WORKFLOWS_SCHEDULER_DB_NAME
 
     @staticmethod
+    def get_kanban_db_path(user_id: int) -> Path:
+        """Get the path to the user's Kanban database."""
+        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        # Keep at root of user dir alongside ChaChaNotes for discoverability
+        return user_dir / DatabasePaths.KANBAN_DB_NAME
+
+    @staticmethod
     def get_all_user_db_paths(user_id: int) -> Dict[str, Path]:
         """
         Get all database paths for a user.
@@ -174,6 +182,7 @@ class DatabasePaths:
             "personalization": DatabasePaths.get_personalization_db_path(user_id),
             "workflows": DatabasePaths.get_workflows_db_path(user_id),
             "workflows_scheduler": DatabasePaths.get_workflows_scheduler_db_path(user_id),
+            "kanban": DatabasePaths.get_kanban_db_path(user_id),
         }
 
     @staticmethod

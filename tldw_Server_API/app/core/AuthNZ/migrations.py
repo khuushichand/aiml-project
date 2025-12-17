@@ -1251,6 +1251,290 @@ def migration_027_add_session_revocation_columns(conn: sqlite3.Connection) -> No
         logger.info("Migration 027: Harmonized session revocation columns")
     except Exception as exc:
         logger.warning(f"Migration 027: Unable to harmonize session columns: {exc}")
+
+
+def migration_028_create_org_invites(conn: sqlite3.Connection) -> None:
+    """Create org_invites table for shareable invite codes."""
+    logger.info("Migration 028: START org_invites table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_invites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT UNIQUE NOT NULL,
+            org_id INTEGER NOT NULL,
+            team_id INTEGER,
+            role_to_grant TEXT DEFAULT 'member',
+            created_by INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP NOT NULL,
+            max_uses INTEGER DEFAULT 1,
+            uses_count INTEGER DEFAULT 0,
+            is_active INTEGER DEFAULT 1,
+            description TEXT,
+            metadata TEXT,
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+            FOREIGN KEY (created_by) REFERENCES users(id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_invites_code ON org_invites(code)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_invites_org_active ON org_invites(org_id, is_active)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_invites_expires ON org_invites(expires_at)")
+    conn.commit()
+    logger.info("Migration 028: Created org_invites table")
+
+
+def migration_029_create_org_invite_redemptions(conn: sqlite3.Connection) -> None:
+    """Create org_invite_redemptions table to track who redeemed invites."""
+    logger.info("Migration 029: START org_invite_redemptions table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_invite_redemptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invite_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            redeemed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ip_address TEXT,
+            user_agent TEXT,
+            FOREIGN KEY (invite_id) REFERENCES org_invites(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE(invite_id, user_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_invite_redemptions_invite ON org_invite_redemptions(invite_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_invite_redemptions_user ON org_invite_redemptions(user_id)")
+    conn.commit()
+    logger.info("Migration 029: Created org_invite_redemptions table")
+
+
+def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
+    """Create subscription_plans table for plan tier definitions."""
+    logger.info("Migration 030: START subscription_plans table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS subscription_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            display_name TEXT NOT NULL,
+            description TEXT,
+            stripe_product_id TEXT,
+            stripe_price_id TEXT,
+            stripe_price_id_yearly TEXT,
+            price_usd_monthly REAL DEFAULT 0,
+            price_usd_yearly REAL DEFAULT 0,
+            limits_json TEXT NOT NULL,
+            is_active INTEGER DEFAULT 1,
+            is_public INTEGER DEFAULT 1,
+            sort_order INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_name ON subscription_plans(name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_active ON subscription_plans(is_active)")
+
+    # Seed default plans
+    import json
+    default_plans = [
+        {
+            "name": "free",
+            "display_name": "Free",
+            "description": "Get started with basic features",
+            "price_usd_monthly": 0,
+            "price_usd_yearly": 0,
+            "sort_order": 0,
+            "limits_json": json.dumps({
+                "storage_mb": 1024,
+                "api_calls_day": 100,
+                "api_calls_month": 3000,
+                "llm_tokens_day": 10000,
+                "llm_tokens_month": 300000,
+                "llm_cost_month_usd": 0,
+                "transcription_minutes_month": 10,
+                "concurrent_jobs": 1,
+                "team_members": 1,
+                "rate_limit_rpm": 10,
+                "features": ["basic_search", "fts5_search", "basic_chat"]
+            })
+        },
+        {
+            "name": "pro",
+            "display_name": "Pro",
+            "description": "For power users and small teams",
+            "price_usd_monthly": 29,
+            "price_usd_yearly": 290,
+            "sort_order": 1,
+            "limits_json": json.dumps({
+                "storage_mb": 10240,
+                "api_calls_day": 5000,
+                "api_calls_month": 150000,
+                "llm_tokens_day": 500000,
+                "llm_tokens_month": 15000000,
+                "llm_cost_month_usd": 50,
+                "transcription_minutes_month": 300,
+                "concurrent_jobs": 5,
+                "team_members": 5,
+                "rate_limit_rpm": 120,
+                "features": ["*", "rag_advanced", "vector_search", "priority_support"]
+            })
+        },
+        {
+            "name": "enterprise",
+            "display_name": "Enterprise",
+            "description": "For organizations with advanced needs",
+            "price_usd_monthly": 199,
+            "price_usd_yearly": 1990,
+            "sort_order": 2,
+            "limits_json": json.dumps({
+                "storage_mb": 102400,
+                "api_calls_day": 50000,
+                "api_calls_month": 1500000,
+                "llm_tokens_day": 5000000,
+                "llm_tokens_month": 150000000,
+                "llm_cost_month_usd": 500,
+                "transcription_minutes_month": 3000,
+                "concurrent_jobs": 20,
+                "team_members": -1,
+                "rate_limit_rpm": 600,
+                "features": ["*", "sso", "audit_logs", "dedicated_support", "custom_models"]
+            })
+        }
+    ]
+
+    for plan in default_plans:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO subscription_plans
+            (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (plan["name"], plan["display_name"], plan["description"],
+             plan["price_usd_monthly"], plan["price_usd_yearly"], plan["limits_json"], plan["sort_order"])
+        )
+
+    conn.commit()
+    logger.info("Migration 030: Created subscription_plans table with default plans")
+
+
+def migration_031_create_org_subscriptions(conn: sqlite3.Connection) -> None:
+    """Create org_subscriptions table for organization subscription state."""
+    logger.info("Migration 031: START org_subscriptions table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id INTEGER NOT NULL UNIQUE,
+            plan_id INTEGER NOT NULL,
+            stripe_customer_id TEXT,
+            stripe_subscription_id TEXT,
+            stripe_subscription_status TEXT,
+            billing_cycle TEXT DEFAULT 'monthly',
+            current_period_start TIMESTAMP,
+            current_period_end TIMESTAMP,
+            status TEXT DEFAULT 'active',
+            trial_start TIMESTAMP,
+            trial_end TIMESTAMP,
+            canceled_at TIMESTAMP,
+            cancel_at_period_end INTEGER DEFAULT 0,
+            custom_limits_json TEXT,
+            metadata TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+            FOREIGN KEY (plan_id) REFERENCES subscription_plans(id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_org ON org_subscriptions(org_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_customer ON org_subscriptions(stripe_customer_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_sub ON org_subscriptions(stripe_subscription_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_subs_status ON org_subscriptions(status)")
+    conn.commit()
+    logger.info("Migration 031: Created org_subscriptions table")
+
+
+def migration_032_create_stripe_webhook_events(conn: sqlite3.Connection) -> None:
+    """Create stripe_webhook_events table for idempotency and audit."""
+    logger.info("Migration 032: START stripe_webhook_events table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stripe_event_id TEXT UNIQUE NOT NULL,
+            event_type TEXT NOT NULL,
+            event_data TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',
+            processed_at TIMESTAMP,
+            error_message TEXT,
+            retry_count INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_stripe_events_event_id ON stripe_webhook_events(stripe_event_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON stripe_webhook_events(event_type)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_stripe_events_status ON stripe_webhook_events(status)")
+    conn.commit()
+    logger.info("Migration 032: Created stripe_webhook_events table")
+
+
+def migration_033_create_payment_history(conn: sqlite3.Connection) -> None:
+    """Create payment_history table for invoice display."""
+    logger.info("Migration 033: START payment_history table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS payment_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id INTEGER NOT NULL,
+            stripe_invoice_id TEXT,
+            stripe_payment_intent_id TEXT,
+            amount_cents INTEGER NOT NULL,
+            currency TEXT DEFAULT 'usd',
+            status TEXT NOT NULL,
+            description TEXT,
+            invoice_pdf_url TEXT,
+            receipt_url TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_payment_history_org ON payment_history(org_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_payment_history_org_date ON payment_history(org_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_payment_history_stripe_invoice ON payment_history(stripe_invoice_id)")
+    conn.commit()
+    logger.info("Migration 033: Created payment_history table")
+
+
+def migration_034_create_billing_audit_log(conn: sqlite3.Connection) -> None:
+    """Create billing_audit_log table for billing operation audit trail."""
+    logger.info("Migration 034: START billing_audit_log table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS billing_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id INTEGER NOT NULL,
+            user_id INTEGER,
+            action TEXT NOT NULL,
+            details TEXT,
+            ip_address TEXT,
+            user_agent TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_audit_org ON billing_audit_log(org_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_audit_action ON billing_audit_log(action)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_audit_created ON billing_audit_log(created_at)")
+    conn.commit()
+    logger.info("Migration 034: Created billing_audit_log table")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -1295,6 +1579,13 @@ def get_authnz_migrations() -> List[Migration]:
             "Ensure session revocation columns",
             migration_027_add_session_revocation_columns,
         ),
+        Migration(28, "Create org_invites table", migration_028_create_org_invites),
+        Migration(29, "Create org_invite_redemptions table", migration_029_create_org_invite_redemptions),
+        Migration(30, "Create subscription_plans table", migration_030_create_subscription_plans),
+        Migration(31, "Create org_subscriptions table", migration_031_create_org_subscriptions),
+        Migration(32, "Create stripe_webhook_events table", migration_032_create_stripe_webhook_events),
+        Migration(33, "Create payment_history table", migration_033_create_payment_history),
+        Migration(34, "Create billing_audit_log table", migration_034_create_billing_audit_log),
     ]
 
 

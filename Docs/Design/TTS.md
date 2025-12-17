@@ -82,6 +82,8 @@ https://huggingface.co/FunAudioLLM/Fun-CosyVoice3-0.5B-2512
 https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512
 https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512
 https://huggingface.co/ResembleAI/chatterbox-turbo
+https://github.com/diodiogod/TTS-Audio-Suite
+
 https://decodingml.substack.com/p/deploying-agents-as-real-time-apis
 https://github.com/Nighthawk42/mOrpheus
 https://github.com/RobViren/kvoicewalk

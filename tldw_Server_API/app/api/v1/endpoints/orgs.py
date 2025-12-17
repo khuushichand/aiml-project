@@ -1,0 +1,920 @@
+"""
+orgs.py
+
+Self-service organization management endpoints.
+Allows users to manage their own organizations, teams, members, and invites.
+"""
+from __future__ import annotations
+
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from loguru import logger
+
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.api.v1.API_Deps.org_deps import (
+    OrgContext,
+    require_org_role,
+    require_org_admin,
+    require_org_owner,
+    require_org_membership,
+    get_user_orgs,
+)
+from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
+    OrgSelfCreateRequest,
+    OrgUpdateRequest,
+    OrgDetailResponse,
+    OrganizationResponse,
+    OrganizationListResponse,
+    OwnershipTransferRequest,
+    TeamCreateRequest,
+    TeamResponse,
+    TeamListResponse,
+    TeamUpdateRequest,
+    TeamMemberAddRequest,
+    TeamMemberResponse,
+    TeamMemberListResponse,
+    OrgMemberAddRequest,
+    OrgMemberResponse,
+    OrgMemberRoleUpdateRequest,
+    OrgMemberListItem,
+    OrgInviteCreateRequest,
+    OrgInviteResponse,
+    OrgInviteListResponse,
+)
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
+from tldw_Server_API.app.core.AuthNZ.exceptions import (
+    DuplicateOrganizationError,
+    DuplicateTeamError,
+)
+from tldw_Server_API.app.services.org_invite_service import OrgInviteService, get_invite_service
+
+
+router = APIRouter(
+    prefix="/orgs",
+    tags=["organizations"],
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "Not authorized"},
+    },
+)
+
+
+# =============================================================================
+# Organization CRUD
+# =============================================================================
+
+@router.get(
+    "",
+    response_model=OrganizationListResponse,
+    summary="List my organizations",
+    description="List all organizations the current user belongs to.",
+)
+async def list_my_orgs(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    """List organizations the current user is a member of."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    # Get user's org memberships
+    memberships = await repo.list_org_memberships_for_user(principal.user_id)
+    org_ids = [m["org_id"] for m in memberships]
+
+    if not org_ids:
+        return OrganizationListResponse(
+            items=[],
+            total=0,
+            limit=limit,
+            offset=offset,
+            has_more=False,
+        )
+
+    # Fetch org details
+    all_orgs, total = await repo.list_organizations(with_total=True, limit=1000, offset=0)
+
+    # Filter to user's orgs and add role info
+    user_orgs = []
+    role_map = {m["org_id"]: m["role"] for m in memberships}
+    for org in all_orgs:
+        if org["id"] in org_ids:
+            user_orgs.append(org)
+
+    # Apply pagination
+    paginated = user_orgs[offset : offset + limit]
+
+    return OrganizationListResponse(
+        items=[OrganizationResponse(**org) for org in paginated],
+        total=len(user_orgs),
+        limit=limit,
+        offset=offset,
+        has_more=offset + limit < len(user_orgs),
+    )
+
+
+@router.post(
+    "",
+    response_model=OrgDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create organization",
+    description="Create a new organization. The creating user becomes the owner.",
+)
+async def create_org(
+    body: OrgSelfCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+):
+    """Create a new organization with the current user as owner."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    try:
+        org = await repo.create_organization(
+            name=body.name,
+            slug=body.slug,
+            owner_user_id=principal.user_id,
+        )
+
+        # Add creator as owner member
+        await repo.add_org_member(
+            org_id=org["id"],
+            user_id=principal.user_id,
+            role="owner",
+        )
+
+        logger.info(f"User {principal.user_id} created org {org['id']} ({body.name})")
+
+        return OrgDetailResponse(
+            id=org["id"],
+            name=org["name"],
+            slug=org.get("slug"),
+            owner_user_id=org.get("owner_user_id"),
+            is_active=org.get("is_active", True),
+            created_at=org.get("created_at"),
+            updated_at=org.get("updated_at"),
+            member_count=1,
+            team_count=0,
+            user_role="owner",
+        )
+    except DuplicateOrganizationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
+
+
+@router.get(
+    "/{org_id}",
+    response_model=OrgDetailResponse,
+    summary="Get organization details",
+)
+async def get_org(
+    ctx: OrgContext = Depends(require_org_membership()),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+):
+    """Get detailed information about an organization."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    # Get org
+    all_orgs, _ = await repo.list_organizations(limit=1000, offset=0)
+    org = next((o for o in all_orgs if o["id"] == ctx.org_id), None)
+
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    # Get member count
+    members = await repo.list_org_members(org_id=ctx.org_id, limit=1000)
+    member_count = len(members)
+
+    # Get team count (we need a method for this)
+    from tldw_Server_API.app.services.admin_orgs_service import list_teams_by_org as svc_list_teams
+    teams = await svc_list_teams(ctx.org_id)
+    team_count = len(teams) if teams else 0
+
+    return OrgDetailResponse(
+        id=org["id"],
+        name=org["name"],
+        slug=org.get("slug"),
+        owner_user_id=org.get("owner_user_id"),
+        is_active=org.get("is_active", True),
+        created_at=org.get("created_at"),
+        updated_at=org.get("updated_at"),
+        member_count=member_count,
+        team_count=team_count,
+        user_role=ctx.role,
+    )
+
+
+@router.patch(
+    "/{org_id}",
+    response_model=OrganizationResponse,
+    summary="Update organization",
+)
+async def update_org(
+    body: OrgUpdateRequest,
+    ctx: OrgContext = Depends(require_org_admin()),
+):
+    """Update organization details. Requires admin or owner role."""
+    db_pool = await get_db_pool()
+
+    # Build update fields
+    updates = {}
+    if body.name is not None:
+        updates["name"] = body.name
+    if body.slug is not None:
+        updates["slug"] = body.slug
+
+    if not updates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields to update",
+        )
+
+    # Execute update
+    async with db_pool.transaction() as conn:
+        if hasattr(conn, "fetchrow"):
+            # PostgreSQL
+            set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(updates.keys()))
+            params = [ctx.org_id] + list(updates.values())
+            row = await conn.fetchrow(
+                f"""
+                UPDATE organizations
+                SET {set_clause}, updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+                RETURNING id, name, slug, owner_user_id, is_active, created_at, updated_at
+                """,
+                *params,
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="Organization not found")
+            org = dict(row)
+        else:
+            # SQLite
+            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+            params = list(updates.values()) + [ctx.org_id]
+            await conn.execute(
+                f"UPDATE organizations SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                tuple(params),
+            )
+            cur = await conn.execute(
+                "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations WHERE id = ?",
+                (ctx.org_id,),
+            )
+            row = await cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Organization not found")
+            org = {
+                "id": row[0],
+                "name": row[1],
+                "slug": row[2],
+                "owner_user_id": row[3],
+                "is_active": bool(row[4]),
+                "created_at": row[5],
+                "updated_at": row[6],
+            }
+
+    logger.info(f"Org {ctx.org_id} updated by user with role {ctx.role}")
+    return OrganizationResponse(**org)
+
+
+@router.delete(
+    "/{org_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete organization",
+)
+async def delete_org(
+    ctx: OrgContext = Depends(require_org_owner()),
+):
+    """Delete an organization. Requires owner role."""
+    # TODO: Check for active billing subscription before allowing deletion
+    db_pool = await get_db_pool()
+
+    async with db_pool.transaction() as conn:
+        if hasattr(conn, "execute"):
+            if hasattr(conn, "fetchrow"):
+                # PostgreSQL
+                await conn.execute("DELETE FROM organizations WHERE id = $1", ctx.org_id)
+            else:
+                # SQLite
+                await conn.execute("DELETE FROM organizations WHERE id = ?", (ctx.org_id,))
+
+    logger.info(f"Org {ctx.org_id} deleted by owner")
+
+
+@router.post(
+    "/{org_id}/transfer",
+    response_model=OrganizationResponse,
+    summary="Transfer ownership",
+)
+async def transfer_ownership(
+    body: OwnershipTransferRequest,
+    ctx: OrgContext = Depends(require_org_owner()),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+):
+    """Transfer organization ownership to another member. Requires owner role."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    # Verify new owner is a member
+    new_owner_membership = await repo.get_org_member(ctx.org_id, body.new_owner_user_id)
+    if not new_owner_membership:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New owner must be an existing member of the organization",
+        )
+
+    async with db_pool.transaction() as conn:
+        if hasattr(conn, "fetchrow"):
+            # PostgreSQL
+            # Update org owner
+            await conn.execute(
+                "UPDATE organizations SET owner_user_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+                body.new_owner_user_id,
+                ctx.org_id,
+            )
+            # Update new owner's role
+            await conn.execute(
+                "UPDATE org_members SET role = 'owner' WHERE org_id = $1 AND user_id = $2",
+                ctx.org_id,
+                body.new_owner_user_id,
+            )
+            # Demote current owner to admin
+            await conn.execute(
+                "UPDATE org_members SET role = 'admin' WHERE org_id = $1 AND user_id = $2",
+                ctx.org_id,
+                principal.user_id,
+            )
+            row = await conn.fetchrow(
+                "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations WHERE id = $1",
+                ctx.org_id,
+            )
+            org = dict(row) if row else {}
+        else:
+            # SQLite
+            await conn.execute(
+                "UPDATE organizations SET owner_user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (body.new_owner_user_id, ctx.org_id),
+            )
+            await conn.execute(
+                "UPDATE org_members SET role = 'owner' WHERE org_id = ? AND user_id = ?",
+                (ctx.org_id, body.new_owner_user_id),
+            )
+            await conn.execute(
+                "UPDATE org_members SET role = 'admin' WHERE org_id = ? AND user_id = ?",
+                (ctx.org_id, principal.user_id),
+            )
+            cur = await conn.execute(
+                "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations WHERE id = ?",
+                (ctx.org_id,),
+            )
+            row = await cur.fetchone()
+            org = {
+                "id": row[0],
+                "name": row[1],
+                "slug": row[2],
+                "owner_user_id": row[3],
+                "is_active": bool(row[4]),
+                "created_at": row[5],
+                "updated_at": row[6],
+            } if row else {}
+
+    logger.info(
+        f"Org {ctx.org_id} ownership transferred from {principal.user_id} to {body.new_owner_user_id}"
+    )
+    return OrganizationResponse(**org)
+
+
+# =============================================================================
+# Organization Members
+# =============================================================================
+
+@router.get(
+    "/{org_id}/members",
+    response_model=List[OrgMemberListItem],
+    summary="List organization members",
+)
+async def list_org_members(
+    ctx: OrgContext = Depends(require_org_membership()),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    """List members of an organization."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    members = await repo.list_org_members(org_id=ctx.org_id, limit=limit, offset=offset)
+    return [OrgMemberListItem(**m) for m in members]
+
+
+@router.post(
+    "/{org_id}/members",
+    response_model=OrgMemberResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Add organization member",
+)
+async def add_org_member(
+    body: OrgMemberAddRequest,
+    ctx: OrgContext = Depends(require_org_admin()),
+):
+    """Add a member to the organization. Requires admin or owner role."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    # Cannot add owners via this endpoint
+    if body.role and body.role.lower() == "owner":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Use the transfer ownership endpoint to add an owner",
+        )
+
+    result = await repo.add_org_member(
+        org_id=ctx.org_id,
+        user_id=body.user_id,
+        role=body.role or "member",
+    )
+
+    logger.info(f"Added user {body.user_id} to org {ctx.org_id} as {body.role}")
+    return OrgMemberResponse(**result)
+
+
+@router.patch(
+    "/{org_id}/members/{user_id}",
+    response_model=OrgMemberResponse,
+    summary="Update member role",
+)
+async def update_member_role(
+    user_id: int,
+    body: OrgMemberRoleUpdateRequest,
+    ctx: OrgContext = Depends(require_org_admin()),
+):
+    """Update a member's role. Requires admin or owner role."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    # Cannot assign owner role via this endpoint
+    if body.role.lower() == "owner":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Use the transfer ownership endpoint to assign owner role",
+        )
+
+    result = await repo.update_org_member_role(
+        org_id=ctx.org_id,
+        user_id=user_id,
+        role=body.role,
+    )
+
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Member not found",
+        )
+
+    if result.get("error") == "owner_required":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot demote the last owner. Transfer ownership first.",
+        )
+
+    return OrgMemberResponse(
+        org_id=ctx.org_id,
+        user_id=user_id,
+        role=result["role"],
+    )
+
+
+@router.delete(
+    "/{org_id}/members/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove organization member",
+)
+async def remove_org_member(
+    user_id: int,
+    ctx: OrgContext = Depends(require_org_admin()),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+):
+    """Remove a member from the organization. Requires admin or owner role."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    # Cannot remove yourself if you're the only owner
+    if user_id == principal.user_id and ctx.role == "owner":
+        members = await repo.list_org_members(org_id=ctx.org_id, role="owner", limit=10)
+        owners = [m for m in members if m.get("role") == "owner"]
+        if len(owners) <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot remove the last owner. Transfer ownership first.",
+            )
+
+    result = await repo.remove_org_member(org_id=ctx.org_id, user_id=user_id)
+
+    if result.get("error") == "owner_required":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot remove the last owner. Transfer ownership first.",
+        )
+
+    if not result.get("removed"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Member not found",
+        )
+
+    logger.info(f"Removed user {user_id} from org {ctx.org_id}")
+
+
+# =============================================================================
+# Teams
+# =============================================================================
+
+@router.get(
+    "/{org_id}/teams",
+    response_model=TeamListResponse,
+    summary="List teams",
+)
+async def list_teams(
+    ctx: OrgContext = Depends(require_org_membership()),
+):
+    """List teams in the organization."""
+    from tldw_Server_API.app.services.admin_orgs_service import list_teams_by_org
+
+    teams = await list_teams_by_org(ctx.org_id)
+    return TeamListResponse(
+        items=[TeamResponse(**t) for t in (teams or [])],
+        total=len(teams) if teams else 0,
+    )
+
+
+@router.post(
+    "/{org_id}/teams",
+    response_model=TeamResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create team",
+)
+async def create_team(
+    body: TeamCreateRequest,
+    ctx: OrgContext = Depends(require_org_admin()),
+):
+    """Create a new team in the organization. Requires admin or owner role."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    try:
+        team = await repo.create_team(
+            org_id=ctx.org_id,
+            name=body.name,
+            slug=body.slug,
+            description=body.description,
+        )
+        logger.info(f"Created team {team['id']} in org {ctx.org_id}")
+        return TeamResponse(**team)
+    except DuplicateTeamError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
+
+
+@router.get(
+    "/{org_id}/teams/{team_id}",
+    response_model=TeamResponse,
+    summary="Get team details",
+)
+async def get_team(
+    team_id: int,
+    ctx: OrgContext = Depends(require_org_membership()),
+):
+    """Get team details."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    team = await repo.get_team(team_id)
+    if not team or team.get("org_id") != ctx.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Team not found",
+        )
+
+    return TeamResponse(**team)
+
+
+@router.patch(
+    "/{org_id}/teams/{team_id}",
+    response_model=TeamResponse,
+    summary="Update team",
+)
+async def update_team(
+    team_id: int,
+    body: TeamUpdateRequest,
+    ctx: OrgContext = Depends(require_org_admin()),
+):
+    """Update team details. Requires admin or owner role."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    # Verify team belongs to org
+    team = await repo.get_team(team_id)
+    if not team or team.get("org_id") != ctx.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Team not found",
+        )
+
+    # Build update
+    updates = {}
+    if body.name is not None:
+        updates["name"] = body.name
+    if body.slug is not None:
+        updates["slug"] = body.slug
+    if body.description is not None:
+        updates["description"] = body.description
+
+    if not updates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields to update",
+        )
+
+    async with db_pool.transaction() as conn:
+        if hasattr(conn, "fetchrow"):
+            set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(updates.keys()))
+            params = [team_id] + list(updates.values())
+            row = await conn.fetchrow(
+                f"""
+                UPDATE teams
+                SET {set_clause}, updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+                RETURNING id, org_id, name, slug, description, is_active, created_at, updated_at
+                """,
+                *params,
+            )
+            updated = dict(row) if row else None
+        else:
+            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+            params = list(updates.values()) + [team_id]
+            await conn.execute(
+                f"UPDATE teams SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                tuple(params),
+            )
+            cur = await conn.execute(
+                "SELECT id, org_id, name, slug, description, is_active, created_at, updated_at FROM teams WHERE id = ?",
+                (team_id,),
+            )
+            row = await cur.fetchone()
+            updated = {
+                "id": row[0],
+                "org_id": row[1],
+                "name": row[2],
+                "slug": row[3],
+                "description": row[4],
+                "is_active": bool(row[5]),
+                "created_at": row[6],
+                "updated_at": row[7],
+            } if row else None
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    return TeamResponse(**updated)
+
+
+@router.delete(
+    "/{org_id}/teams/{team_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete team",
+)
+async def delete_team(
+    team_id: int,
+    ctx: OrgContext = Depends(require_org_admin()),
+):
+    """Delete a team. Requires admin or owner role."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    # Verify team belongs to org
+    team = await repo.get_team(team_id)
+    if not team or team.get("org_id") != ctx.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Team not found",
+        )
+
+    async with db_pool.transaction() as conn:
+        if hasattr(conn, "fetchrow"):
+            await conn.execute("DELETE FROM teams WHERE id = $1", team_id)
+        else:
+            await conn.execute("DELETE FROM teams WHERE id = ?", (team_id,))
+
+    logger.info(f"Deleted team {team_id} from org {ctx.org_id}")
+
+
+# =============================================================================
+# Team Members
+# =============================================================================
+
+@router.get(
+    "/{org_id}/teams/{team_id}/members",
+    response_model=TeamMemberListResponse,
+    summary="List team members",
+)
+async def list_team_members(
+    team_id: int,
+    ctx: OrgContext = Depends(require_org_membership()),
+):
+    """List members of a team."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    # Verify team belongs to org
+    team = await repo.get_team(team_id)
+    if not team or team.get("org_id") != ctx.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Team not found",
+        )
+
+    members = await repo.list_team_members(team_id)
+    return TeamMemberListResponse(
+        items=[
+            TeamMemberResponse(
+                team_id=team_id,
+                user_id=m["user_id"],
+                role=m.get("role", "member"),
+                org_id=ctx.org_id,
+            )
+            for m in members
+        ],
+        total=len(members),
+    )
+
+
+@router.post(
+    "/{org_id}/teams/{team_id}/members",
+    response_model=TeamMemberResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Add team member",
+)
+async def add_team_member(
+    team_id: int,
+    body: TeamMemberAddRequest,
+    ctx: OrgContext = Depends(require_org_admin()),
+):
+    """Add a member to a team. Requires admin or owner role."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    # Verify team belongs to org
+    team = await repo.get_team(team_id)
+    if not team or team.get("org_id") != ctx.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Team not found",
+        )
+
+    # Verify user is an org member
+    membership = await repo.get_org_member(ctx.org_id, body.user_id)
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User must be an organization member first",
+        )
+
+    result = await repo.add_team_member(
+        team_id=team_id,
+        user_id=body.user_id,
+        role=body.role or "member",
+    )
+
+    logger.info(f"Added user {body.user_id} to team {team_id}")
+    return TeamMemberResponse(**result)
+
+
+@router.delete(
+    "/{org_id}/teams/{team_id}/members/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove team member",
+)
+async def remove_team_member(
+    team_id: int,
+    user_id: int,
+    ctx: OrgContext = Depends(require_org_admin()),
+):
+    """Remove a member from a team. Requires admin or owner role."""
+    db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    # Verify team belongs to org
+    team = await repo.get_team(team_id)
+    if not team or team.get("org_id") != ctx.org_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Team not found",
+        )
+
+    result = await repo.remove_team_member(team_id=team_id, user_id=user_id)
+    if not result.get("removed"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Team member not found",
+        )
+
+    logger.info(f"Removed user {user_id} from team {team_id}")
+
+
+# =============================================================================
+# Organization Invites
+# =============================================================================
+
+@router.get(
+    "/{org_id}/invites",
+    response_model=OrgInviteListResponse,
+    summary="List organization invites",
+)
+async def list_invites(
+    ctx: OrgContext = Depends(require_org_admin()),
+    include_expired: bool = Query(False),
+    include_inactive: bool = Query(False),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    """List invites for the organization. Requires admin or owner role."""
+    invite_service = await get_invite_service()
+
+    invites, total = await invite_service.list_org_invites(
+        ctx.org_id,
+        include_expired=include_expired,
+        include_inactive=include_inactive,
+        limit=limit,
+        offset=offset,
+    )
+
+    return OrgInviteListResponse(
+        items=[OrgInviteResponse(**inv) for inv in invites],
+        total=total,
+    )
+
+
+@router.post(
+    "/{org_id}/invites",
+    response_model=OrgInviteResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create invite",
+)
+async def create_invite(
+    body: OrgInviteCreateRequest,
+    ctx: OrgContext = Depends(require_org_admin()),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+):
+    """Create a new invite code. Requires admin or owner role."""
+    invite_service = await get_invite_service()
+
+    try:
+        invite = await invite_service.create_invite(
+            org_id=ctx.org_id,
+            created_by=principal.user_id,
+            team_id=body.team_id,
+            role_to_grant=body.role_to_grant,
+            max_uses=body.max_uses,
+            expiry_days=body.expiry_days,
+            description=body.description,
+        )
+
+        logger.info(
+            f"Created invite {invite['code'][:8]}... for org {ctx.org_id} by user {principal.user_id}"
+        )
+        return OrgInviteResponse(**invite)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.delete(
+    "/{org_id}/invites/{invite_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Revoke invite",
+)
+async def revoke_invite(
+    invite_id: int,
+    ctx: OrgContext = Depends(require_org_admin()),
+):
+    """Revoke an invite. Requires admin or owner role."""
+    invite_service = await get_invite_service()
+
+    success = await invite_service.revoke_invite(invite_id, ctx.org_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invite not found or does not belong to this organization",
+        )
+
+    logger.info(f"Revoked invite {invite_id} for org {ctx.org_id}")

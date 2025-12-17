@@ -96,6 +96,8 @@ https://component.gallery/
 https://medium.com/@alphadesignglobal/8-tiny-ui-fixes-that-will-make-your-product-feel-10x-smarter-afffb1a61a6b
 
 
+https://www.youtube.com/watch?v=1fZTOjd_bOQ
+https://medium.com/design-bootcamp/7-tips-to-become-a-master-of-ui-design-i-wish-i-knew-this-earlier-8e52de05783d
 
 www.aiuxplayground.com/pattern/chat-artifact
 https://www.8bitcn.com/?ref=sidebar

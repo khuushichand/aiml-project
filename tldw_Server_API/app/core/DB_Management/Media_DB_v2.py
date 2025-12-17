@@ -226,7 +226,7 @@ class MediaDatabase:
     handling sync metadata and FTS updates internally via Python code.
     Requires client_id on initialization. Includes schema versioning.
     """
-    _CURRENT_SCHEMA_VERSION = 8  # Add scope columns for org/team visibility
+    _CURRENT_SCHEMA_VERSION = 9  # Add visibility and owner_user_id columns
 
     # <<< Schema Definition (Version 1) >>>
 
@@ -261,6 +261,8 @@ class MediaDatabase:
         version INTEGER NOT NULL DEFAULT 1,
         org_id INTEGER,
         team_id INTEGER,
+        visibility TEXT DEFAULT 'personal' CHECK (visibility IN ('personal', 'team', 'org')),
+        owner_user_id INTEGER,
         client_id TEXT NOT NULL,
         deleted BOOLEAN NOT NULL DEFAULT 0,
         prev_version INTEGER,
@@ -483,6 +485,8 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_media_merge_parent_uuid ON Media(merge_parent_uuid);
     CREATE INDEX IF NOT EXISTS idx_media_org_id ON Media(org_id);
     CREATE INDEX IF NOT EXISTS idx_media_team_id ON Media(team_id);
+    CREATE INDEX IF NOT EXISTS idx_media_visibility ON Media(visibility);
+    CREATE INDEX IF NOT EXISTS idx_media_owner_user_id ON Media(owner_user_id);
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_keywords_uuid ON Keywords(uuid);
     CREATE INDEX IF NOT EXISTS idx_keywords_last_modified ON Keywords(last_modified);
@@ -2187,6 +2191,7 @@ class MediaDatabase:
             6: self._postgres_migrate_to_v6,
             7: self._postgres_migrate_to_v7,
             8: self._postgres_migrate_to_v8,
+            9: self._postgres_migrate_to_v9,
         }
 
     def _postgres_migrate_to_v5(self, conn) -> None:
@@ -2313,6 +2318,73 @@ class MediaDatabase:
                 ),
                 connection=conn,
             )
+
+    def _postgres_migrate_to_v9(self, conn) -> None:
+        """Add visibility and owner_user_id columns for content sharing (PostgreSQL)."""
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        # Add visibility column with check constraint
+        backend.execute(
+            (
+                f"ALTER TABLE {ident('media')} "
+                f"ADD COLUMN IF NOT EXISTS {ident('visibility')} TEXT DEFAULT 'personal'"
+            ),
+            connection=conn,
+        )
+
+        # Add check constraint for visibility values (idempotent)
+        try:
+            backend.execute(
+                f"""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint WHERE conname = 'chk_media_visibility'
+                    ) THEN
+                        ALTER TABLE {ident('media')}
+                        ADD CONSTRAINT chk_media_visibility
+                        CHECK ({ident('visibility')} IN ('personal', 'team', 'org'));
+                    END IF;
+                END $$;
+                """,
+                connection=conn,
+            )
+        except Exception as exc:
+            logging.debug(f"Could not add visibility check constraint: {exc}")
+
+        # Add owner_user_id column
+        backend.execute(
+            (
+                f"ALTER TABLE {ident('media')} "
+                f"ADD COLUMN IF NOT EXISTS {ident('owner_user_id')} BIGINT"
+            ),
+            connection=conn,
+        )
+
+        # Backfill owner_user_id from client_id where possible
+        try:
+            backend.execute(
+                f"""
+                UPDATE {ident('media')}
+                SET {ident('owner_user_id')} = CAST({ident('client_id')} AS BIGINT)
+                WHERE {ident('owner_user_id')} IS NULL
+                  AND {ident('client_id')} ~ '^[0-9]+$'
+                """,
+                connection=conn,
+            )
+        except Exception as exc:
+            logging.debug(f"Could not backfill owner_user_id: {exc}")
+
+        # Add indexes
+        backend.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_media_visibility ON {ident('media')}({ident('visibility')})",
+            connection=conn,
+        )
+        backend.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_media_owner_user_id ON {ident('media')}({ident('owner_user_id')})",
+            connection=conn,
+        )
 
     def _update_schema_version_postgres(self, conn, version: int) -> None:
         """Ensure schema_version table reflects the supplied version."""
@@ -2458,27 +2530,71 @@ class MediaDatabase:
             return False
 
     def _ensure_postgres_rls(self, conn) -> None:
-        """Ensure row-level security policies exist for shared content tables."""
+        """Ensure row-level security policies exist for shared content tables.
+
+        Visibility-aware policies:
+        - personal: Only the owner can access (owner_user_id or client_id match)
+        - team: Team members can access (team_id in user's teams)
+        - org: Organization members can access (org_id in user's orgs)
+        - admin: Platform admins can access everything
+        """
         backend = self.backend
         ident = backend.escape_identifier
 
+        # Helper expressions for array conversions
         org_array = "COALESCE(string_to_array(NULLIF(current_setting('app.org_ids', true), ''), ',')::BIGINT[], ARRAY[]::BIGINT[])"
         team_array = "COALESCE(string_to_array(NULLIF(current_setting('app.team_ids', true), ''), ',')::BIGINT[], ARRAY[]::BIGINT[])"
+        current_user = "current_setting('app.current_user_id', true)"
+        is_admin = "COALESCE(current_setting('app.is_admin', true), '0') = '1'"
+
+        # Build visibility-aware predicates for media table
+        # Personal: owner_user_id matches OR client_id matches (backwards compatibility)
+        personal_predicate = (
+            f"(COALESCE({ident('media')}.visibility, 'personal') = 'personal' "
+            f"AND (COALESCE({ident('media')}.owner_user_id::TEXT, {ident('media')}.client_id) = {current_user}))"
+        )
+
+        # Team: visibility is 'team' AND team_id is in user's team list
+        team_predicate = (
+            f"({ident('media')}.visibility = 'team' "
+            f"AND {ident('media')}.team_id IS NOT NULL "
+            f"AND {ident('media')}.team_id = ANY({team_array}))"
+        )
+
+        # Org: visibility is 'org' AND org_id is in user's org list
+        org_predicate = (
+            f"({ident('media')}.visibility = 'org' "
+            f"AND {ident('media')}.org_id IS NOT NULL "
+            f"AND {ident('media')}.org_id = ANY({org_array}))"
+        )
+
+        # Combined media access: admin OR personal OR team OR org
+        media_access_predicate = f"({is_admin} OR {personal_predicate} OR {team_predicate} OR {org_predicate})"
 
         policy_sets = {
             'media': [
-                ('media_scope_admin', "COALESCE(current_setting('app.is_admin', true), '0') = '1'"),
-                ('media_scope_personal', f"{ident('media')}.client_id = current_setting('app.current_user_id', true)"),
-                ('media_scope_org', f"{ident('media')}.org_id IS NOT NULL AND {ident('media')}.org_id = ANY({org_array})"),
-                ('media_scope_team', f"{ident('media')}.team_id IS NOT NULL AND {ident('media')}.team_id = ANY({team_array})"),
+                ('media_visibility_access', media_access_predicate),
             ],
             'sync_log': [
-                ('sync_scope_admin', "COALESCE(current_setting('app.is_admin', true), '0') = '1'"),
-                ('sync_scope_personal', f"{ident('sync_log')}.client_id = current_setting('app.current_user_id', true)"),
+                ('sync_scope_admin', is_admin),
+                ('sync_scope_personal', f"{ident('sync_log')}.client_id = {current_user}"),
                 ('sync_scope_org', f"{ident('sync_log')}.org_id IS NOT NULL AND {ident('sync_log')}.org_id = ANY({org_array})"),
                 ('sync_scope_team', f"{ident('sync_log')}.team_id IS NOT NULL AND {ident('sync_log')}.team_id = ANY({team_array})"),
             ],
         }
+
+        # Drop old media policies if they exist (migration to new visibility-based policy)
+        old_media_policies = ['media_scope_admin', 'media_scope_personal', 'media_scope_org', 'media_scope_team']
+        for old_policy in old_media_policies:
+            try:
+                if self._postgres_policy_exists(conn, 'media', old_policy):
+                    backend.execute(
+                        f"DROP POLICY IF EXISTS {backend.escape_identifier(old_policy)} ON {ident('media')}",
+                        connection=conn,
+                    )
+                    logging.debug(f"Dropped old media policy: {old_policy}")
+            except Exception as exc:
+                logging.debug(f"Could not drop old policy {old_policy}: {exc}")
 
         try:
             backend.execute(f"ALTER TABLE {ident('media')} ENABLE ROW LEVEL SECURITY", connection=conn)
@@ -2486,19 +2602,26 @@ class MediaDatabase:
         except Exception as exc:
             logging.debug(f"Could not enable RLS for media: {exc}")
 
-        # Create policies only if missing (idempotent)
+        # Create new visibility-aware media policy
         for policy_name, predicate in policy_sets['media']:
             try:
-                if not self._postgres_policy_exists(conn, 'media', policy_name):
+                # Drop and recreate to ensure latest predicate
+                try:
                     backend.execute(
-                        f"""
-                        CREATE POLICY {backend.escape_identifier(policy_name)} ON {ident('media')}
-                        FOR ALL
-                        USING ({predicate})
-                        WITH CHECK ({predicate})
-                        """,
+                        f"DROP POLICY IF EXISTS {backend.escape_identifier(policy_name)} ON {ident('media')}",
                         connection=conn,
                     )
+                except Exception:
+                    pass
+                backend.execute(
+                    f"""
+                    CREATE POLICY {backend.escape_identifier(policy_name)} ON {ident('media')}
+                    FOR ALL
+                    USING ({predicate})
+                    WITH CHECK ({predicate})
+                    """,
+                    connection=conn,
+                )
             except Exception as exc:
                 logging.debug(f"Skipping media policy {policy_name}: {exc}")
 
@@ -3280,6 +3403,45 @@ class MediaDatabase:
             conditions.append("m.deleted = 0")
         if not include_trash:
             conditions.append("m.is_trash = 0")
+
+        # Visibility filtering for SQLite (PostgreSQL uses RLS policies)
+        if self.backend_type == BackendType.SQLITE:
+            try:
+                scope = get_scope()
+            except Exception:
+                scope = None
+
+            if scope and not scope.is_admin:
+                # Build visibility conditions for non-admin users
+                visibility_parts = []
+
+                # Personal: visibility is 'personal' and user is the owner
+                user_id_str = str(scope.user_id) if scope.user_id is not None else ""
+                if user_id_str:
+                    visibility_parts.append(
+                        "(COALESCE(m.visibility, 'personal') = 'personal' "
+                        "AND (COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = ?))"
+                    )
+                    params.append(user_id_str)
+
+                # Team: visibility is 'team' and user is a member of the team
+                if scope.team_ids:
+                    team_placeholders = ','.join('?' * len(scope.team_ids))
+                    visibility_parts.append(
+                        f"(m.visibility = 'team' AND m.team_id IN ({team_placeholders}))"
+                    )
+                    params.extend(scope.team_ids)
+
+                # Org: visibility is 'org' and user is a member of the org
+                if scope.org_ids:
+                    org_placeholders = ','.join('?' * len(scope.org_ids))
+                    visibility_parts.append(
+                        f"(m.visibility = 'org' AND m.org_id IN ({org_placeholders}))"
+                    )
+                    params.extend(scope.org_ids)
+
+                if visibility_parts:
+                    conditions.append(f"({' OR '.join(visibility_parts)})")
 
         # Media IDs Filter
         if media_ids_filter:
@@ -4353,6 +4515,133 @@ class MediaDatabase:
             logger.error(f"Unexpected error soft deleting media ID {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error during soft delete: {e}") from e
 
+    def share_media(
+        self,
+        media_id: int,
+        visibility: str,
+        *,
+        org_id: Optional[int] = None,
+        team_id: Optional[int] = None,
+    ) -> bool:
+        """
+        Share media by changing its visibility scope.
+
+        Args:
+            media_id: ID of the media to share
+            visibility: New visibility level ('personal', 'team', 'org')
+            org_id: Organization ID (required for 'org' visibility)
+            team_id: Team ID (required for 'team' visibility)
+
+        Returns:
+            True if the media was updated successfully
+
+        Raises:
+            InputError: If visibility is invalid or required scope IDs are missing
+            DatabaseError: If the update fails
+        """
+        valid_visibilities = ('personal', 'team', 'org')
+        if visibility not in valid_visibilities:
+            raise InputError(f"Invalid visibility '{visibility}'. Must be one of: {valid_visibilities}")
+
+        if visibility == 'team' and team_id is None:
+            raise InputError("team_id is required for 'team' visibility")
+        if visibility == 'org' and org_id is None:
+            raise InputError("org_id is required for 'org' visibility")
+
+        now = self._get_current_utc_timestamp_str()
+
+        try:
+            with self.transaction() as conn:
+                # Get current media record
+                row = self._fetchone_with_connection(
+                    conn,
+                    "SELECT id, uuid, version, visibility, org_id, team_id FROM Media WHERE id = ? AND deleted = 0",
+                    (media_id,),
+                )
+                if not row:
+                    raise InputError(f"Media ID {media_id} not found or deleted")
+
+                media_uuid = row['uuid']
+                current_version = row['version']
+                new_version = current_version + 1
+
+                # Determine new org_id and team_id based on visibility
+                new_org_id = org_id if visibility in ('team', 'org') else None
+                new_team_id = team_id if visibility == 'team' else None
+
+                # Update the record
+                update_sql = """
+                    UPDATE Media
+                    SET visibility = ?, org_id = ?, team_id = ?, version = ?, last_modified = ?
+                    WHERE id = ? AND version = ?
+                """
+                cursor = self._execute_with_connection(
+                    conn,
+                    update_sql,
+                    (visibility, new_org_id, new_team_id, new_version, now, media_id, current_version),
+                )
+                if cursor.rowcount == 0:
+                    raise ConflictError(f"Concurrent modification detected for media ID {media_id}", entity="Media", identifier=media_id)
+
+                # Log sync event
+                payload = {
+                    "visibility": visibility,
+                    "org_id": new_org_id,
+                    "team_id": new_team_id,
+                    "version": new_version,
+                    "last_modified": now,
+                }
+                self._log_sync_event(conn, "Media", media_uuid, "update", new_version, payload)
+
+                logger.info(f"Shared media ID {media_id} with visibility '{visibility}'")
+                return True
+
+        except (InputError, ConflictError, DatabaseError) as e:
+            logger.error(f"Error sharing media ID {media_id}: {e}", exc_info=True)
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error sharing media ID {media_id}: {e}", exc_info=True)
+            raise DatabaseError(f"Failed to share media: {e}") from e
+
+    def unshare_media(self, media_id: int) -> bool:
+        """
+        Revert media to personal visibility.
+
+        This removes team/org sharing and makes the content private to the owner.
+
+        Args:
+            media_id: ID of the media to unshare
+
+        Returns:
+            True if the media was updated successfully
+        """
+        return self.share_media(media_id, visibility='personal')
+
+    def get_media_visibility(self, media_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get the current visibility settings for a media item.
+
+        Args:
+            media_id: ID of the media to check
+
+        Returns:
+            Dict with visibility, org_id, team_id, owner_user_id or None if not found
+        """
+        row = self.fetchone(
+            "SELECT visibility, org_id, team_id, owner_user_id, client_id FROM Media WHERE id = ? AND deleted = 0",
+            (media_id,),
+        )
+        if not row:
+            return None
+
+        return {
+            "visibility": row.get("visibility", "personal"),
+            "org_id": row.get("org_id"),
+            "team_id": row.get("team_id"),
+            "owner_user_id": row.get("owner_user_id"),
+            "client_id": row.get("client_id"),
+        }
+
     def add_media_with_keywords(
             self,
             *,
@@ -4370,8 +4659,15 @@ class MediaDatabase:
             overwrite: bool = False,
             chunk_options: Optional[Dict] = None,
             chunks: Optional[List[Dict[str, Any]]] = None,
+            visibility: Optional[str] = None,
+            owner_user_id: Optional[int] = None,
     ) -> Tuple[Optional[int], Optional[str], str]:
-        """Add or update a media record, handle keyword links, optional chunks and full-text sync."""
+        """Add or update a media record, handle keyword links, optional chunks and full-text sync.
+
+        Args:
+            visibility: Content visibility ('personal', 'team', 'org'). Defaults to 'personal'.
+            owner_user_id: User ID of the content owner. Defaults to client_id if numeric.
+        """
 
         # ---------------------------------------------------------------------
         # 1. Fast-fail validation & normalisation
@@ -4383,9 +4679,23 @@ class MediaDatabase:
         media_type = media_type or "unknown"
         keywords_norm = [k.strip().lower() for k in keywords or [] if k and k.strip()]
 
+        # Validate and normalize visibility
+        valid_visibilities = ('personal', 'team', 'org')
+        visibility = visibility or 'personal'
+        if visibility not in valid_visibilities:
+            raise InputError(f"Invalid visibility '{visibility}'. Must be one of: {valid_visibilities}")
+
         now = self._get_current_utc_timestamp_str()
         ingestion_date = ingestion_date or now
         client_id = self.client_id
+
+        # Resolve owner_user_id: use provided value, or derive from client_id if numeric
+        resolved_owner_user_id = owner_user_id
+        if resolved_owner_user_id is None and client_id is not None:
+            try:
+                resolved_owner_user_id = int(client_id)
+            except (TypeError, ValueError):
+                resolved_owner_user_id = None
 
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         url = url or f"local://{media_type}/{content_hash}"
@@ -4434,6 +4744,8 @@ class MediaDatabase:
                 "version": version_,
                 "org_id": scope_org_id,
                 "team_id": scope_team_id,
+                "visibility": visibility,
+                "owner_user_id": resolved_owner_user_id,
                 "client_id": client_id,
                 "deleted": bool_false,
             }
@@ -4663,8 +4975,9 @@ class MediaDatabase:
                             INSERT INTO Media (url, title, type, content, author, ingestion_date,
                                                transcription_model, content_hash, is_trash, trash_date,
                                                chunking_status, vector_processing, uuid, last_modified,
-                                               version, org_id, team_id, client_id, deleted)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                               version, org_id, team_id, visibility, owner_user_id,
+                                               client_id, deleted)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """
                         insert_params = (
                             payload['url'],
@@ -4684,6 +4997,8 @@ class MediaDatabase:
                             payload['version'],
                             payload['org_id'],
                             payload['team_id'],
+                            payload['visibility'],
+                            payload['owner_user_id'],
                             payload['client_id'],
                             payload['deleted'],
                         )

@@ -41,6 +41,11 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 - Chunking Templates: Chunking_Templates_User_Guide.md
 - Chatbooks (export/import): Chatbook_User_Guide.md
 
+## Organizations & Collaboration
+
+- Organizations and Sharing: Organizations_and_Sharing.md - Joining orgs, content visibility, sharing
+- Organization Administration: Organization_Administration.md - Managing orgs, teams, billing
+
 ## Operations & Admin
 
 - Multi-User Deployment: Multi-User_Deployment_Guide.md
