@@ -204,7 +204,12 @@ class BillingEnforcer:
             return 0
 
     async def _get_llm_tokens_month(self, org_id: int) -> int:
-        """Get LLM token usage for current month."""
+        """Get LLM token usage for current month for an organization.
+
+        This aggregates usage from both:
+        - User-scoped calls (llm_usage_log.user_id joined via org_members)
+        - API-key scoped calls (llm_usage_log.key_id joined via api_keys.org_id)
+        """
         try:
             from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 
@@ -214,24 +219,42 @@ class BillingEnforcer:
 
             async with pool.acquire() as conn:
                 if hasattr(conn, "fetchval"):
-                    # PostgreSQL
+                    # PostgreSQL: sum tokens for all org members and org-scoped API keys
                     result = await conn.fetchval(
                         """
-                        SELECT COALESCE(SUM(total_tokens), 0)
-                        FROM llm_usage_log
-                        WHERE org_id = $1 AND ts >= $2
+                        SELECT COALESCE(SUM(sub.total_tokens), 0)
+                        FROM (
+                            SELECT l.total_tokens
+                            FROM llm_usage_log AS l
+                            JOIN org_members AS om ON l.user_id = om.user_id
+                            WHERE om.org_id = $1 AND l.ts >= $2
+                            UNION ALL
+                            SELECT l2.total_tokens
+                            FROM llm_usage_log AS l2
+                            JOIN api_keys AS ak ON l2.key_id = ak.id
+                            WHERE ak.org_id = $1 AND l2.ts >= $2
+                        ) AS sub
                         """,
                         org_id, month_start,
                     )
                 else:
-                    # SQLite
+                    # SQLite: same aggregation using SQLite-compatible syntax
                     cur = await conn.execute(
                         """
-                        SELECT COALESCE(SUM(total_tokens), 0)
-                        FROM llm_usage_log
-                        WHERE org_id = ? AND ts >= ?
+                        SELECT COALESCE(SUM(sub.total_tokens), 0)
+                        FROM (
+                            SELECT l.total_tokens
+                            FROM llm_usage_log AS l
+                            JOIN org_members AS om ON l.user_id = om.user_id
+                            WHERE om.org_id = ? AND l.ts >= ?
+                            UNION ALL
+                            SELECT l2.total_tokens
+                            FROM llm_usage_log AS l2
+                            JOIN api_keys AS ak ON l2.key_id = ak.id
+                            WHERE ak.org_id = ? AND l2.ts >= ?
+                        ) AS sub
                         """,
-                        (org_id, month_start.isoformat()),
+                        (org_id, month_start.isoformat(), org_id, month_start.isoformat()),
                     )
                     row = await cur.fetchone()
                     result = row[0] if row else 0
@@ -256,10 +279,44 @@ class BillingEnforcer:
             return 0
 
     async def _get_concurrent_jobs(self, org_id: int) -> int:
-        """Get count of currently running jobs for organization."""
-        # This would integrate with a job tracking system
-        # For now, return 0 (no jobs tracked)
-        return 0
+        """
+        Get count of currently running jobs for an organization.
+
+        This currently aggregates concurrent embedding jobs per user from the
+        Embeddings_Jobs_DB user_quotas table by summing concurrent_jobs_active
+        for all org members. Other job systems (audio/chatbooks) continue to
+        enforce their own caps and are not yet included in this summary.
+        """
+        try:
+            from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+            from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
+            from tldw_Server_API.app.core.DB_Management.Embeddings_Jobs_DB import EmbeddingsJobsDatabase
+
+            pool = await get_db_pool()
+            repo = AuthnzOrgsTeamsRepo(db_pool=pool)
+            members = await repo.list_org_members(org_id=org_id, limit=1000)
+            if not members:
+                return 0
+
+            db = EmbeddingsJobsDatabase()
+            total_active = 0
+            for member in members:
+                user_id = member.get("user_id")
+                if user_id is None:
+                    continue
+                try:
+                    quota = db.get_or_create_user_quota(str(user_id))
+                    active = int(quota.get("concurrent_jobs_active", 0))
+                    if active > 0:
+                        total_active += active
+                except Exception:
+                    # Ignore per-user quota errors; continue best-effort aggregation
+                    continue
+
+            return int(total_active)
+        except Exception as exc:
+            logger.debug(f"Failed to get concurrent jobs for org {org_id}: {exc}")
+            return 0
 
     async def check_limit(
         self,
@@ -365,6 +422,49 @@ class BillingEnforcer:
         else:
             self._usage_cache.clear()
             self._limits_cache.clear()
+
+    def apply_usage_delta(self, org_id: int, category: LimitCategory, units: int) -> None:
+        """
+        Apply an in-memory usage delta for an organization.
+
+        This helper updates the cached UsageSummary for the given org_id so
+        that subsequent limit checks within the cache TTL see the most recent
+        usage without needing to hit the database again.
+
+        Persistent usage remains the responsibility of the existing logging
+        flows (usage_log, llm_usage_log, audio minutes ledger, etc.).
+        """
+        try:
+            delta = int(units)
+        except Exception:
+            return
+
+        if delta <= 0:
+            return
+
+        cached = self._usage_cache.get(org_id)
+        if not cached:
+            return
+
+        summary, cached_at = cached
+        if not isinstance(summary, UsageSummary):
+            return
+
+        if category == LimitCategory.API_CALLS_DAY:
+            summary.api_calls_today += delta
+        elif category == LimitCategory.LLM_TOKENS_MONTH:
+            summary.llm_tokens_month += delta
+        elif category == LimitCategory.TEAM_MEMBERS:
+            summary.team_members += delta
+        elif category == LimitCategory.RAG_QUERIES_DAY:
+            summary.rag_queries_today += delta
+        elif category == LimitCategory.CONCURRENT_JOBS:
+            summary.concurrent_jobs += delta
+        else:
+            # Other categories (e.g., storage) are not backed by this summary.
+            return
+
+        self._usage_cache[org_id] = (summary, cached_at)
 
 
 # Singleton instance

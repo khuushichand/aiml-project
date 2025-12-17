@@ -12,7 +12,10 @@ from fastapi import Depends, Header, HTTPException, Request, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
+from tldw_Server_API.app.core.Resource_Governance import cost_units
 from tldw_Server_API.app.core.Billing.enforcement import (
     BillingEnforcer,
     LimitCategory,
@@ -45,9 +48,6 @@ async def _resolve_org_id(
         return x_tldw_org_id
 
     try:
-        from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-        from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
-
         pool = await get_db_pool()
         repo = AuthnzOrgsTeamsRepo(db_pool=pool)
         memberships = await repo.list_org_memberships_for_user(principal.user_id)
@@ -299,10 +299,43 @@ class LimitEnforcer:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         """Record actual usage on exit (if operation succeeded)."""
-        if exc_type is None and self.actual_units is not None:
-            # Operation succeeded - would record actual usage here
-            # This would integrate with usage tracking system
-            pass
+        if exc_type is None and self.actual_units is not None and enforcement_enabled():
+            try:
+                units = int(self.actual_units)
+            except Exception:
+                units = 0
+
+            if units > 0:
+                # Best-effort in-memory cache delta for billing checks
+                try:
+                    self._enforcer.apply_usage_delta(self.org_id, self.category, units)
+                except Exception as exc:
+                    logger.debug(f"LimitEnforcer: apply_usage_delta failed for org_id={self.org_id}: {exc}")
+
+                # Mirror usage into the generic cost-units ledger so that
+                # cross-category budgets can reason about org-level usage.
+                try:
+                    tokens = 0
+                    minutes = 0.0
+                    requests = 0
+
+                    if self.category == LimitCategory.LLM_TOKENS_MONTH:
+                        tokens = units
+                    elif self.category in (LimitCategory.API_CALLS_DAY, LimitCategory.RAG_QUERIES_DAY):
+                        requests = units
+                    elif self.category == LimitCategory.TRANSCRIPTION_MINUTES_MONTH:
+                        minutes = float(units)
+
+                    if tokens or minutes or requests:
+                        await cost_units.record_cost_units_for_entity(
+                            entity_scope="org",
+                            entity_value=str(self.org_id),
+                            tokens=tokens,
+                            minutes=minutes,
+                            requests=requests,
+                        )
+                except Exception as exc:
+                    logger.debug(f"LimitEnforcer: cost-units ledger write failed for org_id={self.org_id}: {exc}")
 
         # Invalidate cache so next request gets fresh data
         if self.actual_units is not None:

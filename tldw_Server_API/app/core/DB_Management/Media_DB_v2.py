@@ -4627,10 +4627,12 @@ class MediaDatabase:
         Returns:
             Dict with visibility, org_id, team_id, owner_user_id or None if not found
         """
-        row = self.fetchone(
-            "SELECT visibility, org_id, team_id, owner_user_id, client_id FROM Media WHERE id = ? AND deleted = 0",
+        cursor = self.execute_query(
+            "SELECT visibility, org_id, team_id, owner_user_id, client_id "
+            "FROM Media WHERE id = ? AND deleted = 0",
             (media_id,),
         )
+        row = cursor.fetchone() if cursor else None
         if not row:
             return None
 

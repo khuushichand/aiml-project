@@ -383,6 +383,126 @@ class AuthnzOrgsTeamsRepo:
             logger.error(f"AuthnzOrgsTeamsRepo.list_organizations failed: {exc}")
             raise
 
+    async def update_organization(
+        self,
+        *,
+        org_id: int,
+        name: Optional[str] = None,
+        slug: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Update an organization row.
+
+        Currently supports updating name and slug; additional fields should be
+        added here so backend-specific SQL stays encapsulated in the repo.
+
+        Args:
+            org_id: Organization ID to update.
+            name: New organization name (optional).
+            slug: New organization slug (optional).
+
+        Returns:
+            Updated organization dict, or None if the organization was not found.
+
+        Raises:
+            DuplicateOrganizationError: If name or slug collides with another org.
+            ValueError: If no update fields are supplied.
+        """
+        updates: Dict[str, Any] = {}
+        if name is not None:
+            updates["name"] = name
+        if slug is not None:
+            updates["slug"] = slug
+
+        if not updates:
+            raise ValueError("No fields to update")
+
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres(conn):
+                    if "slug" in updates and updates["slug"] not in (None, ""):
+                        exists_slug = await conn.fetchrow(
+                            "SELECT 1 FROM organizations WHERE LOWER(slug) = LOWER($1) AND id <> $2",
+                            updates["slug"],
+                            org_id,
+                        )
+                        if exists_slug:
+                            raise DuplicateOrganizationError("slug", str(updates["slug"]))
+                    if "name" in updates:
+                        exists_name = await conn.fetchrow(
+                            "SELECT 1 FROM organizations WHERE LOWER(name) = LOWER($1) AND id <> $2",
+                            updates["name"],
+                            org_id,
+                        )
+                        if exists_name:
+                            raise DuplicateOrganizationError("name", str(updates["name"]))
+
+                    set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(updates.keys()))
+                    params = [org_id] + list(updates.values())
+                    row = await conn.fetchrow(
+                        f"""
+                        UPDATE organizations
+                        SET {set_clause}, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = $1
+                        RETURNING id, name, slug, owner_user_id, is_active, created_at, updated_at
+                        """,
+                        *params,
+                    )
+                    if not row:
+                        return None
+                    d = dict(row)
+                    d["is_active"] = bool(d.get("is_active", True))
+                    try:
+                        from datetime import datetime
+
+                        for key in ("created_at", "updated_at"):
+                            if isinstance(d.get(key), datetime):
+                                d[key] = d[key].isoformat()
+                    except (TypeError, ValueError, AttributeError) as exc:
+                        logger.debug(f"Skipping datetime normalization for org row: {exc}")
+                    return d
+
+                if "slug" in updates and updates["slug"] not in (None, ""):
+                    cur_chk = await conn.execute(
+                        "SELECT 1 FROM organizations WHERE LOWER(slug) = LOWER(?) AND id <> ?",
+                        (updates["slug"], org_id),
+                    )
+                    if await cur_chk.fetchone():
+                        raise DuplicateOrganizationError("slug", str(updates["slug"]))
+                if "name" in updates:
+                    cur_chk2 = await conn.execute(
+                        "SELECT 1 FROM organizations WHERE LOWER(name) = LOWER(?) AND id <> ?",
+                        (updates["name"], org_id),
+                    )
+                    if await cur_chk2.fetchone():
+                        raise DuplicateOrganizationError("name", str(updates["name"]))
+
+                set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+                params = list(updates.values()) + [org_id]
+                await conn.execute(
+                    f"UPDATE organizations SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    tuple(params),
+                )
+                cur = await conn.execute(
+                    "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations WHERE id = ?",
+                    (org_id,),
+                )
+                row = await cur.fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": row[0],
+                    "name": row[1],
+                    "slug": row[2],
+                    "owner_user_id": row[3],
+                    "is_active": bool(row[4]),
+                    "created_at": row[5],
+                    "updated_at": row[6],
+                }
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzOrgsTeamsRepo.update_organization failed: {exc}")
+            raise
+
     # -------------------------------------------------------------------------
     # Single-record getters
     # -------------------------------------------------------------------------

@@ -4,6 +4,7 @@
 # Imports
 from typing import List
 import sqlite3
+import json
 from pathlib import Path
 #
 # 3rd-party imports
@@ -1285,6 +1286,13 @@ def migration_028_create_org_invites(conn: sqlite3.Connection) -> None:
     logger.info("Migration 028: Created org_invites table")
 
 
+def rollback_028_drop_org_invites_table(conn: sqlite3.Connection) -> None:
+    """Drop org_invites table during rollback/testing."""
+    conn.execute("DROP TABLE IF EXISTS org_invites")
+    conn.commit()
+    logger.info("Rollback 028: Dropped org_invites table")
+
+
 def migration_029_create_org_invite_redemptions(conn: sqlite3.Connection) -> None:
     """Create org_invite_redemptions table to track who redeemed invites."""
     logger.info("Migration 029: START org_invite_redemptions table")
@@ -1307,6 +1315,13 @@ def migration_029_create_org_invite_redemptions(conn: sqlite3.Connection) -> Non
     conn.execute("CREATE INDEX IF NOT EXISTS idx_invite_redemptions_user ON org_invite_redemptions(user_id)")
     conn.commit()
     logger.info("Migration 029: Created org_invite_redemptions table")
+
+
+def rollback_029_drop_org_invite_redemptions_table(conn: sqlite3.Connection) -> None:
+    """Drop org_invite_redemptions table during rollback/testing."""
+    conn.execute("DROP TABLE IF EXISTS org_invite_redemptions")
+    conn.commit()
+    logger.info("Rollback 029: Dropped org_invite_redemptions table")
 
 
 def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
@@ -1337,7 +1352,6 @@ def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_subscription_plans_active ON subscription_plans(is_active)")
 
     # Seed default plans
-    import json
     default_plans = [
         {
             "name": "free",
@@ -1419,6 +1433,13 @@ def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
     logger.info("Migration 030: Created subscription_plans table with default plans")
 
 
+def rollback_030_drop_subscription_plans_table(conn: sqlite3.Connection) -> None:
+    """Drop subscription_plans table during rollback/testing."""
+    conn.execute("DROP TABLE IF EXISTS subscription_plans")
+    conn.commit()
+    logger.info("Rollback 030: Dropped subscription_plans table")
+
+
 def migration_031_create_org_subscriptions(conn: sqlite3.Connection) -> None:
     """Create org_subscriptions table for organization subscription state."""
     logger.info("Migration 031: START org_subscriptions table")
@@ -1456,6 +1477,13 @@ def migration_031_create_org_subscriptions(conn: sqlite3.Connection) -> None:
     logger.info("Migration 031: Created org_subscriptions table")
 
 
+def rollback_031_drop_org_subscriptions_table(conn: sqlite3.Connection) -> None:
+    """Drop org_subscriptions table during rollback/testing."""
+    conn.execute("DROP TABLE IF EXISTS org_subscriptions")
+    conn.commit()
+    logger.info("Rollback 031: Dropped org_subscriptions table")
+
+
 def migration_032_create_stripe_webhook_events(conn: sqlite3.Connection) -> None:
     """Create stripe_webhook_events table for idempotency and audit."""
     logger.info("Migration 032: START stripe_webhook_events table")
@@ -1479,6 +1507,13 @@ def migration_032_create_stripe_webhook_events(conn: sqlite3.Connection) -> None
     conn.execute("CREATE INDEX IF NOT EXISTS idx_stripe_events_status ON stripe_webhook_events(status)")
     conn.commit()
     logger.info("Migration 032: Created stripe_webhook_events table")
+
+
+def rollback_032_drop_stripe_webhook_events_table(conn: sqlite3.Connection) -> None:
+    """Drop stripe_webhook_events table during rollback/testing."""
+    conn.execute("DROP TABLE IF EXISTS stripe_webhook_events")
+    conn.commit()
+    logger.info("Rollback 032: Dropped stripe_webhook_events table")
 
 
 def migration_033_create_payment_history(conn: sqlite3.Connection) -> None:
@@ -1509,6 +1544,13 @@ def migration_033_create_payment_history(conn: sqlite3.Connection) -> None:
     logger.info("Migration 033: Created payment_history table")
 
 
+def rollback_033_drop_payment_history_table(conn: sqlite3.Connection) -> None:
+    """Drop payment_history table during rollback/testing."""
+    conn.execute("DROP TABLE IF EXISTS payment_history")
+    conn.commit()
+    logger.info("Rollback 033: Dropped payment_history table")
+
+
 def migration_034_create_billing_audit_log(conn: sqlite3.Connection) -> None:
     """Create billing_audit_log table for billing operation audit trail."""
     logger.info("Migration 034: START billing_audit_log table")
@@ -1533,6 +1575,13 @@ def migration_034_create_billing_audit_log(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_audit_created ON billing_audit_log(created_at)")
     conn.commit()
     logger.info("Migration 034: Created billing_audit_log table")
+
+
+def rollback_034_drop_billing_audit_log_table(conn: sqlite3.Connection) -> None:
+    """Drop billing_audit_log table during rollback/testing."""
+    conn.execute("DROP TABLE IF EXISTS billing_audit_log")
+    conn.commit()
+    logger.info("Rollback 034: Dropped billing_audit_log table")
 
 
 #######################################################################################################################
@@ -1579,13 +1628,43 @@ def get_authnz_migrations() -> List[Migration]:
             "Ensure session revocation columns",
             migration_027_add_session_revocation_columns,
         ),
-        Migration(28, "Create org_invites table", migration_028_create_org_invites),
-        Migration(29, "Create org_invite_redemptions table", migration_029_create_org_invite_redemptions),
-        Migration(30, "Create subscription_plans table", migration_030_create_subscription_plans),
-        Migration(31, "Create org_subscriptions table", migration_031_create_org_subscriptions),
-        Migration(32, "Create stripe_webhook_events table", migration_032_create_stripe_webhook_events),
-        Migration(33, "Create payment_history table", migration_033_create_payment_history),
-        Migration(34, "Create billing_audit_log table", migration_034_create_billing_audit_log),
+        Migration(28, "Create org_invites table", migration_028_create_org_invites, rollback_028_drop_org_invites_table),
+        Migration(
+            29,
+            "Create org_invite_redemptions table",
+            migration_029_create_org_invite_redemptions,
+            rollback_029_drop_org_invite_redemptions_table,
+        ),
+        Migration(
+            30,
+            "Create subscription_plans table",
+            migration_030_create_subscription_plans,
+            rollback_030_drop_subscription_plans_table,
+        ),
+        Migration(
+            31,
+            "Create org_subscriptions table",
+            migration_031_create_org_subscriptions,
+            rollback_031_drop_org_subscriptions_table,
+        ),
+        Migration(
+            32,
+            "Create stripe_webhook_events table",
+            migration_032_create_stripe_webhook_events,
+            rollback_032_drop_stripe_webhook_events_table,
+        ),
+        Migration(
+            33,
+            "Create payment_history table",
+            migration_033_create_payment_history,
+            rollback_033_drop_payment_history_table,
+        ),
+        Migration(
+            34,
+            "Create billing_audit_log table",
+            migration_034_create_billing_audit_log,
+            rollback_034_drop_billing_audit_log_table,
+        ),
     ]
 
 

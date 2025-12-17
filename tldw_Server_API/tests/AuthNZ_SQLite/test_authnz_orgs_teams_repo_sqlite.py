@@ -11,6 +11,7 @@ async def test_authnz_orgs_teams_repo_membership_sqlite(tmp_path, monkeypatch):
     """AuthnzOrgsTeamsRepo membership helpers should work on SQLite."""
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool, get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError
     from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
     from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import (
         AuthnzOrgsTeamsRepo,
@@ -56,6 +57,21 @@ async def test_authnz_orgs_teams_repo_membership_sqlite(tmp_path, monkeypatch):
     # Create organization and add members
     org = await repo.create_organization(name="Acme Corp", owner_user_id=owner_id)
     org_id = org["id"]
+
+    updated_org = await repo.update_organization(
+        org_id=org_id,
+        name="Acme Corp Updated",
+        slug="acme-corp-updated",
+    )
+    assert updated_org is not None
+    assert updated_org["id"] == org_id
+    assert updated_org["name"] == "Acme Corp Updated"
+    assert updated_org["slug"] == "acme-corp-updated"
+    assert updated_org.get("updated_at") is not None
+
+    await repo.create_organization(name="Other Org", owner_user_id=owner_id, slug="other-org")
+    with pytest.raises(DuplicateOrganizationError):
+        await repo.update_organization(org_id=org_id, slug="other-org")
 
     owner_membership = await repo.add_org_member(
         org_id=org_id, user_id=owner_id, role="owner"

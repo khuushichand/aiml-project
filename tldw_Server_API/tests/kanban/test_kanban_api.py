@@ -1464,3 +1464,352 @@ def test_search_post_with_all_parameters(client_with_kanban_db):
     assert result["pagination"]["total"] == 1
     assert result["results"][0]["title"] == "Complete feature implementation"
     assert result["results"][0]["priority"] == "high"
+
+
+# =============================================================================
+# Card Links API Tests (Phase 5: Content Integration)
+# =============================================================================
+
+def test_card_link_crud(client_with_kanban_db):
+    """Test basic CRUD operations for card links."""
+    client, db = client_with_kanban_db
+
+    # Setup
+    board = client.post(
+        "/api/v1/kanban/boards",
+        json={"name": "Link Test Board", "client_id": "board-link-1"}
+    ).json()
+    lst = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/lists",
+        json={"name": "Link Test List", "client_id": "list-link-1"}
+    ).json()
+    card = client.post(
+        f"/api/v1/kanban/lists/{lst['id']}/cards",
+        json={"title": "Card with Links", "client_id": "card-link-1"}
+    ).json()
+
+    # Create a link to a media item
+    create_resp = client.post(
+        f"/api/v1/kanban/cards/{card['id']}/links",
+        json={"linked_type": "media", "linked_id": "media-123"}
+    )
+    assert create_resp.status_code == 201
+    link = create_resp.json()
+    assert link["card_id"] == card["id"]
+    assert link["linked_type"] == "media"
+    assert link["linked_id"] == "media-123"
+    link_id = link["id"]
+
+    # Create a link to a note
+    note_link_resp = client.post(
+        f"/api/v1/kanban/cards/{card['id']}/links",
+        json={"linked_type": "note", "linked_id": "note-456"}
+    )
+    assert note_link_resp.status_code == 201
+
+    # List links
+    list_resp = client.get(f"/api/v1/kanban/cards/{card['id']}/links")
+    assert list_resp.status_code == 200
+    links = list_resp.json()["links"]
+    assert len(links) == 2
+
+    # Filter by type
+    media_resp = client.get(
+        f"/api/v1/kanban/cards/{card['id']}/links",
+        params={"linked_type": "media"}
+    )
+    assert media_resp.status_code == 200
+    assert len(media_resp.json()["links"]) == 1
+
+    # Get link counts
+    counts_resp = client.get(f"/api/v1/kanban/cards/{card['id']}/links/counts")
+    assert counts_resp.status_code == 200
+    counts = counts_resp.json()
+    assert counts["media"] == 1
+    assert counts["note"] == 1
+
+    # Delete link by type/id
+    delete_resp = client.delete(
+        f"/api/v1/kanban/cards/{card['id']}/links/media/media-123"
+    )
+    assert delete_resp.status_code == 200
+
+    # Delete link by ID
+    remaining_links = client.get(f"/api/v1/kanban/cards/{card['id']}/links").json()["links"]
+    assert len(remaining_links) == 1
+    delete_by_id_resp = client.delete(f"/api/v1/kanban/links/{remaining_links[0]['id']}")
+    assert delete_by_id_resp.status_code == 200
+
+    # Verify all links removed
+    final_links = client.get(f"/api/v1/kanban/cards/{card['id']}/links").json()["links"]
+    assert len(final_links) == 0
+
+
+def test_card_link_duplicate_rejected(client_with_kanban_db):
+    """Test that duplicate links are rejected with 409 Conflict."""
+    client, db = client_with_kanban_db
+
+    # Setup
+    board = client.post(
+        "/api/v1/kanban/boards",
+        json={"name": "Duplicate Link Board", "client_id": "board-dup-link-1"}
+    ).json()
+    lst = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/lists",
+        json={"name": "Duplicate Link List", "client_id": "list-dup-link-1"}
+    ).json()
+    card = client.post(
+        f"/api/v1/kanban/lists/{lst['id']}/cards",
+        json={"title": "Duplicate Test Card", "client_id": "card-dup-link-1"}
+    ).json()
+
+    # Create first link
+    client.post(
+        f"/api/v1/kanban/cards/{card['id']}/links",
+        json={"linked_type": "media", "linked_id": "media-dup"}
+    )
+
+    # Try to create duplicate link
+    dup_resp = client.post(
+        f"/api/v1/kanban/cards/{card['id']}/links",
+        json={"linked_type": "media", "linked_id": "media-dup"}
+    )
+    assert dup_resp.status_code == 409
+
+
+def test_card_link_invalid_type_rejected(client_with_kanban_db):
+    """Test that invalid linked_type is rejected with 422."""
+    client, db = client_with_kanban_db
+
+    # Setup
+    board = client.post(
+        "/api/v1/kanban/boards",
+        json={"name": "Invalid Link Type Board", "client_id": "board-inv-type-1"}
+    ).json()
+    lst = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/lists",
+        json={"name": "Invalid Link Type List", "client_id": "list-inv-type-1"}
+    ).json()
+    card = client.post(
+        f"/api/v1/kanban/lists/{lst['id']}/cards",
+        json={"title": "Invalid Type Card", "client_id": "card-inv-type-1"}
+    ).json()
+
+    # Try to create link with invalid type
+    invalid_resp = client.post(
+        f"/api/v1/kanban/cards/{card['id']}/links",
+        json={"linked_type": "invalid", "linked_id": "some-id"}
+    )
+    assert invalid_resp.status_code == 422
+
+
+def test_bulk_card_links(client_with_kanban_db):
+    """Test bulk add and remove card links."""
+    client, db = client_with_kanban_db
+
+    # Setup
+    board = client.post(
+        "/api/v1/kanban/boards",
+        json={"name": "Bulk Links Board", "client_id": "board-bulk-links-1"}
+    ).json()
+    lst = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/lists",
+        json={"name": "Bulk Links List", "client_id": "list-bulk-links-1"}
+    ).json()
+    card = client.post(
+        f"/api/v1/kanban/lists/{lst['id']}/cards",
+        json={"title": "Bulk Links Card", "client_id": "card-bulk-links-1"}
+    ).json()
+
+    # Bulk add links
+    bulk_add_resp = client.post(
+        f"/api/v1/kanban/cards/{card['id']}/links/bulk-add",
+        json={
+            "links": [
+                {"linked_type": "media", "linked_id": "media-1"},
+                {"linked_type": "media", "linked_id": "media-2"},
+                {"linked_type": "note", "linked_id": "note-1"}
+            ]
+        }
+    )
+    assert bulk_add_resp.status_code == 200
+    result = bulk_add_resp.json()
+    assert result["added_count"] == 3
+    assert result["skipped_count"] == 0
+    assert len(result["links"]) == 3
+
+    # Bulk add with duplicates (should skip)
+    bulk_add_dup_resp = client.post(
+        f"/api/v1/kanban/cards/{card['id']}/links/bulk-add",
+        json={
+            "links": [
+                {"linked_type": "media", "linked_id": "media-1"},  # duplicate
+                {"linked_type": "media", "linked_id": "media-3"}   # new
+            ]
+        }
+    )
+    assert bulk_add_dup_resp.status_code == 200
+    dup_result = bulk_add_dup_resp.json()
+    assert dup_result["added_count"] == 1
+    assert dup_result["skipped_count"] == 1
+
+    # Verify total links
+    links_resp = client.get(f"/api/v1/kanban/cards/{card['id']}/links")
+    assert len(links_resp.json()["links"]) == 4
+
+    # Bulk remove links
+    bulk_remove_resp = client.post(
+        f"/api/v1/kanban/cards/{card['id']}/links/bulk-remove",
+        json={
+            "links": [
+                {"linked_type": "media", "linked_id": "media-1"},
+                {"linked_type": "media", "linked_id": "media-2"},
+                {"linked_type": "note", "linked_id": "nonexistent"}  # doesn't exist
+            ]
+        }
+    )
+    assert bulk_remove_resp.status_code == 200
+    remove_result = bulk_remove_resp.json()
+    assert remove_result["removed_count"] == 2
+
+    # Verify remaining links
+    final_links = client.get(f"/api/v1/kanban/cards/{card['id']}/links")
+    assert len(final_links.json()["links"]) == 2
+
+
+def test_bidirectional_lookup(client_with_kanban_db):
+    """Test finding cards that link to a specific content item."""
+    client, db = client_with_kanban_db
+
+    # Setup - create two boards with cards linking to same content
+    board1 = client.post(
+        "/api/v1/kanban/boards",
+        json={"name": "Lookup Board 1", "client_id": "board-lookup-1"}
+    ).json()
+    board2 = client.post(
+        "/api/v1/kanban/boards",
+        json={"name": "Lookup Board 2", "client_id": "board-lookup-2"}
+    ).json()
+
+    lst1 = client.post(
+        f"/api/v1/kanban/boards/{board1['id']}/lists",
+        json={"name": "Lookup List 1", "client_id": "list-lookup-1"}
+    ).json()
+    lst2 = client.post(
+        f"/api/v1/kanban/boards/{board2['id']}/lists",
+        json={"name": "Lookup List 2", "client_id": "list-lookup-2"}
+    ).json()
+
+    card1 = client.post(
+        f"/api/v1/kanban/lists/{lst1['id']}/cards",
+        json={"title": "Card linking to shared media", "client_id": "lookup-card-1"}
+    ).json()
+    card2 = client.post(
+        f"/api/v1/kanban/lists/{lst2['id']}/cards",
+        json={"title": "Another card linking to shared media", "client_id": "lookup-card-2"}
+    ).json()
+
+    # Both cards link to the same media item
+    shared_media_id = "shared-media-123"
+    client.post(
+        f"/api/v1/kanban/cards/{card1['id']}/links",
+        json={"linked_type": "media", "linked_id": shared_media_id}
+    )
+    client.post(
+        f"/api/v1/kanban/cards/{card2['id']}/links",
+        json={"linked_type": "media", "linked_id": shared_media_id}
+    )
+
+    # Bidirectional lookup - find all cards linking to this media
+    lookup_resp = client.get(f"/api/v1/kanban/linked/media/{shared_media_id}/cards")
+    assert lookup_resp.status_code == 200
+    result = lookup_resp.json()
+
+    assert result["linked_type"] == "media"
+    assert result["linked_id"] == shared_media_id
+    assert len(result["cards"]) == 2
+
+    # Verify card details are included
+    card_ids = [c["id"] for c in result["cards"]]
+    assert card1["id"] in card_ids
+    assert card2["id"] in card_ids
+
+    # Verify board/list context is included
+    for card_data in result["cards"]:
+        assert "board_id" in card_data
+        assert "board_name" in card_data
+        assert "list_id" in card_data
+        assert "list_name" in card_data
+        assert "link_id" in card_data
+        assert "linked_at" in card_data
+
+
+def test_bidirectional_lookup_respects_archived(client_with_kanban_db):
+    """Test that bidirectional lookup respects include_archived flag."""
+    client, db = client_with_kanban_db
+
+    # Setup
+    board = client.post(
+        "/api/v1/kanban/boards",
+        json={"name": "Archived Lookup Board", "client_id": "board-archived-lookup-1"}
+    ).json()
+    lst = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/lists",
+        json={"name": "Archived Lookup List", "client_id": "list-archived-lookup-1"}
+    ).json()
+
+    card1 = client.post(
+        f"/api/v1/kanban/lists/{lst['id']}/cards",
+        json={"title": "Active Card", "client_id": "archived-lookup-card-1"}
+    ).json()
+    card2 = client.post(
+        f"/api/v1/kanban/lists/{lst['id']}/cards",
+        json={"title": "Archived Card", "client_id": "archived-lookup-card-2"}
+    ).json()
+
+    # Both cards link to same content
+    content_id = "archived-test-content"
+    client.post(
+        f"/api/v1/kanban/cards/{card1['id']}/links",
+        json={"linked_type": "note", "linked_id": content_id}
+    )
+    client.post(
+        f"/api/v1/kanban/cards/{card2['id']}/links",
+        json={"linked_type": "note", "linked_id": content_id}
+    )
+
+    # Archive card2
+    client.post(f"/api/v1/kanban/cards/{card2['id']}/archive")
+
+    # Lookup without include_archived (default)
+    lookup_resp = client.get(f"/api/v1/kanban/linked/note/{content_id}/cards")
+    assert lookup_resp.status_code == 200
+    assert len(lookup_resp.json()["cards"]) == 1
+
+    # Lookup with include_archived
+    lookup_archived_resp = client.get(
+        f"/api/v1/kanban/linked/note/{content_id}/cards",
+        params={"include_archived": "true"}
+    )
+    assert lookup_archived_resp.status_code == 200
+    assert len(lookup_archived_resp.json()["cards"]) == 2
+
+
+def test_bidirectional_lookup_invalid_type(client_with_kanban_db):
+    """Test that invalid linked_type in lookup returns 400."""
+    client, db = client_with_kanban_db
+
+    lookup_resp = client.get("/api/v1/kanban/linked/invalid/some-id/cards")
+    assert lookup_resp.status_code == 400
+
+
+def test_bidirectional_lookup_no_cards(client_with_kanban_db):
+    """Test bidirectional lookup returns empty list when no cards link to content."""
+    client, db = client_with_kanban_db
+
+    lookup_resp = client.get("/api/v1/kanban/linked/media/nonexistent-media/cards")
+    assert lookup_resp.status_code == 200
+    result = lookup_resp.json()
+    assert result["linked_type"] == "media"
+    assert result["linked_id"] == "nonexistent-media"
+    assert len(result["cards"]) == 0

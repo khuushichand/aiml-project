@@ -544,6 +544,7 @@ else:
         from tldw_Server_API.app.api.v1.endpoints.kanban_checklists import router as kanban_checklists_router
         from tldw_Server_API.app.api.v1.endpoints.kanban_comments import router as kanban_comments_router
         from tldw_Server_API.app.api.v1.endpoints.kanban_search import router as kanban_search_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_links import router as kanban_links_router
 
         _HAS_KANBAN = True
     except Exception as _kanban_err:
@@ -3895,6 +3896,7 @@ if _MINIMAL_TEST_APP:
         from tldw_Server_API.app.api.v1.endpoints.kanban_checklists import router as kanban_checklists_router
         from tldw_Server_API.app.api.v1.endpoints.kanban_comments import router as kanban_comments_router
         from tldw_Server_API.app.api.v1.endpoints.kanban_search import router as kanban_search_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_links import router as kanban_links_router
 
         app.include_router(kanban_boards_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
         app.include_router(kanban_lists_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
@@ -3903,6 +3905,7 @@ if _MINIMAL_TEST_APP:
         app.include_router(kanban_checklists_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
         app.include_router(kanban_comments_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
         app.include_router(kanban_search_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
+        app.include_router(kanban_links_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
     except Exception as _kanban_min_err:
         logger.debug(f"Skipping kanban router in minimal test app: {_kanban_min_err}")
     # Auth endpoints (login/register/refresh/logout/me)
@@ -4281,6 +4284,9 @@ else:
         )
         _include_if_enabled(
             "kanban", kanban_search_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"]
+        )
+        _include_if_enabled(
+            "kanban", kanban_links_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"]
         )
     if _HAS_READING_HIGHLIGHTS:
         _include_if_enabled(

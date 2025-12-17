@@ -688,11 +688,11 @@ Content-Type: application/json
 
 | Value | Description |
 |-------|-------------|
-| `VALID` | Can be redeemed |
-| `EXPIRED` | Past expiration date |
-| `EXHAUSTED` | Reached max_uses |
-| `REVOKED` | Manually deactivated |
-| `NOT_FOUND` | Code doesn't exist |
+| `valid` | Can be redeemed |
+| `expired` | Past expiration date |
+| `exhausted` | Reached max_uses |
+| `revoked` | Manually deactivated |
+| `not_found` | Code doesn't exist |
 
 ### ContentVisibility Enum
 

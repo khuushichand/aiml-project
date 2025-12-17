@@ -7,7 +7,7 @@ Handles invite creation, validation, redemption, and cleanup.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -190,7 +190,9 @@ class OrgInviteService:
         if expires_at:
             if isinstance(expires_at, str):
                 expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-            if expires_at < datetime.utcnow():
+            # Ensure both sides of the comparison are timezone-aware UTC
+            now_utc = datetime.now(timezone.utc)
+            if expires_at < now_utc:
                 return InviteValidationResult(
                     status=InviteStatus.EXPIRED,
                     invite=invite,

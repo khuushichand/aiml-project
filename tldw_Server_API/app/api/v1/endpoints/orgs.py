@@ -50,6 +50,7 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DuplicateTeamError,
 )
 from tldw_Server_API.app.services.org_invite_service import OrgInviteService, get_invite_service
+from tldw_Server_API.app.core.Billing.subscription_service import get_subscription_service
 
 
 router = APIRouter(
@@ -223,6 +224,7 @@ async def update_org(
 ):
     """Update organization details. Requires admin or owner role."""
     db_pool = await get_db_pool()
+    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
 
     # Build update fields
     updates = {}
@@ -237,48 +239,16 @@ async def update_org(
             detail="No fields to update",
         )
 
-    # Execute update
-    async with db_pool.transaction() as conn:
-        if hasattr(conn, "fetchrow"):
-            # PostgreSQL
-            set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(updates.keys()))
-            params = [ctx.org_id] + list(updates.values())
-            row = await conn.fetchrow(
-                f"""
-                UPDATE organizations
-                SET {set_clause}, updated_at = CURRENT_TIMESTAMP
-                WHERE id = $1
-                RETURNING id, name, slug, owner_user_id, is_active, created_at, updated_at
-                """,
-                *params,
-            )
-            if not row:
-                raise HTTPException(status_code=404, detail="Organization not found")
-            org = dict(row)
-        else:
-            # SQLite
-            set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-            params = list(updates.values()) + [ctx.org_id]
-            await conn.execute(
-                f"UPDATE organizations SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                tuple(params),
-            )
-            cur = await conn.execute(
-                "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations WHERE id = ?",
-                (ctx.org_id,),
-            )
-            row = await cur.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Organization not found")
-            org = {
-                "id": row[0],
-                "name": row[1],
-                "slug": row[2],
-                "owner_user_id": row[3],
-                "is_active": bool(row[4]),
-                "created_at": row[5],
-                "updated_at": row[6],
-            }
+    try:
+        org = await repo.update_organization(org_id=ctx.org_id, **updates)
+    except DuplicateOrganizationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        ) from e
+
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
 
     logger.info(f"Org {ctx.org_id} updated by user with role {ctx.role}")
     return OrganizationResponse(**org)
@@ -293,7 +263,21 @@ async def delete_org(
     ctx: OrgContext = Depends(require_org_owner()),
 ):
     """Delete an organization. Requires owner role."""
-    # TODO: Check for active billing subscription before allowing deletion
+    # Check for active paid subscription before allowing deletion
+    try:
+        subscription_service = await get_subscription_service()
+        sub_status = await subscription_service.get_subscription(ctx.org_id)
+    except Exception as exc:
+        logger.warning(f"delete_org: failed to load subscription for org {ctx.org_id}: {exc}")
+        sub_status = None
+
+    if sub_status and sub_status.plan_name != "free" and sub_status.status not in ("canceled",):
+        # Block deletion when a non-free subscription is still active/pending
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Organization has an active paid subscription; cancel billing before deletion.",
+        )
+
     db_pool = await get_db_pool()
 
     async with db_pool.transaction() as conn:
@@ -321,6 +305,24 @@ async def transfer_ownership(
     """Transfer organization ownership to another member. Requires owner role."""
     db_pool = await get_db_pool()
     repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+
+    # Prevent transferring ownership to the current owner (no-op that would demote them to admin)
+    if principal.user_id is None:
+        logger.warning("transfer_ownership called without a concrete user_id for org %s", ctx.org_id)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Ownership transfer requires an authenticated user",
+        )
+    if body.new_owner_user_id == principal.user_id:
+        logger.warning(
+            "User %s attempted to transfer ownership of org %s to themselves",
+            principal.user_id,
+            ctx.org_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New owner must be a different user than the current owner",
+        )
 
     # Verify new owner is a member
     new_owner_membership = await repo.get_org_member(ctx.org_id, body.new_owner_user_id)
@@ -384,6 +386,12 @@ async def transfer_ownership(
                 "created_at": row[5],
                 "updated_at": row[6],
             } if row else {}
+
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
 
     logger.info(
         f"Org {ctx.org_id} ownership transferred from {principal.user_id} to {body.new_owner_user_id}"

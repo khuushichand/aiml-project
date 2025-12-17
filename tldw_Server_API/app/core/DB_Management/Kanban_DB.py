@@ -4919,3 +4919,498 @@ END;
                 raise KanbanDBError(f"Database error: {e}") from e
             finally:
                 conn.close()
+
+    # ==========================================================================
+    # Card Links Methods (Phase 5: Content Integration)
+    # ==========================================================================
+
+    def add_card_link(
+        self,
+        card_id: int,
+        linked_type: str,
+        linked_id: str
+    ) -> Dict[str, Any]:
+        """
+        Add a link from a card to a media item or note.
+
+        Args:
+            card_id: The card to add the link to.
+            linked_type: Type of linked content ('media' or 'note').
+            linked_id: ID of the linked content.
+
+        Returns:
+            The created link.
+
+        Raises:
+            NotFoundError: If the card doesn't exist.
+            InputError: If linked_type is invalid.
+            ConflictError: If the link already exists.
+        """
+        if linked_type not in ("media", "note"):
+            raise InputError(f"Invalid linked_type: {linked_type}. Must be 'media' or 'note'.")
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                # Verify card exists and belongs to user
+                card = self._get_card_by_id(conn, card_id)
+                if not card:
+                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)
+
+                link_uuid = _generate_uuid()
+                now = _utcnow_iso()
+
+                cur = conn.execute(
+                    """
+                    INSERT INTO kanban_card_links (uuid, card_id, linked_type, linked_id, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (link_uuid, card_id, linked_type, linked_id, now)
+                )
+                link_id = cur.lastrowid
+
+                # Log activity
+                self._log_activity_internal(
+                    conn, card["board_id"], "link_added", "card_link", entity_id=link_id,
+                    card_id=card_id, list_id=card["list_id"],
+                    details={"linked_type": linked_type, "linked_id": linked_id}
+                )
+
+                conn.commit()
+
+                return {
+                    "id": link_id,
+                    "card_id": card_id,
+                    "linked_type": linked_type,
+                    "linked_id": linked_id,
+                    "created_at": now
+                }
+
+            except sqlite3.IntegrityError as e:
+                if "UNIQUE constraint" in str(e):
+                    raise ConflictError(
+                        f"Link already exists from card {card_id} to {linked_type}:{linked_id}",
+                        entity="card_link"
+                    )
+                raise KanbanDBError(f"Database error: {e}") from e
+            finally:
+                conn.close()
+
+    def get_card_links(
+        self,
+        card_id: int,
+        linked_type: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all links for a card.
+
+        Args:
+            card_id: The card to get links for.
+            linked_type: Optional filter by type ('media' or 'note').
+
+        Returns:
+            List of card links.
+
+        Raises:
+            NotFoundError: If the card doesn't exist.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                # Verify card exists and belongs to user
+                card = self._get_card_by_id(conn, card_id)
+                if not card:
+                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)
+
+                if linked_type:
+                    cur = conn.execute(
+                        """
+                        SELECT id, card_id, linked_type, linked_id, created_at
+                        FROM kanban_card_links
+                        WHERE card_id = ? AND linked_type = ?
+                        ORDER BY created_at DESC
+                        """,
+                        (card_id, linked_type)
+                    )
+                else:
+                    cur = conn.execute(
+                        """
+                        SELECT id, card_id, linked_type, linked_id, created_at
+                        FROM kanban_card_links
+                        WHERE card_id = ?
+                        ORDER BY created_at DESC
+                        """,
+                        (card_id,)
+                    )
+
+                return [dict(row) for row in cur.fetchall()]
+
+            finally:
+                conn.close()
+
+    def get_linked_content_counts(self, card_id: int) -> Dict[str, int]:
+        """
+        Get counts of linked content by type for a card.
+
+        Args:
+            card_id: The card to get link counts for.
+
+        Returns:
+            Dict with counts by type: {"media": N, "note": M}
+
+        Raises:
+            NotFoundError: If the card doesn't exist.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                # Verify card exists and belongs to user
+                card = self._get_card_by_id(conn, card_id)
+                if not card:
+                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)
+
+                cur = conn.execute(
+                    """
+                    SELECT linked_type, COUNT(*) as count
+                    FROM kanban_card_links
+                    WHERE card_id = ?
+                    GROUP BY linked_type
+                    """,
+                    (card_id,)
+                )
+
+                counts = {"media": 0, "note": 0}
+                for row in cur.fetchall():
+                    counts[row["linked_type"]] = row["count"]
+
+                return counts
+
+            finally:
+                conn.close()
+
+    def remove_card_link(
+        self,
+        card_id: int,
+        linked_type: str,
+        linked_id: str
+    ) -> bool:
+        """
+        Remove a link from a card.
+
+        Args:
+            card_id: The card to remove the link from.
+            linked_type: Type of linked content.
+            linked_id: ID of the linked content.
+
+        Returns:
+            True if the link was removed, False if it didn't exist.
+
+        Raises:
+            NotFoundError: If the card doesn't exist.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                # Verify card exists and belongs to user
+                card = self._get_card_by_id(conn, card_id)
+                if not card:
+                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)
+
+                cur = conn.execute(
+                    """
+                    DELETE FROM kanban_card_links
+                    WHERE card_id = ? AND linked_type = ? AND linked_id = ?
+                    """,
+                    (card_id, linked_type, linked_id)
+                )
+
+                if cur.rowcount > 0:
+                    # Log activity
+                    self._log_activity_internal(
+                        conn, card["board_id"], "link_removed", "card_link",
+                        card_id=card_id, list_id=card["list_id"],
+                        details={"linked_type": linked_type, "linked_id": linked_id}
+                    )
+                    conn.commit()
+                    return True
+
+                return False
+
+            finally:
+                conn.close()
+
+    def remove_card_link_by_id(self, link_id: int) -> bool:
+        """
+        Remove a card link by its ID.
+
+        Args:
+            link_id: The link ID to remove.
+
+        Returns:
+            True if the link was removed, False if it didn't exist.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                # Get link details first for activity logging
+                cur = conn.execute(
+                    """
+                    SELECT cl.*, c.board_id, c.list_id
+                    FROM kanban_card_links cl
+                    JOIN kanban_cards c ON cl.card_id = c.id
+                    JOIN kanban_boards b ON c.board_id = b.id
+                    WHERE cl.id = ? AND b.user_id = ?
+                    """,
+                    (link_id, self.user_id)
+                )
+                link = cur.fetchone()
+
+                if not link:
+                    return False
+
+                conn.execute("DELETE FROM kanban_card_links WHERE id = ?", (link_id,))
+
+                # Log activity
+                self._log_activity_internal(
+                    conn, link["board_id"], "link_removed", "card_link",
+                    card_id=link["card_id"], list_id=link["list_id"],
+                    details={"linked_type": link["linked_type"], "linked_id": link["linked_id"]}
+                )
+                conn.commit()
+                return True
+
+            finally:
+                conn.close()
+
+    def bulk_add_card_links(
+        self,
+        card_id: int,
+        links: List[Dict[str, str]]
+    ) -> Dict[str, Any]:
+        """
+        Add multiple links to a card at once.
+
+        Args:
+            card_id: The card to add links to.
+            links: List of dicts with "linked_type" and "linked_id".
+
+        Returns:
+            Dict with added_count, skipped_count, and links list.
+
+        Raises:
+            NotFoundError: If the card doesn't exist.
+            InputError: If any linked_type is invalid.
+        """
+        # Validate all linked_types first
+        for link in links:
+            if link.get("linked_type") not in ("media", "note"):
+                raise InputError(
+                    f"Invalid linked_type: {link.get('linked_type')}. Must be 'media' or 'note'."
+                )
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                # Verify card exists and belongs to user
+                card = self._get_card_by_id(conn, card_id)
+                if not card:
+                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)
+
+                added_links = []
+                skipped_count = 0
+                now = _utcnow_iso()
+
+                for link in links:
+                    link_uuid = _generate_uuid()
+                    linked_type = link["linked_type"]
+                    linked_id = link["linked_id"]
+
+                    try:
+                        cur = conn.execute(
+                            """
+                            INSERT INTO kanban_card_links (uuid, card_id, linked_type, linked_id, created_at)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (link_uuid, card_id, linked_type, linked_id, now)
+                        )
+                        link_id = cur.lastrowid
+                        added_links.append({
+                            "id": link_id,
+                            "card_id": card_id,
+                            "linked_type": linked_type,
+                            "linked_id": linked_id,
+                            "created_at": now
+                        })
+                    except sqlite3.IntegrityError:
+                        # Duplicate link, skip
+                        skipped_count += 1
+
+                if added_links:
+                    # Log activity
+                    self._log_activity_internal(
+                        conn, card["board_id"], "links_bulk_added", "card",
+                        card_id=card_id, list_id=card["list_id"],
+                        details={"added_count": len(added_links), "skipped_count": skipped_count}
+                    )
+
+                conn.commit()
+
+                return {
+                    "added_count": len(added_links),
+                    "skipped_count": skipped_count,
+                    "links": added_links
+                }
+
+            finally:
+                conn.close()
+
+    def bulk_remove_card_links(
+        self,
+        card_id: int,
+        links: List[Dict[str, str]]
+    ) -> Dict[str, Any]:
+        """
+        Remove multiple links from a card at once.
+
+        Args:
+            card_id: The card to remove links from.
+            links: List of dicts with "linked_type" and "linked_id".
+
+        Returns:
+            Dict with removed_count.
+
+        Raises:
+            NotFoundError: If the card doesn't exist.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                # Verify card exists and belongs to user
+                card = self._get_card_by_id(conn, card_id)
+                if not card:
+                    raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)
+
+                removed_count = 0
+
+                for link in links:
+                    linked_type = link.get("linked_type")
+                    linked_id = link.get("linked_id")
+
+                    cur = conn.execute(
+                        """
+                        DELETE FROM kanban_card_links
+                        WHERE card_id = ? AND linked_type = ? AND linked_id = ?
+                        """,
+                        (card_id, linked_type, linked_id)
+                    )
+                    removed_count += cur.rowcount
+
+                if removed_count > 0:
+                    # Log activity
+                    self._log_activity_internal(
+                        conn, card["board_id"], "links_bulk_removed", "card",
+                        card_id=card_id, list_id=card["list_id"],
+                        details={"removed_count": removed_count}
+                    )
+                    conn.commit()
+
+                return {"removed_count": removed_count}
+
+            finally:
+                conn.close()
+
+    def get_cards_by_linked_content(
+        self,
+        linked_type: str,
+        linked_id: str,
+        include_archived: bool = False,
+        include_deleted: bool = False
+    ) -> List[Dict[str, Any]]:
+        """
+        Find all cards that link to a specific media item or note.
+
+        This is the bidirectional lookup - given a media item or note ID,
+        find all Kanban cards that reference it.
+
+        Args:
+            linked_type: Type of content ('media' or 'note').
+            linked_id: ID of the content.
+            include_archived: Include archived cards.
+            include_deleted: Include soft-deleted cards.
+
+        Returns:
+            List of cards with board/list context and link info.
+        """
+        with self._lock:
+            conn = self._connect()
+            try:
+                query = """
+                    SELECT
+                        c.id,
+                        c.title,
+                        c.description,
+                        c.board_id,
+                        b.name as board_name,
+                        c.list_id,
+                        l.name as list_name,
+                        c.position,
+                        c.archived as is_archived,
+                        c.deleted as is_deleted,
+                        cl.id as link_id,
+                        cl.created_at as linked_at
+                    FROM kanban_card_links cl
+                    JOIN kanban_cards c ON cl.card_id = c.id
+                    JOIN kanban_boards b ON c.board_id = b.id
+                    JOIN kanban_lists l ON c.list_id = l.id
+                    WHERE cl.linked_type = ?
+                      AND cl.linked_id = ?
+                      AND b.user_id = ?
+                """
+
+                params: List[Any] = [linked_type, linked_id, self.user_id]
+
+                if not include_archived:
+                    query += " AND c.archived = 0"
+
+                if not include_deleted:
+                    query += " AND c.deleted = 0"
+
+                query += " ORDER BY cl.created_at DESC"
+
+                cur = conn.execute(query, params)
+                return [dict(row) for row in cur.fetchall()]
+
+            finally:
+                conn.close()
+
+    def get_card_counts_for_lists(self, list_ids: List[int]) -> Dict[int, int]:
+        """
+        Get card counts for multiple lists in a single query.
+
+        Args:
+            list_ids: List of list IDs to get card counts for.
+
+        Returns:
+            Dict mapping list_id -> card count.
+        """
+        if not list_ids:
+            return {}
+
+        with self._lock:
+            conn = self._connect()
+            try:
+                placeholders = ",".join("?" * len(list_ids))
+                cur = conn.execute(
+                    f"""
+                    SELECT list_id, COUNT(*) as count
+                    FROM kanban_cards
+                    WHERE list_id IN ({placeholders}) AND deleted = 0
+                    GROUP BY list_id
+                    """,
+                    list_ids
+                )
+
+                return {row["list_id"]: row["count"] for row in cur.fetchall()}
+
+            finally:
+                conn.close()

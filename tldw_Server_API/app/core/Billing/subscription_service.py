@@ -188,10 +188,7 @@ class SubscriptionService:
             billing_cycle=sub.get("billing_cycle"),
             current_period_end=sub.get("current_period_end"),
             trial_end=sub.get("trial_end"),
-            cancel_at_period_end=bool(
-                sub.get("stripe_subscription_status") == "canceled"
-                or sub.get("status") == "canceling"
-            ),
+            cancel_at_period_end=bool(sub.get("cancel_at_period_end")),
             limits=sub.get("effective_limits", get_plan_limits("free")),
         )
 

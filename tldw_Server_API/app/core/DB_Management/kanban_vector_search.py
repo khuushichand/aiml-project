@@ -153,7 +153,7 @@ class KanbanVectorSearch:
         # Add label names if present
         labels = card.get("labels", [])
         if labels:
-            label_names = [l.get("name", "") for l in labels if l.get("name")]
+            label_names = [label.get("name", "") for label in labels if label.get("name")]
             if label_names:
                 parts.append("Labels: " + ", ".join(label_names))
 
@@ -198,9 +198,6 @@ class KanbanVectorSearch:
             doc_id = f"card_{card['id']}"
             document = self._build_document(card)
             metadata = self._build_metadata(card)
-
-            # Use the manager's store method
-            collection = self._manager.get_or_create_collection(self._collection_name)
 
             # Upsert the document
             self._manager.store_document_with_embedding(

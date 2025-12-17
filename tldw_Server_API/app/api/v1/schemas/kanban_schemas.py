@@ -750,3 +750,96 @@ class SearchResponse(BaseModel):
     search_mode: str = Field(..., description="Search mode used")
     results: List[SearchResultCard] = Field(..., description="Search results")
     pagination: PaginationInfo = Field(..., description="Pagination info")
+
+
+# =============================================================================
+# Card Links Schemas (Phase 5: Content Integration)
+# =============================================================================
+
+
+class CardLinkCreate(BaseModel):
+    """Schema for creating a card link."""
+
+    linked_type: str = Field(..., description="Type of linked content ('media' or 'note')")
+    linked_id: str = Field(..., description="ID of the linked content")
+
+    @field_validator("linked_type")
+    @classmethod
+    def validate_linked_type(cls, v: str) -> str:
+        if v not in ("media", "note"):
+            raise ValueError("linked_type must be 'media' or 'note'")
+        return v
+
+
+class CardLinkResponse(BaseModel):
+    """Schema for card link response."""
+
+    id: int = Field(..., description="Link ID")
+    card_id: int = Field(..., description="Card ID")
+    linked_type: str = Field(..., description="Type of linked content")
+    linked_id: str = Field(..., description="ID of linked content")
+    created_at: datetime = Field(..., description="When link was created")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CardLinksListResponse(BaseModel):
+    """Schema for list of card links."""
+
+    links: List[CardLinkResponse] = Field(..., description="List of card links")
+
+
+class CardLinkCountsResponse(BaseModel):
+    """Schema for link counts by type."""
+
+    media: int = Field(0, description="Number of media links")
+    note: int = Field(0, description="Number of note links")
+
+
+class BulkCardLinksRequest(BaseModel):
+    """Schema for bulk link operations."""
+
+    links: List[CardLinkCreate] = Field(
+        ..., description="Links to add/remove", min_length=1, max_length=100
+    )
+
+
+class BulkCardLinksAddResponse(BaseModel):
+    """Schema for bulk add response."""
+
+    added_count: int = Field(..., description="Number of links added")
+    skipped_count: int = Field(..., description="Number of duplicates skipped")
+    links: List[CardLinkResponse] = Field(..., description="Added links")
+
+
+class BulkCardLinksRemoveResponse(BaseModel):
+    """Schema for bulk remove response."""
+
+    removed_count: int = Field(..., description="Number of links removed")
+
+
+class LinkedCardResponse(BaseModel):
+    """Schema for a card returned in bidirectional lookup."""
+
+    id: int = Field(..., description="Card ID")
+    title: str = Field(..., description="Card title")
+    description: Optional[str] = Field(None, description="Card description")
+    board_id: int = Field(..., description="Board ID")
+    board_name: str = Field(..., description="Board name")
+    list_id: int = Field(..., description="List ID")
+    list_name: str = Field(..., description="List name")
+    position: int = Field(..., description="Position in list")
+    is_archived: bool = Field(False, description="Whether card is archived")
+    is_deleted: bool = Field(False, description="Whether card is soft-deleted")
+    link_id: int = Field(..., description="The link ID")
+    linked_at: datetime = Field(..., description="When the link was created")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LinkedCardsListResponse(BaseModel):
+    """Schema for bidirectional lookup response."""
+
+    linked_type: str = Field(..., description="Type queried")
+    linked_id: str = Field(..., description="Content ID queried")
+    cards: List[LinkedCardResponse] = Field(..., description="Cards linked to this content")

@@ -121,95 +121,95 @@ Primary value: Visual task organization that integrates with tldw_server's knowl
 ## 7. UX Flows (API-Focused for Frontend Handoff)
 
 ### Board Management
-- `GET /boards` - List all boards with counts (excludes archived/deleted by default)
+- `GET /api/v1/kanban/boards` - List all boards with counts (excludes archived/deleted by default)
   - Query params: `include_archived`, `include_deleted`
-- `POST /boards` - Create new board
-- `GET /boards/{id}` - Get board with all lists and cards (nested)
-- `PATCH /boards/{id}` - Update board name/description/settings (including activity_retention_days)
-- `POST /boards/{id}/archive` - Archive board (hidden, fully restorable)
-- `POST /boards/{id}/unarchive` - Unarchive board
-- `DELETE /boards/{id}` - Soft delete (marked for cleanup after retention period)
-- `POST /boards/{id}/restore` - Restore soft-deleted board (within retention period)
+- `POST /api/v1/kanban/boards` - Create new board
+- `GET /api/v1/kanban/boards/{id}` - Get board with all lists and cards (nested)
+- `PATCH /api/v1/kanban/boards/{id}` - Update board name/description/settings (including activity_retention_days)
+- `POST /api/v1/kanban/boards/{id}/archive` - Archive board (hidden, fully restorable)
+- `POST /api/v1/kanban/boards/{id}/unarchive` - Unarchive board
+- `DELETE /api/v1/kanban/boards/{id}` - Soft delete (marked for cleanup after retention period)
+- `POST /api/v1/kanban/boards/{id}/restore` - Restore soft-deleted board (within retention period)
 
 ### List Management
-- `GET /boards/{board_id}/lists` - Get lists for board (excludes archived/deleted by default)
+- `GET /api/v1/kanban/boards/{board_id}/lists` - Get lists for board (excludes archived/deleted by default)
   - Query params: `include_archived`, `include_deleted`
-- `POST /boards/{board_id}/lists` - Create list
-- `PATCH /lists/{id}` - Update list (name, position)
-- `POST /lists/{id}/archive` - Archive list (and its cards)
-- `POST /lists/{id}/unarchive` - Unarchive list (and its cards)
-- `DELETE /lists/{id}` - Soft delete list
-- `POST /lists/{id}/restore` - Restore soft-deleted list
-- `POST /boards/{board_id}/lists/reorder` - Batch reorder all lists in board
+- `POST /api/v1/kanban/boards/{board_id}/lists` - Create list
+- `PATCH /api/v1/kanban/lists/{id}` - Update list (name, position)
+- `POST /api/v1/kanban/lists/{id}/archive` - Archive list (and its cards)
+- `POST /api/v1/kanban/lists/{id}/unarchive` - Unarchive list (and its cards)
+- `DELETE /api/v1/kanban/lists/{id}` - Soft delete list
+- `POST /api/v1/kanban/lists/{id}/restore` - Restore soft-deleted list
+- `POST /api/v1/kanban/boards/{board_id}/lists/reorder` - Batch reorder all lists in board
 
 ### Card Management
-- `GET /lists/{list_id}/cards` - Get cards in list (excludes archived/deleted by default)
+- `GET /api/v1/kanban/lists/{list_id}/cards` - Get cards in list (excludes archived/deleted by default)
   - Query params: `include_archived`, `include_deleted`
-- `POST /lists/{list_id}/cards` - Create card
-- `GET /cards/{id}` - Get card with all details
-- `PATCH /cards/{id}` - Update card fields
-- `POST /cards/{id}/archive` - Archive card
-- `POST /cards/{id}/unarchive` - Unarchive card
-- `DELETE /cards/{id}` - Soft delete card
-- `POST /cards/{id}/restore` - Restore soft-deleted card
-- `POST /cards/{id}/move` - Move to different list
-- `POST /cards/{id}/copy` - Duplicate card (with checklists)
-- `POST /lists/{list_id}/cards/reorder` - Batch reorder cards in list
+- `POST /api/v1/kanban/lists/{list_id}/cards` - Create card
+- `GET /api/v1/kanban/cards/{id}` - Get card with all details
+- `PATCH /api/v1/kanban/cards/{id}` - Update card fields
+- `POST /api/v1/kanban/cards/{id}/archive` - Archive card
+- `POST /api/v1/kanban/cards/{id}/unarchive` - Unarchive card
+- `DELETE /api/v1/kanban/cards/{id}` - Soft delete card
+- `POST /api/v1/kanban/cards/{id}/restore` - Restore soft-deleted card
+- `POST /api/v1/kanban/cards/{id}/move` - Move to different list
+- `POST /api/v1/kanban/cards/{id}/copy` - Duplicate card (with checklists)
+- `POST /api/v1/kanban/lists/{list_id}/cards/reorder` - Batch reorder cards in list
 
 ### Bulk Operations
-- `POST /cards/bulk-move` - Move multiple cards to a list
-- `POST /cards/bulk-archive` - Archive multiple cards
-- `POST /cards/bulk-delete` - Soft delete multiple cards
-- `POST /cards/bulk-label` - Add/remove labels from multiple cards
+- `POST /api/v1/kanban/cards/bulk-move` - Move multiple cards to a list
+- `POST /api/v1/kanban/cards/bulk-archive` - Archive multiple cards
+- `POST /api/v1/kanban/cards/bulk-delete` - Soft delete multiple cards
+- `POST /api/v1/kanban/cards/bulk-label` - Add/remove labels from multiple cards
 
 ### Filtering
-- `GET /boards/{id}/cards` - Get all cards in board with filters
+- `GET /api/v1/kanban/boards/{id}/cards` - Get all cards in board with filters
   - Query params: `label_ids`, `due_before`, `due_after`, `overdue` (true = due_date < now AND due_complete = false), `has_due_date` (true|false), `priority`, `has_checklist`, `is_complete`
 
 ### Card Features
-- `GET /cards/{id}/checklists` - Get checklists
-- `POST /cards/{id}/checklists` - Add checklist
-- `PATCH /checklists/{id}` - Update checklist
-- `DELETE /checklists/{id}` - Delete checklist
-- `POST /checklists/{id}/items` - Add item
-- `PATCH /checklist-items/{id}` - Toggle/update item
-- `DELETE /checklist-items/{id}` - Delete item
-- `POST /checklists/{id}/toggle-all` - Check or uncheck all items in checklist
+- `GET /api/v1/kanban/cards/{id}/checklists` - Get checklists
+- `POST /api/v1/kanban/cards/{id}/checklists` - Add checklist
+- `PATCH /api/v1/kanban/checklists/{id}` - Update checklist
+- `DELETE /api/v1/kanban/checklists/{id}` - Delete checklist
+- `POST /api/v1/kanban/checklists/{id}/items` - Add item
+- `PATCH /api/v1/kanban/checklist-items/{id}` - Toggle/update item
+- `DELETE /api/v1/kanban/checklist-items/{id}` - Delete item
+- `POST /api/v1/kanban/checklists/{id}/toggle-all` - Check or uncheck all items in checklist
   - Body: `{"checked": true}` or `{"checked": false}`
 
-- `GET /cards/{id}/comments` - Get comments
-- `POST /cards/{id}/comments` - Add comment
-- `PATCH /comments/{id}` - Edit comment
-- `DELETE /comments/{id}` - Delete comment
+- `GET /api/v1/kanban/cards/{id}/comments` - Get comments
+- `POST /api/v1/kanban/cards/{id}/comments` - Add comment
+- `PATCH /api/v1/kanban/comments/{id}` - Edit comment
+- `DELETE /api/v1/kanban/comments/{id}` - Delete comment
 
-- `GET /cards/{id}/activities` - Get activity log for card
-- `GET /lists/{id}/activities` - Get activity log for list
-- `GET /boards/{id}/activities` - Get board-level activities
+- `GET /api/v1/kanban/cards/{id}/activities` - Get activity log for card
+- `GET /api/v1/kanban/lists/{id}/activities` - Get activity log for list
+- `GET /api/v1/kanban/boards/{id}/activities` - Get board-level activities
   - Query params: `created_after`, `created_before`, `action_type`, `entity_type`, `list_id`, `card_id`
 
 ### Labels
-- `GET /boards/{id}/labels` - Get board labels
-- `POST /boards/{id}/labels` - Create label
-- `PATCH /labels/{id}` - Update label
-- `DELETE /labels/{id}` - Delete label
-- `POST /cards/{id}/labels/{label_id}` - Assign label to card
-- `DELETE /cards/{id}/labels/{label_id}` - Remove label from card
+- `GET /api/v1/kanban/boards/{id}/labels` - Get board labels
+- `POST /api/v1/kanban/boards/{id}/labels` - Create label
+- `PATCH /api/v1/kanban/labels/{id}` - Update label
+- `DELETE /api/v1/kanban/labels/{id}` - Delete label
+- `POST /api/v1/kanban/cards/{id}/labels/{label_id}` - Assign label to card
+- `DELETE /api/v1/kanban/cards/{id}/labels/{label_id}` - Remove label from card
 
 ### Content Links
-- `GET /cards/{id}/links` - Get linked content
-- `POST /cards/{id}/links` - Link media item or note
-- `DELETE /cards/{id}/links/{link_id}` - Remove link
+- `GET /api/v1/kanban/cards/{id}/links` - Get linked content
+- `POST /api/v1/kanban/cards/{id}/links` - Link media item or note
+- `DELETE /api/v1/kanban/cards/{id}/links/{link_id}` - Remove link
 
 ### Search
-- `GET /kanban/search?q=...` - Search across cards (FTS + vector)
+- `GET /api/v1/kanban/search?q=...` - Search across cards (FTS + vector)
   - Query params: `q`, `board_id`, `label_ids`, `priority`, `include_archived`, `search_mode` (fts|vector|hybrid, default: fts)
 
 ### Export/Import
-- `GET /boards/{id}/export` - Export board as JSON (includes lists, cards, checklists, labels)
+- `GET /api/v1/kanban/boards/{id}/export` - Export board as JSON (includes lists, cards, checklists, labels)
   - Export format matches the nested board response structure (see "Get Board with Lists and Cards" example)
   - Includes: board metadata, all labels, all lists with their cards, all checklists/items, all comments
   - Excludes: activity log (too large), internal IDs (uses UUIDs for portability)
-- `POST /boards/import` - Import board from JSON (tldw format or Trello format)
+- `POST /api/v1/kanban/boards/import` - Import board from JSON (tldw format or Trello format)
   - Trello import maps: boards→boards, lists→lists, cards→cards, checklists→checklists, labels→labels
   - Trello features not imported: attachments, members, power-ups, custom fields, stickers
 

@@ -204,7 +204,8 @@ class AuthnzBillingRepo:
                         """
                         SELECT os.id, os.org_id, os.plan_id, os.stripe_customer_id, os.stripe_subscription_id,
                                os.stripe_subscription_status, os.billing_cycle, os.current_period_start,
-                               os.current_period_end, os.status, os.trial_end, os.custom_limits_json,
+                               os.current_period_end, os.status, os.trial_end, os.cancel_at_period_end,
+                               os.custom_limits_json,
                                os.created_at, sp.name as plan_name, sp.display_name as plan_display_name,
                                sp.limits_json as plan_limits_json
                         FROM org_subscriptions os
@@ -219,7 +220,8 @@ class AuthnzBillingRepo:
                         """
                         SELECT os.id, os.org_id, os.plan_id, os.stripe_customer_id, os.stripe_subscription_id,
                                os.stripe_subscription_status, os.billing_cycle, os.current_period_start,
-                               os.current_period_end, os.status, os.trial_end, os.custom_limits_json,
+                               os.current_period_end, os.status, os.trial_end, os.cancel_at_period_end,
+                               os.custom_limits_json,
                                os.created_at, sp.name as plan_name, sp.display_name as plan_display_name,
                                sp.limits_json as plan_limits_json
                         FROM org_subscriptions os
@@ -232,13 +234,23 @@ class AuthnzBillingRepo:
                     if not row:
                         return None
                     return self._subscription_row_to_dict({
-                        "id": row[0], "org_id": row[1], "plan_id": row[2],
-                        "stripe_customer_id": row[3], "stripe_subscription_id": row[4],
-                        "stripe_subscription_status": row[5], "billing_cycle": row[6],
-                        "current_period_start": row[7], "current_period_end": row[8],
-                        "status": row[9], "trial_end": row[10], "custom_limits_json": row[11],
-                        "created_at": row[12], "plan_name": row[13], "plan_display_name": row[14],
-                        "plan_limits_json": row[15],
+                        "id": row[0],
+                        "org_id": row[1],
+                        "plan_id": row[2],
+                        "stripe_customer_id": row[3],
+                        "stripe_subscription_id": row[4],
+                        "stripe_subscription_status": row[5],
+                        "billing_cycle": row[6],
+                        "current_period_start": row[7],
+                        "current_period_end": row[8],
+                        "status": row[9],
+                        "trial_end": row[10],
+                        "cancel_at_period_end": row[11],
+                        "custom_limits_json": row[12],
+                        "created_at": row[13],
+                        "plan_name": row[14],
+                        "plan_display_name": row[15],
+                        "plan_limits_json": row[16],
                     })
         except Exception as exc:
             logger.error(f"AuthnzBillingRepo.get_org_subscription failed: {exc}")
@@ -336,7 +348,7 @@ class AuthnzBillingRepo:
         allowed_fields = {
             "plan_id", "stripe_customer_id", "stripe_subscription_id",
             "stripe_subscription_status", "billing_cycle", "current_period_start",
-            "current_period_end", "status", "trial_end", "custom_limits_json",
+            "current_period_end", "status", "trial_end", "cancel_at_period_end", "custom_limits_json",
         }
         updates = {k: v for k, v in updates.items() if k in allowed_fields}
 

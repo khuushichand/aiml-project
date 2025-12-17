@@ -11,13 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
-    KanbanDB,
-    KanbanDBError,
-    InputError,
-    ConflictError,
-    NotFoundError,
-)
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
 from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
     CommentCreate,
     CommentUpdate,
@@ -61,6 +55,8 @@ async def create_comment(
     Create a new comment on a card.
 
     - **content**: Comment content (required, 1-10000 characters, markdown supported)
+
+    The comment author is derived from the authenticated user context.
     """
     try:
         comment = db.create_comment(
@@ -69,7 +65,7 @@ async def create_comment(
         )
         return CommentResponse(**comment)
     except Exception as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e
 
 
 @router.get(
@@ -107,7 +103,7 @@ async def list_comments(
             )
         )
     except Exception as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e
 
 
 @router.get(
@@ -133,7 +129,7 @@ async def get_comment(
     except HTTPException:
         raise
     except Exception as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e
 
 
 @router.patch(
@@ -161,7 +157,7 @@ async def update_comment(
         )
         return CommentResponse(**comment)
     except Exception as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e
 
 
 @router.delete(
@@ -191,4 +187,4 @@ async def delete_comment(
     except HTTPException:
         raise
     except Exception as e:
-        raise _handle_error(e)
+        raise _handle_error(e) from e

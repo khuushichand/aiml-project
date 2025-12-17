@@ -507,7 +507,7 @@ class AuthnzOrgInvitesRepo:
                 if self._is_postgres(conn):
                     if deactivate_only:
                         result = await conn.execute(
-                            "UPDATE org_invites SET is_active = 0 WHERE expires_at < $1 AND is_active = 1",
+                            "UPDATE org_invites SET is_active = FALSE WHERE expires_at < $1 AND is_active = TRUE",
                             now
                         )
                     else:
