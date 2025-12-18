@@ -2026,10 +2026,10 @@ class MediaDatabase:
                                 CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
                                 """
                             )
-                        # Ensure visibility/owner columns and indexes exist on upgraded DBs
-                        self._ensure_sqlite_visibility_columns(conn)
-                    else:
-                        raise SchemaError(f"Migration failed: {result}")
+                            # Ensure visibility/owner columns and indexes exist on upgraded DBs
+                            self._ensure_sqlite_visibility_columns(conn)
+                        else:
+                            raise SchemaError(f"Migration failed: {result}")
 
                 except MigrationError as e:
                     raise SchemaError(f"Database migration failed: {e}") from e
@@ -2531,7 +2531,7 @@ class MediaDatabase:
         try:
             conn.executescript("\n".join(statements))
         except sqlite3.Error as exc:
-            logging.warning(f"Could not ensure visibility columns/indexes on Media: {exc}")
+            logger.warning(f"Could not ensure visibility columns/indexes on Media: {exc}")
 
     def _ensure_postgres_fts(self, conn) -> None:
         backend = self.backend
@@ -2561,8 +2561,8 @@ class MediaDatabase:
                 columns=['chunk_text'],
                 connection=conn,
             )
-        except Exception as e:
-            logging.warning(f"Failed to ensure Postgres chunk-level FTS: {e}")
+        except BackendDatabaseError as exc:
+            logger.warning(f"Failed to ensure Postgres chunk-level FTS: {exc}")
 
     def _postgres_policy_exists(self, conn, table: str, policy: str) -> bool:
         """Check whether a named RLS policy exists for the given table."""
@@ -2574,8 +2574,8 @@ class MediaDatabase:
             )
             rows = getattr(result, "rows", None)
             return bool(rows)
-        except Exception as exc:
-            logging.warning(
+        except BackendDatabaseError as exc:
+            logger.warning(
                 f"Failed to inspect Postgres RLS policy '{policy}' on table '{table}': {exc}"
             )
             return False
@@ -2643,15 +2643,15 @@ class MediaDatabase:
                         f"DROP POLICY IF EXISTS {backend.escape_identifier(old_policy)} ON {ident('media')}",
                         connection=conn,
                     )
-                    logging.debug(f"Dropped old media policy: {old_policy}")
-            except Exception as exc:
-                logging.warning(f"Could not drop old media policy '{old_policy}': {exc}")
+                    logger.debug(f"Dropped old media policy: {old_policy}")
+            except BackendDatabaseError as exc:
+                logger.warning(f"Could not drop old media policy '{old_policy}': {exc}")
 
         try:
             backend.execute(f"ALTER TABLE {ident('media')} ENABLE ROW LEVEL SECURITY", connection=conn)
             backend.execute(f"ALTER TABLE {ident('media')} FORCE ROW LEVEL SECURITY", connection=conn)
-        except Exception as exc:
-            logging.warning(f"Could not enable RLS for media table: {exc}")
+        except BackendDatabaseError as exc:
+            logger.warning(f"Could not enable RLS for media table: {exc}")
 
         # Create new visibility-aware media policy
         for policy_name, predicate in policy_sets['media']:
@@ -2662,8 +2662,8 @@ class MediaDatabase:
                         f"DROP POLICY IF EXISTS {backend.escape_identifier(policy_name)} ON {ident('media')}",
                         connection=conn,
                     )
-                except Exception as exc:
-                    logging.warning(f"Could not drop existing media policy '{policy_name}': {exc}")
+                except BackendDatabaseError as exc:
+                    logger.warning(f"Could not drop existing media policy '{policy_name}': {exc}")
                 backend.execute(
                     f"""
                     CREATE POLICY {backend.escape_identifier(policy_name)} ON {ident('media')}
@@ -2673,14 +2673,14 @@ class MediaDatabase:
                     """,
                     connection=conn,
                 )
-            except Exception as exc:
-                logging.warning(f"Skipping creation of media policy '{policy_name}': {exc}")
+            except BackendDatabaseError as exc:
+                logger.warning(f"Skipping creation of media policy '{policy_name}': {exc}")
 
         try:
             backend.execute(f"ALTER TABLE {ident('sync_log')} ENABLE ROW LEVEL SECURITY", connection=conn)
             backend.execute(f"ALTER TABLE {ident('sync_log')} FORCE ROW LEVEL SECURITY", connection=conn)
-        except Exception as exc:
-            logging.warning(f"Could not enable RLS for sync_log table: {exc}")
+        except BackendDatabaseError as exc:
+            logger.warning(f"Could not enable RLS for sync_log table: {exc}")
 
         # Create policies only if missing (idempotent)
         for policy_name, predicate in policy_sets['sync_log']:
@@ -2695,8 +2695,8 @@ class MediaDatabase:
                         """,
                         connection=conn,
                     )
-            except Exception as exc:
-                logging.warning(f"Skipping creation of sync_log policy '{policy_name}': {exc}")
+            except BackendDatabaseError as exc:
+                logger.warning(f"Skipping creation of sync_log policy '{policy_name}': {exc}")
 
     # --- Internal Helpers (Unchanged) ---
     def _get_current_utc_timestamp_str(self) -> str:
@@ -4909,43 +4909,43 @@ class MediaDatabase:
 
                             return media_id, media_uuid, f"Media '{title}' is already up-to-date."
 
-	                        # Case A.1.b: Content is different. Proceed with a full versioned update.
-	                        new_ver = current_ver + 1
-	                        payload = _media_payload(media_uuid, new_ver, chunk_status=final_chunk_status)
-	                        update_sql = """
-	                            UPDATE Media
-	                               SET url = ?, title = ?, type = ?, content = ?, author = ?,
-	                                   ingestion_date = ?, transcription_model = ?,
-	                                   content_hash = ?, is_trash = ?, trash_date = ?,
-	                                   chunking_status = ?, vector_processing = ?,
-	                                   last_modified = ?, version = ?, org_id = ?, team_id = ?,
-	                                   visibility = ?, owner_user_id = ?, client_id = ?, deleted = ?
-	                               WHERE id = ? AND version = ?
-	                        """
-	                        update_params = (
-	                            payload['url'],
-	                            payload['title'],
+                        # Case A.1.b: Content is different. Proceed with a full versioned update.
+                        new_ver = current_ver + 1
+                        payload = _media_payload(media_uuid, new_ver, chunk_status=final_chunk_status)
+                        update_sql = """
+                            UPDATE Media
+                               SET url = ?, title = ?, type = ?, content = ?, author = ?,
+                                   ingestion_date = ?, transcription_model = ?,
+                                   content_hash = ?, is_trash = ?, trash_date = ?,
+                                   chunking_status = ?, vector_processing = ?,
+                                   last_modified = ?, version = ?, org_id = ?, team_id = ?,
+                                   visibility = ?, owner_user_id = ?, client_id = ?, deleted = ?
+                               WHERE id = ? AND version = ?
+                        """
+                        update_params = (
+                            payload['url'],
+                            payload['title'],
                             payload['type'],
                             payload['content'],
                             payload['author'],
                             payload['ingestion_date'],
                             payload['transcription_model'],
-	                            payload['content_hash'],
-	                            payload['is_trash'],
-	                            payload['trash_date'],
-	                            payload['chunking_status'],
-	                            payload['vector_processing'],
-	                            payload['last_modified'],
-	                            payload['version'],
-	                            payload['org_id'],
-	                            payload['team_id'],
-	                            payload['visibility'],
-	                            payload['owner_user_id'],
-	                            payload['client_id'],
-	                            payload['deleted'],
-	                            media_id,
-	                            current_ver,
-	                        )
+                            payload['content_hash'],
+                            payload['is_trash'],
+                            payload['trash_date'],
+                            payload['chunking_status'],
+                            payload['vector_processing'],
+                            payload['last_modified'],
+                            payload['version'],
+                            payload['org_id'],
+                            payload['team_id'],
+                            payload['visibility'],
+                            payload['owner_user_id'],
+                            payload['client_id'],
+                            payload['deleted'],
+                            media_id,
+                            current_ver,
+                        )
                         update_cursor = _exec(update_sql, update_params)
                         if update_cursor.rowcount == 0:
                             raise ConflictError(f"Media (full update id={media_id})", media_id)

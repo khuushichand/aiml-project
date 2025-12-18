@@ -568,10 +568,26 @@ class ChromaDBManager:
                                   llm_model_for_context: Optional[str] = None,  # e.g., "gpt-3.5-turbo"
                                   chunk_options: Optional[Dict] = None,
                                   hierarchical_chunking: Optional[bool] = None,
-                                  hierarchical_template: Optional[Dict] = None):
+                                  hierarchical_template: Optional[Dict] = None,
+                                  base_metadata: Optional[Dict[str, Any]] = None):
         """
         Processes content by chunking, optionally contextualizing, generating embeddings,
         and storing them in ChromaDB and references in SQL DB.
+
+        Args:
+            content: Raw document text to process.
+            media_id: Logical identifier for the document.
+            file_name: File name associated with the content.
+            collection_name: Optional Chroma collection name.
+            embedding_model_id_override: Optional embedding model override.
+            create_embeddings: Whether to generate embeddings.
+            create_contextualized: Whether to generate contextual summaries.
+            llm_model_for_context: Optional LLM for contextualization.
+            chunk_options: Chunking configuration.
+            hierarchical_chunking: Enable hierarchical chunking.
+            hierarchical_template: Template for hierarchical chunking.
+            base_metadata: Optional base metadata to merge into each chunk's metadata
+                           before storage (e.g., domain-specific identifiers).
         """
         target_collection = self.get_or_create_collection(collection_name)
 
@@ -939,6 +955,14 @@ class ChromaDBManager:
                         }
                         # Add metadata from chunk_for_embedding
                         meta.update(chunk_info.get('metadata', {}))
+
+                        # Merge in any base-level metadata provided by caller
+                        if base_metadata:
+                            try:
+                                meta.update(base_metadata)
+                            except Exception:
+                                # Best-effort merge; skip on type errors
+                                pass
 
                         if create_contextualized:
                             # If docs_for_chroma contains original text, but texts_for_embedding_generation has context,

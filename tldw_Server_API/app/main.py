@@ -366,8 +366,6 @@ logger.info("Logging configured (Loguru + stdlib interception)")
 
 #
 # Auth Endpoint (NEW)
-#
-# Auth Endpoint (NEW)
 """
 Initialize feature flags up-front so later references in route inclusion do not
 raise NameError when running under ULTRA/MINIMAL test modes or when optional
@@ -387,6 +385,9 @@ _HAS_SCHEDULER_WF = False
 _HAS_JOBS_ADMIN = False
 _HAS_AUTH_ENHANCED = False
 _HAS_CHUNKING = False
+_HAS_NOTES_GRAPH = False
+_HAS_READING_HIGHLIGHTS = False
+_HAS_KANBAN = False
 
 from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
 
@@ -2488,6 +2489,18 @@ OPENAPI_TAGS = [
         },
     },
     {
+        "name": "organizations",
+        "description": "Organization management: create orgs, manage membership, teams, and roles.",
+    },
+    {
+        "name": "invites",
+        "description": "Organization invite codes: preview, redeem, and audit.",
+    },
+    {
+        "name": "billing",
+        "description": "Billing and subscription management (plans, invoices, webhooks).",
+    },
+    {
         "name": "admin",
         "description": "Administrative operations and diagnostics (non-Jobs). For Jobs Admin endpoints (stats, prune, TTL sweep, requeue quarantined, integrity sweep), see the 'jobs' tag.",
         "externalDocs": {
@@ -3715,7 +3728,16 @@ async def api_metrics():
 
 
 # Router for health monitoring endpoints (NEW)
-if _MINIMAL_TEST_APP:
+if _ULTRA_MINIMAL_APP:
+    # Ultra-minimal: only mount health endpoints (no optional routers, no gating)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
+
+        app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])
+        app.include_router(health_router, prefix="", tags=["health"])
+    except Exception as _health_ultra_err:  # noqa: BLE001
+        logger.warning(f"Health router unavailable in ULTRA_MINIMAL_APP: {_health_ultra_err}")
+elif _MINIMAL_TEST_APP:
     # Minimal set for paper_search tests
     app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
     app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
@@ -4133,28 +4155,28 @@ else:
         from tldw_Server_API.app.api.v1.endpoints.orgs import router as orgs_router
 
         _include_if_enabled("orgs", orgs_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
-    except ImportError as _orgs_err:  # noqa: B904
+    except ImportError as _orgs_err:
         logger.warning(f"Skipping orgs router due to import error: {_orgs_err}")
     # Organization invite preview and redemption endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.org_invites import router as org_invites_router
 
         _include_if_enabled("org-invites", org_invites_router, prefix=f"{API_V1_PREFIX}", tags=["invites"])
-    except ImportError as _inv_err:  # noqa: B904
+    except ImportError as _inv_err:
         logger.warning(f"Skipping org_invites router due to import error: {_inv_err}")
     # Billing and subscription management endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.billing import router as billing_router
 
         _include_if_enabled("billing", billing_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except ImportError as _bill_err:  # noqa: B904
+    except ImportError as _bill_err:
         logger.warning(f"Skipping billing router due to import error: {_bill_err}")
     # Stripe webhook handler (no auth required)
     try:
         from tldw_Server_API.app.api.v1.endpoints.billing_webhooks import router as billing_webhooks_router
 
         _include_if_enabled("billing-webhooks", billing_webhooks_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except ImportError as _wh_err:  # noqa: B904
+    except ImportError as _wh_err:
         logger.warning(f"Skipping billing_webhooks router due to import error: {_wh_err}")
     if _HAS_MEDIA:
         _include_if_enabled("media", media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])

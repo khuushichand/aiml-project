@@ -222,6 +222,7 @@ class KanbanVectorSearch:
                 collection_name=self._collection_name,
                 create_embeddings=True,
                 create_contextualized=False,
+                base_metadata=metadata,
             )
 
             logger.debug(f"Indexed card {card_id} for user {self.user_id}")
