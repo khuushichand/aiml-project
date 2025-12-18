@@ -261,11 +261,15 @@ class KanbanVectorSearch:
         self,
         query: str,
         board_id: Optional[int] = None,
-        priority: Optional[str] = None,
-        limit: int = 20,
-    ) -> List[Dict[str, Any]]:
+            priority: Optional[str] = None,
+            limit: int = 20,
+        ) -> List[Dict[str, Any]]:
         """
         Search cards using vector similarity.
+
+        The returned ``relevance_score`` is a normalized similarity value in the
+        range ``0.0`` to ``1.0``, derived from the underlying L2 distance
+        reported by ChromaDB (lower distance → higher relevance).
 
         Args:
             query: The search query.
@@ -274,7 +278,8 @@ class KanbanVectorSearch:
             limit: Maximum number of results.
 
         Returns:
-            List of search results with card_id and relevance_score.
+            List of search results with card_id, board_id, list_id and
+            relevance_score in the range [0.0, 1.0].
         """
         if not self.available:
             return []

@@ -2344,7 +2344,9 @@ class MediaDatabase:
                 DO $$
                 BEGIN
                     IF NOT EXISTS (
-                        SELECT 1 FROM pg_constraint WHERE conname = 'chk_media_visibility'
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'chk_media_visibility'
+                          AND conrelid = 'media'::regclass
                     ) THEN
                         ALTER TABLE {ident('media')}
                         ADD CONSTRAINT chk_media_visibility
@@ -2513,12 +2515,6 @@ class MediaDatabase:
 
         if "owner_user_id" not in columns:
             statements.append("ALTER TABLE Media ADD COLUMN owner_user_id INTEGER;")
-
-        # Backfill owner_user_id from client_id when possible; safe to run multiple times.
-        statements.append(
-            "UPDATE Media SET owner_user_id = CAST(client_id AS INTEGER) "
-            "WHERE owner_user_id IS NULL;"
-        )
 
         # Indexes are idempotent; they may already exist from the base schema.
         statements.append(
@@ -4627,13 +4623,13 @@ class MediaDatabase:
                 # Update the record
                 update_sql = """
                     UPDATE Media
-                    SET visibility = ?, org_id = ?, team_id = ?, version = ?, last_modified = ?
+                    SET visibility = ?, org_id = ?, team_id = ?, version = ?, last_modified = ?, client_id = ?
                     WHERE id = ? AND version = ?
                 """
                 cursor = self._execute_with_connection(
                     conn,
                     update_sql,
-                    (visibility, new_org_id, new_team_id, new_version, now, media_id, current_version),
+                    (visibility, new_org_id, new_team_id, new_version, now, self.client_id, media_id, current_version),
                 )
                 if cursor.rowcount == 0:
                     raise ConflictError(f"Concurrent modification detected for media ID {media_id}", entity="Media", identifier=media_id)

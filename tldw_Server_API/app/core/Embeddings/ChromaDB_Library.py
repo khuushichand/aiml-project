@@ -961,8 +961,11 @@ class ChromaDBManager:
                             try:
                                 meta.update(base_metadata)
                             except Exception:
-                                # Best-effort merge; skip on type errors
-                                pass
+                                # Best-effort merge; log and skip on type errors
+                                logger.debug(
+                                    f"User '{self.user_id}': Failed to merge base_metadata for chunk {i} "
+                                    f"(media_id: {media_id}). Type mismatch or invalid metadata."
+                                )
 
                         if create_contextualized:
                             # If docs_for_chroma contains original text, but texts_for_embedding_generation has context,

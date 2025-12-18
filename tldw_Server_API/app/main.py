@@ -548,7 +548,7 @@ else:
         from tldw_Server_API.app.api.v1.endpoints.kanban_links import router as kanban_links_router
 
         _HAS_KANBAN = True
-    except Exception as _kanban_err:
+    except ImportError as _kanban_err:
         logger.warning(f"Kanban endpoints unavailable; skipping import: {_kanban_err}")
         _HAS_KANBAN = False
 
@@ -2499,6 +2499,10 @@ OPENAPI_TAGS = [
     {
         "name": "billing",
         "description": "Billing and subscription management (plans, invoices, webhooks).",
+    },
+    {
+        "name": "kanban",
+        "description": "Kanban board endpoints: boards, lists, cards, and actions.",
     },
     {
         "name": "admin",
