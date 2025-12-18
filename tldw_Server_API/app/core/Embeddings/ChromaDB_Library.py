@@ -956,15 +956,18 @@ class ChromaDBManager:
                         # Add metadata from chunk_for_embedding
                         meta.update(chunk_info.get('metadata', {}))
 
-                        # Merge in any base-level metadata provided by caller
+                        # Merge in any base-level metadata provided by caller (base first, then chunk-specific)
                         if base_metadata:
                             try:
-                                meta.update(base_metadata)
-                            except Exception:
+                                # Reverse order: start with base-level metadata, then overlay chunk-specific metadata
+                                base_copy = dict(base_metadata)
+                                base_copy.update(meta)
+                                meta = base_copy
+                            except TypeError as e:
                                 # Best-effort merge; log and skip on type errors
                                 logger.debug(
                                     f"User '{self.user_id}': Failed to merge base_metadata for chunk {i} "
-                                    f"(media_id: {media_id}). Type mismatch or invalid metadata."
+                                    f"(media_id: {media_id}). Type error: {e}"
                                 )
 
                         if create_contextualized:

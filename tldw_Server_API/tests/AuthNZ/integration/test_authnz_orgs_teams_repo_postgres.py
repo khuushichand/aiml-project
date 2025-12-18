@@ -153,3 +153,13 @@ async def test_authnz_orgs_teams_repo_membership_postgres(test_db_pool):
     remove_owner = await repo.remove_org_member(org_id=org_id, user_id=owner_id)
     assert remove_owner["removed"] is False
     assert remove_owner.get("error") == "owner_required"
+
+    # List organizations for user via new helper
+    orgs_for_owner, total_for_owner = await repo.list_organizations_for_user(
+        owner_id,
+        limit=10,
+        offset=0,
+        with_total=True,
+    )
+    assert any(o["id"] == org_id for o in orgs_for_owner)
+    assert total_for_owner >= 1

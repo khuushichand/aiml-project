@@ -261,8 +261,8 @@ class KanbanVectorSearch:
         self,
         query: str,
         board_id: Optional[int] = None,
-            priority: Optional[str] = None,
-            limit: int = 20,
+        priority: Optional[str] = None,
+        limit: int = 20,
         ) -> List[Dict[str, Any]]:
         """
         Search cards using vector similarity.

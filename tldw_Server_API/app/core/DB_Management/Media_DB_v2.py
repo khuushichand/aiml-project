@@ -2335,7 +2335,7 @@ class MediaDatabase:
                 f"ADD COLUMN IF NOT EXISTS {ident('visibility')} TEXT DEFAULT 'personal'"
             ),
             connection=conn,
-        )
+        )  # noqa: S608
 
         # Add check constraint for visibility values (idempotent)
         try:
@@ -2355,7 +2355,7 @@ class MediaDatabase:
                 END $$;
                 """,
                 connection=conn,
-            )
+            )  # noqa: S608
         except Exception as exc:
             logging.debug(f"Could not add visibility check constraint: {exc}")
 
@@ -2366,7 +2366,7 @@ class MediaDatabase:
                 f"ADD COLUMN IF NOT EXISTS {ident('owner_user_id')} BIGINT"
             ),
             connection=conn,
-        )
+        )  # noqa: S608
 
         # Backfill owner_user_id from client_id where possible
         try:
@@ -2378,7 +2378,7 @@ class MediaDatabase:
                   AND {ident('client_id')} ~ '^[0-9]+$'
                 """,
                 connection=conn,
-            )
+            )  # noqa: S608
         except Exception as exc:
             logging.debug(f"Could not backfill owner_user_id: {exc}")
 
@@ -2386,11 +2386,11 @@ class MediaDatabase:
         backend.execute(
             f"CREATE INDEX IF NOT EXISTS idx_media_visibility ON {ident('media')}({ident('visibility')})",
             connection=conn,
-        )
+        )  # noqa: S608
         backend.execute(
             f"CREATE INDEX IF NOT EXISTS idx_media_owner_user_id ON {ident('media')}({ident('owner_user_id')})",
             connection=conn,
-        )
+        )  # noqa: S608
 
     def _update_schema_version_postgres(self, conn, version: int) -> None:
         """Ensure schema_version table reflects the supplied version."""
@@ -2638,14 +2638,20 @@ class MediaDatabase:
                     backend.execute(
                         f"DROP POLICY IF EXISTS {backend.escape_identifier(old_policy)} ON {ident('media')}",
                         connection=conn,
-                    )
+                    )  # noqa: S608
                     logger.debug(f"Dropped old media policy: {old_policy}")
             except BackendDatabaseError as exc:
                 logger.warning(f"Could not drop old media policy '{old_policy}': {exc}")
 
         try:
-            backend.execute(f"ALTER TABLE {ident('media')} ENABLE ROW LEVEL SECURITY", connection=conn)
-            backend.execute(f"ALTER TABLE {ident('media')} FORCE ROW LEVEL SECURITY", connection=conn)
+            backend.execute(
+                f"ALTER TABLE {ident('media')} ENABLE ROW LEVEL SECURITY",
+                connection=conn,
+            )  # noqa: S608
+            backend.execute(
+                f"ALTER TABLE {ident('media')} FORCE ROW LEVEL SECURITY",
+                connection=conn,
+            )  # noqa: S608
         except BackendDatabaseError as exc:
             logger.warning(f"Could not enable RLS for media table: {exc}")
 
@@ -2657,7 +2663,7 @@ class MediaDatabase:
                     backend.execute(
                         f"DROP POLICY IF EXISTS {backend.escape_identifier(policy_name)} ON {ident('media')}",
                         connection=conn,
-                    )
+                    )  # noqa: S608
                 except BackendDatabaseError as exc:
                     logger.warning(f"Could not drop existing media policy '{policy_name}': {exc}")
                 backend.execute(
@@ -2668,13 +2674,19 @@ class MediaDatabase:
                     WITH CHECK ({predicate})
                     """,
                     connection=conn,
-                )
+                )  # noqa: S608
             except BackendDatabaseError as exc:
                 logger.warning(f"Skipping creation of media policy '{policy_name}': {exc}")
 
         try:
-            backend.execute(f"ALTER TABLE {ident('sync_log')} ENABLE ROW LEVEL SECURITY", connection=conn)
-            backend.execute(f"ALTER TABLE {ident('sync_log')} FORCE ROW LEVEL SECURITY", connection=conn)
+            backend.execute(
+                f"ALTER TABLE {ident('sync_log')} ENABLE ROW LEVEL SECURITY",
+                connection=conn,
+            )  # noqa: S608
+            backend.execute(
+                f"ALTER TABLE {ident('sync_log')} FORCE ROW LEVEL SECURITY",
+                connection=conn,
+            )  # noqa: S608
         except BackendDatabaseError as exc:
             logger.warning(f"Could not enable RLS for sync_log table: {exc}")
 
@@ -2690,7 +2702,7 @@ class MediaDatabase:
                         WITH CHECK ({predicate})
                         """,
                         connection=conn,
-                    )
+                    )  # noqa: S608
             except BackendDatabaseError as exc:
                 logger.warning(f"Skipping creation of sync_log policy '{policy_name}': {exc}")
 
@@ -3455,7 +3467,8 @@ class MediaDatabase:
         if self.backend_type == BackendType.SQLITE:
             try:
                 scope = get_scope()
-            except Exception:
+            except Exception as scope_err:
+                logging.debug(f"Failed to resolve scope for SQLite visibility filter; falling back to no scope: {scope_err}")
                 scope = None
 
             if scope and not scope.is_admin:
