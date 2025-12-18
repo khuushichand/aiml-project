@@ -79,7 +79,6 @@ def require_within_limit(category: LimitCategory, units: int = 1):
             ...
     """
     async def _check_limit(
-        request: Request,
         response: Response,
         principal: AuthPrincipal = Depends(get_auth_principal),
         x_tldw_org_id: Optional[int] = Header(None, alias="X-TLDW-Org-Id"),

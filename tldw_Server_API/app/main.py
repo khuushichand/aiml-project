@@ -4133,29 +4133,29 @@ else:
         from tldw_Server_API.app.api.v1.endpoints.orgs import router as orgs_router
 
         _include_if_enabled("orgs", orgs_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
-    except Exception as _orgs_err:
-        logger.debug(f"Skipping orgs router: {_orgs_err}")
+    except ImportError as _orgs_err:  # noqa: B904
+        logger.warning(f"Skipping orgs router due to import error: {_orgs_err}")
     # Organization invite preview and redemption endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.org_invites import router as org_invites_router
 
         _include_if_enabled("org-invites", org_invites_router, prefix=f"{API_V1_PREFIX}", tags=["invites"])
-    except Exception as _inv_err:
-        logger.debug(f"Skipping org_invites router: {_inv_err}")
+    except ImportError as _inv_err:  # noqa: B904
+        logger.warning(f"Skipping org_invites router due to import error: {_inv_err}")
     # Billing and subscription management endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.billing import router as billing_router
 
         _include_if_enabled("billing", billing_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except Exception as _bill_err:
-        logger.debug(f"Skipping billing router: {_bill_err}")
+    except ImportError as _bill_err:  # noqa: B904
+        logger.warning(f"Skipping billing router due to import error: {_bill_err}")
     # Stripe webhook handler (no auth required)
     try:
         from tldw_Server_API.app.api.v1.endpoints.billing_webhooks import router as billing_webhooks_router
 
         _include_if_enabled("billing-webhooks", billing_webhooks_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
-    except Exception as _wh_err:
-        logger.debug(f"Skipping billing_webhooks router: {_wh_err}")
+    except ImportError as _wh_err:  # noqa: B904
+        logger.warning(f"Skipping billing_webhooks router due to import error: {_wh_err}")
     if _HAS_MEDIA:
         _include_if_enabled("media", media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
     if _HAS_AUDIO:

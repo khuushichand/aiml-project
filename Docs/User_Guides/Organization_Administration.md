@@ -519,5 +519,5 @@ curl -X PATCH http://localhost:8000/admin/organizations/1/limits \
 ## Related Documentation
 
 - [Organizations and Sharing Guide](Organizations_and_Sharing.md) - For end users
-- [Orgs and Billing API Reference](../API-related/Orgs_Billing_API.md) - Full API documentation
+- [Orgs and Billing API Reference](../Published/API-related/Orgs_Billing_API.md) - Full API documentation
 - [Production Hardening Checklist](Production_Hardening_Checklist.md) - Security best practices

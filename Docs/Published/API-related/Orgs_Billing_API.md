@@ -14,7 +14,7 @@ All endpoints require authentication via one of:
 
 Users can belong to multiple organizations. For org-scoped operations:
 
-```
+```http
 X-TLDW-Org-Id: 1
 ```
 
@@ -303,6 +303,7 @@ GET /api/v1/invites/preview?code=ABC123XYZ
 ```
 
 **Possible Status Values:**
+
 | Status | Description |
 |--------|-------------|
 | `valid` | Can be redeemed |
@@ -356,6 +357,7 @@ Content-Type: application/json
 **Required Role:** owner or admin
 
 **Parameters:**
+
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `max_uses` | int | No | 1 | Maximum redemptions (1-1000) |
@@ -388,6 +390,7 @@ Authorization: Bearer <token>
 ```
 
 **Query Parameters:**
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `include_expired` | bool | false | Include expired/exhausted invites |
@@ -533,6 +536,7 @@ Content-Type: application/json
 ```
 
 **Parameters:**
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `at_period_end` | bool | true | If true, access continues until period end |
@@ -631,6 +635,7 @@ Content-Type: application/json
 ```
 
 **Parameters:**
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `visibility` | string | Yes | `team` or `org` |
@@ -790,7 +795,7 @@ Content-Type: application/json
 
 ### Billing Warnings
 
-```
+```http
 X-Billing-Warning: Approaching API call limit (85% used)
 ```
 
@@ -798,7 +803,7 @@ Returned when usage exceeds 80% of limit (soft limit).
 
 ### Rate Limits
 
-```
+```http
 X-RateLimit-Limit: 100
 X-RateLimit-Remaining: 15
 X-RateLimit-Reset: 1702857600

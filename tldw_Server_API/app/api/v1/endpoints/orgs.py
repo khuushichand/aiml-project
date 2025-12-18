@@ -96,11 +96,10 @@ async def list_my_orgs(
         )
 
     # Fetch org details
-    all_orgs, total = await repo.list_organizations(with_total=True, limit=1000, offset=0)
+    all_orgs, _ = await repo.list_organizations(with_total=True, limit=1000, offset=0)
 
     # Filter to user's orgs and add role info
     user_orgs = []
-    role_map = {m["org_id"]: m["role"] for m in memberships}
     for org in all_orgs:
         if org["id"] in org_ids:
             user_orgs.append(org)

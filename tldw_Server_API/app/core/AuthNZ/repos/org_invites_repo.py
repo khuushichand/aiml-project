@@ -9,7 +9,7 @@ import secrets
 import string
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -278,7 +278,10 @@ class AuthnzOrgInvitesRepo:
                 params: List[Any] = [org_id]
 
                 if not include_inactive:
-                    conditions.append("is_active = 1")
+                    if self._is_postgres(conn):
+                        conditions.append("is_active = TRUE")
+                    else:
+                        conditions.append("is_active = 1")
 
                 if not include_expired:
                     if self._is_postgres(conn):
@@ -399,7 +402,7 @@ class AuthnzOrgInvitesRepo:
             async with self.db_pool.transaction() as conn:
                 if self._is_postgres(conn):
                     result = await conn.execute(
-                        "UPDATE org_invites SET is_active = 0 WHERE id = $1 AND org_id = $2",
+                        "UPDATE org_invites SET is_active = FALSE WHERE id = $1 AND org_id = $2",
                         invite_id, org_id
                     )
                     return "UPDATE 1" in result
@@ -434,10 +437,14 @@ class AuthnzOrgInvitesRepo:
                         """
                         INSERT INTO org_invite_redemptions (invite_id, user_id, ip_address, user_agent)
                         VALUES ($1, $2, $3, $4)
+                        ON CONFLICT (invite_id, user_id) DO NOTHING
                         RETURNING id, invite_id, user_id, redeemed_at, ip_address
                         """,
                         invite_id, user_id, ip_address, user_agent
                     )
+                    if row is None:
+                        logger.warning(f"User {user_id} already redeemed invite {invite_id}")
+                        raise ValueError(f"User {user_id} has already redeemed this invite")
                     result = dict(row)
                     if isinstance(result.get("redeemed_at"), datetime):
                         result["redeemed_at"] = result["redeemed_at"].isoformat()
@@ -445,11 +452,14 @@ class AuthnzOrgInvitesRepo:
                 else:
                     cur = await conn.execute(
                         """
-                        INSERT INTO org_invite_redemptions (invite_id, user_id, ip_address, user_agent)
+                        INSERT OR IGNORE INTO org_invite_redemptions (invite_id, user_id, ip_address, user_agent)
                         VALUES (?, ?, ?, ?)
                         """,
                         (invite_id, user_id, ip_address, user_agent)
                     )
+                    if cur.rowcount == 0:
+                        logger.warning(f"User {user_id} already redeemed invite {invite_id}")
+                        raise ValueError(f"User {user_id} has already redeemed this invite")
                     redemption_id = cur.lastrowid
                     cur2 = await conn.execute(
                         "SELECT id, invite_id, user_id, redeemed_at, ip_address FROM org_invite_redemptions WHERE id = ?",
@@ -463,11 +473,19 @@ class AuthnzOrgInvitesRepo:
                         "redeemed_at": row[3],
                         "ip_address": row[4],
                     }
+        except ValueError:
+            # Propagate domain-level "already redeemed" error without extra logging
+            raise
         except Exception as exc:
-            # Check for unique constraint violation (user already redeemed)
-            if "UNIQUE" in str(exc).upper() or "unique" in str(exc).lower():
+            msg = str(exc).lower()
+            if (
+                "org_invite_redemptions" in msg
+                and "invite_id" in msg
+                and "user_id" in msg
+                and ("unique" in msg or "duplicate" in msg)
+            ):
                 logger.warning(f"User {user_id} already redeemed invite {invite_id}")
-                raise ValueError(f"User {user_id} has already redeemed this invite")
+                raise ValueError(f"User {user_id} has already redeemed this invite") from exc
             logger.error(f"AuthnzOrgInvitesRepo.record_redemption failed: {exc}")
             raise
 

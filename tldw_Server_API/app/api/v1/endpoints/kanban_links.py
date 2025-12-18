@@ -36,13 +36,31 @@ from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
 )
 
 
-router = APIRouter(tags=["Kanban Card Links"])
+router = APIRouter(tags=["kanban"])
+
+ALLOWED_LINKED_TYPES = ("media", "note")
 
 
 # --- Helper for Exception Handling ---
 def _handle_error(e: Exception) -> HTTPException:
     """Convert exceptions to appropriate HTTP responses."""
     return handle_kanban_db_error(e)
+
+
+def _validate_linked_type_or_400(linked_type: Optional[str]) -> Optional[str]:
+    """
+    Validate linked_type for endpoints that accept 'media' or 'note'.
+
+    Returns the value when valid, raises HTTP 400 for invalid types.
+    """
+    if linked_type is None:
+        return None
+    if linked_type not in ALLOWED_LINKED_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid linked_type: {linked_type}. Must be 'media' or 'note'.",
+        )
+    return linked_type
 
 
 # =============================================================================
@@ -98,6 +116,7 @@ async def get_card_links(
     Optionally filter by linked_type.
     """
     try:
+        linked_type = _validate_linked_type_or_400(linked_type)
         links = db.get_card_links(card_id=card_id, linked_type=linked_type)
         return CardLinksListResponse(links=[CardLinkResponse(**link) for link in links])
     except (NotFoundError, KanbanDBError) as e:
@@ -145,6 +164,7 @@ async def remove_card_link(
     - **linked_type**: Type of linked content ('media' or 'note')
     - **linked_id**: ID of the linked content
     """
+    linked_type = _validate_linked_type_or_400(linked_type)
     try:
         removed = db.remove_card_link(
             card_id=card_id,
@@ -274,11 +294,7 @@ async def get_cards_by_linked_content(
     - **include_archived**: Include archived cards in results
     - **include_deleted**: Include soft-deleted cards in results
     """
-    if linked_type not in ("media", "note"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid linked_type: {linked_type}. Must be 'media' or 'note'."
-        )
+    linked_type = _validate_linked_type_or_400(linked_type)
 
     try:
         cards = db.get_cards_by_linked_content(

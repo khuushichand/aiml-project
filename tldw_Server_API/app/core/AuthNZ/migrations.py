@@ -1265,7 +1265,7 @@ def migration_028_create_org_invites(conn: sqlite3.Connection) -> None:
             org_id INTEGER NOT NULL,
             team_id INTEGER,
             role_to_grant TEXT DEFAULT 'member',
-            created_by INTEGER NOT NULL,
+            created_by INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             expires_at TIMESTAMP NOT NULL,
             max_uses INTEGER DEFAULT 1,
@@ -1275,7 +1275,7 @@ def migration_028_create_org_invites(conn: sqlite3.Connection) -> None:
             metadata TEXT,
             FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
             FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
-            FOREIGN KEY (created_by) REFERENCES users(id)
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
         )
         """
     )
@@ -1465,7 +1465,7 @@ def migration_031_create_org_subscriptions(conn: sqlite3.Connection) -> None:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
-            FOREIGN KEY (plan_id) REFERENCES subscription_plans(id)
+            FOREIGN KEY (plan_id) REFERENCES subscription_plans(id) ON DELETE RESTRICT
         )
         """
     )

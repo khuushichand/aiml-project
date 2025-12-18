@@ -205,7 +205,7 @@ class OrgInviteResponse(BaseModel):
     is_active: bool
     expires_at: Optional[str] = None
     created_at: Optional[str] = None
-    created_by: int
+    created_by: Optional[int] = None
     description: Optional[str] = None
 
 

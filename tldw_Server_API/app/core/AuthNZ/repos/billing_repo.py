@@ -7,6 +7,7 @@ Handles subscription plans, org subscriptions, payment history, and billing audi
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -639,7 +640,7 @@ class AuthnzBillingRepo:
                             (stripe_event_id, event_type, json.dumps(event_data)),
                         )
                         return True
-                    except Exception:
+                    except sqlite3.IntegrityError:
                         # Likely unique constraint violation
                         return False
         except Exception as exc:

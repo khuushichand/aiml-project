@@ -515,7 +515,7 @@ class AuthnzOrgsTeamsRepo:
         Returns None if not found.
         """
         try:
-            async with self.db_pool.transaction() as conn:
+            async with self.db_pool.acquire() as conn:
                 if self._is_postgres(conn):
                     row = await conn.fetchrow(
                         """

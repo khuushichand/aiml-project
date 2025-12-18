@@ -98,6 +98,10 @@ https://medium.com/@alphadesignglobal/8-tiny-ui-fixes-that-will-make-your-produc
 
 https://www.youtube.com/watch?v=1fZTOjd_bOQ
 https://medium.com/design-bootcamp/7-tips-to-become-a-master-of-ui-design-i-wish-i-knew-this-earlier-8e52de05783d
+https://medium.com/design-bootcamp/how-i-design-light-theme-ui-2bb7961f5ed6
+https://medium.com/design-bootcamp/10-tiny-ui-fixes-that-make-a-big-difference-c5922c0ef6ab
+https://medium.muz.li/neurodesign-in-ux-what-cognitive-science-can-teach-us-about-better-interfaces-c21c73363119?gi=14cfe4be7385
+https://medium.com/@alphadesignglobal/full-screen-headers-are-obsolete-these-layouts-are-killing-them-8b2137560001
 
 www.aiuxplayground.com/pattern/chat-artifact
 https://www.8bitcn.com/?ref=sidebar

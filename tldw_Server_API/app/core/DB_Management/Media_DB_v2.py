@@ -1878,7 +1878,7 @@ class MediaDatabase:
 
             if current_db_version == target_version:
                 logging.debug("Database schema is up to date.")
-                # Optionally ensure FTS tables exist even if schema version matches
+                # Optionally ensure FTS tables and newer helper structures exist
                 try:
                     # Ensure Claims table exists for older DBs without bumping version
                     conn.executescript(self._CLAIMS_TABLE_SQL)
@@ -1911,16 +1911,18 @@ class MediaDatabase:
                             color TEXT,
                             note TEXT,
                             created_at TEXT NOT NULL,
-                            anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote',
-                            content_hash_ref TEXT,
-                            context_before TEXT,
-                            context_after TEXT,
-                            state TEXT NOT NULL DEFAULT 'active'
-                        );
-                        CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
-                        """
-                    )
-                    logging.debug("Verified FTS tables exist.")
+	                            anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote',
+	                            content_hash_ref TEXT,
+	                            context_before TEXT,
+	                            context_after TEXT,
+	                            state TEXT NOT NULL DEFAULT 'active'
+	                        );
+	                        CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
+	                        """
+	                    )
+                    # Ensure visibility/owner columns and indexes exist on upgraded DBs
+                    self._ensure_sqlite_visibility_columns(conn)
+                    logging.debug("Verified FTS tables and visibility columns exist.")
                 except (sqlite3.Error, DatabaseError) as fts_err:
                     logging.warning(f"Could not verify/create FTS tables on already correct schema version: {fts_err}")
                 return
@@ -2024,8 +2026,10 @@ class MediaDatabase:
                                 CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
                                 """
                             )
-                        else:
-                            raise SchemaError(f"Migration failed: {result}")
+                        # Ensure visibility/owner columns and indexes exist on upgraded DBs
+                        self._ensure_sqlite_visibility_columns(conn)
+                    else:
+                        raise SchemaError(f"Migration failed: {result}")
 
                 except MigrationError as e:
                     raise SchemaError(f"Database migration failed: {e}") from e
@@ -2485,6 +2489,50 @@ class MediaDatabase:
         finally:
             conn.commit()
 
+    def _ensure_sqlite_visibility_columns(self, conn: sqlite3.Connection) -> None:
+        """
+        Ensure Media.visibility and Media.owner_user_id columns and indexes exist on SQLite.
+
+        This guards against mixed-version databases where the base schema has been
+        updated but older files may have been migrated without the newer columns.
+        """
+        try:
+            cursor = conn.execute("PRAGMA table_info(Media)")
+            columns = {row[1] for row in cursor.fetchall()}
+        except sqlite3.Error as exc:
+            logging.warning(f"Could not introspect Media table for visibility columns: {exc}")
+            return
+
+        statements: list[str] = []
+
+        if "visibility" not in columns:
+            statements.append(
+                "ALTER TABLE Media ADD COLUMN visibility TEXT DEFAULT 'personal' "
+                "CHECK (visibility IN ('personal', 'team', 'org'));"
+            )
+
+        if "owner_user_id" not in columns:
+            statements.append("ALTER TABLE Media ADD COLUMN owner_user_id INTEGER;")
+
+        # Backfill owner_user_id from client_id when possible; safe to run multiple times.
+        statements.append(
+            "UPDATE Media SET owner_user_id = CAST(client_id AS INTEGER) "
+            "WHERE owner_user_id IS NULL;"
+        )
+
+        # Indexes are idempotent; they may already exist from the base schema.
+        statements.append(
+            "CREATE INDEX IF NOT EXISTS idx_media_visibility ON Media(visibility);"
+        )
+        statements.append(
+            "CREATE INDEX IF NOT EXISTS idx_media_owner_user_id ON Media(owner_user_id);"
+        )
+
+        try:
+            conn.executescript("\n".join(statements))
+        except sqlite3.Error as exc:
+            logging.warning(f"Could not ensure visibility columns/indexes on Media: {exc}")
+
     def _ensure_postgres_fts(self, conn) -> None:
         backend = self.backend
         backend.create_fts_table(
@@ -2526,7 +2574,10 @@ class MediaDatabase:
             )
             rows = getattr(result, "rows", None)
             return bool(rows)
-        except Exception:
+        except Exception as exc:
+            logging.warning(
+                f"Failed to inspect Postgres RLS policy '{policy}' on table '{table}': {exc}"
+            )
             return False
 
     def _ensure_postgres_rls(self, conn) -> None:
@@ -2594,13 +2645,13 @@ class MediaDatabase:
                     )
                     logging.debug(f"Dropped old media policy: {old_policy}")
             except Exception as exc:
-                logging.debug(f"Could not drop old policy {old_policy}: {exc}")
+                logging.warning(f"Could not drop old media policy '{old_policy}': {exc}")
 
         try:
             backend.execute(f"ALTER TABLE {ident('media')} ENABLE ROW LEVEL SECURITY", connection=conn)
             backend.execute(f"ALTER TABLE {ident('media')} FORCE ROW LEVEL SECURITY", connection=conn)
         except Exception as exc:
-            logging.debug(f"Could not enable RLS for media: {exc}")
+            logging.warning(f"Could not enable RLS for media table: {exc}")
 
         # Create new visibility-aware media policy
         for policy_name, predicate in policy_sets['media']:
@@ -2611,8 +2662,8 @@ class MediaDatabase:
                         f"DROP POLICY IF EXISTS {backend.escape_identifier(policy_name)} ON {ident('media')}",
                         connection=conn,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.warning(f"Could not drop existing media policy '{policy_name}': {exc}")
                 backend.execute(
                     f"""
                     CREATE POLICY {backend.escape_identifier(policy_name)} ON {ident('media')}
@@ -2623,13 +2674,13 @@ class MediaDatabase:
                     connection=conn,
                 )
             except Exception as exc:
-                logging.debug(f"Skipping media policy {policy_name}: {exc}")
+                logging.warning(f"Skipping creation of media policy '{policy_name}': {exc}")
 
         try:
             backend.execute(f"ALTER TABLE {ident('sync_log')} ENABLE ROW LEVEL SECURITY", connection=conn)
             backend.execute(f"ALTER TABLE {ident('sync_log')} FORCE ROW LEVEL SECURITY", connection=conn)
         except Exception as exc:
-            logging.debug(f"Could not enable RLS for sync_log: {exc}")
+            logging.warning(f"Could not enable RLS for sync_log table: {exc}")
 
         # Create policies only if missing (idempotent)
         for policy_name, predicate in policy_sets['sync_log']:
@@ -2645,7 +2696,7 @@ class MediaDatabase:
                         connection=conn,
                     )
             except Exception as exc:
-                logging.debug(f"Skipping sync_log policy {policy_name}: {exc}")
+                logging.warning(f"Skipping creation of sync_log policy '{policy_name}': {exc}")
 
     # --- Internal Helpers (Unchanged) ---
     def _get_current_utc_timestamp_str(self) -> str:
@@ -3442,6 +3493,10 @@ class MediaDatabase:
 
                 if visibility_parts:
                     conditions.append(f"({' OR '.join(visibility_parts)})")
+                else:
+                    # Fail closed for non-admin scopes with no visibility identifiers
+                    # (no user_id, team_ids, or org_ids): return no rows.
+                    conditions.append("(0 = 1)")
 
         # Media IDs Filter
         if media_ids_filter:
@@ -4854,38 +4909,43 @@ class MediaDatabase:
 
                             return media_id, media_uuid, f"Media '{title}' is already up-to-date."
 
-                        # Case A.1.b: Content is different. Proceed with a full versioned update.
-                        new_ver = current_ver + 1
-                        payload = _media_payload(media_uuid, new_ver, chunk_status=final_chunk_status)
-                        update_sql = """
-                            UPDATE Media
-                               SET url = ?, title = ?, type = ?, content = ?, author = ?,
-                                   ingestion_date = ?, transcription_model = ?,
-                                   content_hash = ?, is_trash = ?, trash_date = ?,
-                                   chunking_status = ?, vector_processing = ?,
-                                   last_modified = ?, version = ?, client_id = ?, deleted = ?
-                               WHERE id = ? AND version = ?
-                        """
-                        update_params = (
-                            payload['url'],
-                            payload['title'],
+	                        # Case A.1.b: Content is different. Proceed with a full versioned update.
+	                        new_ver = current_ver + 1
+	                        payload = _media_payload(media_uuid, new_ver, chunk_status=final_chunk_status)
+	                        update_sql = """
+	                            UPDATE Media
+	                               SET url = ?, title = ?, type = ?, content = ?, author = ?,
+	                                   ingestion_date = ?, transcription_model = ?,
+	                                   content_hash = ?, is_trash = ?, trash_date = ?,
+	                                   chunking_status = ?, vector_processing = ?,
+	                                   last_modified = ?, version = ?, org_id = ?, team_id = ?,
+	                                   visibility = ?, owner_user_id = ?, client_id = ?, deleted = ?
+	                               WHERE id = ? AND version = ?
+	                        """
+	                        update_params = (
+	                            payload['url'],
+	                            payload['title'],
                             payload['type'],
                             payload['content'],
                             payload['author'],
                             payload['ingestion_date'],
                             payload['transcription_model'],
-                            payload['content_hash'],
-                            payload['is_trash'],
-                            payload['trash_date'],
-                            payload['chunking_status'],
-                            payload['vector_processing'],
-                            payload['last_modified'],
-                            payload['version'],
-                            payload['client_id'],
-                            payload['deleted'],
-                            media_id,
-                            current_ver,
-                        )
+	                            payload['content_hash'],
+	                            payload['is_trash'],
+	                            payload['trash_date'],
+	                            payload['chunking_status'],
+	                            payload['vector_processing'],
+	                            payload['last_modified'],
+	                            payload['version'],
+	                            payload['org_id'],
+	                            payload['team_id'],
+	                            payload['visibility'],
+	                            payload['owner_user_id'],
+	                            payload['client_id'],
+	                            payload['deleted'],
+	                            media_id,
+	                            current_ver,
+	                        )
                         update_cursor = _exec(update_sql, update_params)
                         if update_cursor.rowcount == 0:
                             raise ConflictError(f"Media (full update id={media_id})", media_id)

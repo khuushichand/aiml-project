@@ -1117,7 +1117,7 @@ Response (200 OK):
 
 ## 12. File Structure
 
-```
+```bash
 tldw_Server_API/app/
 ├── api/v1/
 │   ├── endpoints/
@@ -1249,7 +1249,7 @@ Error response format:
 ## 17. Configuration
 
 Environment variables:
-```
+```bash
 # Limits
 KANBAN_MAX_BOARDS_PER_USER=50
 KANBAN_MAX_LISTS_PER_BOARD=20

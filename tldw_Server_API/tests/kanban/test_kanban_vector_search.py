@@ -5,6 +5,8 @@ Unit tests for Kanban vector search helper methods.
 Tests the KanbanVectorSearch class helper methods and utility functions
 without requiring ChromaDB to be available.
 """
+import hashlib
+
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.kanban_vector_search import (
@@ -39,12 +41,23 @@ class TestGetKanbanCollectionName:
         assert result == f"{KANBAN_COLLECTION_PREFIX}user_123_abc_def_ghi"
 
     def test_long_user_id_truncation(self):
-        """Test that user_id longer than 50 chars is truncated."""
+        """Test that user_id longer than 50 chars uses a hash suffix."""
         long_id = "a" * 100
         result = get_kanban_collection_name(long_id)
-        # Prefix + first 50 chars
-        assert result == f"{KANBAN_COLLECTION_PREFIX}{'a' * 50}"
+        hash_suffix = hashlib.sha256(long_id.encode("utf-8")).hexdigest()[:16]
+        expected_safe_user_id = f"{'a' * 33}_{hash_suffix}"
+        assert result == f"{KANBAN_COLLECTION_PREFIX}{expected_safe_user_id}"
         assert len(result) == len(KANBAN_COLLECTION_PREFIX) + 50
+
+    def test_long_user_id_hash_avoids_collision(self):
+        """Test that very long user IDs remain unique even with shared prefixes."""
+        user_id_1 = ("a" * 100) + "1"
+        user_id_2 = ("a" * 100) + "2"
+        result_1 = get_kanban_collection_name(user_id_1)
+        result_2 = get_kanban_collection_name(user_id_2)
+        assert result_1 != result_2
+        assert len(result_1) == len(KANBAN_COLLECTION_PREFIX) + 50
+        assert len(result_2) == len(KANBAN_COLLECTION_PREFIX) + 50
 
     def test_numeric_user_id(self):
         """Test with numeric user_id (gets converted to string)."""

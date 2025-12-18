@@ -390,9 +390,20 @@ class SubscriptionService:
                     at_period_end=at_period_end,
                 )
 
-        # Update local status
-        new_status = "canceling" if at_period_end else "canceled"
-        await repo.update_org_subscription(org_id, status=new_status)
+        # Update local status to mirror Stripe semantics:
+        # - at_period_end=True  -> keep status "active", set cancel_at_period_end=True
+        # - at_period_end=False -> set status "canceled", cancel_at_period_end=False
+        if at_period_end:
+            await repo.update_org_subscription(
+                org_id,
+                cancel_at_period_end=True,
+            )
+        else:
+            await repo.update_org_subscription(
+                org_id,
+                status="canceled",
+                cancel_at_period_end=False,
+            )
 
         # Log the action
         await repo.log_billing_action(

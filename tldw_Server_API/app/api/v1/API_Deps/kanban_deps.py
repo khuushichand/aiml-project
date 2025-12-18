@@ -5,12 +5,13 @@ FastAPI dependency injection for Kanban database access.
 Provides per-user KanbanDB instances with caching for performance.
 """
 import asyncio
+import os
 import sqlite3
 import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from cachetools import LRUCache
 from fastapi import Depends, HTTPException, status
@@ -273,10 +274,20 @@ def close_all_kanban_db_instances() -> None:
     Should be called during application shutdown.
     """
     with _kanban_db_lock:
-        logger.info(f"Closing all cached KanbanDB instances ({len(_kanban_db_instances)})...")
+        cached_items = list(_kanban_db_instances.items())
+        logger.info(f"Closing all cached KanbanDB instances ({len(cached_items)})...")
         _kanban_db_instances.clear()
         _kanban_db_health_checks.clear()
-        logger.info("All KanbanDB instances closed and cache cleared.")
+
+    for cache_key, db_instance in cached_items:
+        close_method = getattr(db_instance, "close", None)
+        if callable(close_method):
+            try:
+                close_method()
+            except Exception as e:
+                logger.debug(f"Error closing KanbanDB instance {cache_key}: {e}")
+
+    logger.info("All KanbanDB instances closed and cache cleared.")
 
 
 def shutdown_kanban_executor(wait: bool = False) -> None:
@@ -344,10 +355,6 @@ def handle_kanban_db_error(e: Exception) -> HTTPException:
 # Rate Limiting Infrastructure (Phase 7)
 # =============================================================================
 
-import os
-from functools import wraps
-from typing import Callable
-
 # Rate limiting configuration - default limits per minute
 KANBAN_RATE_LIMITS: Dict[str, int] = {
     # Board operations
@@ -392,9 +399,37 @@ KANBAN_RATE_LIMITS: Dict[str, int] = {
 }
 
 # In-memory rate limit tracking (per-user, per-action)
+# NOTE: This is process-local and will not work as a global rate limit across
+# multiple server workers/instances. For distributed deployments, use a shared
+# store (e.g., Redis) and/or an ingress rate limiter.
 _rate_limit_lock = threading.Lock()
 _rate_limit_windows: Dict[str, deque] = {}
 RATE_LIMIT_WINDOW_SECONDS = 60
+_RATE_LIMIT_CLEANUP_INTERVAL_SECONDS = max(
+    1.0, float(os.getenv("KANBAN_RATE_LIMIT_CLEANUP_INTERVAL_SECONDS", "300"))
+)
+_rate_limit_last_cleanup_ts: float = 0.0
+
+
+def _maybe_cleanup_rate_limit_windows(now: float) -> None:
+    """Remove stale rate limit windows to avoid unbounded growth.
+
+    Must be called with `_rate_limit_lock` held.
+    """
+    global _rate_limit_last_cleanup_ts
+
+    now_monotonic = time.monotonic()
+    if (now_monotonic - _rate_limit_last_cleanup_ts) < _RATE_LIMIT_CLEANUP_INTERVAL_SECONDS:
+        return
+
+    window_start = now - RATE_LIMIT_WINDOW_SECONDS
+    for key, window in list(_rate_limit_windows.items()):
+        while window and window[0] < window_start:
+            window.popleft()
+        if not window:
+            _rate_limit_windows.pop(key, None)
+
+    _rate_limit_last_cleanup_ts = now_monotonic
 
 
 def check_kanban_rate_limit(user_id: int, action: str) -> tuple[bool, Dict[str, Any]]:
@@ -414,10 +449,8 @@ def check_kanban_rate_limit(user_id: int, action: str) -> tuple[bool, Dict[str, 
     window_start = now - RATE_LIMIT_WINDOW_SECONDS
 
     with _rate_limit_lock:
-        if key not in _rate_limit_windows:
-            _rate_limit_windows[key] = deque()
-
-        window = _rate_limit_windows[key]
+        _maybe_cleanup_rate_limit_windows(now)
+        window = _rate_limit_windows.setdefault(key, deque())
 
         # Remove expired entries
         while window and window[0] < window_start:
@@ -497,6 +530,7 @@ def get_rate_limit_status(user_id: int, action: str) -> Dict[str, Any]:
     window_start = now - RATE_LIMIT_WINDOW_SECONDS
 
     with _rate_limit_lock:
+        _maybe_cleanup_rate_limit_windows(now)
         window = _rate_limit_windows.get(key, deque())
 
         # Count valid entries (don't modify the window)

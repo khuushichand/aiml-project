@@ -14,10 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Billing.plan_limits import (
-    check_limit,
-    SOFT_LIMIT_PERCENT,
-)
+from tldw_Server_API.app.core.Billing.plan_limits import SOFT_LIMIT_PERCENT
 
 
 class LimitCategory(str, Enum):

@@ -8,13 +8,14 @@ kanban_vector_search.py
 Provides optional vector search functionality for Kanban cards using ChromaDB.
 Gracefully degrades to FTS-only search when ChromaDB is not available.
 
-Collection name: kanban_user_{user_id}
+Collection name: kanban_user_{safe_user_id}
 Document: Card title + description + label names
 Metadata: card_id, board_id, list_id, due_date, priority, labels, created_at
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -49,7 +50,9 @@ def get_kanban_collection_name(user_id: str) -> str:
     Get the ChromaDB collection name for a user's Kanban cards.
 
     Sanitizes the user_id for use in collection names by replacing
-    hyphens and spaces with underscores and limiting to 50 characters.
+    hyphens and spaces with underscores. User IDs longer than 50 characters
+    are shortened with a hash suffix to reduce collision risk while
+    respecting collection name limits.
 
     Args:
         user_id: The user identifier (can contain hyphens, spaces, etc.)
@@ -57,8 +60,14 @@ def get_kanban_collection_name(user_id: str) -> str:
     Returns:
         A sanitized collection name in the format 'kanban_user_{safe_user_id}'.
     """
-    # Sanitize user_id for collection name
-    safe_user_id = str(user_id).replace("-", "_").replace(" ", "_")[:50]
+    user_id_str = str(user_id)
+    sanitized = user_id_str.replace("-", "_").replace(" ", "_")
+    if len(sanitized) > 50:
+        hash_suffix = hashlib.sha256(user_id_str.encode("utf-8")).hexdigest()[:16]
+        prefix_len = 50 - 1 - len(hash_suffix)
+        safe_user_id = f"{sanitized[:prefix_len]}_{hash_suffix}"
+    else:
+        safe_user_id = sanitized
     return f"{KANBAN_COLLECTION_PREFIX}{safe_user_id}"
 
 
@@ -195,19 +204,27 @@ class KanbanVectorSearch:
             return False
 
         try:
-            doc_id = f"card_{card['id']}"
+            card_id = card.get("id")
+            if not card_id:
+                logger.warning(f"KanbanVectorSearch.index_card: missing or invalid card id for user {self.user_id}")
+                return False
+
+            doc_id = f"card_{card_id}"
             document = self._build_document(card)
             metadata = self._build_metadata(card)
 
-            # Upsert the document
-            self._manager.store_document_with_embedding(
-                document_id=doc_id,
-                text_content=document,
-                metadata=metadata,
+            # Upsert the document using the manager's generic storage API
+            # Reuse the existing collection name and let the manager handle embedding generation.
+            self._manager.process_and_store_content(
+                content=document,
+                media_id=doc_id,
+                file_name=f"kanban_card_{card_id}",
                 collection_name=self._collection_name,
+                create_embeddings=True,
+                create_contextualized=False,
             )
 
-            logger.debug(f"Indexed card {card['id']} for user {self.user_id}")
+            logger.debug(f"Indexed card {card_id} for user {self.user_id}")
             return True
 
         except Exception as e:
@@ -353,9 +370,7 @@ def create_kanban_vector_search(
 
     try:
         search = KanbanVectorSearch(user_id, embedding_config)
-        if search.available:
-            return search
-        return None
+        return search if search.available else None
     except Exception as e:
         logger.warning(f"Failed to create KanbanVectorSearch for user {user_id}: {e}")
         return None

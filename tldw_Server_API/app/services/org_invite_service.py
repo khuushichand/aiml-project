@@ -190,6 +190,8 @@ class OrgInviteService:
         if expires_at:
             if isinstance(expires_at, str):
                 expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
             # Ensure both sides of the comparison are timezone-aware UTC
             now_utc = datetime.now(timezone.utc)
             if expires_at < now_utc:
@@ -256,6 +258,13 @@ class OrgInviteService:
 
         This is idempotent - if user is already a member, returns success
         with was_already_member=True.
+
+        Note:
+            If the invite is team-specific (has a team_id), the service will attempt
+            to add the user to the team after successfully adding them to the org.
+            If team membership fails, the operation still returns success because
+            org membership already succeeded; this can leave the user as an org
+            member but not a team member.
 
         Args:
             code: The invite code
@@ -325,12 +334,14 @@ class OrgInviteService:
             )
 
         # If team-specific invite, also add to team
+        team_membership_failed = False
         if team_id:
             try:
                 await orgs_repo.add_team_member(team_id=team_id, user_id=user_id, role=role)
             except Exception as e:
                 logger.warning(f"Failed to add user {user_id} to team {team_id}: {e}")
                 # Don't fail the whole operation - org membership succeeded
+                team_membership_failed = True
 
         # Record the redemption
         try:
@@ -350,6 +361,13 @@ class OrgInviteService:
             f"{f' team {team_id}' if team_id else ''} with role {role}"
         )
 
+        message = "Successfully joined the organization"
+        if team_id and team_membership_failed:
+            message = (
+                "Joined the organization, but failed to add you to the team. "
+                "An admin may need to add you manually."
+            )
+
         return RedemptionResult(
             success=True,
             org_id=org_id,
@@ -358,7 +376,7 @@ class OrgInviteService:
             team_name=invite.get("team_name"),
             role=role,
             was_already_member=False,
-            message="Successfully joined the organization"
+            message=message,
         )
 
     async def list_org_invites(
@@ -442,3 +460,9 @@ async def get_invite_service() -> OrgInviteService:
     if _invite_service is None:
         _invite_service = OrgInviteService()
     return _invite_service
+
+
+async def reset_invite_service() -> None:
+    """Reset the invite service singleton (primarily for tests)."""
+    global _invite_service
+    _invite_service = None
