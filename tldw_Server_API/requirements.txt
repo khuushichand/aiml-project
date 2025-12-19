@@ -1,4 +1,5 @@
 # Requirements.txt for tldw Server API. Sorted into categories.
+regex==2025.11.3
 # Audio
 av  # For audio encoding/streaming
 faster_whisper
