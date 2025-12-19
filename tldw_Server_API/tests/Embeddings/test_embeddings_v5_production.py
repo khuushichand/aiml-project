@@ -555,7 +555,8 @@ class TestPerformance:
         app.dependency_overrides[get_request_user] = override_user
         call_sizes = []
 
-        async def fake_embeddings(texts, provider, model_id, config, metadata=None):
+        async def fake_embeddings(texts, provider, model_id, config, metadata=None, dimensions=None):
+            _ = (provider, model_id, config, metadata, dimensions)
             nonlocal call_sizes
             batch = texts if isinstance(texts, list) else [texts]
             call_sizes.append(len(batch))
@@ -644,7 +645,8 @@ class TestEndToEnd:
             return setup.regular_user
 
         app.dependency_overrides[get_request_user] = override_user
-        async def fake_embeddings(texts, provider, model_id, config, metadata=None):
+        async def fake_embeddings(texts, provider, model_id, config, metadata=None, dimensions=None):
+            _ = (provider, model_id, config, metadata, dimensions)
             batch = texts if isinstance(texts, list) else [texts]
             return [[float(idx), float(idx + 1), float(idx + 2)] for idx, _ in enumerate(batch)]
 
@@ -682,7 +684,8 @@ class TestEndToEnd:
         unique_text = f"cache test {datetime.now().isoformat()}"
         call_count = 0
 
-        async def fake_embeddings(texts, provider, model_id, config, metadata=None):
+        async def fake_embeddings(texts, provider, model_id, config, metadata=None, dimensions=None):
+            _ = (provider, model_id, config, metadata, dimensions)
             nonlocal call_count
             call_count += 1
             batch = texts if isinstance(texts, list) else [texts]
@@ -863,7 +866,8 @@ class TestIntegration:
 
         # First, ensure the model is loaded with a single request
         print("Loading HuggingFace model...")
-        async def fake_embeddings(texts, provider, model_id, config, metadata=None):
+        async def fake_embeddings(texts, provider, model_id, config, metadata=None, dimensions=None):
+            _ = (provider, model_id, config, metadata, dimensions)
             batch = texts if isinstance(texts, list) else [texts]
             return [[0.1, 0.2, 0.3] for _ in batch]
 

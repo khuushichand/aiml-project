@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional, AsyncIterator, List, Union
 import os
+import asyncio
+import threading
 
 from loguru import logger
 
@@ -142,6 +144,10 @@ class OpenAIAdapter(ChatProvider):
             payload["seed"] = request.get("seed")
         if request.get("stop") is not None:
             payload["stop"] = request.get("stop")
+        if request.get("logprobs") is not None:
+            payload["logprobs"] = request.get("logprobs")
+        if request.get("top_logprobs") is not None and request.get("logprobs"):
+            payload["top_logprobs"] = request.get("top_logprobs")
         return payload
 
     def _openai_base_url(self) -> str:
@@ -160,7 +166,7 @@ class OpenAIAdapter(ChatProvider):
         try:
             cfg = (request or {}).get("app_config") or {}
             oa = cfg.get("openai_api") or {}
-            base = oa.get("api_base_url")
+            base = oa.get("api_base_url") or oa.get("api_base") or oa.get("base_url")
             if isinstance(base, str) and base.strip():
                 return base.strip()
         except Exception:
@@ -244,14 +250,44 @@ class OpenAIAdapter(ChatProvider):
         raise RuntimeError("OpenAIAdapter native HTTP disabled by configuration")
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        # Fallback to sync path for now to preserve behavior; future: call native async if available
-        return self.chat(request, timeout=timeout)
+        return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
     async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
-        # Wrap sync generator into async iterator for compatibility
         gen = self.stream(request, timeout=timeout)
-        for item in gen:
-            yield item
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        sentinel = object()
+        stop_event = threading.Event()
+
+        def _worker() -> None:
+            try:
+                for item in gen:
+                    if stop_event.is_set():
+                        break
+                    loop.call_soon_threadsafe(queue.put_nowait, item)
+            except Exception as exc:
+                loop.call_soon_threadsafe(queue.put_nowait, exc)
+            finally:
+                try:
+                    if hasattr(gen, "close"):
+                        gen.close()
+                except Exception:
+                    pass
+                loop.call_soon_threadsafe(queue.put_nowait, sentinel)
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+
+        try:
+            while True:
+                item = await queue.get()
+                if item is sentinel:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            stop_event.set()
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
         try:

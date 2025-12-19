@@ -1,14 +1,17 @@
 """Pydantic schemas for API key management endpoints."""
 
 from datetime import datetime
-from typing import Optional, List, Any, Dict
+from typing import Optional, List, Any, Dict, Union
 from pydantic import BaseModel, Field
 
 
 class APIKeyCreateRequest(BaseModel):
     name: Optional[str] = Field(None, description="Optional display name for the key")
     description: Optional[str] = Field(None, description="Optional description")
-    scope: str = Field("read", description="Permission scope: read|write|admin|service")
+    scope: Union[str, List[str]] = Field(
+        "read",
+        description="Permission scope(s): 'read', 'write', 'admin', 'service' or a list of these"
+    )
     expires_in_days: Optional[int] = Field(365, ge=1, description="Days until expiration (None = never)")
 
 
@@ -21,7 +24,7 @@ class APIKeyMetadata(BaseModel):
     key_prefix: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
-    scope: str
+    scope: Union[str, List[str]]
     status: Optional[str] = None
     created_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None

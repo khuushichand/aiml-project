@@ -392,10 +392,11 @@ class RBACPolicy:
 
     def _clear_user_cache(self, user_id: str):
         """Clear cached permissions for a user"""
-        # Clear LRU cache for this user
-        cache_key = (user_id,)
-        if cache_key in self._get_user_permissions.cache_info():
+        # lru_cache has no per-key invalidation; clear entire cache.
+        try:
             self._get_user_permissions.cache_clear()
+        except Exception:
+            pass
 
     def can_access_module(self, user_id: str, module_id: str) -> bool:
         """Check if user can access a module"""

@@ -99,6 +99,63 @@ async def test_task_submission(scheduler):
 
 
 @pytest.mark.asyncio
+async def test_handler_name_allows_module_qualified_defaults(scheduler):
+    """Module-qualified handler names should be accepted."""
+    registry = get_registry()
+
+    @registry.task()
+    async def dotted_handler(payload):
+        return payload
+
+    task_id = await scheduler.submit(
+        handler=dotted_handler._task_name,
+        payload={"value": 1},
+        metadata=DEFAULT_METADATA
+    )
+
+    await scheduler.write_buffer.flush()
+    task = await scheduler.get_task(task_id)
+    assert task is not None
+    assert task.handler == dotted_handler._task_name
+
+
+@pytest.mark.asyncio
+async def test_sync_handler_executes_as_awaitable(scheduler):
+    """Sync handlers should execute via executor without TypeError."""
+    registry = get_registry()
+
+    @registry.task(name="sync_handler_test")
+    def sync_handler(payload):
+        return {"ok": payload["value"]}
+
+    result = await registry.execute_handler("sync_handler_test", {"value": 5})
+    assert result == {"ok": 5}
+
+
+@pytest.mark.asyncio
+async def test_handler_defaults_applied_to_task(scheduler):
+    """Handler defaults should populate queue/timeout/retries on tasks."""
+    registry = get_registry()
+
+    @registry.task(name="defaults_handler", queue="custom_queue", max_retries=5, timeout=123)
+    async def defaults_handler(payload):
+        return payload
+
+    task_id = await scheduler.submit(
+        handler="defaults_handler",
+        payload={"value": 2},
+        metadata=DEFAULT_METADATA
+    )
+
+    await scheduler.write_buffer.flush()
+    task = await scheduler.get_task(task_id)
+    assert task is not None
+    assert task.queue_name == "custom_queue"
+    assert task.max_retries == 5
+    assert task.timeout == 123
+
+
+@pytest.mark.asyncio
 async def test_batch_submission(scheduler):
     """Test batch task submission."""
     # Register handler

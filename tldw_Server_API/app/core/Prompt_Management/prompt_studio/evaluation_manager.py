@@ -94,14 +94,14 @@ class EvaluationManager:
                     api_endpoint="openai",
                     model=model,
                     messages_payload=[
-                        {"role": "system", "content": prompt.get("system_prompt")},
                         {"role": "user", "content": formatted_user_prompt}
                     ],
-                    temperature=temperature,
+                    system_message=prompt.get("system_prompt"),
+                    temp=temperature,
                     max_tokens=max_tokens
                 )
 
-                actual_output = response[0] if response else ""
+                actual_output = self._extract_response_text(response)
                 _log.debug(
                     "PS evaluation.sync.test_done test_case_id={} duration_ms={}",
                     test_id,
@@ -174,6 +174,42 @@ class EvaluationManager:
             "results": results,
             "metrics": aggregate_metrics
         }
+
+    @staticmethod
+    def _extract_response_text(response: Any) -> str:
+        if response is None:
+            return ""
+        if isinstance(response, str):
+            return response
+        if isinstance(response, list) and response:
+            if isinstance(response[0], str):
+                return response[0]
+            if isinstance(response[0], dict):
+                return EvaluationManager._extract_response_text(response[0])
+        if isinstance(response, dict):
+            choices = response.get("choices")
+            if isinstance(choices, list):
+                for choice in choices:
+                    if not isinstance(choice, dict):
+                        continue
+                    message = choice.get("message") or {}
+                    content = message.get("content")
+                    if isinstance(content, list):
+                        parts = [part.get("text", "") for part in content if isinstance(part, dict)]
+                        content = "".join(parts)
+                    if isinstance(content, str):
+                        return content
+                    delta = choice.get("delta") or {}
+                    delta_content = delta.get("content")
+                    if isinstance(delta_content, list):
+                        parts = [part.get("text", "") for part in delta_content if isinstance(part, dict)]
+                        delta_content = "".join(parts)
+                    if isinstance(delta_content, str):
+                        return delta_content
+            content = response.get("content")
+            if isinstance(content, str):
+                return content
+        return str(response)
 
     def _calculate_score(self, expected: Dict, actual: Dict) -> float:
         """

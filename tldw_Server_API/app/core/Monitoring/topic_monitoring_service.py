@@ -12,12 +12,14 @@ Design goals:
 - Bounded scanning and dedup window to avoid alert spam
 """
 
+import asyncio
 import json
 import os
 import re
 import threading
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -40,6 +42,20 @@ class CompiledRule:
     note: Optional[str] = None
 
 
+def _find_project_root(start: Path) -> Path | None:
+    """Best-effort search for the repository root starting from a file/dir path."""
+    start_dir = start if start.is_dir() else start.parent
+
+    for candidate in (start_dir, *start_dir.parents):
+        if (candidate / "pyproject.toml").is_file():
+            return candidate
+        if (candidate / "AGENTS.md").is_file() and (candidate / "tldw_Server_API").is_dir():
+            return candidate
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
 class TopicMonitoringService:
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -54,24 +70,41 @@ class TopicMonitoringService:
         raw_db_path = os.getenv("MONITORING_ALERTS_DB", "Databases/monitoring_alerts.db")
         # Anchor relative paths to project root to avoid creating dirs from CWD
         try:
-            from pathlib import Path as _Path
-            from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
-            _root = _Path(_gpr())
+            wl_p = Path(str(raw_watchlists))
         except Exception:
-            from pathlib import Path as _Path
-            _root = _Path(__file__).resolve().parents[5]
+            wl_p = Path("tldw_Server_API/Config_Files/monitoring_watchlists.json")
         try:
-            wl_p = _Path(str(raw_watchlists))
+            db_p = Path(str(raw_db_path))
         except Exception:
-            wl_p = _Path("tldw_Server_API/Config_Files/monitoring_watchlists.json")
-        if not wl_p.is_absolute():
-            wl_p = (_root / wl_p).resolve()
-        try:
-            db_p = _Path(str(raw_db_path))
-        except Exception:
-            db_p = _Path("Databases/monitoring_alerts.db")
-        if not db_p.is_absolute():
-            db_p = (_root / db_p).resolve()
+            db_p = Path("Databases/monitoring_alerts.db")
+
+        if not wl_p.is_absolute() or not db_p.is_absolute():
+            try:
+                from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+            except Exception as exc:
+                start = Path(__file__).resolve()
+                root = _find_project_root(start)
+                if root is None:
+                    msg = (
+                        "Unable to resolve monitoring paths: watchlists/db are relative, "
+                        f"and importing get_project_root failed: {exc}. "
+                        f"Searched parents of {start} for root markers (pyproject.toml, AGENTS.md, .git) "
+                        "but none were found."
+                    )
+                    logger.error(msg)
+                    raise RuntimeError(msg) from exc
+                logger.debug(
+                    "monitoring: get_project_root unavailable ({}); using fallback root {}",
+                    exc,
+                    root,
+                )
+            else:
+                root = Path(_gpr()).resolve()
+
+            if not wl_p.is_absolute():
+                wl_p = (root / wl_p).resolve()
+            if not db_p.is_absolute():
+                db_p = (root / db_p).resolve()
         self._watchlists_path = str(wl_p)
         self._db_path = str(db_p)
         self._db = TopicMonitoringDB(db_path=self._db_path)
@@ -145,14 +178,37 @@ class TopicMonitoringService:
         return False
 
     def _compile_rule(self, rule: WatchlistRule) -> Optional[CompiledRule]:
-        pat_text = rule.pattern or ""
+        pat_text = (rule.pattern or "").strip()
+        if not pat_text:
+            logger.warning("Topic monitor: skipped empty pattern")
+            return None
         try:
-            if len(pat_text) >= 2 and pat_text.startswith("/") and pat_text.endswith("/"):
-                raw = pat_text[1:-1]
+            regex_flags = re.IGNORECASE
+            m = re.match(r"^/(.*)/([a-zA-Z]*)$", pat_text)
+            if m:
+                raw = m.group(1)
+                flags_text = m.group(2)
                 if self._is_regex_dangerous(raw):
                     logger.warning(f"Topic monitor: skipped dangerous regex: {raw}")
                     return None
-                rgx = re.compile(raw, re.IGNORECASE)
+                extra_flags = 0
+                unknown_flags = set()
+                for ch in flags_text:
+                    if ch == "i":
+                        extra_flags |= re.IGNORECASE
+                    elif ch == "m":
+                        extra_flags |= re.MULTILINE
+                    elif ch == "s":
+                        extra_flags |= re.DOTALL
+                    elif ch == "x":
+                        extra_flags |= re.VERBOSE
+                    else:
+                        unknown_flags.add(ch)
+                if unknown_flags:
+                    logger.warning(
+                        f"Topic monitor: unsupported regex flags in pattern '{pat_text}': {''.join(sorted(unknown_flags))}"
+                    )
+                rgx = re.compile(raw, regex_flags | extra_flags)
                 patt_for_log = raw
             else:
                 rgx = re.compile(re.escape(pat_text), re.IGNORECASE)
@@ -180,7 +236,8 @@ class TopicMonitoringService:
 
     # --------------------- Public CRUD ---------------------
     def list_watchlists(self) -> List[Watchlist]:
-        return list(self._watchlists.values())
+        with self._lock:
+            return list(self._watchlists.values())
 
     def upsert_watchlist(self, wl: Watchlist) -> Watchlist:
         with self._lock:
@@ -219,7 +276,9 @@ class TopicMonitoringService:
         out: List[Tuple[str, Watchlist]] = []
         if not user_id:
             return out
-        for wid, wl in self._watchlists.items():
+        with self._lock:
+            items = list(self._watchlists.items())
+        for wid, wl in items:
             if not wl.enabled:
                 continue
             # Phase 1: per-user scoping + simple global support
@@ -259,8 +318,11 @@ class TopicMonitoringService:
             return 0
         scan = text[: self._max_scan_chars]
         total_created = 0
-        for wid, wl in self._applicable_watchlists(user_id, team_ids=team_ids, org_ids=org_ids):
-            compiled = self._compiled.get(wid) or []
+        applicable = self._applicable_watchlists(user_id, team_ids=team_ids, org_ids=org_ids)
+        with self._lock:
+            compiled_map = {wid: list(self._compiled.get(wid) or []) for wid, _ in applicable}
+        for wid, wl in applicable:
+            compiled = compiled_map.get(wid, [])
             for cr in compiled:
                 m = cr.regex.search(scan)
                 if not m:
@@ -297,6 +359,49 @@ class TopicMonitoringService:
                     logger.debug(f"Topic monitoring notify skipped: {_ne}")
                 total_created += 1
         return total_created
+
+    def schedule_evaluate_and_alert(
+        self,
+        *,
+        user_id: Optional[str],
+        text: Optional[str],
+        source: str,
+        scope_type: str = "user",
+        scope_id: Optional[str] = None,
+        team_ids: Optional[List[str]] = None,
+        org_ids: Optional[List[str]] = None,
+    ) -> None:
+        """Run evaluate_and_alert in the background to avoid blocking the caller."""
+        if not text or not user_id:
+            return
+
+        def _run_sync() -> None:
+            try:
+                self.evaluate_and_alert(
+                    user_id=user_id,
+                    text=text,
+                    source=source,
+                    scope_type=scope_type,
+                    scope_id=scope_id,
+                    team_ids=team_ids,
+                    org_ids=org_ids,
+                )
+            except Exception as exc:
+                logger.debug(f"Topic monitoring background evaluation failed: {exc}")
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            threading.Thread(target=_run_sync, daemon=True).start()
+            return
+
+        async def _runner() -> None:
+            try:
+                await asyncio.to_thread(_run_sync)
+            except Exception as exc:
+                logger.debug(f"Topic monitoring background evaluation failed: {exc}")
+
+        loop.create_task(_runner())
 
 
 _service_singleton: Optional[TopicMonitoringService] = None

@@ -2,6 +2,7 @@
 #
 #
 # Imports
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -39,8 +40,8 @@ from tldw_Server_API.app.api.v1.schemas.notes_schemas import (
 # Dependency to get user-specific ChaChaNotes_DB instance
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
+    resolve_chacha_user_base_dir,
 )
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep, rbac_rate_limit
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
@@ -127,6 +128,92 @@ def _build_title_opts(note_in: Any) -> TitleGenOptions:
         opts.language = None
     return opts
 
+# --- Note link validation -----------------------------------------------------
+def _normalize_optional_id(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return str(value).strip() or None
+
+
+def _validate_note_links(
+    db: CharactersRAGDB,
+    conversation_id: Optional[str],
+    message_id: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    normalized_conversation_id = _normalize_optional_id(conversation_id)
+    normalized_message_id = _normalize_optional_id(message_id)
+
+    if normalized_conversation_id:
+        conv = db.get_conversation_by_id(normalized_conversation_id)
+        if not conv:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    message_conversation_id = None
+    if normalized_message_id:
+        message_conversation_id = db.get_message_conversation_id(normalized_message_id)
+        if not message_conversation_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+
+    if normalized_conversation_id and normalized_message_id:
+        if message_conversation_id != normalized_conversation_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Message not found in conversation",
+            )
+
+    return normalized_conversation_id, normalized_message_id
+
+
+# --- CSV export helper --------------------------------------------------------
+def _notes_csv_response(notes_data: List[Dict[str, Any]], include_keywords: bool) -> StreamingResponse:
+    import io, csv
+    output = io.StringIO()
+    writer = csv.writer(output)
+    headers = ["id", "title", "content", "created_at", "last_modified", "version", "client_id"]
+    if include_keywords:
+        headers.append("keywords")
+    writer.writerow(headers)
+    for n in notes_data:
+        row = [
+            n.get("id"),
+            n.get("title"),
+            n.get("content"),
+            n.get("created_at"),
+            n.get("last_modified") or n.get("updated_at"),
+            n.get("version"),
+            n.get("client_id"),
+        ]
+        if include_keywords:
+            kws = n.get("keywords") or []
+            row.append(",".join([str(k.get("keyword")) for k in kws if isinstance(k, dict) and k.get("keyword") is not None]))
+        writer.writerow(row)
+    output.seek(0)
+    from datetime import datetime as _dt
+    headers_map = {"Content-Disposition": f"attachment; filename=notes_export_{_dt.utcnow().strftime('%Y%m%dT%H%M%SZ')}.csv"}
+    return StreamingResponse(output, media_type="text/csv; charset=utf-8", headers=headers_map)
+
+
+# --- Keyword attach helper ----------------------------------------------------
+def _attach_keywords_bulk(db: CharactersRAGDB, notes_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    note_ids = [nd.get("id") for nd in notes_data if isinstance(nd, dict) and nd.get("id")]
+    if not note_ids:
+        return notes_data
+    try:
+        kw_map = db.get_keywords_for_notes(note_ids)
+    except Exception as e:
+        logger.warning(f"Bulk keyword lookup failed: {e}")
+        return notes_data
+    for nd in notes_data:
+        if isinstance(nd, dict):
+            nid = nd.get("id")
+            if nid:
+                nd["keywords"] = kw_map.get(nid, [])
+    return notes_data
+
+
 # --- Helper for Exception Handling (largely the same) ---
 def handle_db_errors(e: Exception, entity_type: str = "resource"):
     if isinstance(e, HTTPException):  # If it's already an HTTPException, re-raise
@@ -141,13 +228,21 @@ def handle_db_errors(e: Exception, entity_type: str = "resource"):
         detail_message = str(e)
     elif isinstance(e, ConflictError):
         http_status_code = status.HTTP_409_CONFLICT
-        # Prioritize version mismatch message
+        # Prioritize version mismatch and not-found semantics
         exception_message_str = str(e.args[0]) if e.args else str(e)  # Get the primary message
-        if "version mismatch" in exception_message_str.lower():
+        lowered_msg = exception_message_str.lower()
+        if "version mismatch" in lowered_msg:
             detail_message = "The resource has been modified since you last fetched it. Please refresh and try again."
+        elif "not found" in lowered_msg or "soft-deleted" in lowered_msg or "soft deleted" in lowered_msg:
+            http_status_code = status.HTTP_404_NOT_FOUND
+            if "conversation" in lowered_msg or "message" in lowered_msg:
+                detail_message = exception_message_str
+            else:
+                resource_name = entity_type or "resource"
+                detail_message = f"{resource_name.capitalize()} not found."
         elif hasattr(e, 'entity') and e.entity and hasattr(e, 'entity_id') and e.entity_id:
             detail_message = f"A conflict occurred with {e.entity} (ID: {e.entity_id}). It might have been modified or deleted, or a unique constraint was violated."
-        elif "already exists" in exception_message_str.lower():
+        elif "already exists" in lowered_msg:
             detail_message = f"A {entity_type} with the provided identifier already exists."
         else:  # Generic conflict based on the exception's original message
             detail_message = exception_message_str
@@ -176,10 +271,9 @@ def handle_db_errors(e: Exception, entity_type: str = "resource"):
     openapi_extra={"security": []},
 )
 async def notes_health() -> Dict[str, Any]:
-    """Lightweight health endpoint for the Notes subsystem, scoped to the current user."""
+    """Unauthenticated health endpoint for Notes storage."""
     import os
-    user_base: Optional[Path] = None
-    chacha_db_path: Optional[Path] = None
+    base_dir: Optional[Path] = None
     health = {
         "service": "notes",
         "status": "healthy",
@@ -194,16 +288,12 @@ async def notes_health() -> Dict[str, Any]:
     }
 
     try:
-        # Resolve base directory using configured single-user ID to avoid auth dependency
-        user_id = DatabasePaths.get_single_user_id()
-        user_base = DatabasePaths.get_user_base_directory(user_id)
-        chacha_db_path = user_base / DatabasePaths.CHACHA_DB_NAME
-
-        exists = user_base.exists()
+        base_dir = resolve_chacha_user_base_dir()
+        exists = base_dir.exists()
         writable = False
         if exists:
             try:
-                test_path = user_base / ".health_check"
+                test_path = base_dir / ".health_check"
                 with open(test_path, "w") as f:
                     f.write("ok")
                 os.remove(test_path)
@@ -213,8 +303,8 @@ async def notes_health() -> Dict[str, Any]:
 
         storage_info.update(
             {
-                "base_dir": str(user_base),
-                "db_path": str(chacha_db_path),
+                "base_dir": str(base_dir),
+                "db_path": None,
                 "exists": exists,
                 "writable": writable,
             }
@@ -225,10 +315,8 @@ async def notes_health() -> Dict[str, Any]:
     except Exception as e:
         health["status"] = "unhealthy"
         health["error"] = str(e)
-        if user_base:
-            storage_info["base_dir"] = str(user_base)
-        if chacha_db_path:
-            storage_info["db_path"] = str(chacha_db_path)
+        if base_dir:
+            storage_info["base_dir"] = str(base_dir)
 
     health["components"]["storage"] = storage_info
     return health
@@ -270,9 +358,9 @@ async def create_note(
             mon = get_topic_monitoring_service()
             uid = getattr(db, 'client_id', None)
             if note_in.title:
-                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=note_in.title, source="notes.create", scope_type="user", scope_id=str(uid) if uid else None)
+                mon.schedule_evaluate_and_alert(user_id=str(uid) if uid else None, text=note_in.title, source="notes.create", scope_type="user", scope_id=str(uid) if uid else None)
             if note_in.content:
-                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=note_in.content, source="notes.create", scope_type="user", scope_id=str(uid) if uid else None)
+                mon.schedule_evaluate_and_alert(user_id=str(uid) if uid else None, text=note_in.content, source="notes.create", scope_type="user", scope_id=str(uid) if uid else None)
         except Exception:
             pass
         # Compute title (auto-generate if requested)
@@ -281,24 +369,31 @@ async def create_note(
             if getattr(note_in, "auto_title", False):
                 try:
                     opts = _build_title_opts(note_in)
-                    effective_title = generate_note_title(
+                    effective_title = await asyncio.to_thread(
+                        generate_note_title,
                         note_in.content,
                         options=opts,
                     )
                 except Exception as gen_err:
                     logger.warning(f"Auto-title generation failed, falling back: {gen_err}")
                     # Fallback to safe timestamped title
-                    effective_title = generate_note_title(note_in.content)
+                    effective_title = await asyncio.to_thread(generate_note_title, note_in.content)
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                     detail="Title is required unless auto_title=true")
+
+        conversation_id, message_id = _validate_note_links(
+            db,
+            note_in.conversation_id,
+            note_in.message_id,
+        )
 
         note_id = db.add_note(
             title=effective_title,
             content=note_in.content,
             note_id=note_in.id,  # Pass optional client-provided ID
-            conversation_id=note_in.conversation_id,
-            message_id=note_in.message_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
         )
         if note_id is None:  # Should be caught by exceptions
             raise CharactersRAGDBError("Note creation failed to return an ID.")
@@ -338,39 +433,6 @@ async def create_note(
 
 
 @router.get(
-    "/{note_id}",
-    response_model=NoteResponse,
-    summary="Get a specific note by ID",
-    tags=["notes"],
-    responses={status.HTTP_404_NOT_FOUND: {"model": DetailResponse}}
-)
-async def get_note(
-        note_id: str,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
-):
-    logger.debug(f"User (DB client_id: {db.client_id}) fetching note: ID='{note_id}'")
-    try:  # Added try block here to catch DB errors during fetch
-        note_data = db.get_note_by_id(note_id=note_id)
-    except Exception as e:  # Catch DB errors from get_note_by_id
-        handle_db_errors(e, "note")  # This will reraise appropriately
-        return  # Should not be reached if handle_db_errors raises
-
-    if not note_data:
-        logger.warning(f"Note ID '{note_id}' not found for user (DB client_id: {db.client_id}).")
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
-
-    # If note_data is found, it's a dict from the DB. Pydantic will validate it on return.
-    # No need for an explicit try-except for Pydantic here, FastAPI handles it.
-    # Attach keywords inline
-    try:
-        kw_rows = db.get_keywords_for_note(note_id=note_id)
-        note_data['keywords'] = kw_rows
-    except Exception as kw_fetch_err:
-        logger.warning(f"Fetching keywords for note {note_id} failed: {kw_fetch_err}")
-    return note_data
-
-
-@router.get(
     "/",
     response_model=NotesListResponse,
     summary="List all notes for the current user",
@@ -402,11 +464,7 @@ async def list_notes(
         # Attach keywords inline for each note (optional for performance)
         if include_keywords:
             try:
-                for nd in notes_data:
-                    try:
-                        nd['keywords'] = db.get_keywords_for_note(note_id=nd.get('id'))
-                    except Exception as kw_err:
-                        logger.warning(f"Fetching keywords for note {nd.get('id')} failed: {kw_err}")
+                _attach_keywords_bulk(db, notes_data)
             except Exception as outer_err:
                 logger.warning(f"Attaching keywords for notes list failed: {outer_err}")
         # Lightweight total count
@@ -427,6 +485,309 @@ async def list_notes(
         }
     except Exception as e:
         handle_db_errors(e, "notes list")
+
+
+@router.get(
+    "/search",
+    response_model=List[NoteResponse],
+    summary="Search notes for the current user",
+    tags=["notes"]
+)
+@router.get(
+    "/search/",
+    response_model=List[NoteResponse],
+    summary="Search notes for the current user",
+    tags=["notes"]
+)
+async def search_notes_endpoint(  # Renamed to avoid conflict with imported search_notes
+        query: str = Query(..., min_length=1, description="Search term for notes"),
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        limit: int = Query(10, ge=1, le=100, description="Number of results to return"),
+        offset: int = Query(0, ge=0, description="Result offset for pagination"),
+        include_keywords: bool = Query(False, description="If true, include linked keywords inline per note"),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.search")),
+):
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.search")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.search",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
+        logger.debug(
+            f"User (DB client_id: {db.client_id}) searching notes: query='{query}', limit={limit}, offset={offset}")
+        notes_data = db.search_notes(search_term=query, limit=limit, offset=offset)
+        # Attach keywords inline (optional)
+        if include_keywords:
+            try:
+                _attach_keywords_bulk(db, notes_data)
+            except Exception as outer_err:
+                logger.warning(f"Attaching keywords for notes search failed: {outer_err}")
+        return notes_data
+    except Exception as e:
+        handle_db_errors(e, "notes search")
+
+
+@router.get(
+    "/export",
+    response_model=NotesExportResponse,
+    summary="Export notes as JSON",
+    tags=["notes"]
+)
+async def export_notes(
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        q: Optional[str] = Query(None, description="Optional search query to filter notes"),
+        limit: int = Query(1000, ge=1, le=10000, description="Max notes to export"),
+        offset: int = Query(0, ge=0, description="Offset for pagination"),
+        include_keywords: bool = Query(False, description="If true, include linked keywords inline per note"),
+        format: str = Query("json", description="Export format. Only json here; use /export.csv for CSV."),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.export")),
+):
+    """Simple JSON export for notes. If `q` is provided, uses FTS search; otherwise lists notes."""
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.export")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.export",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
+        if str(format).lower() != "json":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="CSV export is available at /api/v1/notes/export.csv")
+        total = None
+        if q:
+            notes_data = db.search_notes(search_term=q, limit=limit, offset=offset)
+            try:
+                total = db.count_notes_matching(q)
+            except Exception:
+                total = None
+        else:
+            notes_data = db.list_notes(limit=limit, offset=offset)
+            try:
+                total = db.count_notes()
+            except Exception:
+                total = None
+        for nd in notes_data:
+            if isinstance(nd, dict):
+                nd.pop("bm25_score", None)
+                nd.pop("rank", None)
+        if include_keywords:
+            _attach_keywords_bulk(db, notes_data)
+
+        return {
+            "notes": notes_data,
+            "data": notes_data,
+            "items": notes_data,
+            "results": notes_data,
+            "count": len(notes_data),
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "exported_at": __import__("datetime").datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        handle_db_errors(e, "notes export")
+
+
+@router.get(
+    "/export.csv",
+    response_class=StreamingResponse,
+    summary="Export notes as CSV",
+    tags=["notes"]
+)
+async def export_notes_csv(
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        q: Optional[str] = Query(None, description="Optional search query to filter notes"),
+        limit: int = Query(1000, ge=1, le=10000, description="Max notes to export"),
+        offset: int = Query(0, ge=0, description="Offset for pagination"),
+        include_keywords: bool = Query(False, description="If true, include linked keywords inline per note"),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.export")),
+):
+    """CSV export for notes. If `q` is provided, uses FTS search; otherwise lists notes."""
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.export")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.export",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
+        if q:
+            notes_data = db.search_notes(search_term=q, limit=limit, offset=offset)
+        else:
+            notes_data = db.list_notes(limit=limit, offset=offset)
+        for nd in notes_data:
+            if isinstance(nd, dict):
+                nd.pop("bm25_score", None)
+                nd.pop("rank", None)
+        if include_keywords:
+            _attach_keywords_bulk(db, notes_data)
+        return _notes_csv_response(notes_data, include_keywords)
+    except Exception as e:
+        handle_db_errors(e, "notes export (csv)")
+
+
+@router.post(
+    "/export",
+    response_model=NotesExportResponse,
+    summary="Export selected notes by ID",
+    tags=["notes"]
+)
+async def export_notes_post(
+        payload: NotesExportRequest,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.export")),
+):
+    """Export notes by explicit IDs (parity with E2E scaffold)."""
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.export")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.export",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
+        note_ids = payload.note_ids
+        include_keywords = bool(payload.include_keywords)
+        fmt = str(payload.format).lower()
+        if fmt != "json":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="CSV export is available at /api/v1/notes/export.csv")
+
+        results: List[Dict[str, Any]] = []
+        for nid in note_ids:
+            try:
+                nd = db.get_note_by_id(note_id=nid)
+                if not nd:
+                    continue
+                if include_keywords:
+                    nd["keywords"] = []
+                results.append(nd)
+            except Exception:
+                # Skip bad ids
+                continue
+
+        if include_keywords and results:
+            _attach_keywords_bulk(db, results)
+
+        return {
+            "notes": results,
+            "data": results,
+            "items": results,
+            "results": results,
+            "count": len(results),
+            "exported_at": __import__("datetime").datetime.utcnow().isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        handle_db_errors(e, "notes export (POST)")
+
+
+@router.post(
+    "/export.csv",
+    response_class=StreamingResponse,
+    summary="Export selected notes as CSV",
+    tags=["notes"]
+)
+async def export_notes_post_csv(
+        payload: NotesExportRequest,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.export")),
+):
+    """CSV export for notes by explicit IDs."""
+    try:
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.export")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.export",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
+        note_ids = payload.note_ids
+        include_keywords = bool(payload.include_keywords)
+
+        results: List[Dict[str, Any]] = []
+        for nid in note_ids:
+            try:
+                nd = db.get_note_by_id(note_id=nid)
+                if not nd:
+                    continue
+                if include_keywords:
+                    nd["keywords"] = []
+                results.append(nd)
+            except Exception:
+                continue
+
+        if include_keywords and results:
+            _attach_keywords_bulk(db, results)
+
+        return _notes_csv_response(results, include_keywords)
+    except HTTPException:
+        raise
+    except Exception as e:
+        handle_db_errors(e, "notes export (POST csv)")
+
+
+@router.get(
+    "/{note_id}",
+    response_model=NoteResponse,
+    summary="Get a specific note by ID",
+    tags=["notes"],
+    responses={status.HTTP_404_NOT_FOUND: {"model": DetailResponse}}
+)
+async def get_note(
+        note_id: str,
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.get")),
+):
+    logger.debug(f"User (DB client_id: {db.client_id}) fetching note: ID='{note_id}'")
+    try:  # Added try block here to catch DB errors during fetch
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.get")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.get",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
+        note_data = db.get_note_by_id(note_id=note_id)
+    except Exception as e:  # Catch DB errors from get_note_by_id
+        handle_db_errors(e, "note")  # This will reraise appropriately
+        return  # Should not be reached if handle_db_errors raises
+
+    if not note_data:
+        logger.warning(f"Note ID '{note_id}' not found for user (DB client_id: {db.client_id}).")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+
+    # If note_data is found, it's a dict from the DB. Pydantic will validate it on return.
+    # No need for an explicit try-except for Pydantic here, FastAPI handles it.
+    # Attach keywords inline
+    try:
+        kw_rows = db.get_keywords_for_note(note_id=note_id)
+        note_data['keywords'] = kw_rows
+    except Exception as kw_fetch_err:
+        logger.warning(f"Fetching keywords for note {note_id} failed: {kw_fetch_err}")
+    return note_data
 
 
 @router.put(
@@ -453,6 +814,12 @@ async def update_note(
         for key, value in note_in.model_dump(exclude_unset=True).items()
         if value is not None
     }
+    if "title" in update_data and isinstance(update_data["title"], str):
+        stripped_title = update_data["title"].strip()
+        if not stripped_title:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Title cannot be empty or whitespace.")
+        update_data["title"] = stripped_title
     if not update_data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid fields provided for update.")
     try:
@@ -465,6 +832,22 @@ async def update_note(
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="Rate limit exceeded for notes.update",
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
+        if "conversation_id" in update_data or "message_id" in update_data:
+            validated_conversation_id, validated_message_id = _validate_note_links(
+                db,
+                update_data.get("conversation_id"),
+                update_data.get("message_id"),
+            )
+            if "conversation_id" in update_data:
+                if validated_conversation_id is None:
+                    update_data.pop("conversation_id", None)
+                else:
+                    update_data["conversation_id"] = validated_conversation_id
+            if "message_id" in update_data:
+                if validated_message_id is None:
+                    update_data.pop("message_id", None)
+                else:
+                    update_data["message_id"] = validated_message_id
         logger.info(
             f"User (DB client_id: {db.client_id}) updating note: ID='{note_id}', Version={expected_version}, DataKeys={list(update_data.keys())}")
         # Topic monitoring (non-blocking) for updated fields
@@ -472,9 +855,9 @@ async def update_note(
             mon = get_topic_monitoring_service()
             uid = getattr(db, 'client_id', None)
             if 'title' in update_data and update_data['title']:
-                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=str(update_data['title']), source="notes.update", scope_type="user", scope_id=str(uid) if uid else None)
+                mon.schedule_evaluate_and_alert(user_id=str(uid) if uid else None, text=str(update_data['title']), source="notes.update", scope_type="user", scope_id=str(uid) if uid else None)
             if 'content' in update_data and update_data['content']:
-                mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=str(update_data['content']), source="notes.update", scope_type="user", scope_id=str(uid) if uid else None)
+                mon.schedule_evaluate_and_alert(user_id=str(uid) if uid else None, text=str(update_data['content']), source="notes.update", scope_type="user", scope_id=str(uid) if uid else None)
         except Exception:
             pass
         success = db.update_note(
@@ -523,6 +906,12 @@ async def patch_note(
         for key, value in note_in.model_dump(exclude_unset=True).items()
         if value is not None
     }
+    if "title" in update_data and isinstance(update_data["title"], str):
+        stripped_title = update_data["title"].strip()
+        if not stripped_title:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Title cannot be empty or whitespace.")
+        update_data["title"] = stripped_title
     if not update_data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid fields provided for update.")
     try:
@@ -542,6 +931,22 @@ async def patch_note(
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="Rate limit exceeded for notes.update",
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
+        if "conversation_id" in update_data or "message_id" in update_data:
+            validated_conversation_id, validated_message_id = _validate_note_links(
+                db,
+                update_data.get("conversation_id"),
+                update_data.get("message_id"),
+            )
+            if "conversation_id" in update_data:
+                if validated_conversation_id is None:
+                    update_data.pop("conversation_id", None)
+                else:
+                    update_data["conversation_id"] = validated_conversation_id
+            if "message_id" in update_data:
+                if validated_message_id is None:
+                    update_data.pop("message_id", None)
+                else:
+                    update_data["message_id"] = validated_message_id
         logger.info(
             f"User (DB client_id: {db.client_id}) partially updating note: ID='{note_id}', Version={expected_version}, DataKeys={list(update_data.keys())}")
         success = db.update_note(
@@ -604,225 +1009,6 @@ async def delete_note(
         handle_db_errors(e, "note")
 
 
-@router.get(
-    "/search/",
-    response_model=List[NoteResponse],
-    summary="Search notes for the current user",
-    tags=["notes"]
-)
-async def search_notes_endpoint(  # Renamed to avoid conflict with imported search_notes
-        query: str = Query(..., min_length=1, description="Search term for notes"),
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        limit: int = Query(10, ge=1, le=100, description="Number of results to return"),
-        offset: int = Query(0, ge=0, description="Result offset for pagination"),
-        include_keywords: bool = Query(False, description="If true, include linked keywords inline per note"),
-        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-        current_user: User = Depends(get_request_user),
-        _: None = Depends(rbac_rate_limit("notes.search")),
-):
-    try:
-        try:
-            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.search")
-        except Exception:
-            allowed, meta = True, {}
-        if not allowed:
-            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                                detail="Rate limit exceeded for notes.search",
-                                headers={"Retry-After": str(meta.get("retry_after", 60))})
-        logger.debug(
-            f"User (DB client_id: {db.client_id}) searching notes: query='{query}', limit={limit}, offset={offset}")
-        notes_data = db.search_notes(search_term=query, limit=limit, offset=offset)
-        # Attach keywords inline (optional)
-        if include_keywords:
-            try:
-                for nd in notes_data:
-                    try:
-                        nd['keywords'] = db.get_keywords_for_note(note_id=nd.get('id'))
-                    except Exception as kw_err:
-                        logger.warning(f"Fetching keywords for note {nd.get('id')} failed: {kw_err}")
-            except Exception as outer_err:
-                logger.warning(f"Attaching keywords for notes search failed: {outer_err}")
-        return notes_data
-    except Exception as e:
-        handle_db_errors(e, "notes search")
-
-
-@router.get(
-    "/export",
-    response_model=NotesExportResponse,
-    summary="Export notes as JSON",
-    tags=["notes"]
-)
-async def export_notes(
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        q: Optional[str] = Query(None, description="Optional search query to filter notes"),
-        limit: int = Query(1000, ge=1, le=10000, description="Max notes to export"),
-        offset: int = Query(0, ge=0, description="Offset for pagination"),
-        include_keywords: bool = Query(False, description="If true, include linked keywords inline per note"),
-        format: str = Query("json", pattern="^(json|csv)$", description="Export format"),
-        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-        current_user: User = Depends(get_request_user),
-        _: None = Depends(rbac_rate_limit("notes.export")),
-):
-    """Simple JSON export for notes. If `q` is provided, uses FTS search; otherwise lists notes."""
-    try:
-        try:
-            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.export")
-        except Exception:
-            allowed, meta = True, {}
-        if not allowed:
-            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                                detail="Rate limit exceeded for notes.export",
-                                headers={"Retry-After": str(meta.get("retry_after", 60))})
-        total = None
-        if q:
-            notes_data = db.search_notes(search_term=q, limit=limit, offset=offset)
-            try:
-                total = db.count_notes_matching(q)
-            except Exception:
-                total = None
-        else:
-            notes_data = db.list_notes(limit=limit, offset=offset)
-            try:
-                total = db.count_notes()
-            except Exception:
-                total = None
-        for nd in notes_data:
-            if isinstance(nd, dict):
-                nd.pop("bm25_score", None)
-                nd.pop("rank", None)
-        if include_keywords:
-            for nd in notes_data:
-                try:
-                    nd['keywords'] = db.get_keywords_for_note(note_id=nd.get('id'))
-                except Exception as kw_err:
-                    logger.warning(f"Fetching keywords for note {nd.get('id')} failed: {kw_err}")
-        if format == "csv":
-            import io, csv
-            output = io.StringIO()
-            writer = csv.writer(output)
-            headers = ["id", "title", "content", "created_at", "last_modified", "version", "client_id"]
-            if include_keywords:
-                headers.append("keywords")
-            writer.writerow(headers)
-            for n in notes_data:
-                row = [
-                    n.get("id"),
-                    n.get("title"),
-                    n.get("content"),
-                    n.get("created_at"),
-                    n.get("last_modified") or n.get("updated_at"),
-                    n.get("version"),
-                    n.get("client_id"),
-                ]
-                if include_keywords:
-                    kws = n.get("keywords") or []
-                    row.append(",".join([str(k.get("keyword")) for k in kws if isinstance(k, dict) and k.get("keyword") is not None]))
-                writer.writerow(row)
-            output.seek(0)
-            from datetime import datetime as _dt
-            headers_map = {"Content-Disposition": f"attachment; filename=notes_export_{_dt.utcnow().strftime('%Y%m%dT%H%M%SZ')}.csv"}
-            return StreamingResponse(output, media_type="text/csv; charset=utf-8", headers=headers_map)
-
-        return {
-            "notes": notes_data,
-            "data": notes_data,
-            "items": notes_data,
-            "results": notes_data,
-            "count": len(notes_data),
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "exported_at": __import__("datetime").datetime.utcnow().isoformat()
-        }
-    except Exception as e:
-        handle_db_errors(e, "notes export")
-
-
-@router.post(
-    "/export",
-    response_model=NotesExportResponse,
-    summary="Export selected notes by ID",
-    tags=["notes"]
-)
-async def export_notes_post(
-        payload: NotesExportRequest,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
-        current_user: User = Depends(get_request_user),
-        _: None = Depends(rbac_rate_limit("notes.export")),
-):
-    """Export notes by explicit IDs (parity with E2E scaffold)."""
-    try:
-        try:
-            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.export")
-        except Exception:
-            allowed, meta = True, {}
-        if not allowed:
-            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                                detail="Rate limit exceeded for notes.export",
-                                headers={"Retry-After": str(meta.get("retry_after", 60))})
-        note_ids = payload.note_ids
-        include_keywords = bool(payload.include_keywords)
-        fmt = str(payload.format).lower()
-
-        results: List[Dict[str, Any]] = []
-        for nid in note_ids:
-            try:
-                nd = db.get_note_by_id(note_id=nid)
-                if not nd:
-                    continue
-                if include_keywords:
-                    try:
-                        nd['keywords'] = db.get_keywords_for_note(note_id=nid)
-                    except Exception:
-                        pass
-                results.append(nd)
-            except Exception:
-                # Skip bad ids
-                continue
-
-        if fmt == "csv":
-            import io, csv
-            output = io.StringIO()
-            writer = csv.writer(output)
-            headers = ["id", "title", "content", "created_at", "last_modified", "version", "client_id"]
-            if include_keywords:
-                headers.append("keywords")
-            writer.writerow(headers)
-            for n in results:
-                row = [
-                    n.get("id"),
-                    n.get("title"),
-                    n.get("content"),
-                    n.get("created_at"),
-                    n.get("last_modified") or n.get("updated_at"),
-                    n.get("version"),
-                    n.get("client_id"),
-                ]
-                if include_keywords:
-                    kws = n.get("keywords") or []
-                    row.append(",".join([str(k.get("keyword")) for k in kws if isinstance(k, dict) and k.get("keyword") is not None]))
-                writer.writerow(row)
-            output.seek(0)
-            from datetime import datetime as _dt
-            headers_map = {"Content-Disposition": f"attachment; filename=notes_export_{_dt.utcnow().strftime('%Y%m%dT%H%M%SZ')}.csv"}
-            return StreamingResponse(output, media_type="text/csv; charset=utf-8", headers=headers_map)
-
-        return {
-            "notes": results,
-            "data": results,
-            "items": results,
-            "results": results,
-            "count": len(results),
-            "exported_at": __import__("datetime").datetime.utcnow().isoformat()
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        handle_db_errors(e, "notes export (POST)")
-
-
 # --- Keyword Endpoints (related to Notes) ---
 
 @router.post(
@@ -848,7 +1034,7 @@ async def suggest_note_title(
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
 
         opts = _build_title_opts(payload)
-        title = generate_note_title(payload.content, options=opts)
+        title = await asyncio.to_thread(generate_note_title, payload.content, options=opts)
         return TitleSuggestResponse(title=title)
     except HTTPException:
         raise
@@ -888,9 +1074,9 @@ async def bulk_create_notes(
                 mon = get_topic_monitoring_service()
                 uid = getattr(db, 'client_id', None)
                 if getattr(item, 'title', None):
-                    mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=item.title, source="notes.bulk_create", scope_type="user", scope_id=str(uid) if uid else None)
+                    mon.schedule_evaluate_and_alert(user_id=str(uid) if uid else None, text=item.title, source="notes.bulk_create", scope_type="user", scope_id=str(uid) if uid else None)
                 if getattr(item, 'content', None):
-                    mon.evaluate_and_alert(user_id=str(uid) if uid else None, text=item.content, source="notes.bulk_create", scope_type="user", scope_id=str(uid) if uid else None)
+                    mon.schedule_evaluate_and_alert(user_id=str(uid) if uid else None, text=item.content, source="notes.bulk_create", scope_type="user", scope_id=str(uid) if uid else None)
             except Exception:
                 pass
             # Compute title per item
@@ -899,20 +1085,29 @@ async def bulk_create_notes(
                 if getattr(item, "auto_title", False):
                     try:
                         opts = _build_title_opts(item)
-                        effective_title = generate_note_title(
+                        effective_title = await asyncio.to_thread(
+                            generate_note_title,
                             item.content,
                             options=opts,
                         )
                     except Exception as gen_err:
                         logger.warning(f"[Bulk] Auto-title generation failed, falling back: {gen_err}")
-                        effective_title = generate_note_title(item.content)
+                        effective_title = await asyncio.to_thread(generate_note_title, item.content)
                 else:
                     raise InputError("Title is required for bulk item unless auto_title=true.")
+
+            conversation_id, message_id = _validate_note_links(
+                db,
+                item.conversation_id,
+                item.message_id,
+            )
 
             note_id = db.add_note(
                 title=effective_title,
                 content=item.content,
-                note_id=item.id
+                note_id=item.id,
+                conversation_id=conversation_id,
+                message_id=message_id,
             )
             if not note_id:
                 raise CharactersRAGDBError("Failed to create note (no ID returned)")
@@ -997,10 +1192,21 @@ async def create_keyword(
 )
 async def get_keyword(
         keyword_id: int,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("keywords.get")),
 ):
     logger.debug(f"User (DB client_id: {db.client_id}) fetching keyword by ID: {keyword_id}")
     try: # Added try block
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.get")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for keywords.get",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         keyword_data = db.get_keyword_by_id(keyword_id=keyword_id)
     except Exception as e:
         handle_db_errors(e, "keyword")
@@ -1021,10 +1227,21 @@ async def get_keyword(
 )
 async def get_keyword_by_text(
         keyword_text: str,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("keywords.get")),
 ):
     try:
         logger.debug(f"User (DB client_id: {db.client_id}) fetching keyword by text: '{keyword_text}'")
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.get")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for keywords.get",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         keyword_data = db.get_keyword_by_text(keyword_text=keyword_text)
         if not keyword_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Keyword not found")
@@ -1219,10 +1436,21 @@ async def unlink_note_from_keyword_endpoint(
 )
 async def get_keywords_for_note_endpoint(
         note_id: str,
-        db: CharactersRAGDB = Depends(get_chacha_db_for_user)
+        db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("notes.keywords.list")),
 ):
     try:
         logger.debug(f"User (DB client_id: {db.client_id}) fetching keywords for note '{note_id}'")
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "notes.keywords.list")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for notes.keywords.list",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         note_check = db.get_note_by_id(note_id=note_id)
         if not note_check:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Note with ID '{note_id}' not found.")
@@ -1246,10 +1474,21 @@ async def get_notes_for_keyword_endpoint(
         keyword_id: int,
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         limit: int = Query(50, ge=1, le=200),
-        offset: int = Query(0, ge=0)
+        offset: int = Query(0, ge=0),
+        rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+        current_user: User = Depends(get_request_user),
+        _: None = Depends(rbac_rate_limit("keywords.notes.list")),
 ):
     try:
         logger.debug(f"User (DB client_id: {db.client_id}) fetching notes for keyword '{keyword_id}'")
+        try:
+            allowed, meta = await rate_limiter.check_user_rate_limit(int(current_user.id), "keywords.notes.list")
+        except Exception:
+            allowed, meta = True, {}
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Rate limit exceeded for keywords.notes.list",
+                                headers={"Retry-After": str(meta.get("retry_after", 60))})
         keyword_check = db.get_keyword_by_id(keyword_id=keyword_id)
         if not keyword_check:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,

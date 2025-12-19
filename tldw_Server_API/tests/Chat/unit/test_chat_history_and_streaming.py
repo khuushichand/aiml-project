@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional, List
 
 import pytest
@@ -90,6 +91,45 @@ class DummySave:
 
 
 @pytest.mark.asyncio
+async def test_build_context_skips_tool_placeholder_replacement():
+    records = [
+        {
+            "id": "msg-tool-1",
+            "sender": "tool",
+            "content": "{\"query\":\"{{char}}\"}",
+            "timestamp": 1,
+            "images": [],
+        }
+    ]
+    db = DummyChatDB(records)
+    request_data = DummyRequestData(history_message_limit=5, history_message_order="asc")
+    request_data.messages = []
+    loop = asyncio.get_running_loop()
+
+    class DummyMetrics:
+        def track_character_access(self, *args, **kwargs):
+            pass
+
+        def track_conversation(self, *args, **kwargs):
+            pass
+
+    result = await chat_service.build_context_and_messages(
+        chat_db=db,
+        request_data=request_data,
+        loop=loop,
+        metrics=DummyMetrics(),
+        default_save_to_db=False,
+        final_conversation_id="conv",
+        save_message_fn=AsyncMock(),
+    )
+
+    history = result[4]
+    tool_msgs = [msg for msg in history if msg.get("role") == "tool"]
+    assert tool_msgs
+    assert tool_msgs[0]["content"] == "{\"query\":\"{{char}}\"}"
+
+
+@pytest.mark.asyncio
 async def test_streaming_handler_persists_tool_calls():
     handler = StreamingResponseHandler(
         conversation_id="conv",
@@ -135,6 +175,86 @@ async def test_streaming_handler_persists_tool_calls():
         }
     ]
     assert persisted["function_call"] is None
+
+
+@pytest.mark.asyncio
+async def test_streaming_topic_monitoring_runs_without_output_moderation(monkeypatch):
+    class DummyPolicy:
+        enabled = False
+        output_enabled = False
+
+    class DummyModeration:
+        def get_effective_policy(self, *_args, **_kwargs):
+            return DummyPolicy()
+
+    class DummyMonitor:
+        def __init__(self):
+            self.calls: List[Dict[str, Any]] = []
+
+        def schedule_evaluate_and_alert(self, **kwargs):
+            self.calls.append(kwargs)
+
+    dummy_monitor = DummyMonitor()
+    monkeypatch.setattr(chat_service, "get_moderation_service", lambda: DummyModeration())
+    monkeypatch.setattr(chat_service, "get_topic_monitoring_service", lambda: dummy_monitor)
+
+    class DummyStreamTracker:
+        def add_heartbeat(self):
+            pass
+
+        def add_chunk(self):
+            pass
+
+    class DummyMetrics:
+        def track_llm_call(self, *args, **kwargs):
+            pass
+
+        def track_provider_fallback_success(self, *args, **kwargs):
+            pass
+
+        def track_rate_limit(self, *args, **kwargs):
+            pass
+
+        @asynccontextmanager
+        async def track_streaming(self, *args, **kwargs):
+            yield DummyStreamTracker()
+
+    def fake_llm_call():
+        def _gen():
+            yield "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"
+            yield "data: [DONE]\n\n"
+        return _gen()
+
+    response = await chat_service.execute_streaming_call(
+        current_loop=asyncio.get_running_loop(),
+        cleaned_args={"messages_payload": [], "api_endpoint": "openai"},
+        selected_provider="openai",
+        provider="openai",
+        model="gpt",
+        request_json="{}",
+        request=None,
+        metrics=DummyMetrics(),
+        provider_manager=None,
+        templated_llm_payload=[],
+        should_persist=False,
+        final_conversation_id="conv",
+        character_card_for_context=None,
+        chat_db=MagicMock(),
+        save_message_fn=AsyncMock(),
+        audit_service=None,
+        audit_context=None,
+        client_id="client",
+        queue_execution_enabled=False,
+        enable_provider_fallback=False,
+        llm_call_func=fake_llm_call,
+        refresh_provider_params=lambda *_args, **_kwargs: ({}, None),
+        moderation_getter=None,
+    )
+
+    async for _chunk in response.body_iterator:
+        pass
+
+    assert dummy_monitor.calls
 
 
 def test_document_generator_accepts_string_ids(tmp_path):

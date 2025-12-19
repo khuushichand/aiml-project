@@ -196,7 +196,8 @@ class TestUnifiedPipelineFeatures:
             result = await unified_rag_pipeline(
                 query="cached query",
                 enable_cache=True,
-                cache_ttl=3600
+                cache_ttl=3600,
+                adaptive_cache=False,
             )
 
             # Should return cached result
@@ -205,6 +206,38 @@ class TestUnifiedPipelineFeatures:
             assert len(result.documents) == 1
             assert result.documents[0]["content"] == "Cached content"
             mock_semantic_cache.get.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_adaptive_cache_selected_when_enabled(self):
+        """Adaptive cache should be used when enabled and available."""
+        cached_result = {
+            "answer": "Adaptive cached answer",
+            "documents": [Document(id="cached_1", content="Cached content", metadata={})],
+            "cached": True,
+        }
+        mock_cache = MagicMock()
+        mock_cache.get.return_value = cached_result
+
+        seen = {}
+
+        def _fake_shared_cache(cache_cls, **_kwargs):
+            seen["cache_cls"] = cache_cls
+            return mock_cache
+
+        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.get_shared_cache', side_effect=_fake_shared_cache), \
+            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.AdaptiveCache') as mock_adaptive, \
+            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+            result = await unified_rag_pipeline(
+                query="cached query",
+                enable_cache=True,
+                adaptive_cache=True,
+                enable_generation=False,
+            )
+
+        assert seen.get("cache_cls") is mock_adaptive
+        mock_retriever.assert_not_called()
+        assert result.cache_hit is True
+        assert result.generated_answer == "Adaptive cached answer"
 
     @pytest.mark.asyncio
     async def test_cache_hit_with_legacy_list_payload(self, mock_semantic_cache):
@@ -225,6 +258,7 @@ class TestUnifiedPipelineFeatures:
                 query="legacy cache hit",
                 enable_cache=True,
                 enable_generation=False,
+                adaptive_cache=False,
             )
 
         mock_retriever.assert_not_called()
@@ -268,6 +302,7 @@ class TestUnifiedPipelineFeatures:
                 query="store cache payload",
                 enable_cache=True,
                 enable_generation=False,
+                adaptive_cache=False,
             )
 
         assert recording_cache.set_calls, "Cache set should have been invoked"

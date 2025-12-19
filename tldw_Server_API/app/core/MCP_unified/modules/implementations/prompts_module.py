@@ -106,58 +106,93 @@ class PromptsModule(BaseModule):
         offset: int = int(args.get("offset", 0))
         snippet_len: int = int(args.get("snippet_length", 300))
         db = self._open_db(context)
-        page = (offset // max(1, limit)) + 1 if limit > 0 else 1
-        rows, total = db.search_prompts(search_query=query, search_fields=fields or None, page=page, results_per_page=limit, include_deleted=False)
-        out = []
-        for r in rows:
-            desc = r.get("details") or r.get("system_prompt") or ""
-            out.append({
-                "id": r.get("id"),
-                "source": "prompts",
-                "title": r.get("name"),
-                "snippet": " ".join(desc.split())[:snippet_len],
-                "uri": f"prompts://{r.get('id')}",
-                "score": 1.0,
-                "score_type": "fts",
-                "created_at": r.get("created_at"),
-                "last_modified": r.get("last_modified"),
-                "version": r.get("version"),
-                "tags": r.get("keywords") or None,
-                "loc": None,
-            })
-        return {"results": out, "has_more": (offset + len(rows)) < total, "next_offset": (offset + len(rows)) if (offset + len(rows)) < total else None, "total_estimated": total}
+        try:
+            page_size = max(1, limit)
+            page = (offset // page_size) + 1
+            local_offset = offset % page_size
+            rows, total = db.search_prompts(
+                search_query=query,
+                search_fields=fields or None,
+                page=page,
+                results_per_page=page_size,
+                include_deleted=False,
+            )
+            if local_offset:
+                if len(rows) == page_size and (offset + limit) < total:
+                    next_rows, _ = db.search_prompts(
+                        search_query=query,
+                        search_fields=fields or None,
+                        page=page + 1,
+                        results_per_page=page_size,
+                        include_deleted=False,
+                    )
+                    rows = rows + next_rows
+                rows = rows[local_offset: local_offset + limit]
+            else:
+                rows = rows[:limit]
+            out = []
+            for r in rows:
+                desc = r.get("details") or r.get("system_prompt") or ""
+                out.append({
+                    "id": r.get("id"),
+                    "source": "prompts",
+                    "title": r.get("name"),
+                    "snippet": " ".join(desc.split())[:snippet_len],
+                    "uri": f"prompts://{r.get('id')}",
+                    "score": 1.0,
+                    "score_type": "fts",
+                    "created_at": r.get("created_at"),
+                    "last_modified": r.get("last_modified"),
+                    "version": r.get("version"),
+                    "tags": r.get("keywords") or None,
+                    "loc": None,
+                })
+            has_more = (offset + len(out)) < total
+            next_offset = (offset + len(out)) if has_more else None
+            return {"results": out, "has_more": has_more, "next_offset": next_offset, "total_estimated": total}
+        finally:
+            try:
+                db.close_connection()
+            except Exception as exc:
+                logger.debug("Failed to close Prompts DB connections after prompts search: {}", exc)
 
     async def _get(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
         ident: str = args.get("prompt_id_or_name")
         db = self._open_db(context)
-        row = None
         try:
-            pid = int(ident)
-            row = db.get_prompt_by_id(pid)
-        except Exception:
-            row = db.get_prompt_by_name(ident)
-        if not row:
-            raise ValueError(f"Prompt not found: {ident}")
-        desc = row.get("details") or ""
-        meta = {
-            "id": row.get("id"),
-            "source": "prompts",
-            "title": row.get("name"),
-            "snippet": " ".join(desc.split())[:300],
-            "uri": f"prompts://{row.get('id')}",
-            "score": 1.0,
-            "score_type": "fts",
-            "created_at": row.get("created_at"),
-            "last_modified": row.get("last_modified"),
-            "version": row.get("version"),
-            "tags": None,
-            "loc": None,
-        }
-        content = {
-            k: row.get(k)
-            for k in ("name", "author", "details", "system_prompt", "user_prompt")
-        }
-        return {"meta": meta, "content": content, "attachments": None}
+            row = None
+            try:
+                pid = int(ident)
+                row = db.get_prompt_by_id(pid)
+            except Exception:
+                row = db.get_prompt_by_name(ident)
+            if not row:
+                raise ValueError(f"Prompt not found: {ident}")
+            desc = row.get("details") or ""
+            meta = {
+                "id": row.get("id"),
+                "source": "prompts",
+                "title": row.get("name"),
+                "snippet": " ".join(desc.split())[:300],
+                "uri": f"prompts://{row.get('id')}",
+                "score": 1.0,
+                "score_type": "fts",
+                "created_at": row.get("created_at"),
+                "last_modified": row.get("last_modified"),
+                "version": row.get("version"),
+                "tags": None,
+                "loc": None,
+            }
+            content = {
+                k: row.get(k)
+                for k in ("name", "author", "details", "system_prompt", "user_prompt")
+            }
+            return {"meta": meta, "content": content, "attachments": None}
+        finally:
+            try:
+                db.close_connection()
+            except Exception as exc:
+                logger.debug("Failed to close Prompts DB connections after prompts get: {}", exc)
 
     def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
         if tool_name == "prompts.search":

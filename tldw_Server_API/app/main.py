@@ -2371,6 +2371,13 @@ async def lifespan(app: FastAPI):
 
         await shutdown_all_registered_executors(wait=True, cancel_futures=True)
         logger.info("App Shutdown: Registered executors shutdown")
+        try:
+            loop = asyncio.get_running_loop()
+            if hasattr(loop, "shutdown_default_executor"):
+                await loop.shutdown_default_executor()
+                logger.info("App Shutdown: Default executor shutdown")
+        except Exception as e:
+            logger.debug(f"App Shutdown: Default executor shutdown skipped/failed: {e}")
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down executors: {e}")
 
@@ -2420,6 +2427,15 @@ async def lifespan(app: FastAPI):
         logger.info("App Shutdown: Telemetry shutdown")
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down telemetry: {e}")
+
+    # Close cached MediaDatabase instances so Postgres pooled connections are released
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import reset_media_db_cache
+
+        reset_media_db_cache()
+        logger.info("App Shutdown: Media DB cache cleared")
+    except Exception as e:
+        logger.debug(f"App Shutdown: Media DB cache cleanup skipped/failed: {e}")
 
     # Close shared content database backend pool (PostgreSQL content mode)
     try:
@@ -3288,9 +3304,6 @@ else:
     # HTTP request metrics middleware (records count and latency per route)
     app.add_middleware(HTTPMetricsMiddleware)
 
-    # Request ID propagation (adds X-Request-ID header)
-    app.add_middleware(RequestIDMiddleware)
-
     # Structured access logs (request_id, method, host, status, duration)
     try:
         from tldw_Server_API.app.core.Logging.access_log_middleware import AccessLogMiddleware
@@ -3298,6 +3311,9 @@ else:
         app.add_middleware(AccessLogMiddleware)
     except Exception as _e:
         logger.debug(f"Skipping AccessLogMiddleware: {_e}")
+
+    # Request ID propagation (adds X-Request-ID header)
+    app.add_middleware(RequestIDMiddleware)
 
     # Sandbox artifact traversal guard (pre-routing)
     try:

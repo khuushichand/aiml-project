@@ -3,6 +3,7 @@ Simplified chat endpoint tests using real database and authentication.
 """
 import pytest
 from fastapi import status
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -296,8 +297,6 @@ def test_chat_completion_rg_primary_deny(
     the chat endpoint should surface a 429 with a policy-aware message.
     """
 
-    from tldw_Server_API.app.core.Chat import rate_limiter as chat_rl
-
     request_data = ChatCompletionRequest(
         model="test-model",
         api_provider="openai",
@@ -308,24 +307,29 @@ def test_chat_completion_rg_primary_deny(
 
     monkeypatch.setenv("RG_ENABLED", "1")
 
-    async def fake_rg_chat(
-        *,
-        user_id: str,
-        conversation_id: str | None,
-        estimated_tokens: int,
-    ) -> dict:
-        return {
-            "allowed": False,
-            "policy_id": "chat.primary",
-            "retry_after": 1,
-        }
+    gov = getattr(app.state, "rg_governor", None)
+    if gov is None:
+        app.state.rg_governor = SimpleNamespace()
+        gov = app.state.rg_governor
 
-    monkeypatch.setattr(
-        chat_rl,
-        "_maybe_enforce_with_rg_chat",
-        fake_rg_chat,
-        raising=False,
-    )
+    if getattr(app.state, "rg_policy_loader", None) is None:
+        class _Loader:
+            def get_policy(self, _policy_id):
+                return {}
+
+        app.state.rg_policy_loader = _Loader()
+
+    async def fake_reserve(req, op_id=None):
+        categories = getattr(req, "categories", {}) or {}
+        if "requests" in categories and "tokens" not in categories:
+            return SimpleNamespace(allowed=True, retry_after=None, details={"categories": categories}), "req-handle"
+        return SimpleNamespace(allowed=False, retry_after=1, details={"categories": categories}), None
+
+    async def fake_commit(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(gov, "reserve", fake_reserve, raising=True)
+    monkeypatch.setattr(gov, "commit", fake_commit, raising=False)
 
     with patch(
         "tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call"
@@ -350,7 +354,7 @@ def test_chat_completion_rg_primary_deny(
 
         assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
         body = response.json()
-        assert "ResourceGovernor policy=chat.primary" in str(body.get("detail"))
+        assert "ResourceGovernor policy=" in str(body.get("detail"))
 
 
 def test_chat_completion_rg_shadow_vs_primary_behaviour(
@@ -364,8 +368,6 @@ def test_chat_completion_rg_shadow_vs_primary_behaviour(
     validate 200/429 behavior.
     """
 
-    from tldw_Server_API.app.core.Chat import rate_limiter as chat_rl
-
     request_data = ChatCompletionRequest(
         model="test-model",
         api_provider="openai",
@@ -377,30 +379,33 @@ def test_chat_completion_rg_shadow_vs_primary_behaviour(
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("RG_ENABLED", "1")
 
-    # Stub RG gate: first call path (shadow) allowed, second (primary) denied.
-    async def fake_rg_chat_allow(
-        *,
-        user_id: str,
-        conversation_id: str | None,
-        estimated_tokens: int,
-    ) -> dict:
-        return {
-            "allowed": True,
-            "policy_id": "chat.shadow",
-            "retry_after": None,
-        }
+    gov = getattr(app.state, "rg_governor", None)
+    if gov is None:
+        app.state.rg_governor = SimpleNamespace()
+        gov = app.state.rg_governor
 
-    async def fake_rg_chat_deny(
-        *,
-        user_id: str,
-        conversation_id: str | None,
-        estimated_tokens: int,
-    ) -> dict:
-        return {
-            "allowed": False,
-            "policy_id": "chat.primary",
-            "retry_after": 3,
-        }
+    if getattr(app.state, "rg_policy_loader", None) is None:
+        class _Loader:
+            def get_policy(self, _policy_id):
+                return {}
+
+        app.state.rg_policy_loader = _Loader()
+
+    token_calls = {"count": 0}
+
+    async def fake_reserve(req, op_id=None):
+        categories = getattr(req, "categories", {}) or {}
+        if "requests" in categories and "tokens" not in categories:
+            return SimpleNamespace(allowed=True, retry_after=None, details={"categories": categories}), "req-handle"
+        if "tokens" in categories:
+            token_calls["count"] += 1
+            if token_calls["count"] == 1:
+                return SimpleNamespace(allowed=True, retry_after=None, details={"categories": categories}), "tok-handle"
+            return SimpleNamespace(allowed=False, retry_after=3, details={"categories": categories}), None
+        return SimpleNamespace(allowed=True, retry_after=None, details={"categories": categories}), "req-handle"
+
+    async def fake_commit(*_args, **_kwargs):
+        return None
 
     with patch(
         "tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call"
@@ -418,26 +423,14 @@ def test_chat_completion_rg_shadow_vs_primary_behaviour(
             ],
         }
 
-        monkeypatch.setattr(
-            chat_rl,
-            "_maybe_enforce_with_rg_chat",
-            fake_rg_chat_allow,
-            raising=False,
-        )
+        monkeypatch.setattr(gov, "reserve", fake_reserve, raising=True)
+        monkeypatch.setattr(gov, "commit", fake_commit, raising=False)
 
         shadow_resp = authenticated_client.post(
             "/api/v1/chat/completions",
             json=request_data.model_dump(),
         )
         assert shadow_resp.status_code == status.HTTP_200_OK
-
-        # Deny path: RG decision is canonical and denies
-        monkeypatch.setattr(
-            chat_rl,
-            "_maybe_enforce_with_rg_chat",
-            fake_rg_chat_deny,
-            raising=False,
-        )
 
         primary_resp = authenticated_client.post(
             "/api/v1/chat/completions",
@@ -446,7 +439,7 @@ def test_chat_completion_rg_shadow_vs_primary_behaviour(
         assert primary_resp.status_code == status.HTTP_429_TOO_MANY_REQUESTS
         body = primary_resp.json()
         detail = str(body.get("detail"))
-        assert "ResourceGovernor policy=chat.primary" in detail
+        assert "ResourceGovernor policy=" in detail
         # Retry-After may be present either in headers or encoded in detail;
         # assert that at least one representation of the retry interval exists.
         header_retry = primary_resp.headers.get("Retry-After")

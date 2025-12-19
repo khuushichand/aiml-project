@@ -75,10 +75,11 @@ except ImportError:
     multi_strategy_expansion = None
 
 try:
-    from .semantic_cache import SemanticCache, AdaptiveCache
+    from .semantic_cache import SemanticCache, AdaptiveCache, get_shared_cache
 except ImportError:
     SemanticCache = None
     AdaptiveCache = None
+    get_shared_cache = None  # type: ignore
 
 try:
     from .database_retrievers import MultiDatabaseRetriever, RetrievalConfig
@@ -531,6 +532,53 @@ async def unified_rag_pipeline(
     except Exception:
         pass
 
+    cache_instance = None
+    cache_max_size = 1000
+    try:
+        from tldw_Server_API.app.core.config import RAG_SERVICE_CONFIG  # type: ignore
+        cache_max_size = int((RAG_SERVICE_CONFIG.get("cache") or {}).get("max_cache_size", cache_max_size))
+    except Exception:
+        pass
+    cache_namespace = index_namespace or (user_id or None)
+    if cache_namespace is None:
+        try:
+            parts = [media_db_path, notes_db_path, character_db_path]
+            if any(parts):
+                joined = "|".join([str(p or "") for p in parts])
+                cache_namespace = f"db:{hashlib.md5(joined.encode('utf-8')).hexdigest()[:12]}"
+        except Exception:
+            cache_namespace = None
+
+    def _get_cache_instance():
+        nonlocal cache_instance
+        if cache_instance is not None:
+            return cache_instance
+        cache_cls = None
+        if adaptive_cache and AdaptiveCache:
+            cache_cls = AdaptiveCache
+        elif SemanticCache:
+            cache_cls = SemanticCache
+
+        if cache_cls:
+            try:
+                if get_shared_cache:
+                    cache_instance = get_shared_cache(
+                        cache_cls=cache_cls,
+                        similarity_threshold=cache_threshold,
+                        ttl=cache_ttl,
+                        max_size=cache_max_size,
+                        namespace=cache_namespace,
+                    )
+                else:
+                    cache_instance = cache_cls(
+                        similarity_threshold=cache_threshold,
+                        ttl=cache_ttl,
+                        namespace=cache_namespace,
+                    )
+            except TypeError:
+                cache_instance = cache_cls(similarity_threshold=cache_threshold)
+        return cache_instance
+
     # --- Internal helpers (defined early so downstream phases can use them) ---
     async def _with_timeout(coro, timeout: Optional[float]):
         if timeout and timeout > 0:
@@ -805,29 +853,7 @@ async def unified_rag_pipeline(
         cached_documents = None
         if enable_cache:
             cache_start = time.time()
-            # Prefer SemanticCache (test patches target this). Use Adaptive only if SemanticCache unavailable.
-            if SemanticCache:
-                try:
-                    cache = SemanticCache(
-                        similarity_threshold=cache_threshold,
-                        ttl=cache_ttl,
-                        # Use a lightweight namespace to avoid cross-tenant collisions
-                        namespace=index_namespace or (user_id or None),
-                    )
-                except TypeError:
-                    # Fallback if patched constructor signature differs
-                    cache = SemanticCache(similarity_threshold=cache_threshold)
-            elif AdaptiveCache and adaptive_cache:
-                try:
-                    cache = AdaptiveCache(
-                        similarity_threshold=cache_threshold,
-                        ttl=cache_ttl,
-                        namespace=index_namespace or (user_id or None),
-                    )
-                except TypeError:
-                    cache = AdaptiveCache(similarity_threshold=cache_threshold)
-            else:
-                cache = None
+            cache = _get_cache_instance()
 
             if cache:
                 # First try direct get on the main query (support sync or async)
@@ -3236,26 +3262,7 @@ async def unified_rag_pipeline(
         if enable_cache and not result.cache_hit and result.documents:
             try:
                 # Store in cache for future use
-                if SemanticCache:
-                    try:
-                        cache = SemanticCache(
-                            similarity_threshold=cache_threshold,
-                            ttl=cache_ttl,
-                            namespace=index_namespace or (user_id or None),
-                        )
-                    except TypeError:
-                        cache = SemanticCache(similarity_threshold=cache_threshold)
-                elif AdaptiveCache and adaptive_cache:
-                    try:
-                        cache = AdaptiveCache(
-                            similarity_threshold=cache_threshold,
-                            ttl=cache_ttl,
-                            namespace=index_namespace or (user_id or None),
-                        )
-                    except TypeError:
-                        cache = AdaptiveCache(similarity_threshold=cache_threshold)
-                else:
-                    cache = None
+                cache = _get_cache_instance()
 
                 if cache:
                     # Support both async/sync and set/add method names
@@ -3578,7 +3585,18 @@ async def unified_batch_pipeline(
 
 # ========== SIMPLE CONVENIENCE WRAPPERS ==========
 
-async def simple_search(query: str, top_k: int = 10) -> List[Document]:
+async def simple_search(
+    query: str,
+    top_k: int = 10,
+    *,
+    sources: Optional[List[str]] = None,
+    media_db: Any = None,
+    chacha_db: Any = None,
+    media_db_path: Optional[str] = None,
+    notes_db_path: Optional[str] = None,
+    character_db_path: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> List[Document]:
     """
     Simple search wrapper for basic use cases.
 
@@ -3594,7 +3612,14 @@ async def simple_search(query: str, top_k: int = 10) -> List[Document]:
         top_k=top_k,
         expand_query=False,
         enable_cache=True,
-        enable_reranking=True
+        enable_reranking=True,
+        sources=sources,
+        media_db=media_db,
+        chacha_db=chacha_db,
+        media_db_path=media_db_path,
+        notes_db_path=notes_db_path,
+        character_db_path=character_db_path,
+        user_id=user_id,
     )
     return result.documents
 

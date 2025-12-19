@@ -6,9 +6,9 @@ Provides guards that check subscription limits before allowing operations.
 """
 from __future__ import annotations
 
-from typing import Callable, Dict, Any, Optional
+from typing import Dict, Any, Optional
 
-from fastapi import Depends, Header, HTTPException, Request, Response, status
+from fastapi import Depends, Header, HTTPException, Query, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -34,26 +34,48 @@ BILLING_USAGE_HEADER = "X-Billing-Usage"
 
 async def _resolve_org_id(
     principal: AuthPrincipal,
+    org_id: Optional[int] = None,
     x_tldw_org_id: Optional[int] = None,
 ) -> Optional[int]:
     """
     Resolve the organization ID for billing purposes.
 
     Priority:
-    1. X-TLDW-Org-Id header
-    2. First org in user's membership list
-    3. None (user has no orgs)
+    1. org_id query parameter
+    2. X-TLDW-Org-Id header
+    3. First org in user's membership list
+    4. None (user has no orgs)
     """
-    if x_tldw_org_id is not None:
-        return x_tldw_org_id
-
     try:
         pool = await get_db_pool()
         repo = AuthnzOrgsTeamsRepo(db_pool=pool)
-        memberships = await repo.list_org_memberships_for_user(principal.user_id)
+        if org_id is not None:
+            if principal.is_admin:
+                return org_id
+            membership = await repo.get_org_member(org_id, principal.user_id)
+            if not membership:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have access to the specified organization",
+                )
+            return org_id
 
+        if x_tldw_org_id is not None:
+            if principal.is_admin:
+                return x_tldw_org_id
+            membership = await repo.get_org_member(x_tldw_org_id, principal.user_id)
+            if membership:
+                return x_tldw_org_id
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to the specified organization",
+            )
+
+        memberships = await repo.list_org_memberships_for_user(principal.user_id)
         if memberships:
             return memberships[0].get("org_id")
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.debug(f"Failed to resolve org_id for user {principal.user_id}: {exc}")
 
@@ -82,6 +104,7 @@ def require_within_limit(category: LimitCategory, units: int = 1):
         response: Response,
         principal: AuthPrincipal = Depends(get_auth_principal),
         x_tldw_org_id: Optional[int] = Header(None, alias="X-TLDW-Org-Id"),
+        org_id: Optional[int] = Query(None, description="Organization ID"),
     ) -> LimitCheckResult:
         # Skip enforcement if disabled
         if not enforcement_enabled():
@@ -95,7 +118,7 @@ def require_within_limit(category: LimitCategory, units: int = 1):
             )
 
         # Resolve org_id
-        org_id = await _resolve_org_id(principal, x_tldw_org_id)
+        org_id = await _resolve_org_id(principal, org_id, x_tldw_org_id)
 
         if org_id is None:
             # No org - use permissive defaults (single-user mode)
@@ -162,13 +185,14 @@ def require_feature(feature: str):
     async def _check_feature(
         principal: AuthPrincipal = Depends(get_auth_principal),
         x_tldw_org_id: Optional[int] = Header(None, alias="X-TLDW-Org-Id"),
+        org_id: Optional[int] = Query(None, description="Organization ID"),
     ) -> bool:
         # Skip enforcement if disabled
         if not enforcement_enabled():
             return True
 
         # Resolve org_id
-        org_id = await _resolve_org_id(principal, x_tldw_org_id)
+        org_id = await _resolve_org_id(principal, org_id, x_tldw_org_id)
 
         if org_id is None:
             # No org - assume feature is available (single-user mode)
@@ -197,6 +221,7 @@ def require_feature(feature: str):
 async def get_org_limits(
     principal: AuthPrincipal = Depends(get_auth_principal),
     x_tldw_org_id: Optional[int] = Header(None, alias="X-TLDW-Org-Id"),
+    org_id: Optional[int] = Query(None, description="Organization ID"),
 ) -> Dict[str, Any]:
     """
     Dependency that returns the current org's subscription limits.
@@ -204,14 +229,14 @@ async def get_org_limits(
     Use this when you need to access limits for informational purposes
     without enforcing them.
     """
-    org_id = await _resolve_org_id(principal, x_tldw_org_id)
+    org_id = await _resolve_org_id(principal, org_id, x_tldw_org_id)
 
     if org_id is None:
         # Return permissive defaults
         return {
             "api_calls_day": -1,
             "llm_tokens_month": -1,
-            "storage_gb": -1,
+            "storage_mb": -1,
             "team_members": -1,
             "unlimited": True,
         }
@@ -224,6 +249,7 @@ async def add_billing_headers(
     response: Response,
     principal: AuthPrincipal = Depends(get_auth_principal),
     x_tldw_org_id: Optional[int] = Header(None, alias="X-TLDW-Org-Id"),
+    org_id: Optional[int] = Query(None, description="Organization ID"),
 ) -> None:
     """
     Dependency that adds billing info headers to the response.
@@ -234,7 +260,7 @@ async def add_billing_headers(
     if not enforcement_enabled():
         return
 
-    org_id = await _resolve_org_id(principal, x_tldw_org_id)
+    org_id = await _resolve_org_id(principal, org_id, x_tldw_org_id)
     if org_id is None:
         return
 
@@ -285,8 +311,13 @@ class LimitEnforcer:
             )
 
             if self._check_result.should_block:
+                status_code = (
+                    status.HTTP_402_PAYMENT_REQUIRED
+                    if self._check_result.action == EnforcementAction.SOFT_BLOCK
+                    else status.HTTP_429_TOO_MANY_REQUESTS
+                )
                 raise HTTPException(
-                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    status_code=status_code,
                     detail={
                         "error": "limit_exceeded",
                         "category": self.category.value,
@@ -298,6 +329,7 @@ class LimitEnforcer:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         """Record actual usage on exit (if operation succeeded)."""
+        cache_updated = False
         if exc_type is None and self.actual_units is not None and enforcement_enabled():
             try:
                 units = int(self.actual_units)
@@ -307,7 +339,7 @@ class LimitEnforcer:
             if units > 0:
                 # Best-effort in-memory cache delta for billing checks
                 try:
-                    self._enforcer.apply_usage_delta(self.org_id, self.category, units)
+                    cache_updated = self._enforcer.apply_usage_delta(self.org_id, self.category, units)
                 except Exception as exc:
                     logger.debug(f"LimitEnforcer: apply_usage_delta failed for org_id={self.org_id}: {exc}")
 
@@ -337,7 +369,7 @@ class LimitEnforcer:
                     logger.debug(f"LimitEnforcer: cost-units ledger write failed for org_id={self.org_id}: {exc}")
 
         # Invalidate cache so next request gets fresh data
-        if self.actual_units is not None:
+        if self.actual_units is not None and not cache_updated:
             self._enforcer.invalidate_cache(self.org_id)
 
     def record_actual(self, units: int) -> None:

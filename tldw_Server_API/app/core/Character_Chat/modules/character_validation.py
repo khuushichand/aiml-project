@@ -4,6 +4,7 @@ Character validation and parsing module.
 This module contains functions for validating and parsing different character card formats.
 """
 
+import hashlib
 import json
 from typing import Dict, List, Optional, Tuple, Any, Set, Union
 
@@ -24,6 +25,12 @@ def parse_character_book(book_data: Dict[str, Any]) -> Dict[str, Any]:
         Dict[str, Any]: A dictionary containing the parsed character book data,
         including 'name', 'description', 'entries', and other book properties.
         Entries are parsed into a structured list.
+
+        The returned dict also includes '_parse_stats' with:
+        - 'total_entries': Total entries in source data
+        - 'valid_entries': Number of successfully parsed entries
+        - 'skipped_entries': Number of entries skipped due to validation failures
+        - 'skip_reasons': List of reasons entries were skipped
     """
     parsed_book = {
         'name': book_data.get('name', ''),
@@ -35,18 +42,36 @@ def parse_character_book(book_data: Dict[str, Any]) -> Dict[str, Any]:
         'entries': []
     }
 
-    for entry_raw in book_data.get('entries', []):
+    raw_entries = book_data.get('entries', [])
+    total_entries = len(raw_entries)
+    skipped_count = 0
+    skip_reasons: List[str] = []
+
+    for idx, entry_raw in enumerate(raw_entries):
         if not isinstance(entry_raw, dict):
+            reason = f"Entry {idx}: not a dictionary (type={type(entry_raw).__name__})"
             logger.warning(f"Skipping non-dict entry in character_book: {entry_raw}")
+            skip_reasons.append(reason)
+            skipped_count += 1
             continue
 
         # Ensure required fields for an entry are present
-        if not entry_raw.get('keys') or not isinstance(entry_raw['keys'], list) or \
-                'content' not in entry_raw or \
-                'enabled' not in entry_raw or \
-                'insertion_order' not in entry_raw:
-            logger.warning(
-                f"Skipping invalid character_book entry due to missing core fields: {entry_raw.get('name', 'N/A')}")
+        missing_fields = []
+        if not entry_raw.get('keys') or not isinstance(entry_raw['keys'], list):
+            missing_fields.append('keys (must be non-empty list)')
+        if 'content' not in entry_raw:
+            missing_fields.append('content')
+        if 'enabled' not in entry_raw:
+            missing_fields.append('enabled')
+        if 'insertion_order' not in entry_raw:
+            missing_fields.append('insertion_order')
+
+        if missing_fields:
+            entry_name = entry_raw.get('name', f'Entry {idx}')
+            reason = f"Entry '{entry_name}' (index {idx}): missing required fields: {', '.join(missing_fields)}"
+            logger.warning(f"Skipping invalid character_book entry: {reason}")
+            skip_reasons.append(reason)
+            skipped_count += 1
             continue
 
         parsed_entry = {
@@ -66,6 +91,22 @@ def parse_character_book(book_data: Dict[str, Any]) -> Dict[str, Any]:
             'position': entry_raw.get('position', 'before_char')  # Default if not specified
         }
         parsed_book['entries'].append(parsed_entry)
+
+    # Add parse statistics for caller feedback
+    parsed_book['_parse_stats'] = {
+        'total_entries': total_entries,
+        'valid_entries': len(parsed_book['entries']),
+        'skipped_entries': skipped_count,
+        'skip_reasons': skip_reasons
+    }
+
+    # Log summary if any entries were skipped
+    if skipped_count > 0:
+        logger.warning(
+            f"Character book parsing completed with {skipped_count}/{total_entries} entries skipped. "
+            f"Valid entries: {len(parsed_book['entries'])}"
+        )
+
     return parsed_book
 
 
@@ -233,21 +274,40 @@ def parse_pygmalion_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, A
 def parse_textgen_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Parse TextGen format character card."""
     try:
+        # Create a copy to avoid mutating the input
+        card_data = dict(card_data_json)
+
         # TextGen cards typically have a 'char_name' field instead of 'name'
-        if 'char_name' in card_data_json and 'name' not in card_data_json:
-            card_data_json['name'] = card_data_json['char_name']
+        if 'char_name' in card_data and 'name' not in card_data:
+            card_data['name'] = card_data['char_name']
+
+        if 'name' not in card_data:
+            seed = f"{card_data.get('context', '')}|{card_data.get('greeting', '')}"
+            digest = hashlib.sha256(seed.encode('utf-8')).hexdigest()[:8]
+            card_data['name'] = f"TextGen-{digest}"
 
         # Map TextGen-specific fields
-        if 'char_persona' in card_data_json and 'personality' not in card_data_json:
-            card_data_json['personality'] = card_data_json['char_persona']
+        if 'char_persona' in card_data and 'personality' not in card_data:
+            card_data['personality'] = card_data['char_persona']
 
-        if 'char_greeting' in card_data_json and 'first_mes' not in card_data_json:
-            card_data_json['first_mes'] = card_data_json['char_greeting']
+        if 'char_greeting' in card_data and 'first_mes' not in card_data:
+            card_data['first_mes'] = card_data['char_greeting']
 
-        if 'example_dialogue' in card_data_json and 'mes_example' not in card_data_json:
-            card_data_json['mes_example'] = card_data_json['example_dialogue']
+        if 'context' in card_data:
+            if 'description' not in card_data:
+                card_data['description'] = card_data['context']
+            if 'personality' not in card_data:
+                card_data['personality'] = card_data['context']
+            if 'scenario' not in card_data:
+                card_data['scenario'] = card_data['context']
 
-        return parse_v1_card(card_data_json)
+        if 'greeting' in card_data and 'first_mes' not in card_data:
+            card_data['first_mes'] = card_data['greeting']
+
+        if 'example_dialogue' in card_data and 'mes_example' not in card_data:
+            card_data['mes_example'] = card_data['example_dialogue']
+
+        return parse_v1_card(card_data)
     except Exception as e:
         logger.error(f"Error parsing TextGen card: {e}", exc_info=True)
         return None
@@ -256,26 +316,55 @@ def parse_textgen_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any
 def parse_alpaca_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Parse Alpaca format character card."""
     try:
+        # Create a copy to avoid mutating the input
+        card_data = dict(card_data_json)
+
         # Alpaca cards may have different field names
-        if 'char_name' in card_data_json and 'name' not in card_data_json:
-            card_data_json['name'] = card_data_json['char_name']
+        if 'char_name' in card_data and 'name' not in card_data:
+            card_data['name'] = card_data['char_name']
 
-        if 'char_description' in card_data_json and 'description' not in card_data_json:
-            card_data_json['description'] = card_data_json['char_description']
+        if 'name' not in card_data:
+            seed = f"{card_data.get('instruction', '')}|{card_data.get('input', '')}"
+            digest = hashlib.sha256(seed.encode('utf-8')).hexdigest()[:8]
+            card_data['name'] = f"Alpaca-{digest}"
 
-        if 'char_personality' in card_data_json and 'personality' not in card_data_json:
-            card_data_json['personality'] = card_data_json['char_personality']
+        if 'char_description' in card_data and 'description' not in card_data:
+            card_data['description'] = card_data['char_description']
 
-        if 'world_scenario' in card_data_json and 'scenario' not in card_data_json:
-            card_data_json['scenario'] = card_data_json['world_scenario']
+        if 'char_personality' in card_data and 'personality' not in card_data:
+            card_data['personality'] = card_data['char_personality']
 
-        if 'char_greeting' in card_data_json and 'first_mes' not in card_data_json:
-            card_data_json['first_mes'] = card_data_json['char_greeting']
+        if 'world_scenario' in card_data and 'scenario' not in card_data:
+            card_data['scenario'] = card_data['world_scenario']
 
-        if 'example_dialogue' in card_data_json and 'mes_example' not in card_data_json:
-            card_data_json['mes_example'] = card_data_json['example_dialogue']
+        if 'char_greeting' in card_data and 'first_mes' not in card_data:
+            card_data['first_mes'] = card_data['char_greeting']
 
-        return parse_v1_card(card_data_json)
+        if 'instruction' in card_data:
+            if 'description' not in card_data:
+                card_data['description'] = card_data['instruction']
+            if 'scenario' not in card_data:
+                card_data['scenario'] = card_data['instruction']
+
+        if 'input' in card_data and 'personality' not in card_data:
+            card_data['personality'] = card_data['input']
+        if 'instruction' in card_data and 'personality' not in card_data:
+            card_data['personality'] = card_data['instruction']
+
+        if 'output' in card_data and 'first_mes' not in card_data:
+            card_data['first_mes'] = card_data['output']
+        elif 'instruction' in card_data and 'first_mes' not in card_data:
+            card_data['first_mes'] = card_data['instruction']
+
+        if 'output' in card_data and 'mes_example' not in card_data:
+            card_data['mes_example'] = card_data['output']
+        elif 'input' in card_data and 'mes_example' not in card_data:
+            card_data['mes_example'] = card_data['input']
+
+        if 'example_dialogue' in card_data and 'mes_example' not in card_data:
+            card_data['mes_example'] = card_data['example_dialogue']
+
+        return parse_v1_card(card_data)
     except Exception as e:
         logger.error(f"Error parsing Alpaca card: {e}", exc_info=True)
         return None
@@ -416,7 +505,8 @@ def validate_character_book_entry(entry: Dict[str, Any], idx: int, entry_ids: Se
 
     # Validate 'position' field if present
     if 'position' in entry and isinstance(entry['position'], str):
-        valid_positions = ['before_char', 'after_char']
+        # V2 spec supports before_char, after_char, and at_depth positions
+        valid_positions = ['before_char', 'after_char', 'at_depth']
         if entry['position'] not in valid_positions:
             validation_messages.append(
                 f"Entry '{entry_name}' (index {idx}): 'position' ('{entry['position']}') is not a recognized value. "

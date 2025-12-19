@@ -64,6 +64,9 @@ async def test_fallback_memory_requests_allows_when_redis_broken(monkeypatch):
         return _BrokenClient()
 
     monkeypatch.setattr(rg, "_client_get", _broken)
-    d, h = await rg.reserve(RGRequest(entity="user:x", categories={"requests": {"units": 1}}, tags={"policy_id": "p"}))
-    # Fallback memory path should allow
-    assert d.allowed and h
+    req = RGRequest(entity="user:x", categories={"requests": {"units": 1}}, tags={"policy_id": "p"})
+    d1, h1 = await rg.reserve(req, op_id="f1")
+    assert d1.allowed and h1
+    d2, h2 = await rg.reserve(req, op_id="f2")
+    # Memory fallback should enforce rpm=1
+    assert (not d2.allowed) and (h2 is None)

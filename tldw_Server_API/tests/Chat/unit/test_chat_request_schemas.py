@@ -61,6 +61,15 @@ def test_chat_completion_assistant_message_param_validation():
     msg_tools = ChatCompletionAssistantMessageParam(role="assistant", tool_calls=[tool_call])
     assert msg_tools.tool_calls[0].id == "call1"
 
+    # Valid: tool_calls with OpenAI-style arguments
+    tool_call_args = {
+        "id": "call2",
+        "type": "function",
+        "function": {"name": "func", "arguments": "{\"foo\": \"bar\"}"},
+    }
+    msg_tools_args = ChatCompletionAssistantMessageParam(role="assistant", tool_calls=[tool_call_args])
+    assert msg_tools_args.tool_calls[0].function.arguments == "{\"foo\": \"bar\"}"
+
     # Invalid: neither content nor tool_calls
     with pytest.raises(ValidationError) as exc_info:
         ChatCompletionAssistantMessageParam(role="assistant")
@@ -105,3 +114,136 @@ def test_chat_completion_request_invalid_api_provider():
             messages=[ChatCompletionUserMessageParam(role="user", content="hi")],
             api_provider="non_existent_provider_literal_test"
         )
+
+
+# --- Tests for FunctionDefinition Parameter Validation ---
+
+@pytest.mark.unit
+def test_function_definition_valid_parameters():
+    """Test that valid JSON Schema parameters are accepted."""
+    valid_params = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "The name to greet"},
+            "age": {"type": "integer", "description": "Age in years"}
+        },
+        "required": ["name"]
+    }
+    func = FunctionDefinition(name="greet", parameters=valid_params)
+    assert func.parameters == valid_params
+
+
+@pytest.mark.unit
+def test_function_definition_empty_parameters():
+    """Test that empty/None parameters are accepted."""
+    func1 = FunctionDefinition(name="noop", parameters={})
+    assert func1.parameters == {}
+
+    func2 = FunctionDefinition(name="noop2", parameters=None)
+    assert func2.parameters is None
+
+
+@pytest.mark.unit
+def test_function_definition_invalid_type():
+    """Test that invalid JSON Schema types are rejected."""
+    invalid_params = {
+        "type": "invalid_type",  # Not a valid JSON Schema type
+        "properties": {}
+    }
+    with pytest.raises(ValidationError) as exc_info:
+        FunctionDefinition(name="test", parameters=invalid_params)
+    assert "Invalid JSON Schema type" in str(exc_info.value)
+
+
+@pytest.mark.unit
+def test_function_definition_excessive_depth():
+    """Test that deeply nested parameters are rejected (DoS prevention)."""
+    # Build a structure deeper than MAX_PARAMETER_DEPTH (10)
+    deep_params = {"type": "object", "properties": {}}
+    current = deep_params["properties"]
+    for i in range(15):  # Create 15 levels of nesting
+        current["nested"] = {"type": "object", "properties": {}}
+        current = current["nested"]["properties"]
+
+    with pytest.raises(ValidationError) as exc_info:
+        FunctionDefinition(name="deep", parameters=deep_params)
+    assert "maximum nesting depth" in str(exc_info.value)
+
+
+@pytest.mark.unit
+def test_function_definition_excessive_size():
+    """Test that oversized parameters are rejected (DoS prevention)."""
+    # Create a large but shallow structure (> 5KB)
+    large_params = {
+        "type": "object",
+        "properties": {
+            f"field_{i}": {"type": "string", "description": "x" * 100}
+            for i in range(100)
+        }
+    }
+    with pytest.raises(ValidationError) as exc_info:
+        FunctionDefinition(name="large", parameters=large_params)
+    assert "maximum size" in str(exc_info.value)
+
+
+@pytest.mark.unit
+def test_function_definition_invalid_required_field():
+    """Test that invalid 'required' field structure is rejected."""
+    invalid_params = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": "name"  # Should be an array, not a string
+    }
+    with pytest.raises(ValidationError) as exc_info:
+        FunctionDefinition(name="test", parameters=invalid_params)
+    assert "'required' must be an array" in str(exc_info.value)
+
+
+@pytest.mark.unit
+def test_function_definition_invalid_properties_field():
+    """Test that invalid 'properties' field structure is rejected."""
+    invalid_params = {
+        "type": "object",
+        "properties": ["name", "age"]  # Should be an object, not an array
+    }
+    with pytest.raises(ValidationError) as exc_info:
+        FunctionDefinition(name="test", parameters=invalid_params)
+    assert "'properties' must be an object" in str(exc_info.value)
+
+
+@pytest.mark.unit
+def test_function_definition_array_items_validation():
+    """Test that array items schema is validated."""
+    valid_array_params = {
+        "type": "array",
+        "items": {"type": "string"}
+    }
+    func = FunctionDefinition(name="list_func", parameters=valid_array_params)
+    assert func.parameters == valid_array_params
+
+    invalid_array_params = {
+        "type": "array",
+        "items": {"type": "invalid_type"}
+    }
+    with pytest.raises(ValidationError) as exc_info:
+        FunctionDefinition(name="list_func", parameters=invalid_array_params)
+    assert "Invalid JSON Schema type" in str(exc_info.value)
+
+
+@pytest.mark.unit
+def test_function_definition_type_array():
+    """Test that type arrays (union types) are validated."""
+    valid_union_params = {
+        "type": ["string", "null"],
+        "description": "Optional string"
+    }
+    func = FunctionDefinition(name="optional", parameters=valid_union_params)
+    assert func.parameters == valid_union_params
+
+    invalid_union_params = {
+        "type": ["string", "invalid"],
+        "description": "Invalid union"
+    }
+    with pytest.raises(ValidationError) as exc_info:
+        FunctionDefinition(name="invalid_union", parameters=invalid_union_params)
+    assert "Invalid JSON Schema type" in str(exc_info.value)

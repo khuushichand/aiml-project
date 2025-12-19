@@ -43,7 +43,7 @@ from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddi
 from tldw_Server_API.app.core.Watchlists.fetchers import (
     fetch_rss_feed,
     fetch_rss_feed_history,
-    fetch_site_article,
+    fetch_site_article_async,
     fetch_site_items_with_rules,
 )
 from tldw_Server_API.app.core.Watchlists.filters import normalize_filters, evaluate_filters
@@ -55,12 +55,27 @@ def _utcnow_iso() -> str:
     return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
 
 
+def _normalize_tz(tz: Optional[str]) -> str:
+    if not tz or tz.upper() == "UTC":
+        return "UTC"
+    t = tz.strip().upper()
+    if t.startswith("UTC+") or t.startswith("UTC-"):
+        try:
+            sign = 1 if t[3] == "+" else -1
+            hours = int(t[4:])
+            etc_offset = -sign * hours
+            return f"Etc/GMT{('+' if etc_offset>0 else '')}{etc_offset}" if etc_offset != 0 else "Etc/GMT"
+        except Exception:
+            return "UTC"
+    return tz
+
+
 def _compute_next_run(cron: Optional[str], timezone_str: Optional[str]) -> Optional[str]:
     if not cron:
         return None
     try:
         from apscheduler.triggers.cron import CronTrigger
-        tz = timezone_str or "UTC"
+        tz = _normalize_tz(timezone_str) or "UTC"
         trigger = CronTrigger.from_crontab(cron, timezone=tz)
         now = datetime.now(trigger.timezone)
         nxt = trigger.get_next_fire_time(None, now)
@@ -525,7 +540,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                     "author": it.get("author"),
                                 }
                         if article is None:
-                            article = None if test_mode else fetch_site_article(link)
+                            article = None if test_mode else await fetch_site_article_async(link)
                         if article is None and test_mode:
                             # In tests, fall back to summary as content
                             article = {
@@ -772,7 +787,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             if test_mode:
                                 article = {"title": src.name or "Untitled", "url": page_url, "content": "", "author": None}
                             else:
-                                article = fetch_site_article(page_url)
+                                article = await fetch_site_article_async(page_url)
                         if (not article or not article.get("content")) and prefetch:
                             article = article or {}
                             article["title"] = article.get("title") or prefetch.get("title") or src.name

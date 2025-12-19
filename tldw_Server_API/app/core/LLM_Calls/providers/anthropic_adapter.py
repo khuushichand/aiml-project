@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 import os
+import asyncio
+import threading
 
 from .base import ChatProvider
 from tldw_Server_API.app.core.LLM_Calls.sse import (
@@ -408,12 +410,44 @@ class AnthropicAdapter(ChatProvider):
         raise RuntimeError("AnthropicAdapter native HTTP disabled by configuration")
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        return self.chat(request, timeout=timeout)
+        return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
     async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
         gen = self.stream(request, timeout=timeout)
-        for item in gen:
-            yield item
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        sentinel = object()
+        stop_event = threading.Event()
+
+        def _worker() -> None:
+            try:
+                for item in gen:
+                    if stop_event.is_set():
+                        break
+                    loop.call_soon_threadsafe(queue.put_nowait, item)
+            except Exception as exc:
+                loop.call_soon_threadsafe(queue.put_nowait, exc)
+            finally:
+                try:
+                    if hasattr(gen, "close"):
+                        gen.close()
+                except Exception:
+                    pass
+                loop.call_soon_threadsafe(queue.put_nowait, sentinel)
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+
+        try:
+            while True:
+                item = await queue.get()
+                if item is sentinel:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            stop_event.set()
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
         try:

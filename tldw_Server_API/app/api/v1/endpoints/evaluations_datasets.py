@@ -4,7 +4,7 @@ Datasets endpoints extracted from evaluations_unified.
 
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Header, Query, Response, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
@@ -16,6 +16,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, U
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     CreateDatasetRequest, DatasetResponse, DatasetListResponse,
 )
@@ -59,17 +60,40 @@ async def create_dataset(
     dataset_request: CreateDatasetRequest,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_request_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    response: Response = None,
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        dataset_id = svc.db.create_dataset(
+        if idempotency_key:
+            try:
+                existing_id = svc.db.lookup_idempotency("dataset", idempotency_key, user_id)
+                if existing_id:
+                    existing = await svc.get_dataset(existing_id)
+                    if existing:
+                        try:
+                            if response is not None:
+                                response.headers["X-Idempotent-Replay"] = "true"
+                                response.headers["Idempotency-Key"] = idempotency_key
+                        except Exception:
+                            pass
+                        return DatasetResponse(**_normalize_dataset_payload(existing))
+            except Exception:
+                pass
+        dataset_id = await svc.create_dataset(
             name=dataset_request.name,
-            samples=[s.model_dump() for s in dataset_request.samples],
+            samples=[model_dump_compat(s) for s in dataset_request.samples],
             description=dataset_request.description or "",
+            metadata=model_dump_compat(dataset_request.metadata) if dataset_request.metadata else None,
             created_by=user_id,
         )
-        row = svc.db.get_dataset(dataset_id)
+        row = await svc.get_dataset(dataset_id)
         normalized = _normalize_dataset_payload(row)
+        try:
+            if idempotency_key:
+                svc.db.record_idempotency("dataset", idempotency_key, dataset_id, user_id)
+        except Exception:
+            pass
         return DatasetResponse(**normalized)
     except Exception as e:
         logger.exception(f"Failed to create dataset: {e}")
@@ -136,7 +160,7 @@ async def delete_dataset(
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        ok = svc.db.delete_dataset(dataset_id)
+        ok = await svc.delete_dataset(dataset_id, deleted_by=user_id)
         if not ok:
             raise create_error_response(
                 message="Dataset not found",

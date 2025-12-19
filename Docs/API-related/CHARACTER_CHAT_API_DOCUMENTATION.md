@@ -902,9 +902,7 @@ To check your current rate limit usage:
 ```json
 {
   "operations_used": 12,
-  "operations_limit": 100,
   "operations_remaining": 88,
-  "window_seconds": 3600,
   "reset_time": 1736520000.0
 }
 ```

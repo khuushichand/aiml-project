@@ -91,9 +91,12 @@ def decrypt_json_blob(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     secondary = _get_secondary_key_from_env()
     if not primary and not secondary:
         return None
-    nonce_b = base64.b64decode(envelope.get("nonce", ""))
-    ct_b = base64.b64decode(envelope.get("ct", ""))
-    tag_b = base64.b64decode(envelope.get("tag", ""))
+    try:
+        nonce_b = base64.b64decode(envelope.get("nonce", ""))
+        ct_b = base64.b64decode(envelope.get("ct", ""))
+        tag_b = base64.b64decode(envelope.get("tag", ""))
+    except Exception:
+        return None
     # Try primary key first
     for key in (primary, secondary):
         if not key:

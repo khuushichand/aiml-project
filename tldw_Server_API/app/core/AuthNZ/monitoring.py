@@ -3,7 +3,7 @@
 #
 # Imports
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import json
 from collections import defaultdict
@@ -229,7 +229,7 @@ class AuthNZMonitor:
                 'value': value,
                 'labels': labels or {},
                 'metadata': metadata or {},
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
 
             db_pool = await get_db_pool()
@@ -237,7 +237,7 @@ class AuthNZMonitor:
             await repo.insert_metric_audit_log(
                 action=f"metric_{metric_type.value}",
                 details_json=json.dumps(metric_data),
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
 
         except Exception as e:
@@ -253,12 +253,12 @@ class AuthNZMonitor:
         # Add to buffer for rate calculations
         self._metrics_buffer[metric_type].append({
             'value': value,
-            'timestamp': datetime.utcnow(),
+            'timestamp': datetime.now(timezone.utc),
             'metadata': metadata
         })
 
         # Clean old entries from buffer (keep last hour)
-        cutoff = datetime.utcnow() - timedelta(hours=1)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
         for key in self._metrics_buffer:
             self._metrics_buffer[key] = [
                 m for m in self._metrics_buffer[key]
@@ -275,7 +275,7 @@ class AuthNZMonitor:
 
     async def _check_auth_failure_rate(self):
         """Check if authentication failure rate is too high"""
-        five_min_ago = datetime.utcnow() - timedelta(minutes=5)
+        five_min_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
         recent_failures = [
             m for m in self._metrics_buffer[MetricType.AUTH_FAILURE]
             if m['timestamp'] > five_min_ago
@@ -300,7 +300,7 @@ class AuthNZMonitor:
 
     async def _check_rate_limit_violations(self):
         """Check if rate limit violations are excessive"""
-        fifteen_min_ago = datetime.utcnow() - timedelta(minutes=15)
+        fifteen_min_ago = datetime.now(timezone.utc) - timedelta(minutes=15)
         recent_violations = [
             m for m in self._metrics_buffer[MetricType.RATE_LIMIT_HIT]
             if m['timestamp'] > fifteen_min_ago
@@ -316,7 +316,7 @@ class AuthNZMonitor:
 
     async def _check_api_key_abuse(self):
         """Check for API key abuse patterns"""
-        one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
         recent_validations = [
             m for m in self._metrics_buffer[MetricType.API_KEY_VALIDATION]
             if m['timestamp'] > one_hour_ago
@@ -388,7 +388,7 @@ class AuthNZMonitor:
             Dictionary with metrics summary
         """
         try:
-            cutoff = datetime.utcnow() - timedelta(minutes=time_range_minutes)
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=time_range_minutes)
             db_pool = await get_db_pool()
             repo = AuthnzMonitoringRepo(db_pool)
 
@@ -396,7 +396,7 @@ class AuthNZMonitor:
             auth_metrics = await repo.get_metrics_window_summary(cutoff)
 
             # Get active sessions/API keys counts
-            now_dt = datetime.utcnow()
+            now_dt = datetime.now(timezone.utc)
             active_sessions = await repo.get_active_sessions_count(now_dt)
             active_keys = await repo.get_active_api_keys_count()
 
@@ -427,7 +427,7 @@ class AuthNZMonitor:
             logger.error(f"Failed to get metrics summary: {e}")
             return {
                 'error': str(e),
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
 
     async def get_security_dashboard(self) -> Dict[str, Any]:
@@ -465,14 +465,14 @@ class AuthNZMonitor:
                 },
                 'recent_alerts': alerts_list,
                 'health_status': self._calculate_health_status(last_hour),
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
 
         except Exception as e:
             logger.error(f"Failed to get security dashboard: {e}")
             return {
                 'error': str(e),
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
 
     def _calculate_health_status(self, metrics: Dict[str, Any]) -> str:

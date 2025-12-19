@@ -184,6 +184,54 @@ async def test_sse_stream_send_event_without_data_dispatches_blank():
 
 
 @pytest.mark.asyncio
+async def test_sse_stream_send_event_with_data_is_single_frame():
+    stream = SSEStream(heartbeat_interval_s=10.0)  # suppress heartbeats
+
+    async def producer():
+        await stream.send_event("job", {"ok": True})
+        await stream.done()
+
+    out = []
+
+    async def consumer():
+        async for ln in stream.iter_sse():
+            out.append(ln)
+
+    await asyncio.gather(producer(), consumer())
+
+    idx = next(i for i, v in enumerate(out) if v.startswith("event: job"))
+    assert not out[idx].endswith("\n\n")
+    assert out[idx + 1].startswith("data: ")
+    assert "\"ok\": true" in out[idx + 1].lower()
+    assert out[idx + 1].endswith("\n\n")
+    assert out[idx + 1] != "\n"
+
+
+@pytest.mark.asyncio
+async def test_sse_stream_send_event_with_id_and_data_compose():
+    stream = SSEStream(heartbeat_interval_s=10.0)  # suppress heartbeats
+
+    async def producer():
+        await stream.send_event("job", {"ok": True}, event_id="42")
+        await stream.done()
+
+    out = []
+
+    async def consumer():
+        async for ln in stream.iter_sse():
+            out.append(ln)
+
+    await asyncio.gather(producer(), consumer())
+
+    idx = next(i for i, v in enumerate(out) if v.startswith("id: 42"))
+    assert not out[idx].endswith("\n\n")
+    assert out[idx + 1].startswith("event: job")
+    assert not out[idx + 1].endswith("\n\n")
+    assert out[idx + 2].startswith("data: ")
+    assert out[idx + 2].endswith("\n\n")
+
+
+@pytest.mark.asyncio
 async def test_sse_stream_idle_timeout_env_vars(monkeypatch):
     # Drive idle timeout via env; ensure heartbeat longer than idle
     monkeypatch.setenv("STREAM_IDLE_TIMEOUT_S", "0.2")

@@ -46,6 +46,8 @@ class ProviderConfig(BaseModel):
     # API-key verification call during adapter.initialize(). This is disabled
     # by default so startup does not depend on external network availability.
     verify_api_key_on_init: bool = False
+    # Optional: opt-in text sanitization before validation/generation.
+    sanitize_text: bool = False
     extra_params: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator('api_key', mode='before')

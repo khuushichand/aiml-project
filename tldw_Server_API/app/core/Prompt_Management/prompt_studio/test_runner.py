@@ -69,14 +69,14 @@ class TestRunner:
                 api_endpoint="openai",
                 model=model,
                 messages_payload=[
-                    {"role": "system", "content": prompt.get("system_prompt")},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=temperature,
+                system_message=prompt.get("system_prompt"),
+                temp=temperature,
                 max_tokens=max_tokens
             )
 
-            actual_output = {"response": response[0] if response else ""}
+            actual_output = {"response": self._extract_response_text(response)}
             _log.info("PS testrun.llm.done time_ms={}", int((time.time() - start_time) * 1000))
 
         except Exception as e:
@@ -110,6 +110,42 @@ class TestRunner:
             "actual": stored_run.get("outputs", actual_output),
             "model": stored_run.get("model_name", model),
         }
+
+    @staticmethod
+    def _extract_response_text(response: Any) -> str:
+        if response is None:
+            return ""
+        if isinstance(response, str):
+            return response
+        if isinstance(response, list) and response:
+            if isinstance(response[0], str):
+                return response[0]
+            if isinstance(response[0], dict):
+                return TestRunner._extract_response_text(response[0])
+        if isinstance(response, dict):
+            choices = response.get("choices")
+            if isinstance(choices, list):
+                for choice in choices:
+                    if not isinstance(choice, dict):
+                        continue
+                    message = choice.get("message") or {}
+                    content = message.get("content")
+                    if isinstance(content, list):
+                        parts = [part.get("text", "") for part in content if isinstance(part, dict)]
+                        content = "".join(parts)
+                    if isinstance(content, str):
+                        return content
+                    delta = choice.get("delta") or {}
+                    delta_content = delta.get("content")
+                    if isinstance(delta_content, list):
+                        parts = [part.get("text", "") for part in delta_content if isinstance(part, dict)]
+                        delta_content = "".join(parts)
+                    if isinstance(delta_content, str):
+                        return delta_content
+            content = response.get("content")
+            if isinstance(content, str):
+                return content
+        return str(response)
 
     async def run_single_test(
         self,

@@ -676,6 +676,88 @@ async def isolated_test_environment(monkeypatch):
                     perm_id[pname],
                 )
 
+        # Billing-related tables used by integration tests.
+        # NOTE: Keep these definitions in sync with the corresponding
+        # AuthNZ migrations:
+        #   - migration_032_create_stripe_webhook_events
+        #   - migration_033_create_payment_history
+        #   - migration_034_create_billing_audit_log
+        await test_conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+                id SERIAL PRIMARY KEY,
+                stripe_event_id TEXT UNIQUE NOT NULL,
+                event_type TEXT NOT NULL,
+                event_data JSONB NOT NULL,
+                status TEXT DEFAULT 'pending',
+                processed_at TIMESTAMPTZ,
+                error_message TEXT,
+                retry_count INTEGER DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_stripe_events_event_id ON stripe_webhook_events(stripe_event_id)"
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_stripe_events_type ON stripe_webhook_events(event_type)"
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_stripe_events_status ON stripe_webhook_events(status)"
+        )
+
+        await test_conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payment_history (
+                id SERIAL PRIMARY KEY,
+                org_id INTEGER NOT NULL,
+                stripe_invoice_id TEXT,
+                stripe_payment_intent_id TEXT,
+                amount_cents INTEGER NOT NULL,
+                currency TEXT DEFAULT 'usd',
+                status TEXT NOT NULL,
+                description TEXT,
+                invoice_pdf_url TEXT,
+                receipt_url TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_payment_history_org ON payment_history(org_id)"
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_payment_history_org_date ON payment_history(org_id, created_at)"
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_payment_history_stripe_invoice ON payment_history(stripe_invoice_id)"
+        )
+
+        await test_conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS billing_audit_log (
+                id SERIAL PRIMARY KEY,
+                org_id INTEGER NOT NULL,
+                user_id INTEGER,
+                action TEXT NOT NULL,
+                details TEXT,
+                ip_address TEXT,
+                user_agent TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_billing_audit_org ON billing_audit_log(org_id)"
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_billing_audit_action ON billing_audit_log(action)"
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_billing_audit_created ON billing_audit_log(created_at)"
+        )
+
         logger.info(f"Created schema in test database: {db_name}")
     finally:
         await test_conn.close()

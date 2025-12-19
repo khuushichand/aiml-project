@@ -42,85 +42,108 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
         metadata is not found, the image cannot be processed, or if there's
         an error during decoding or JSON validation.
     """
-    img_obj: Optional[Image.Image] = None
     file_name_for_log = "image_stream"
-    image_source_to_use: Optional[io.BytesIO] = None
 
-    try:
+    def _create_image_source() -> Tuple[Optional[io.BytesIO], str]:
+        """Create BytesIO source from various input types. Returns (source, filename)."""
+        nonlocal file_name_for_log
         if isinstance(image_file_input, str) and os.path.exists(image_file_input):
             file_name_for_log = image_file_input
             with open(image_file_input, 'rb') as f_bytes:
-                image_source_to_use = io.BytesIO(f_bytes.read())
+                return io.BytesIO(f_bytes.read()), file_name_for_log
         elif isinstance(image_file_input, bytes):
-            image_source_to_use = io.BytesIO(image_file_input)
+            return io.BytesIO(image_file_input), file_name_for_log
         elif hasattr(image_file_input, 'read'):  # File-like object
             if hasattr(image_file_input, 'name') and image_file_input.name:
                 file_name_for_log = image_file_input.name
             image_file_input.seek(0)
-            image_source_to_use = io.BytesIO(image_file_input.read())
+            data = io.BytesIO(image_file_input.read())
             image_file_input.seek(0)  # Reset original stream pointer
+            return data, file_name_for_log
         else:
             logger.error("extract_json_from_image_file: Invalid input type. Must be file path, bytes, or BytesIO.")
+            return None, file_name_for_log
+
+    def _extract_metadata(img_obj: Image.Image) -> Optional[str]:
+        """Extract and decode character metadata from image."""
+        if not hasattr(img_obj, 'info') or not isinstance(img_obj.info, dict):
+            logger.debug(
+                f"'chara' key not found in image metadata for '{file_name_for_log}'. "
+                f"Available metadata keys: {list(img_obj.info.keys()) if isinstance(img_obj.info, dict) else 'N/A'}")
             return None
 
-        if not image_source_to_use: return None
+        # Try each metadata key and continue to next if decoding fails
+        for metadata_key in ['chara', 'character', 'tEXt']:
+            if metadata_key not in img_obj.info:
+                continue
 
-        logger.debug(f"Attempting to extract JSON from image: {file_name_for_log}")
+            chara_base64_str = img_obj.info[metadata_key]
+            logger.debug(f"Found character data in '{metadata_key}' field")
 
-        img_obj = Image.open(image_source_to_use)
-
-        # Support for PNG and WEBP cards (TavernAI, SillyTavern convention)
-        if img_obj.format not in ['PNG', 'WEBP']:
-            logger.warning(
-                f"Image '{file_name_for_log}' is not in PNG or WEBP format (format: {img_obj.format}). 'chara' metadata extraction may fail or not be applicable.")
-
-        # Enhanced metadata extraction - check multiple possible fields
-        # 'info' attribute in Pillow Image objects holds metadata chunks.
-        # For PNGs, these are tEXt, zTXt, or iTXt chunks.
-        # Also check for 'character', 'tEXt' and other common metadata fields
-        metadata_found = False
-        chara_base64_str = None
-
-        if hasattr(img_obj, 'info') and isinstance(img_obj.info, dict):
-            # Check multiple possible metadata keys
-            for metadata_key in ['chara', 'character', 'tEXt']:
-                if metadata_key in img_obj.info:
-                    chara_base64_str = img_obj.info[metadata_key]
-                    metadata_found = True
-                    logger.debug(f"Found character data in '{metadata_key}' field")
-                    break
-
-        if metadata_found and chara_base64_str:
             try:
                 decoded_chara_json_str = base64.b64decode(chara_base64_str).decode('utf-8')
                 json.loads(decoded_chara_json_str)  # Validate it's JSON
-                logger.info(f"Successfully extracted and decoded 'chara' JSON from '{file_name_for_log}'.")
+                logger.info(f"Successfully extracted and decoded 'chara' JSON from '{file_name_for_log}' (key: {metadata_key}).")
                 return decoded_chara_json_str
             except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as decode_err:
-                logger.error(
-                    f"Error decoding 'chara' metadata from '{file_name_for_log}': {decode_err}. Content (start): {str(chara_base64_str)[:100]}...")
-                return None  # Explicitly return None on decode error
-            except Exception as e:  # Catch any other unexpected error during decode/load
-                logger.error(f"Unexpected error during 'chara' processing from '{file_name_for_log}': {e}",
-                             exc_info=True)
-                return None
-        else:
-            logger.debug(
-                f"'chara' key not found in image metadata for '{file_name_for_log}'. Available metadata keys: {list(img_obj.info.keys()) if isinstance(img_obj.info, dict) else 'N/A'}")
+                logger.warning(
+                    f"Error decoding '{metadata_key}' metadata from '{file_name_for_log}': {decode_err}. Trying next key...")
+                continue
+            except Exception as e:
+                logger.warning(f"Unexpected error during '{metadata_key}' processing from '{file_name_for_log}': {e}. Trying next key...")
+                continue
+
+        # No keys worked
+        logger.debug(
+            f"No valid character data found in image metadata for '{file_name_for_log}'. "
+            f"Available metadata keys: {list(img_obj.info.keys())}")
+        return None
+
+    try:
+        image_source, file_name_for_log = _create_image_source()
+        if image_source is None:
+            return None
+
+        logger.debug(f"Attempting to extract JSON from image: {file_name_for_log}")
+
+        # Use context managers for proper resource cleanup (fallback for mocks without __enter__)
+        try:
+            with image_source:
+                img_obj = Image.open(image_source)
+                if hasattr(img_obj, "__enter__") and hasattr(img_obj, "__exit__"):
+                    with img_obj as opened:
+                        # Support for PNG and WEBP cards (TavernAI, SillyTavern convention)
+                        if opened.format not in ['PNG', 'WEBP']:
+                            logger.warning(
+                                f"Image '{file_name_for_log}' is not in PNG or WEBP format "
+                                f"(format: {opened.format}). 'chara' metadata extraction may fail.")
+
+                        return _extract_metadata(opened)
+
+                try:
+                    if img_obj.format not in ['PNG', 'WEBP']:
+                        logger.warning(
+                            f"Image '{file_name_for_log}' is not in PNG or WEBP format "
+                            f"(format: {img_obj.format}). 'chara' metadata extraction may fail.")
+
+                    return _extract_metadata(img_obj)
+                finally:
+                    if hasattr(img_obj, "close"):
+                        try:
+                            img_obj.close()
+                        except Exception:
+                            pass
+        except IOError as e:
+            # Catches PIL.UnidentifiedImageError and other file I/O issues
+            logger.error(
+                f"Cannot open or read image file (or not a valid image): {file_name_for_log}. Error: {e}",
+                exc_info=True)
             return None
 
     except FileNotFoundError:
         logger.error(f"Image file not found for JSON extraction: {file_name_for_log}")
-    except IOError as e:  # Catches PIL.UnidentifiedImageError and other file I/O issues
-        logger.error(f"Cannot open or read image file (or not a valid image): {file_name_for_log}. Error: {e}",
-                     exc_info=True)
     except Exception as e:
         logger.error(f"Unexpected error extracting JSON from image '{file_name_for_log}': {e}", exc_info=True)
-    finally:
-        if img_obj:
-            img_obj.close()
-        if image_source_to_use:
-            image_source_to_use.close()
     return None
 
 

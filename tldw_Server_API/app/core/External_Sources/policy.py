@@ -79,8 +79,8 @@ def evaluate_policy_constraints(
                 return False, "Notion workspace not in allowed set"
         return True, None
     except Exception as e:
-        logger.debug(f"Policy evaluation error: {e}")
-        return True, None
+        logger.warning(f"Policy evaluation error: {e}")
+        return False, "Policy evaluation failed"
 
 
 def is_file_type_allowed(*, name: Optional[str], mime: Optional[str], allowed: Optional[List[str]]) -> bool:

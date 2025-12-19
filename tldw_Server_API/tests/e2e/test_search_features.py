@@ -545,6 +545,48 @@ class TestHybridSearch:
 class TestRAGContextRetrieval:
     """Test RAG context retrieval and expansion."""
 
+    def test_simple_endpoint_returns_results(self, api_client, data_tracker):
+        """Ensure /rag/simple returns results for freshly ingested content."""
+        token = f"rag-simple-{int(time.time())}"
+        file_path = self._create_temp_file(f"Simple endpoint content {token}")
+        media_id = None
+        try:
+            response = api_client.upload_media(
+                file_path=file_path,
+                title="RAG Simple Endpoint Test",
+                media_type="document"
+            )
+            media_id = self._extract_media_id(response)
+            if media_id:
+                data_tracker.add_media(media_id)
+        finally:
+            os.unlink(file_path)
+
+        if not media_id:
+            pytest.skip("Could not create test media")
+
+        last_response = None
+        for _ in range(3):
+            try:
+                last_response = api_client.rag_simple_search_endpoint(
+                    query=token,
+                    sources=["media_db"],
+                    top_k=5,
+                )
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code in (404, 422, 500):
+                    pytest.skip(f"RAG simple endpoint not available: {e}")
+                raise
+            if last_response.get("count", 0) > 0:
+                break
+            time.sleep(RATE_LIMIT_DELAY)
+
+        assert isinstance(last_response, dict)
+        assert last_response.get("query") == token
+        assert isinstance(last_response.get("documents"), list)
+        assert last_response.get("count") == len(last_response.get("documents"))
+        assert last_response.get("count", 0) > 0
+
     def test_context_window_optimization(self, api_client, data_tracker):
         """Test that RAG optimizes context window usage."""
         # Create a long document

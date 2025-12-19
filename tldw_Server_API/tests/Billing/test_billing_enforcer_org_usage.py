@@ -121,3 +121,36 @@ async def test_get_concurrent_jobs_sums_embedding_jobs_for_org(monkeypatch):
     # 2 (user 1) + 3 (user 2) = 5 concurrent jobs
     assert total == 5
 
+
+class _FakeOrgRepoPaginated:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.total = 2505
+
+    async def list_org_members(self, org_id: int, limit: int = 1000, offset: int = 0, role=None, status=None):
+        remaining = max(self.total - offset, 0)
+        count = min(limit, remaining)
+        return [{"user_id": offset + i + 1} for i in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_get_team_member_count_paginates(monkeypatch):
+    """_get_team_member_count should paginate beyond 1,000 members."""
+
+    async def _fake_get_db_pool():
+        return object()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.database.get_db_pool",
+        _fake_get_db_pool,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo.AuthnzOrgsTeamsRepo",
+        _FakeOrgRepoPaginated,
+        raising=False,
+    )
+
+    enforcer = BillingEnforcer()
+    total = await enforcer._get_team_member_count(org_id=7)
+
+    assert total == 2505

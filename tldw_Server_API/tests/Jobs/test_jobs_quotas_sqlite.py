@@ -74,3 +74,32 @@ def test_max_inflight_quota_sqlite(monkeypatch, tmp_path):
     jm.create_job(domain="chatbooks", queue="default", job_type="t", payload={}, owner_user_id="2")
     acq_other = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=30, worker_id="w3", owner_user_id="2")
     assert acq_other is not None
+
+
+def test_max_inflight_ignores_expired_leases_sqlite(monkeypatch, tmp_path):
+    db_path = tmp_path / "jobs_quota_inflight_expired.db"
+    ensure_jobs_tables(db_path)
+    jm = JobManager(db_path)
+
+    monkeypatch.setenv("JOBS_QUOTA_MAX_INFLIGHT", "1")
+
+    # Two queued jobs for user 1
+    jm.create_job(domain="chatbooks", queue="default", job_type="t", payload={}, owner_user_id="1")
+    jm.create_job(domain="chatbooks", queue="default", job_type="t", payload={}, owner_user_id="1")
+
+    acq1 = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=30, worker_id="w1", owner_user_id="1")
+    assert acq1 is not None
+
+    # Expire the lease so the processing job should not count toward inflight
+    conn = jm._connect()
+    try:
+        conn.execute(
+            "UPDATE jobs SET leased_until = DATETIME('now', '-10 seconds') WHERE id = ?",
+            (int(acq1["id"]),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    acq2 = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=30, worker_id="w2", owner_user_id="1")
+    assert acq2 is not None

@@ -1,6 +1,8 @@
 # app/api/v1/schemas/notes_schemas.py
 #
 # Imports
+from __future__ import annotations
+
 from typing import Optional, List, Any, Dict, Union, Literal
 from datetime import datetime
 # 3rd-party Libraries
@@ -53,7 +55,7 @@ class NoteCreate(NoteBase):
         if isinstance(value, str):
             parts = [p.strip() for p in value.split(',')]
         elif isinstance(value, list):
-            parts = [str(p).strip() for p in value]
+            parts = [p.strip() for p in value if isinstance(p, str)]
         else:
             return None
         # Remove empties and deduplicate while preserving order
@@ -87,7 +89,7 @@ class NoteResponse(NoteBase):
     version: int = Field(..., description="Version number for optimistic locking")
     client_id: str = Field(..., description="Client ID that last modified the note")
     deleted: bool = Field(..., description="Whether the note is soft-deleted")
-    keywords: Optional[List['KeywordResponse']] = Field(default=None, description="Keywords linked to this note")
+    keywords: Optional[List[KeywordResponse]] = Field(default=None, description="Keywords linked to this note")
 
     model_config = ConfigDict(from_attributes=True)  # Pydantic V2 (formerly orm_mode)
 
@@ -183,7 +185,7 @@ class NotesExportRequest(BaseModel):
 
     note_ids: List[str] = Field(..., description="List of note IDs to export")
     include_keywords: bool = Field(default=False)
-    format: Literal['json', 'csv'] = Field(default='json')
+    format: Literal['json', 'csv'] = Field(default='json', description="Use /export.csv for CSV exports.")
 
 
 # --- Title Suggestion Schemas ---
@@ -199,6 +201,12 @@ class TitleSuggestRequest(BaseModel):
 
 class TitleSuggestResponse(BaseModel):
     title: str = Field(..., description="Suggested title")
+
+
+# Resolve forward references for nested schemas.
+NoteResponse.model_rebuild()
+KeywordsForNoteResponse.model_rebuild()
+NotesForKeywordResponse.model_rebuild()
 
 #
 # End of notes_schemas.py

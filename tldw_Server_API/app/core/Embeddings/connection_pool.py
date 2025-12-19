@@ -10,7 +10,7 @@ from aiohttp import ClientTimeout, ClientSession, TCPConnector
 from loguru import logger
 import threading
 
-from tldw_Server_API.app.core.Embeddings.circuit_breaker import circuit_breaker
+from tldw_Server_API.app.core.Embeddings.circuit_breaker import CircuitBreaker
 
 
 class ConnectionPool:
@@ -48,12 +48,19 @@ class ConnectionPool:
 
         self.session: Optional[ClientSession] = None
         self._lock = threading.RLock()
+        self._session_lock = asyncio.Lock()
         self._usage_stats = {
             'requests': 0,
             'failures': 0,
             'total_time': 0,
             'active_connections': 0
         }
+        self._breaker = CircuitBreaker(
+            name=f"{self.provider}.api_request",
+            failure_threshold=5,
+            recovery_timeout=60,
+            expected_exception=Exception,
+        )
 
         logger.info(
             f"ConnectionPool for {provider} initialized: "
@@ -88,7 +95,13 @@ class ConnectionPool:
     async def get_session(self) -> ClientSession:
         """Get or create the session."""
         if self.session is None or self.session.closed:
-            self.session = await self._create_session()
+            async with self._session_lock:
+                if self.session is None or self.session.closed:
+                    new_session = await self._create_session()
+                    old_session = self.session
+                    self.session = new_session
+                    if old_session is not None and not old_session.closed:
+                        await old_session.close()
         return self.session
 
     @asynccontextmanager
@@ -110,7 +123,6 @@ class ConnectionPool:
             with self._lock:
                 self._usage_stats['active_connections'] -= 1
 
-    @circuit_breaker(name="api_request", failure_threshold=5, recovery_timeout=60)
     async def request(
         self,
         method: str,
@@ -119,6 +131,26 @@ class ConnectionPool:
         json_data: Optional[Dict[str, Any]] = None,
         data: Optional[Any] = None,
         params: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
+        """Make an HTTP request using the connection pool with circuit breaker protection."""
+        return await self._breaker.call_async(
+            self._request_impl,
+            method,
+            url,
+            headers=headers,
+            json_data=json_data,
+            data=data,
+            params=params,
+        )
+
+    async def _request_impl(
+        self,
+        method: str,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        json_data: Optional[Dict[str, Any]] = None,
+        data: Optional[Any] = None,
+        params: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Make an HTTP request using the connection pool.

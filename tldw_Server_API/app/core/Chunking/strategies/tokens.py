@@ -5,6 +5,7 @@ Splits text into chunks based on token count using transformers or fallback meth
 """
 
 from typing import List, Optional, Dict, Any, Generator, Protocol, Tuple
+import threading
 from loguru import logger
 
 from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
@@ -162,15 +163,18 @@ class FallbackTokenizer:
         """
         # Split into words and subwords
         import re
+        import hashlib
 
         # Split on whitespace and punctuation
         tokens = re.findall(r'\w+|[^\w\s]', text)
 
-        # Create consistent fake token IDs
+        # Create consistent fake token IDs using MD5 for better distribution
+        # Using a larger modulus (2^31) to minimize collision probability
         token_ids = []
         for token in tokens:
-            # Use hash for consistency
-            token_id = abs(hash(token)) % 50000
+            # Use MD5 hash for better distribution and consistency across runs
+            h = hashlib.md5(token.encode('utf-8', errors='replace')).hexdigest()
+            token_id = int(h[:8], 16) % 2147483647  # 2^31 - 1
             token_ids.append(token_id)
 
             # Simulate subword tokenization for longer words
@@ -178,7 +182,8 @@ class FallbackTokenizer:
                 # Add extra tokens for long words
                 extra_tokens = (len(token) - 7) // 3
                 for i in range(extra_tokens):
-                    token_ids.append(abs(hash(f"{token}_{i}")) % 50000)
+                    h = hashlib.md5(f"{token}_{i}".encode('utf-8', errors='replace')).hexdigest()
+                    token_ids.append(int(h[:8], 16) % 2147483647)
 
         return token_ids
 
@@ -223,6 +228,11 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
     Uses transformers library when available, falls back to word-based approximation.
     """
 
+    # Class-level cache for failed tokenizer names to avoid repeated import attempts
+    # Protected by _failed_tokenizers_lock for thread-safe access
+    _failed_tokenizers: set = set()
+    _failed_tokenizers_lock = threading.Lock()
+
     def __init__(self,
                  language: str = 'en',
                  tokenizer_name: str = 'gpt2'):
@@ -236,13 +246,28 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
         super().__init__(language)
         self.tokenizer_name = tokenizer_name
         self._tokenizer = None
+        self._tokenizer_init_attempted = False
 
         logger.debug(f"TokenChunkingStrategy initialized with tokenizer: {tokenizer_name}")
 
     @property
     def tokenizer(self) -> TokenizerProtocol:
-        """Get or create tokenizer instance."""
+        """Get or create tokenizer instance with caching of failed attempts."""
         if self._tokenizer is None:
+            # Check if this tokenizer previously failed (thread-safe read)
+            with TokenChunkingStrategy._failed_tokenizers_lock:
+                previously_failed = self.tokenizer_name in TokenChunkingStrategy._failed_tokenizers
+
+            # If we've already tried and failed for this tokenizer name, go straight to fallback
+            if self._tokenizer_init_attempted or previously_failed:
+                if not self._tokenizer_init_attempted:
+                    logger.debug(f"Tokenizer '{self.tokenizer_name}' previously failed, using fallback")
+                self._tokenizer = FallbackTokenizer(self.tokenizer_name)
+                self._tokenizer_init_attempted = True
+                return self._tokenizer
+
+            self._tokenizer_init_attempted = True
+
             # Prefer tiktoken when available (fast, consistent for OpenAI-family models)
             try:
                 tk = TiktokenTokenizer(self.tokenizer_name)
@@ -250,19 +275,30 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                     _ = tk.encode("test")
                     self._tokenizer = tk
                     logger.info(f"Using tiktoken tokenizer: {self.tokenizer_name}")
+                    return self._tokenizer
                 else:
                     raise ImportError("tiktoken not available")
-            except (ImportError, Exception) as te:
-                logger.debug(f"tiktoken initialization skipped/failure: {te}")
-                # Try transformers next
-                try:
-                    self._tokenizer = TransformersTokenizer(self.tokenizer_name)
-                    _ = self._tokenizer.encode("test")
-                    logger.info(f"Using transformers tokenizer: {self.tokenizer_name}")
-                except (ImportError, Exception) as e:
-                    logger.warning(f"Could not initialize transformers tokenizer: {e}")
-                    logger.info("Falling back to word-based token approximation")
-                    self._tokenizer = FallbackTokenizer(self.tokenizer_name)
+            except ImportError as te:
+                logger.debug(f"tiktoken not available: {te}")
+            except (RuntimeError, ValueError, OSError) as te:
+                logger.debug(f"tiktoken initialization failed: {te}")
+
+            # Try transformers next
+            try:
+                self._tokenizer = TransformersTokenizer(self.tokenizer_name)
+                _ = self._tokenizer.encode("test")
+                logger.info(f"Using transformers tokenizer: {self.tokenizer_name}")
+                return self._tokenizer
+            except ImportError as e:
+                logger.debug(f"transformers not available: {e}")
+            except (RuntimeError, ValueError, OSError) as e:
+                logger.warning(f"Could not initialize transformers tokenizer '{self.tokenizer_name}': {e}")
+
+            # Cache this tokenizer name as failed to avoid repeated attempts (thread-safe write)
+            with TokenChunkingStrategy._failed_tokenizers_lock:
+                TokenChunkingStrategy._failed_tokenizers.add(self.tokenizer_name)
+            logger.info("Falling back to word-based token approximation")
+            self._tokenizer = FallbackTokenizer(self.tokenizer_name)
 
         return self._tokenizer
 
@@ -533,11 +569,15 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
             if offsets is not None:
                 start_idx = i
                 end_idx = i + len(ids_window) - 1
+                # Clamp end_idx to valid range before iterating
+                end_idx = min(end_idx, len(offsets) - 1)
+                # Skip zero-width tokens at the start
                 while start_idx < len(offsets) and (offsets[start_idx][1] - offsets[start_idx][0]) == 0:
                     start_idx += 1
-                while end_idx >= 0 and (offsets[end_idx][1] - offsets[end_idx][0]) == 0:
+                # Skip zero-width tokens at the end, but don't go below start_idx
+                while end_idx > start_idx and (offsets[end_idx][1] - offsets[end_idx][0]) == 0:
                     end_idx -= 1
-                if start_idx < len(offsets) and end_idx >= start_idx:
+                if start_idx < len(offsets) and end_idx >= start_idx and end_idx < len(offsets):
                     start_char = int(offsets[start_idx][0])
                     end_char = int(offsets[end_idx][1])
                     # Expand end bound to avoid slicing mid-grapheme when safe
@@ -665,6 +705,12 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                 if rel != -1:
                     idx = pos + rel
             if idx == -1:
+                # Fallback: token piece not found in text - use current position
+                # This may produce incorrect offsets for unusual tokenization
+                logger.debug(
+                    f"Token piece not found in text during offset reconstruction: "
+                    f"piece={repr(piece[:50] + '...' if len(piece) > 50 else piece)}, pos={pos}"
+                )
                 idx = pos
             start = max(0, min(idx, n))
             end = min(n, start + len(piece))

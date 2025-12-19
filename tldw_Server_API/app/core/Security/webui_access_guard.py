@@ -68,7 +68,7 @@ def setup_remote_access_enabled() -> bool:
             return cp.getboolean("Setup", "allow_remote_setup_access", fallback=False)
     except Exception:
         pass
-        return False
+    return False
 
 
 class WebUIAccessGuardMiddleware(BaseHTTPMiddleware):
@@ -146,7 +146,7 @@ class WebUIAccessGuardMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         path = request.url.path or ""
-        if not (path.startswith("/webui") or path == "/setup"):
+        if not (path.startswith("/webui") or path.startswith("/setup")):
             return await call_next(request)
 
         # Build allow/deny lists and trusted proxies (environment or config)
@@ -174,9 +174,12 @@ class WebUIAccessGuardMiddleware(BaseHTTPMiddleware):
                 which = "Setup"
                 logger.warning(f"Blocked remote {which} (denylist) from {client_ip}")
                 return PlainTextResponse("Access denied by IP denylist.", status_code=403)
-            # If an allowlist is provided, treat it as enabling remote access for matching IPs
-            if setup_allowlist and client_ip_obj and any(client_ip_obj in net for net in setup_allowlist):
-                return await call_next(request)
+            # If an allowlist is provided, only allow listed IPs regardless of remote-access flag.
+            if setup_allowlist:
+                if client_ip_obj and any(client_ip_obj in net for net in setup_allowlist):
+                    return await call_next(request)
+                logger.warning(f"Blocked remote Setup (allowlist) from {client_ip}")
+                return PlainTextResponse("Access denied by IP allowlist.", status_code=403)
             if setup_remote_access_enabled():
                 return await call_next(request)
         else:  # /webui
@@ -184,8 +187,11 @@ class WebUIAccessGuardMiddleware(BaseHTTPMiddleware):
                 which = "WebUI"
                 logger.warning(f"Blocked remote {which} (denylist) from {client_ip}")
                 return PlainTextResponse("Access denied by IP denylist.", status_code=403)
-            if webui_allowlist and client_ip_obj and any(client_ip_obj in net for net in webui_allowlist):
-                return await call_next(request)
+            if webui_allowlist:
+                if client_ip_obj and any(client_ip_obj in net for net in webui_allowlist):
+                    return await call_next(request)
+                logger.warning(f"Blocked remote WebUI (allowlist) from {client_ip}")
+                return PlainTextResponse("Access denied by IP allowlist.", status_code=403)
             if webui_remote_access_enabled():
                 return await call_next(request)
 

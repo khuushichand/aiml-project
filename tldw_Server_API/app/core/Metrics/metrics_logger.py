@@ -31,7 +31,7 @@ def log_counter(metric_name, labels=None, value=1):
         "labels": labels or {},
         "timestamp": _utc_timestamp(),
     }
-    logger.info("metric", extra=log_entry)
+    logger.bind(**log_entry).info("metric")
 
 
 def log_histogram(metric_name, value, labels=None):
@@ -42,7 +42,7 @@ def log_histogram(metric_name, value, labels=None):
         "labels": labels or {},
         "timestamp": _utc_timestamp(),
     }
-    logger.info("metric", extra=log_entry)
+    logger.bind(**log_entry).info("metric")
 
 
 def log_gauge(metric_name, value, labels=None):
@@ -60,7 +60,7 @@ def log_gauge(metric_name, value, labels=None):
         "labels": labels or {},
         "timestamp": _utc_timestamp(),
     }
-    logger.info("metric", extra=log_entry)
+    logger.bind(**log_entry).info("metric")
 
 
 def timeit(func):

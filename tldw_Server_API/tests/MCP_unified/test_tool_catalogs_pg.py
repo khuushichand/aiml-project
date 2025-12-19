@@ -2,42 +2,22 @@ import os
 import asyncio
 import pytest
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+from tldw_Server_API.tests.AuthNZ.integration.test_rbac_admin_endpoints import _admin_headers
 
 
 @pytest.mark.pg_integration
-def test_tool_catalogs_postgres_list_filter(monkeypatch):
-    # Build Postgres DSN via centralized helper
-    from tldw_Server_API.tests.helpers.pg_env import get_pg_env
-    _pg = get_pg_env()
-    dsn = _pg.dsn
+def test_tool_catalogs_postgres_list_filter(monkeypatch, isolated_test_environment):
+    monkeypatch.setenv("MCP_ENABLE_MEDIA_MODULE", "true")
+    monkeypatch.setenv("TEST_MODE", "true")
 
-    # Configure server for PG AuthNZ DB, but keep single_user mode for simple auth
-    os.environ["DATABASE_URL"] = dsn
-    os.environ["AUTH_MODE"] = "single_user"
-    os.environ["TEST_MODE"] = "true"
-    fallback_key = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
-    if not os.getenv("SINGLE_USER_API_KEY"):
-        os.environ["SINGLE_USER_API_KEY"] = fallback_key
-    os.environ["MCP_ENABLE_MEDIA_MODULE"] = "true"
-    reset_settings()
-
-    from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
-    asyncio.run(ensure_single_user_rbac_seed_if_needed())
-
-    from fastapi.testclient import TestClient
-    from tldw_Server_API.app.main import app
+    # Ensure MCP config/server pick up fresh env toggles (media module)
+    from tldw_Server_API.app.core.MCP_unified.config import get_config
+    get_config.cache_clear()
     from tldw_Server_API.app.core.MCP_unified.server import reset_mcp_server
-
-    # Ensure module registry/server picks up fresh env toggles (media module)
     asyncio.run(reset_mcp_server())
 
-    client = TestClient(app)
-
-    # Use configured test API key
-    settings = get_settings()
-    api_key = settings.SINGLE_USER_API_KEY or fallback_key
-    headers = {"X-API-KEY": api_key}
+    client, db_name = isolated_test_environment
+    headers = _admin_headers(client, db_name)
 
     # Create a unique catalog name and add an entry
     cat_name = f"pg-cat-{os.getpid()}"

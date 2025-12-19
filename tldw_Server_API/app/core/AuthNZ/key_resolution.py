@@ -77,8 +77,11 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
                 "active",
             )
         else:
-            # SQLite
-            placeholders = ",".join("?" for _ in digests)
+            # SQLite - uses parameterized query with ? placeholders
+            # Note: f-string is safe here because we only interpolate the placeholder count,
+            # not any user data. The actual values are passed as the second argument to fetchone().
+            num_placeholders = len(digests)
+            placeholders = ",".join(["?"] * num_placeholders)
             query = (
                 f"SELECT id, user_id FROM api_keys "
                 f"WHERE key_hash IN ({placeholders}) AND status = ? "
@@ -86,8 +89,10 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
             )
             row = await pool.fetchone(query, (*digests, "active"))
     except Exception as e:
-        logger.debug("resolve_api_key_by_hash: DB lookup failed: {}", e)
-        return None
+        # Log at WARNING level to make database errors visible
+        # Re-raise so callers can distinguish "not found" from "error"
+        logger.warning("resolve_api_key_by_hash: DB lookup failed: {}", e)
+        raise
 
     if not row:
         return None

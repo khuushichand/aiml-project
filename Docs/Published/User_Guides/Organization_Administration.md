@@ -330,7 +330,7 @@ curl "http://localhost:8000/api/v1/billing/subscription?org_id=1" \
   "current_period_start": "2024-01-01T00:00:00Z",
   "current_period_end": "2024-02-01T00:00:00Z",
   "limits": {
-    "storage_gb": 10,
+    "storage_mb": 10240,
     "api_calls_day": 5000,
     "llm_tokens_month": 15000000,
     "team_members": 5,
@@ -490,7 +490,7 @@ curl -X PATCH http://localhost:8000/admin/organizations/1/limits \
   -d '{
     "custom_limits_json": {
       "api_calls_day": 10000,
-      "storage_gb": 50
+      "storage_mb": 51200
     }
   }'
 ```

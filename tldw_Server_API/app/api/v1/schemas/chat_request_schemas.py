@@ -2,6 +2,7 @@
 # Description: This code provides schema models for the /chat API endpoints
 #
 # Imports
+import json
 import os
 from typing import Optional, Dict, Any, Literal, Union, List
 
@@ -153,8 +154,14 @@ def get_api_keys() -> Dict[str, Optional[str]]:
 
         return default
 
+    def _provider_env_key(provider_name: str) -> str:
+        normalized = provider_name.upper().replace('.', '_').replace('-', '_')
+        if normalized.endswith("_API"):
+            normalized = normalized[: -len("_API")]
+        return f"{normalized}_API_KEY"
+
     return {
-        name: _get_dynamic_setting(f"{name.upper().replace('.', '_')}_API_KEY", "api_keys", name)
+        name: _get_dynamic_setting(_provider_env_key(name), "api_keys", name)
         for name in ALL_SUPPORTED_PROVIDER_NAMES_LIST
     }
 
@@ -190,6 +197,76 @@ SUPPORTED_API_ENDPOINTS = Literal[
 
 
 # --- Tool Definitions ---
+
+# Security limits for function parameters
+MAX_PARAMETER_DEPTH = 10  # Maximum nesting depth for JSON Schema parameters
+MAX_PARAMETER_SIZE_BYTES = 5000  # Maximum serialized size of parameters (5KB)
+
+
+def _calculate_json_depth(obj: Any, current_depth: int = 0) -> int:
+    """Calculate the maximum nesting depth of a JSON-like structure."""
+    if current_depth > MAX_PARAMETER_DEPTH + 1:
+        # Early termination if already exceeded
+        return current_depth
+    if isinstance(obj, dict):
+        if not obj:
+            return current_depth
+        return max(_calculate_json_depth(v, current_depth + 1) for v in obj.values())
+    elif isinstance(obj, list):
+        if not obj:
+            return current_depth
+        return max(_calculate_json_depth(item, current_depth + 1) for item in obj)
+    return current_depth
+
+
+def _validate_json_schema_structure(schema: Dict[str, Any], path: str = "root") -> None:
+    """
+    Basic validation that the schema follows JSON Schema conventions.
+    Raises ValueError if issues are found.
+    """
+    if not isinstance(schema, dict):
+        raise ValueError(f"JSON Schema at '{path}' must be an object, got {type(schema).__name__}")
+
+    # Validate type field if present
+    schema_type = schema.get("type")
+    if schema_type is not None:
+        valid_types = {"string", "number", "integer", "boolean", "array", "object", "null"}
+        if isinstance(schema_type, str):
+            if schema_type not in valid_types:
+                raise ValueError(f"Invalid JSON Schema type '{schema_type}' at '{path}'")
+        elif isinstance(schema_type, list):
+            for t in schema_type:
+                if t not in valid_types:
+                    raise ValueError(f"Invalid JSON Schema type '{t}' in type array at '{path}'")
+        else:
+            raise ValueError(f"JSON Schema 'type' must be string or array at '{path}'")
+
+    # Validate properties if present
+    properties = schema.get("properties")
+    if properties is not None:
+        if not isinstance(properties, dict):
+            raise ValueError(f"JSON Schema 'properties' must be an object at '{path}'")
+        for prop_name, prop_schema in properties.items():
+            if not isinstance(prop_name, str):
+                raise ValueError(f"Property name must be string at '{path}'")
+            if isinstance(prop_schema, dict):
+                _validate_json_schema_structure(prop_schema, f"{path}.properties.{prop_name}")
+
+    # Validate items if present (for arrays)
+    items = schema.get("items")
+    if items is not None and isinstance(items, dict):
+        _validate_json_schema_structure(items, f"{path}.items")
+
+    # Validate required if present
+    required = schema.get("required")
+    if required is not None:
+        if not isinstance(required, list):
+            raise ValueError(f"JSON Schema 'required' must be an array at '{path}'")
+        for req in required:
+            if not isinstance(req, str):
+                raise ValueError(f"JSON Schema 'required' items must be strings at '{path}'")
+
+
 class FunctionDefinition(BaseModel):
     """Describes a function available to the model."""
 
@@ -205,6 +282,37 @@ class FunctionDefinition(BaseModel):
         default_factory=dict,
         description="The parameters the functions accepts, described as a JSON Schema object. See the guide[1] for examples, and the JSON Schema reference[2] for documentation about the format. Omitting parameters defines a function with an empty parameter list. [1] https://platform.openai.com/docs/guides/function-calling [2] https://json-schema.org/understanding-json-schema/",
     )
+
+    @field_validator("parameters")
+    @classmethod
+    def validate_parameters_schema(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Validate that parameters follow JSON Schema conventions and security limits."""
+        if v is None or not v:
+            return v
+
+        # Check serialized size to prevent DoS via large payloads
+        try:
+            serialized = json.dumps(v, separators=(',', ':'))
+            if len(serialized.encode('utf-8')) > MAX_PARAMETER_SIZE_BYTES:
+                raise ValueError(
+                    f"Function parameters exceed maximum size of {MAX_PARAMETER_SIZE_BYTES} bytes"
+                )
+        except (TypeError, ValueError) as e:
+            if "maximum size" in str(e):
+                raise
+            raise ValueError(f"Function parameters must be JSON serializable: {e}")
+
+        # Check nesting depth to prevent stack overflow / DoS
+        depth = _calculate_json_depth(v)
+        if depth > MAX_PARAMETER_DEPTH:
+            raise ValueError(
+                f"Function parameters exceed maximum nesting depth of {MAX_PARAMETER_DEPTH} levels"
+            )
+
+        # Validate basic JSON Schema structure
+        _validate_json_schema_structure(v)
+
+        return v
 
 
 class ToolDefinition(BaseModel):
@@ -228,9 +336,28 @@ class ToolChoiceOption(BaseModel):
 
 
 # --- Message Definitions ---
+
+# Maximum length for individual message content (characters, not tokens)
+# This provides per-field protection in addition to total request size validation.
+# 100,000 chars is approximately 25,000-40,000 tokens depending on language.
+MAX_MESSAGE_CONTENT_LENGTH = 100_000
+
+# Maximum length for the name field on messages
+MAX_MESSAGE_NAME_LENGTH = 64
+
+
 class ChatCompletionRequestMessageContentPartText(BaseModel):
     type: Literal["text"]
     text: str
+
+    @field_validator("text")
+    @classmethod
+    def validate_text_length(cls, v: str) -> str:
+        if len(v) > MAX_MESSAGE_CONTENT_LENGTH:
+            raise ValueError(
+                f"Text content exceeds maximum length ({MAX_MESSAGE_CONTENT_LENGTH} chars)"
+            )
+        return v
 
 
 class ChatCompletionRequestMessageContentPartImageURL(BaseModel):
@@ -273,8 +400,20 @@ class BaseMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
     name: Optional[str] = Field(
         None,
+        max_length=MAX_MESSAGE_NAME_LENGTH,
         description="An optional name for the participant. Provides the model information to differentiate between participants of the same role.",
     )
+
+    @field_validator("name")
+    @classmethod
+    def validate_name_format(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        # Allow alphanumeric, underscore, hyphen, period, space
+        import re
+        if not re.match(r'^[a-zA-Z0-9_\-. ]+$', v):
+            raise ValueError("Name contains invalid characters (allowed: alphanumeric, underscore, hyphen, period, space)")
+        return v
 
 
 # Specific Message Types
@@ -282,10 +421,34 @@ class ChatCompletionSystemMessageParam(BaseMessage):
     role: Literal["system"]
     content: str
 
+    @field_validator("content")
+    @classmethod
+    def validate_content_length(cls, v: str) -> str:
+        if len(v) > MAX_MESSAGE_CONTENT_LENGTH:
+            raise ValueError(
+                f"System message content exceeds maximum length ({MAX_MESSAGE_CONTENT_LENGTH} chars)"
+            )
+        return v
+
 
 class ChatCompletionUserMessageParam(BaseMessage):
     role: Literal["user"]
     content: Union[str, List[ChatCompletionRequestMessageContentPart]]
+
+    @field_validator("content")
+    @classmethod
+    def validate_content_length(cls, v: Union[str, list]) -> Union[str, list]:
+        if isinstance(v, str):
+            if len(v) > MAX_MESSAGE_CONTENT_LENGTH:
+                raise ValueError(
+                    f"User message content exceeds maximum length ({MAX_MESSAGE_CONTENT_LENGTH} chars)"
+                )
+        # Note: List content parts are validated by ChatCompletionRequestMessageContentPartText
+        return v
+
+
+# Maximum size for function call arguments (10KB)
+MAX_FUNCTION_ARGUMENTS_SIZE = 10000
 
 
 class FunctionCall(BaseModel):
@@ -298,11 +461,95 @@ class FunctionCall(BaseModel):
     )
     name: str = Field(..., description="The name of the function to call.")
 
+    @field_validator("arguments")
+    @classmethod
+    def validate_arguments_json(cls, v: str) -> str:
+        """Validate that arguments is valid JSON and within size limits."""
+        if not isinstance(v, str):
+            raise ValueError("Arguments must be a string")
+
+        # Check size limit
+        if len(v) > MAX_FUNCTION_ARGUMENTS_SIZE:
+            raise ValueError(
+                f"Function arguments exceed maximum size of {MAX_FUNCTION_ARGUMENTS_SIZE} characters"
+            )
+
+        # Validate JSON format (unless empty string)
+        if v.strip():
+            try:
+                json.loads(v)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Function arguments must be valid JSON: {e}")
+
+        return v
+
+
+# Tool call payload (assistant tool invocation in message history)
+class ToolCallFunctionPayload(BaseModel):
+    """Represents a tool invocation payload in assistant message history.
+
+    Accepts both OpenAI-style `arguments` and legacy `parameters` definitions.
+    """
+
+    name: str = Field(..., description="The name of the function to call.")
+    arguments: Optional[str] = Field(
+        None,
+        description="Arguments to call the function with, as a JSON string.",
+    )
+    parameters: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Legacy JSON Schema parameters (accepted for backward compatibility).",
+    )
+    description: Optional[str] = Field(
+        None,
+        description="Optional function description (legacy compatibility).",
+    )
+
+    @field_validator("arguments")
+    @classmethod
+    def validate_tool_call_arguments_json(cls, v: Optional[str]) -> Optional[str]:
+        """Validate that arguments is valid JSON and within size limits."""
+        if v is None:
+            return v
+        if not isinstance(v, str):
+            raise ValueError("Arguments must be a string")
+        if len(v) > MAX_FUNCTION_ARGUMENTS_SIZE:
+            raise ValueError(
+                f"Function arguments exceed maximum size of {MAX_FUNCTION_ARGUMENTS_SIZE} characters"
+            )
+        if v.strip():
+            try:
+                json.loads(v)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Function arguments must be valid JSON: {e}")
+        return v
+
+    @field_validator("parameters")
+    @classmethod
+    def validate_tool_call_parameters_schema(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Reuse FunctionDefinition JSON Schema validation for legacy parameters."""
+        return FunctionDefinition.validate_parameters_schema(v)
+
+
+# Maximum length for tool call IDs
+MAX_TOOL_CALL_ID_LENGTH = 64
+
 
 class ChatCompletionMessageToolCallParam(BaseModel):
-    id: str = Field(..., description="The ID of the tool call.")
+    id: str = Field(..., max_length=MAX_TOOL_CALL_ID_LENGTH, description="The ID of the tool call.")
     type: Literal["function"] = Field(..., description="The type of the tool. Currently, only `function` is supported.")
-    function: FunctionDefinition = Field(..., description="The function that the model called.")
+    function: ToolCallFunctionPayload = Field(
+        ...,
+        description="The function invocation payload generated by the model.",
+    )
+
+    @field_validator("id")
+    @classmethod
+    def validate_id_format(cls, v: str) -> str:
+        import re
+        if not re.match(r'^[a-zA-Z0-9_\-]+$', v):
+            raise ValueError("Tool call ID contains invalid characters (allowed: alphanumeric, underscore, hyphen)")
+        return v
 
 
 class ChatCompletionAssistantMessageParam(BaseMessage):
@@ -319,6 +566,15 @@ class ChatCompletionAssistantMessageParam(BaseMessage):
         None, deprecated=True, description="Deprecated and replaced by `tool_calls`."
     )
 
+    @field_validator("content")
+    @classmethod
+    def validate_content_length(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and len(v) > MAX_MESSAGE_CONTENT_LENGTH:
+            raise ValueError(
+                f"Assistant message content exceeds maximum length ({MAX_MESSAGE_CONTENT_LENGTH} chars)"
+            )
+        return v
+
     @model_validator(mode="before")
     def check_content_or_tool_call(cls, values):
         content = values.get("content")
@@ -332,7 +588,28 @@ class ChatCompletionAssistantMessageParam(BaseMessage):
 class ChatCompletionToolMessageParam(BaseMessage):
     role: Literal["tool"]
     content: str = Field(..., description="The contents of the tool message.")
-    tool_call_id: str = Field(..., description="Tool call that this message is responding to.")
+    tool_call_id: str = Field(
+        ...,
+        max_length=MAX_TOOL_CALL_ID_LENGTH,
+        description="Tool call that this message is responding to."
+    )
+
+    @field_validator("content")
+    @classmethod
+    def validate_content_length(cls, v: str) -> str:
+        if len(v) > MAX_MESSAGE_CONTENT_LENGTH:
+            raise ValueError(
+                f"Tool message content exceeds maximum length ({MAX_MESSAGE_CONTENT_LENGTH} chars)"
+            )
+        return v
+
+    @field_validator("tool_call_id")
+    @classmethod
+    def validate_tool_call_id_format(cls, v: str) -> str:
+        import re
+        if not re.match(r'^[a-zA-Z0-9_\-]+$', v):
+            raise ValueError("Tool call ID contains invalid characters (allowed: alphanumeric, underscore, hyphen)")
+        return v
 
 
 # Message Union

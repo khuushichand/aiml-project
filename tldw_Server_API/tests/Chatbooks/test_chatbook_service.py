@@ -824,7 +824,7 @@ class TestChatbookService:
 
         assert result == (
             False,
-            "Error: Invalid or potentially malicious archive file",
+            "Invalid or potentially malicious archive file",
             None,
         )
 

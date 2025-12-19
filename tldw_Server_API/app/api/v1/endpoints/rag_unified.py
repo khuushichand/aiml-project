@@ -7,7 +7,7 @@ All features are accessible through explicit parameters.
 
 import time
 import hashlib
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks, Request
@@ -29,6 +29,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_permissions,
     require_token_scope,
 )
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import require_within_limit
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_READ
 
 # Unified Pipeline
@@ -57,6 +58,7 @@ from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import (
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFeedbackSystem
+from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
 
 router = APIRouter(prefix="/api/v1/rag", tags=["rag-unified"])
 
@@ -66,6 +68,83 @@ from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 limit_search = limiter.limit("30/minute")
 limit_read = limiter.limit("60/minute")
 limit_batch = limiter.limit("10/minute")
+
+
+async def _log_rag_queries_for_org(
+    request_raw: Request,
+    current_user: User,
+    units: int = 1,
+) -> None:
+    """
+    Best-effort helper to record RAG query usage into the shared
+    ResourceDailyLedger for the active organization.
+
+    This function never raises; failures are logged at debug level only.
+    """
+    if units <= 0:
+        return
+
+    try:
+        # Resolve org_id from request state if available.
+        org_id: Optional[int] = None
+        try:
+            state = getattr(request_raw, "state", None)
+            if state is not None:
+                org_ids = getattr(state, "org_ids", None)
+                if isinstance(org_ids, (list, tuple)) and org_ids:
+                    org_id_candidate = org_ids[0]
+                    try:
+                        org_id = int(org_id_candidate)
+                    except Exception:
+                        org_id = None
+        except Exception:
+            org_id = None
+
+        # Fallback: derive org_id from AuthNZ org memberships.
+        if org_id is None and current_user and current_user.id_int is not None:
+            try:
+                from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+                from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
+
+                pool = await get_db_pool()
+                repo = AuthnzOrgsTeamsRepo(db_pool=pool)
+                memberships = await repo.list_org_memberships_for_user(current_user.id_int)
+                if memberships:
+                    candidate = memberships[0].get("org_id")
+                    if candidate is not None:
+                        org_id = int(candidate)
+            except Exception:
+                org_id = None
+
+        if org_id is None:
+            return
+
+        try:
+            from datetime import datetime, timezone
+            from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import (
+                LedgerEntry,
+                ResourceDailyLedger,
+            )
+
+            ledger = ResourceDailyLedger()
+            await ledger.initialize()
+
+            now = datetime.now(timezone.utc)
+            entry = LedgerEntry(  # type: ignore[call-arg]
+                entity_scope="org",
+                entity_value=str(org_id),
+                category="rag_queries",
+                units=int(units),
+                op_id=f"rag:{org_id}:{uuid4()}",
+                occurred_at=now,
+            )
+            await ledger.add(entry)
+        except Exception:
+            # Ledger write failures must never impact request flow.
+            logger.debug("RAG query ledger write failed; continuing without usage record", exc_info=True)
+    except Exception:
+        # Guard against any unexpected failure paths.
+        logger.debug("RAG query logging failed; continuing without usage record", exc_info=True)
 
 
 def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGResponse:
@@ -401,7 +480,7 @@ async def get_capabilities(request: Request):
         },
         "sources": {
             "supported": True,
-            "datastores": ["media_db", "notes_db", "character_db"],
+            "datastores": ["media_db", "notes", "characters", "chats"],
         },
         "security_filtering": {
             "supported": True,
@@ -525,7 +604,7 @@ async def get_capabilities(request: Request):
 
     # Search modes and configuration ranges
     search = {
-        "modes": ["hybrid", "semantic", "fulltext"],
+        "modes": ["hybrid", "vector", "fts"],
         "hybrid": {
             "alpha_default": RAG_SERVICE_CONFIG.get("retriever", {}).get("hybrid_alpha", 0.5),
             "alpha_range": [0.0, 1.0],
@@ -703,6 +782,7 @@ async def list_vlm_backends():
         Depends(rbac_rate_limit("rag.search")),
         Depends(require_permissions(MEDIA_READ)),
         Depends(require_token_scope("any", require_if_present=False, endpoint_id="rag.search", count_as="call")),
+        Depends(require_within_limit(LimitCategory.RAG_QUERIES_DAY, 1)),
     ]
 )
 async def unified_search_endpoint(
@@ -736,7 +816,7 @@ async def unified_search_endpoint(
             except Exception:
                 pass
             if request.query:
-                mon.evaluate_and_alert(
+                mon.schedule_evaluate_and_alert(
                     user_id=str(uid) if uid else None,
                     text=request.query,
                     source="rag.search",
@@ -986,6 +1066,13 @@ async def unified_search_endpoint(
         # Convert to response format
         response = convert_result_to_response(result)
 
+        # Best-effort RAG query usage logging for billing/analytics.
+        try:
+            await _log_rag_queries_for_org(request_raw, current_user, units=1)
+        except Exception:
+            # Guard against accidental propagation; helper already logs internally.
+            pass
+
         # Log performance if monitoring enabled
         if request.enable_monitoring:
             logger.info(f"Query completed in {result.total_time:.3f}s - Cache hit: {result.cache_hit}")
@@ -1050,6 +1137,7 @@ async def rag_implicit_feedback(
     dependencies=[
         Depends(check_rate_limit),
         Depends(require_permissions(MEDIA_READ)),
+        Depends(require_within_limit(LimitCategory.RAG_QUERIES_DAY, 1)),
     ]
 )
 async def unified_batch_endpoint(
@@ -1073,7 +1161,7 @@ async def unified_batch_endpoint(
         # Set up database paths
         db_paths = {
             "media_db_path": media_db.db_path if media_db else None,
-            "notes_db_path": None,
+            "notes_db_path": chacha_db.db_path if chacha_db else None,
             "character_db_path": chacha_db.db_path if chacha_db else None
         }
 
@@ -1099,6 +1187,12 @@ async def unified_batch_endpoint(
         failed = len(results) - successful
 
         total_time = time.time() - start_time
+
+        # Each query in the batch counts as one RAG query unit.
+        try:
+            await _log_rag_queries_for_org(request_raw, current_user, units=len(request.queries or []))
+        except Exception:
+            pass
 
         return UnifiedBatchResponse(
             results=responses,
@@ -1131,14 +1225,17 @@ async def unified_batch_endpoint(
     dependencies=[
         Depends(check_rate_limit),
         Depends(require_permissions(MEDIA_READ)),
+        Depends(require_within_limit(LimitCategory.RAG_QUERIES_DAY, 1)),
     ]
 )
 async def simple_search_endpoint(
     request: Request,
     query: str,
     top_k: int = 10,
+    sources: Optional[List[str]] = None,
     current_user: User = Depends(get_request_user),
-    media_db: MediaDatabase = Depends(get_media_db_for_user)
+    media_db: MediaDatabase = Depends(get_media_db_for_user),
+    chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user),
 ):
     """
     Simple search for basic use cases.
@@ -1154,12 +1251,29 @@ async def simple_search_endpoint(
             from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
             mon = get_topic_monitoring_service()
             # simple endpoint has no user dependency; best-effort from query param user_id if any later
-            mon.evaluate_and_alert(user_id=None, text=query, source="rag.simple_search", scope_type="user", scope_id=None)
+            mon.schedule_evaluate_and_alert(user_id=None, text=query, source="rag.simple_search", scope_type="user", scope_id=None)
         except Exception:
             pass
 
         # Use the simple_search wrapper
-        documents = await simple_search(query, top_k)
+        effective_sources = sources or ["media_db", "notes", "characters"]
+        documents = await simple_search(
+            query,
+            top_k,
+            sources=effective_sources,
+            media_db=media_db,
+            chacha_db=chacha_db,
+            media_db_path=(media_db.db_path if media_db else None),
+            notes_db_path=(chacha_db.db_path if chacha_db else None),
+            character_db_path=(chacha_db.db_path if chacha_db else None),
+            user_id=current_user.username if current_user else None,
+        )
+
+        # Best-effort RAG query logging (counts as a single query).
+        try:
+            await _log_rag_queries_for_org(request, current_user, units=1)
+        except Exception:
+            pass
 
         return {
             "query": query,
@@ -1190,6 +1304,7 @@ async def simple_search_endpoint(
     dependencies=[
         Depends(check_rate_limit),
         Depends(require_permissions(MEDIA_READ)),
+        Depends(require_within_limit(LimitCategory.RAG_QUERIES_DAY, 1)),
     ]
 )
 async def unified_search_stream_endpoint(
@@ -1202,9 +1317,16 @@ async def unified_search_stream_endpoint(
     if not request.enable_generation:
         raise HTTPException(status_code=400, detail="enable_generation must be true for streaming.")
 
+    # Streaming search counts as a single RAG query.
+    try:
+        await _log_rag_queries_for_org(request_raw, current_user, units=1)
+    except Exception:
+        pass
+
     async def event_stream():
         try:
             # Prepare retrieval like the unified pipeline (simplified)
+            index_namespace = request.index_namespace or getattr(request, "corpus", None)
             db_paths = {}
             if media_db:
                 db_paths["media_db"] = media_db.db_path
@@ -1239,13 +1361,14 @@ async def unified_search_stream_endpoint(
                     # Determine sources
                     src_map = {"media_db": DataSource.MEDIA_DB, "notes": DataSource.NOTES, "characters": DataSource.CHARACTER_CARDS, "chats": DataSource.CHARACTER_CARDS}
                     srcs = [src_map.get(s, DataSource.MEDIA_DB) for s in (request.sources or ["media_db"]) ]
-                    # Hybrid for media
-                    med = retriever.retrievers.get(DataSource.MEDIA_DB)
-                    if med and request.search_mode == "hybrid" and hasattr(med, 'retrieve_hybrid'):
-                        media_docs = await med.retrieve_hybrid(query=request.query, alpha=request.hybrid_alpha)
-                    else:
-                        media_docs = await retriever.retrieve(query=request.query, sources=srcs, config=config)
-                    docs = media_docs
+                    docs = await retriever.retrieve(
+                        query=request.query,
+                        sources=srcs,
+                        config=config,
+                        index_namespace=index_namespace,
+                        allowed_media_ids=request.include_media_ids,
+                        allowed_note_ids=request.include_note_ids,
+                    )
             except Exception:
                 docs = []
 
@@ -1289,15 +1412,17 @@ async def unified_search_stream_endpoint(
                         character_db_path=(chacha_db.db_path if chacha_db else None),
                         search_mode=request.search_mode,
                         fts_level=request.fts_level,
+                        hybrid_alpha=request.hybrid_alpha,
                         top_k=request.top_k,
                         min_score=request.min_score,
+                        index_namespace=index_namespace,
                         agentic=a_cfg,
                         enable_generation=False,
                         enable_citations=False,
                         include_chunk_citations=False,
-                debug_mode=request.debug_mode,
-                explain_only=bool(getattr(request, 'explain_only', False)),
-            )
+                        debug_mode=request.debug_mode,
+                        explain_only=bool(getattr(request, 'explain_only', False)),
+                    )
                     # Emit plan + spans
                     plan = ares.metadata.get('agentic_metrics', {}) if isinstance(ares.metadata, dict) else {}
                     yield json.dumps({"type": "plan", "plan": plan}) + "\n"
@@ -1352,10 +1477,33 @@ async def unified_search_stream_endpoint(
                 pass
 
             # Minimal context for generation
+            generation_config = {"streaming": True}
+            try:
+                from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+                cfg = load_and_log_configs() or {}
+            except Exception:
+                cfg = {}
+            try:
+                provider = (cfg.get("RAG_DEFAULT_LLM_PROVIDER") or "openai").strip()
+            except Exception:
+                provider = "openai"
+            try:
+                model = (request.generation_model or cfg.get("RAG_DEFAULT_LLM_MODEL") or "gpt-4o-mini").strip()
+            except Exception:
+                model = request.generation_model or "gpt-4o-mini"
+            generation_config["provider"] = provider
+            generation_config["model"] = model
+            try:
+                generation_config["max_tokens"] = int(request.max_generation_tokens)
+            except Exception:
+                generation_config["max_tokens"] = 500
+            if request.generation_prompt:
+                generation_config["prompt_template"] = request.generation_prompt
+
             context = types.SimpleNamespace()
             context.documents = docs
             context.query = request.query
-            context.config = {"generation": {"provider": "openai", "streaming": True}}
+            context.config = {"generation": generation_config}
             context.metadata = {}
 
             # Initialize streaming generator with claims overlay enabled per request
@@ -1421,7 +1569,7 @@ async def advanced_search_endpoint(
         try:
             from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
             mon = get_topic_monitoring_service()
-            mon.evaluate_and_alert(user_id=None, text=query, source="rag.advanced_search", scope_type="user", scope_id=None)
+            mon.schedule_evaluate_and_alert(user_id=None, text=query, source="rag.advanced_search", scope_type="user", scope_id=None)
         except Exception:
             pass
 

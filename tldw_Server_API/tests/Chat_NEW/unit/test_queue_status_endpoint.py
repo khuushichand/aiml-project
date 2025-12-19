@@ -1,6 +1,5 @@
 import pytest
 from unittest.mock import patch
-from typing import Optional
 
 from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
@@ -27,7 +26,7 @@ class _QStub:
         return [{"id": 1, "status": "ok", "limit": limit}]
 
 
-async def _principal_override(request: Optional[Request] = None):  # type: ignore[override]
+async def _principal_override(request: Request):  # type: ignore[override]
     principal = AuthPrincipal(
         kind="user",
         user_id=1,
@@ -41,17 +40,16 @@ async def _principal_override(request: Optional[Request] = None):  # type: ignor
         org_ids=[],
         team_ids=[],
     )
-    if request is not None:
-        request.state.auth = AuthContext(
-            principal=principal,
-            ip=None,
-            user_agent=None,
-            request_id=None,
-        )
+    request.state.auth = AuthContext(
+        principal=principal,
+        ip=None,
+        user_agent=None,
+        request_id=None,
+    )
     return principal
 
 
-async def _limited_principal_override(request: Optional[Request] = None):  # type: ignore[override]
+async def _limited_principal_override(request: Request):  # type: ignore[override]
     principal = AuthPrincipal(
         kind="user",
         user_id=2,
@@ -65,17 +63,16 @@ async def _limited_principal_override(request: Optional[Request] = None):  # typ
         org_ids=[],
         team_ids=[],
     )
-    if request is not None:
-        request.state.auth = AuthContext(
-            principal=principal,
-            ip=None,
-            user_agent=None,
-            request_id=None,
-        )
+    request.state.auth = AuthContext(
+        principal=principal,
+        ip=None,
+        user_agent=None,
+        request_id=None,
+    )
     return principal
 
 
-async def _unauthenticated_principal(_request=None):  # type: ignore[override]
+async def _unauthenticated_principal(_request: Request):  # type: ignore[override]
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Not authenticated for test",

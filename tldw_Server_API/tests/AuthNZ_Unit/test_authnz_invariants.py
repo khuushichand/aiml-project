@@ -12,13 +12,13 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 
 
-def _make_request(headers: dict[str, str] | None = None, path: str = "/") -> Request:
+def _make_request(headers: dict[str, str] | None = None, path: str = "/", client_ip: str = "127.0.0.1") -> Request:
     scope: Scope = {
         "type": "http",
         "method": "GET",
         "path": path,
         "headers": [(k.lower().encode("latin-1"), v.encode("latin-1")) for k, v in (headers or {}).items()],
-        "client": ("127.0.0.1", 12345),
+        "client": (client_ip, 12345),
     }
     return Request(scope)
 
@@ -47,6 +47,51 @@ async def test_get_current_user_missing_credentials_returns_401(monkeypatch):
     assert exc.status_code == 401
     assert exc.headers.get("WWW-Authenticate") == "Bearer"
     assert "Authentication required" in str(exc.detail)
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_test_mode_single_user_respects_ip_allowlist(monkeypatch):
+    from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+
+    fake_settings = SimpleNamespace(
+        AUTH_MODE="single_user",
+        SINGLE_USER_API_KEY="test-api-key",
+        SINGLE_USER_ALLOWED_IPS=["203.0.113.10"],
+        SINGLE_USER_FIXED_ID=7,
+        DATABASE_URL="",
+    )
+
+    monkeypatch.setattr(auth_deps, "get_settings", lambda: fake_settings)
+    monkeypatch.setenv("TEST_MODE", "true")
+
+    fake_session = SimpleNamespace(is_token_blacklisted=lambda *_args, **_kwargs: False)
+    fake_db_pool = SimpleNamespace(pool=None)
+    response = Response()
+
+    request_denied = _make_request(client_ip="198.51.100.5")
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(
+            request=request_denied,
+            response=response,
+            credentials=None,
+            session_manager=fake_session,
+            db_pool=fake_db_pool,
+            x_api_key="test-api-key",
+        )
+    assert exc_info.value.status_code == 401
+
+    request_allowed = _make_request(client_ip="203.0.113.10")
+    user = await get_current_user(
+        request=request_allowed,
+        response=response,
+        credentials=None,
+        session_manager=fake_session,
+        db_pool=fake_db_pool,
+        x_api_key="test-api-key",
+    )
+    assert user["id"] == fake_settings.SINGLE_USER_FIXED_ID
+
+    monkeypatch.delenv("TEST_MODE", raising=False)
 
 
 @pytest.mark.asyncio

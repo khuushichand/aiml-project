@@ -369,10 +369,11 @@ class L2DiskCache:
         num_to_remove = max(1, len(sorted_entries) // 10)
 
         for key, _ in sorted_entries[:num_to_remove]:
-            self._remove_entry(key)
+            self._remove_entry(key, persist=False)
             self.stats['evictions'] += 1
+        self._save_index()
 
-    def _remove_entry(self, key: str):
+    def _remove_entry(self, key: str, persist: bool = True):
         """Remove an entry from cache"""
         if key in self.index:
             entry_info = self.index[key]
@@ -391,6 +392,8 @@ class L2DiskCache:
                     logger.debug("metrics increment failed for embeddings_cache l2_evict_delete_failed")
 
             del self.index[key]
+            if persist:
+                self._save_index()
 
     def _get_total_size(self) -> int:
         """Get total size of cached files"""
@@ -693,8 +696,38 @@ class MultiTierCache:
 
         return None
 
+    def _get_sync(self, key: str) -> Optional[Any]:
+        """Synchronous get with tier promotion for use inside a running loop."""
+        value = self.l1.get(key)
+        if value is not None:
+            return value
+
+        value = self.l2.get(key)
+        if value is not None:
+            access_count = self.l2.get_access_count(key)
+            if access_count >= self.l2_to_l1_threshold:
+                self.l1.set(key, value)
+            return value
+
+        if self.l3.enabled:
+            value = self.l3.get(key)
+            if value is not None:
+                self.l2.set(key, value, None)
+                self.l1.set(key, value)
+                return value
+
+        return None
+
     def get(self, key: str) -> Optional[Any]:
         """Synchronous get from cache"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            return self._get_sync(key)
+
         return asyncio.run(self.get_async(key))
 
     async def set_async(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
@@ -711,8 +744,25 @@ class MultiTierCache:
 
         return success
 
+    def _set_sync(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+        """Synchronous set for use inside a running loop."""
+        success = self.l1.set(key, value, ttl)
+        if success:
+            self.l2.set(key, value, ttl)
+            if self.l3.enabled:
+                self.l3.set(key, value, ttl)
+        return success
+
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
         """Synchronous set in cache"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            return self._set_sync(key, value, ttl)
+
         return asyncio.run(self.set_async(key, value, ttl))
 
     def invalidate(self, key: str):

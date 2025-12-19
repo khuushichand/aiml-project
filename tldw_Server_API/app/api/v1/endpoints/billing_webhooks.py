@@ -12,7 +12,11 @@ from tldw_Server_API.app.api.v1.schemas.billing_schemas import WebhookResponse
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.billing_repo import AuthnzBillingRepo
 from tldw_Server_API.app.core.Billing.subscription_service import get_subscription_service
-from tldw_Server_API.app.core.Billing.stripe_client import get_stripe_client, is_billing_enabled
+from tldw_Server_API.app.core.Billing.stripe_client import (
+    StripeClient,
+    get_stripe_client,
+    is_billing_enabled,
+)
 
 
 router = APIRouter(
@@ -56,6 +60,18 @@ async def stripe_webhook(
             detail="Stripe is not configured",
         )
 
+    # Ensure webhook secret is configured for real StripeClient instances.
+    # Test doubles used in unit tests may not define a config attribute.
+    if isinstance(stripe_client, StripeClient):
+        config = getattr(stripe_client, "config", None)
+        webhook_secret = getattr(config, "webhook_secret", None) if config else None
+        if not webhook_secret:
+            logger.error("Stripe webhook secret not configured for billing webhooks")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Stripe webhook secret not configured",
+            )
+
     try:
         event = stripe_client.construct_webhook_event(body, stripe_signature)
     except ValueError as e:
@@ -84,6 +100,17 @@ async def stripe_webhook(
     if not is_new:
         # Already processed this event
         logger.debug(f"Webhook event {event_id} already processed")
+        return WebhookResponse(
+            received=True,
+            event_type=event_type,
+            handled=True,
+        )
+
+    # Atomically claim the event to prevent race conditions
+    # This handles edge cases where multiple webhook deliveries arrive simultaneously
+    claimed = await billing_repo.try_claim_webhook_event(event_id)
+    if not claimed:
+        logger.debug(f"Webhook event {event_id} already being processed by another worker")
         return WebhookResponse(
             received=True,
             event_type=event_type,

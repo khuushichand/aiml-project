@@ -1441,6 +1441,7 @@ def build_provider_config(
             "provider": "openai",
             "model_name_or_path": model,
             "api_key": api_key or settings.get("OPENAI_API_KEY"),
+            "dimensions": dimensions,
         }
     elif provider == EmbeddingProvider.HUGGINGFACE:
         return {
@@ -1502,6 +1503,7 @@ async def create_embeddings_with_circuit_breaker(
     model_id: str,
     config: Dict[str, Any],
     metadata: Optional[Dict[str, Any]] = None,
+    dimensions: Optional[int] = None,
 ) -> List[List[float]]:
     """Create embeddings with circuit breaker protection"""
     breaker = get_or_create_circuit_breaker(provider)
@@ -1518,9 +1520,11 @@ async def create_embeddings_with_circuit_breaker(
                     hf_cache_dir_subpath=config.get("hf_cache_dir_subpath", "huggingface_cache"),
                 )
             elif provider == "openai":
+                dim_override = dimensions if dimensions is not None else config.get("dimensions")
                 model_cfg = OpenAIModelCfg(
                     provider="openai",
                     model_name_or_path=config.get("model_name_or_path", model_id),
+                    dimensions=dim_override,
                 )
             elif provider == "onnx":
                 model_cfg = ONNXModelCfg(
@@ -1724,7 +1728,13 @@ async def create_embeddings_batch_async(
                         model_id,
                         config,
                         metadata=metadata,
+                        dimensions=dimensions,
                     )
+                    if not isinstance(batch_embeddings, list) or len(batch_embeddings) != len(batch_texts):
+                        raise HTTPException(
+                            status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail="Embedding provider returned unexpected number of embeddings",
+                        )
                     all_new_embeddings.extend(batch_embeddings)
                 except HTTPException:
                     raise
@@ -1738,6 +1748,12 @@ async def create_embeddings_batch_async(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         detail=f"Embedding service error: {str(e)}"
                     )
+
+        if len(all_new_embeddings) != len(uncached_texts):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Embedding provider returned unexpected number of embeddings",
+            )
 
         # Update results and cache
         for i, (idx, text) in enumerate(zip(uncached_indices, uncached_texts)):
@@ -2057,6 +2073,8 @@ async def create_embedding_endpoint(
                     "model": model,
                     "api_key": _api_key,
                 }
+                if embedding_request.dimensions is not None:
+                    adapter_request["dimensions"] = embedding_request.dimensions
                 result = adapter.embed(adapter_request) if adapter else None
                 if isinstance(result, dict) and isinstance(result.get("data"), list):
                     embs: List[List[float]] = []

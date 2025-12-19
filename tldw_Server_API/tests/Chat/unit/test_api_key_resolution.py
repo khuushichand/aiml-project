@@ -55,3 +55,14 @@ def test_resolver_can_skip_module_preference(monkeypatch):
 
     assert resolved_key == "env-key"
     assert debug_info["selected_source"] != "module_override"
+
+
+def test_get_api_keys_supports_hyphenated_provider_env_vars(monkeypatch):
+    monkeypatch.setenv("LOCAL_LLM_API_KEY", "local-key")
+    monkeypatch.setenv("CUSTOM_OPENAI_API_KEY", "custom-key")
+    monkeypatch.setattr(chat_request_schemas, "load_and_log_configs", lambda: {})
+
+    keys = chat_request_schemas.get_api_keys()
+
+    assert keys.get("local-llm") == "local-key"
+    assert keys.get("custom-openai-api") == "custom-key"

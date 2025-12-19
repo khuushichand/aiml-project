@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Query, Request, status
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
@@ -258,26 +258,39 @@ async def get_user_orgs(
 async def get_active_org_id(
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    x_tldw_org_id: Optional[int] = None,
+    x_tldw_org_id: Optional[int] = Header(None, alias="X-TLDW-Org-Id"),
+    org_id: Optional[int] = Query(None, description="Organization ID (optional)"),
 ) -> Optional[int]:
     """
     Resolve the active org ID for the current request.
 
     Priority:
-    1. X-TLDW-Org-Id header
-    2. First org in user's membership list
-    3. None (user has no orgs)
+    1. org_id query parameter (when provided)
+    2. X-TLDW-Org-Id header
+    3. First org in user's membership list
+    4. None (user has no orgs)
     """
-    # Check header first
-    if x_tldw_org_id is not None:
-        # Verify user has access to this org
-        membership = await _get_user_org_membership(principal.user_id, x_tldw_org_id)
+    # Check explicit org_id first
+    if org_id is not None:
+        membership = await _get_user_org_membership(principal.user_id, org_id)
         if not membership and not principal.is_admin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have access to the specified organization",
             )
-        return x_tldw_org_id
+        return org_id
+
+    # Check header next
+    if x_tldw_org_id is not None:
+        if principal.is_admin:
+            return x_tldw_org_id
+        membership = await _get_user_org_membership(principal.user_id, x_tldw_org_id)
+        if membership:
+            return x_tldw_org_id
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to the specified organization",
+        )
 
     # Fall back to first org
     user_orgs = await get_user_orgs(principal)

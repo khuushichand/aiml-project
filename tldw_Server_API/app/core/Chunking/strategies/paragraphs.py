@@ -11,6 +11,9 @@ from loguru import logger
 from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
 from ..exceptions import InvalidInputError, ProcessingError
 
+# Maximum text size for paragraph chunking (50MB) - prevents DoS with ReDoS patterns
+MAX_PARAGRAPH_TEXT_SIZE = 50 * 1024 * 1024
+
 
 class ParagraphChunkingStrategy(BaseChunkingStrategy):
     """
@@ -44,8 +47,15 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
         Returns:
             List of text chunks
         """
-        if not text:
-            raise InvalidInputError("Cannot chunk empty text")
+        if not text or not text.strip():
+            return []  # Consistent with other strategies
+
+        # Input size validation to prevent DoS
+        if len(text) > MAX_PARAGRAPH_TEXT_SIZE:
+            raise InvalidInputError(
+                f"Text size ({len(text)} bytes) exceeds maximum allowed "
+                f"({MAX_PARAGRAPH_TEXT_SIZE} bytes) for paragraph chunking"
+            )
 
         if max_size < 1:
             raise InvalidInputError(f"max_size must be at least 1, got {max_size}")
@@ -60,8 +70,8 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
 
         try:
             # Split text into paragraphs (handling various paragraph separators)
-            # Match two or more newlines, optionally with whitespace
-            paragraphs = re.split(r'\n\s*\n+', text.strip())
+            # Use simple linear-time pattern: two or more newlines (avoids ReDoS with \s*)
+            paragraphs = re.split(r'\n{2,}', text.strip())
 
             # Filter out empty paragraphs
             paragraphs = [p.strip() for p in paragraphs if p.strip()]
@@ -113,8 +123,15 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
         to a paragraph is trimmed for content, but the offsets refer to the exact
         positions in the original text for the trimmed content.
         """
-        if not text:
-            raise InvalidInputError("Cannot chunk empty text")
+        if not text or not text.strip():
+            return []  # Consistent with other strategies
+
+        # Input size validation to prevent DoS
+        if len(text) > MAX_PARAGRAPH_TEXT_SIZE:
+            raise InvalidInputError(
+                f"Text size ({len(text)} bytes) exceeds maximum allowed "
+                f"({MAX_PARAGRAPH_TEXT_SIZE} bytes) for paragraph chunking"
+            )
 
         if max_size < 1:
             raise InvalidInputError(f"max_size must be at least 1, got {max_size}")
@@ -129,8 +146,8 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
 
         try:
             # Build paragraph spans directly from the original text
-            # Separator: two or more newlines with optional whitespace between blocks
-            sep = re.compile(r"\n\s*\n+")
+            # Use simple linear-time pattern: two or more newlines (avoids ReDoS with \s*)
+            sep = re.compile(r"\n{2,}")
             spans: List[tuple[int, int]] = []
             pos = 0
             n = len(text)
@@ -182,8 +199,8 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
                 end_char = window[-1][1]
                 try:
                     end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
-                except Exception:
-                    pass
+                except (IndexError, ValueError) as e:
+                    logger.debug(f"Grapheme expansion failed for paragraph chunk {chunk_index}: {e}")
                 # Build display text by joining trimmed paragraph content with double newlines
                 parts = [text[s:e] for (s, e) in window]
                 chunk_text = "\n\n".join(p.strip() for p in parts)

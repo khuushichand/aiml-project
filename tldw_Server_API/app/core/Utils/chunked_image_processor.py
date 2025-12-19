@@ -122,25 +122,44 @@ async def decode_base64_image_chunked(
     # Base64 encoding increases size by ~33%, so adjust chunk size
     b64_chunk_size = int(chunk_size * 1.34)
 
+    remainder = ""
     for i in range(0, len(base64_str), b64_chunk_size):
-        chunk = base64_str[i:i + b64_chunk_size]
+        chunk = remainder + base64_str[i:i + b64_chunk_size]
 
-        # Ensure chunk is properly padded
-        padding = 4 - (len(chunk) % 4)
-        if padding != 4:
-            chunk += '=' * padding
+        if len(chunk) < 4:
+            remainder = chunk
+            continue
 
-        try:
-            # Strict validation: reject invalid characters or incorrect padding
-            decoded = base64.b64decode(chunk, validate=True)
-            yield decoded
-        except Exception as e:
-            # Tightened policy: abort on invalid data rather than silently skipping
-            logger.error(f"Invalid base64 data encountered: {e}")
-            raise
+        decode_len = (len(chunk) // 4) * 4
+        to_decode = chunk[:decode_len]
+        remainder = chunk[decode_len:]
+
+        if to_decode:
+            try:
+                # Strict validation: reject invalid characters or incorrect padding
+                decoded = base64.b64decode(to_decode, validate=True)
+                yield decoded
+            except Exception as e:
+                # Tightened policy: abort on invalid data rather than silently skipping
+                logger.error(f"Invalid base64 data encountered: {e}")
+                raise
 
         # Small delay to prevent blocking
         await asyncio.sleep(0)
+
+    if remainder:
+        if len(remainder) == 1:
+            logger.error("Invalid base64 data: incomplete trailing quartet")
+            raise ValueError("Invalid base64 data: incomplete trailing quartet")
+        padding = (4 - (len(remainder) % 4)) % 4
+        padded = remainder + ("=" * padding)
+        try:
+            decoded = base64.b64decode(padded, validate=True)
+            if decoded:
+                yield decoded
+        except Exception as e:
+            logger.error(f"Invalid base64 data encountered: {e}")
+            raise
 
 
 async def validate_and_process_image_stream(

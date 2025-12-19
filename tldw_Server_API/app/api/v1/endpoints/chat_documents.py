@@ -32,12 +32,27 @@ from tldw_Server_API.app.api.v1.schemas.document_generator_schemas import (
 )
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.core.Chat.document_generator import (
-    DocumentGeneratorService,
     DocumentType,
     GenerationStatus as GenStatus,
 )
 
 router = APIRouter()
+
+
+def _resolve_document_generator_service():
+    """Allow tests to patch DocumentGeneratorService via chat router."""
+    try:
+        from tldw_Server_API.app.api.v1.endpoints import chat as chat_router
+
+        service_cls = getattr(chat_router, "DocumentGeneratorService", None)
+        if service_cls is not None:
+            return service_cls
+    except Exception:
+        pass
+
+    from tldw_Server_API.app.core.Chat.document_generator import DocumentGeneratorService
+
+    return DocumentGeneratorService
 
 
 @router.post(
@@ -53,7 +68,8 @@ async def generate_document(
 ) -> Union[GenerateDocumentResponse, AsyncGenerationResponse]:
     """Generate a document from a conversation."""
     try:
-        service = DocumentGeneratorService(db)
+        service_cls = _resolve_document_generator_service()
+        service = service_cls(db)
 
         doc_type = DocumentType(request.document_type.value)
 
@@ -371,7 +387,8 @@ async def get_job_status(
 ) -> JobStatusResponse:
     """Get the status of a document generation job."""
     try:
-        service = DocumentGeneratorService(db)
+        service_cls = _resolve_document_generator_service()
+        service = service_cls(db)
         job = service.get_job_status(job_id)
 
         if not job:
@@ -425,7 +442,8 @@ async def cancel_job(
 ) -> Dict[str, str]:
     """Cancel a document generation job."""
     try:
-        service = DocumentGeneratorService(db)
+        service_cls = _resolve_document_generator_service()
+        service = service_cls(db)
 
         job = service.get_job_status(job_id)
         if not job:
@@ -475,7 +493,8 @@ async def list_generated_documents(
 ) -> DocumentListResponse:
     """List previously generated documents."""
     try:
-        service = DocumentGeneratorService(db)
+        service_cls = _resolve_document_generator_service()
+        service = service_cls(db)
 
         doc_type = DocumentType(document_type.value) if document_type else None
 
@@ -511,7 +530,8 @@ async def get_generated_document(
 ) -> GeneratedDocument:
     """Get a specific generated document."""
     try:
-        service = DocumentGeneratorService(db)
+        service_cls = _resolve_document_generator_service()
+        service = service_cls(db)
 
         doc = service.get_generated_document_by_id(document_id)
 
@@ -541,7 +561,8 @@ async def delete_generated_document(
 ) -> Dict[str, str]:
     """Delete a generated document."""
     try:
-        service = DocumentGeneratorService(db)
+        service_cls = _resolve_document_generator_service()
+        service = service_cls(db)
 
         success = service.delete_generated_document(document_id)
 
@@ -572,7 +593,8 @@ async def save_prompt_config(
 ) -> PromptConfigResponse:
     """Save a custom prompt configuration for a document type."""
     try:
-        service = DocumentGeneratorService(db)
+        service_cls = _resolve_document_generator_service()
+        service = service_cls(db)
 
         doc_type = DocumentType(config.document_type.value)
 
@@ -620,7 +642,8 @@ async def get_prompt_config(
 ) -> PromptConfigResponse:
     """Get the prompt configuration for a document type."""
     try:
-        service = DocumentGeneratorService(db)
+        service_cls = _resolve_document_generator_service()
+        service = service_cls(db)
 
         doc_type = DocumentType(document_type.value)
 
@@ -672,7 +695,8 @@ async def bulk_generate_documents(
 ) -> BulkGenerateResponse:
     """Generate multiple documents in bulk (async)."""
     try:
-        service = DocumentGeneratorService(db)
+        service_cls = _resolve_document_generator_service()
+        service = service_cls(db)
 
         job_ids: List[str] = []
         total_jobs = len(request.conversation_ids) * len(request.document_types)
@@ -715,7 +739,8 @@ async def get_generation_statistics(
 ) -> GenerationStatistics:
     """Get statistics about document generation."""
     try:
-        service = DocumentGeneratorService(db)
+        service_cls = _resolve_document_generator_service()
+        service = service_cls(db)
 
         all_docs = service.get_generated_documents(limit=1000)
 

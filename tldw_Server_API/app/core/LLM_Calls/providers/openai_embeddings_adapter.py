@@ -50,6 +50,7 @@ class OpenAIEmbeddingsAdapter(EmbeddingsProvider):
         inputs = request.get("input")
         model = request.get("model")
         api_key = request.get("api_key")
+        dimensions = request.get("dimensions")
         if inputs is None:
             raise ValueError("Embeddings: 'input' is required")
 
@@ -58,6 +59,13 @@ class OpenAIEmbeddingsAdapter(EmbeddingsProvider):
             from tldw_Server_API.app.core.http_client import fetch as _fetch
             url = f"{self._base_url().rstrip('/')}/embeddings"
             payload = {"input": inputs, "model": model}
+            if dimensions is not None:
+                try:
+                    dim = int(dimensions)
+                except Exception:
+                    dim = None
+                if dim and dim > 0:
+                    payload["dimensions"] = dim
             headers = self._headers(api_key)
             try:
                 resp = _fetch(method="POST", url=url, headers=headers, json=payload, timeout=timeout or 60.0)
@@ -73,8 +81,8 @@ class OpenAIEmbeddingsAdapter(EmbeddingsProvider):
         if isinstance(inputs, list):
             embeddings: List[List[float]] = []
             for text in inputs:
-                embeddings.append(legacy.get_openai_embeddings(text, model))
+                embeddings.append(legacy.get_openai_embeddings(text, model, dimensions=dimensions))
             return self._normalize_response(embeddings, multi=True)
         else:
-            vec = legacy.get_openai_embeddings(inputs, model)
+            vec = legacy.get_openai_embeddings(inputs, model, dimensions=dimensions)
             return self._normalize_response(vec, multi=False)

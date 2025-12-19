@@ -276,7 +276,7 @@ class RobotsFilter:
                 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
                     is_allowed_by_robots_async as _robots_check_async,
                 )
-                return await _robots_check_async(url, self.user_agent, backend=self.backend, timeout=self.timeout)
+                return await _robots_check_async(url, self.user_agent, timeout=self.timeout)
             except Exception:
                 # Fail open: treat as allowed when robots is missing/unreadable
                 return True

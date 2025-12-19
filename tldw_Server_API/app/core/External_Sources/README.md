@@ -20,6 +20,7 @@
 
 - Architecture & Data Flow:
   - Provider connectors implement a small interface; service functions write to AuthNZ DB tables via async pool
+  - OAuth state is generated on authorize, stored in AuthNZ DB, and consumed once during callback
   - Endpoints enforce org-level policy in multi-user mode; single-user mode bypasses org checks
 - Key Classes/Functions:
   - Connectors service: `core/External_Sources/connectors_service.py` (DDL ensure, policy upsert/get, accounts/sources CRUD)
@@ -28,9 +29,10 @@
   - Internal: AuthNZ DB pool, policy helpers, Logging context
   - External: Google/Notion APIs (networked); tokens stored via DB
 - Data Models & DB:
-  - AuthNZ DB tables: `external_accounts`, `external_sources`, `external_items`, `org_connector_policy` (SQLite/PG variants)
+  - AuthNZ DB tables: `external_accounts`, `external_sources`, `external_items`, `org_connector_policy`, `external_oauth_state` (SQLite/PG variants)
 - Configuration:
-  - `CONNECTOR_REDIRECT_BASE_URL` for OAuth callbacks; provider keys via env/config
+  - `CONNECTOR_REDIRECT_BASE_URL` for OAuth callbacks (fallback to request host/connector redirect base); provider keys via env/config
+  - `CONNECTOR_OAUTH_STATE_TTL_MINUTES` to control OAuth state validity (default: 10)
 - Concurrency & Performance:
   - Import jobs queued with daily quotas by role; pagination support
 - Error Handling:

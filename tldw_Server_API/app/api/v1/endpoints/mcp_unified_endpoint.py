@@ -29,7 +29,6 @@ from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_
 from fastapi import Response
 from tldw_Server_API.app.core.MCP_unified.auth import UserRole
 from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get_jwt_manager
-from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from tldw_Server_API.app.core.AuthNZ.settings import (
@@ -44,6 +43,10 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
+from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
 
 # Create router
 router = APIRouter(prefix="/mcp", tags=["mcp-unified"])
@@ -143,6 +146,21 @@ class McpAuthContext:
     raw_api_key: Optional[str]
 
 
+def _is_authnz_access_token(token: str) -> bool:
+    """Return True when the token verifies as an AuthNZ access token."""
+    try:
+        jwt_service = get_jwt_service()
+        jwt_service.decode_access_token(token)
+        return True
+    except TokenExpiredError:
+        # Still an AuthNZ token; just expired.
+        return True
+    except InvalidTokenError:
+        return False
+    except Exception:
+        return False
+
+
 # Dependency functions
 
 async def get_current_user(
@@ -169,18 +187,29 @@ async def get_current_user(
     # Try AuthNZ JWT first (multi-user)
     try:
         if credentials and credentials.credentials:
-            jwt_service = get_jwt_service()
-            payload = jwt_service.decode_access_token(credentials.credentials)
-            uid = str(payload.get("user_id") or payload.get("sub"))
+            if request is None:
+                from starlette.requests import Request as _Request
+
+                request = _Request({"type": "http", "headers": []})
+            user = await verify_jwt_and_fetch_user(request, credentials.credentials)
+            uid = str(getattr(user, "id", None))
             if uid:
                 return TokenData(
                     sub=uid,
-                    username=payload.get("username"),
-                    roles=payload.get("roles", []),
-                    permissions=payload.get("permissions", []),
+                    username=getattr(user, "username", None),
+                    roles=list(getattr(user, "roles", []) or []),
+                    permissions=list(getattr(user, "permissions", []) or []),
                     token_type="access",
                 )
     except Exception:
+        token = credentials.credentials if credentials and credentials.credentials else None
+        if token and _is_authnz_access_token(token):
+            logger.debug(
+                "AuthNZ JWT rejected; not falling back to MCP JWT",
+                extra={"auth_method": "authnz_jwt"},
+                exc_info=True,
+            )
+            return None
         logger.debug(
             "AuthNZ JWT check failed; falling back to MCP JWT / API key",
             extra={"auth_method": "authnz_jwt"},
@@ -227,6 +256,7 @@ async def get_current_user(
                             or os.getenv("ENV")
                             or ""
                         ).lower()
+                        prod_flag = os.getenv("tldw_production", "false").lower() in {"1", "true", "yes", "on", "y"}
                         is_dev_ctx = bool(cfg and getattr(cfg, "debug_mode", False))
                         if os.getenv("PYTEST_CURRENT_TEST") is not None:
                             is_dev_ctx = True
@@ -239,6 +269,8 @@ async def get_current_user(
                             pass
                         if env in {"dev", "development", "test", "ci"}:
                             is_dev_ctx = True
+                        if prod_flag:
+                            is_dev_ctx = False
                         if not is_dev_ctx:
                             logger.error(
                                 "TEST_MODE enabled outside dev/test context; refusing SINGLE_USER_TEST_API_KEY",
@@ -253,6 +285,15 @@ async def get_current_user(
                         if test_key:
                             allowed.add(test_key)
                     if x_api_key in {a for a in allowed if a}:
+                        client_ip = None
+                        try:
+                            client = getattr(request, "client", None)
+                            if client is not None:
+                                client_ip = getattr(client, "host", None)
+                        except Exception:
+                            client_ip = None
+                        if not is_single_user_ip_allowed(client_ip, settings):
+                            return None
                         roles = [UserRole.ADMIN.value]
                         perms = ["*"] if test_mode else []
                         return TokenData(

@@ -2,7 +2,7 @@
 # Description: Database migrations for AuthNZ module tables
 #
 # Imports
-from typing import List
+from typing import List, Optional
 import sqlite3
 import json
 from pathlib import Path
@@ -1368,6 +1368,7 @@ def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
                 "llm_tokens_month": 300000,
                 "llm_cost_month_usd": 0,
                 "transcription_minutes_month": 10,
+                "rag_queries_day": 50,
                 "concurrent_jobs": 1,
                 "team_members": 1,
                 "rate_limit_rpm": 10,
@@ -1389,6 +1390,7 @@ def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
                 "llm_tokens_month": 15000000,
                 "llm_cost_month_usd": 50,
                 "transcription_minutes_month": 300,
+                "rag_queries_day": 500,
                 "concurrent_jobs": 5,
                 "team_members": 5,
                 "rate_limit_rpm": 120,
@@ -1410,6 +1412,7 @@ def migration_030_create_subscription_plans(conn: sqlite3.Connection) -> None:
                 "llm_tokens_month": 150000000,
                 "llm_cost_month_usd": 500,
                 "transcription_minutes_month": 3000,
+                "rag_queries_day": 5000,
                 "concurrent_jobs": 20,
                 "team_members": -1,
                 "rate_limit_rpm": 600,
@@ -1584,6 +1587,61 @@ def rollback_034_drop_billing_audit_log_table(conn: sqlite3.Connection) -> None:
     logger.info("Rollback 034: Dropped billing_audit_log table")
 
 
+def migration_035_backfill_storage_mb_limits(conn: sqlite3.Connection) -> None:
+    """Normalize storage limits to storage_mb in plan and custom limit JSON."""
+    logger.info("Migration 035: START storage_mb limit backfill")
+
+    def _normalize_limits_json(raw_json: str) -> Optional[str]:
+        if not raw_json:
+            return None
+        try:
+            data = json.loads(raw_json)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+
+        changed = False
+        if "storage_gb" in data:
+            storage_mb = None
+            try:
+                storage_mb = int(float(data["storage_gb"]) * 1024)
+            except (TypeError, ValueError):
+                storage_mb = None
+            if storage_mb is not None and "storage_mb" not in data:
+                data["storage_mb"] = storage_mb
+            data.pop("storage_gb", None)
+            changed = True
+        return json.dumps(data) if changed else None
+
+    # Update subscription plans.
+    cur = conn.execute("SELECT id, limits_json FROM subscription_plans")
+    rows = cur.fetchall()
+    for plan_id, limits_json in rows:
+        updated = _normalize_limits_json(limits_json)
+        if updated is not None:
+            conn.execute(
+                "UPDATE subscription_plans SET limits_json = ? WHERE id = ?",
+                (updated, plan_id),
+            )
+
+    # Update org custom limits.
+    cur = conn.execute(
+        "SELECT id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
+    )
+    rows = cur.fetchall()
+    for sub_id, limits_json in rows:
+        updated = _normalize_limits_json(limits_json)
+        if updated is not None:
+            conn.execute(
+                "UPDATE org_subscriptions SET custom_limits_json = ? WHERE id = ?",
+                (updated, sub_id),
+            )
+
+    conn.commit()
+    logger.info("Migration 035: Completed storage_mb limit backfill")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -1664,6 +1722,11 @@ def get_authnz_migrations() -> List[Migration]:
             "Create billing_audit_log table",
             migration_034_create_billing_audit_log,
             rollback_034_drop_billing_audit_log_table,
+        ),
+        Migration(
+            35,
+            "Backfill storage_mb limits",
+            migration_035_backfill_storage_mb_limits,
         ),
     ]
 

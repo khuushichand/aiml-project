@@ -8,12 +8,13 @@ from __future__ import annotations
 import secrets
 import string
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
 # Invite code configuration
@@ -76,7 +77,7 @@ class AuthnzOrgInvitesRepo:
         import json
 
         code = generate_invite_code()
-        expires_at = datetime.utcnow() + timedelta(days=expiry_days)
+        expires_at = datetime.now(timezone.utc) + timedelta(days=expiry_days)
 
         try:
             async with self.db_pool.transaction() as conn:
@@ -286,10 +287,10 @@ class AuthnzOrgInvitesRepo:
                 if not include_expired:
                     if self._is_postgres(conn):
                         conditions.append(f"expires_at > ${len(params) + 1}")
-                        params.append(datetime.utcnow())
+                        params.append(datetime.now(timezone.utc))
                     else:
                         conditions.append("expires_at > ?")
-                        params.append(datetime.utcnow().isoformat())
+                        params.append(datetime.now(timezone.utc).isoformat())
 
                 where_clause = " AND ".join(conditions)
 
@@ -443,7 +444,11 @@ class AuthnzOrgInvitesRepo:
                         invite_id, user_id, ip_address, user_agent
                     )
                     if row is None:
-                        logger.warning(f"User {user_id} already redeemed invite {invite_id}")
+                        settings = get_settings()
+                        if settings.PII_REDACT_LOGS:
+                            logger.warning("User already redeemed invite (details redacted)")
+                        else:
+                            logger.warning(f"User {user_id} already redeemed invite {invite_id}")
                         raise ValueError(f"User {user_id} has already redeemed this invite")
                     result = dict(row)
                     if isinstance(result.get("redeemed_at"), datetime):
@@ -458,7 +463,11 @@ class AuthnzOrgInvitesRepo:
                         (invite_id, user_id, ip_address, user_agent)
                     )
                     if cur.rowcount == 0:
-                        logger.warning(f"User {user_id} already redeemed invite {invite_id}")
+                        settings = get_settings()
+                        if settings.PII_REDACT_LOGS:
+                            logger.warning("User already redeemed invite (details redacted)")
+                        else:
+                            logger.warning(f"User {user_id} already redeemed invite {invite_id}")
                         raise ValueError(f"User {user_id} has already redeemed this invite")
                     redemption_id = cur.lastrowid
                     cur2 = await conn.execute(
@@ -484,7 +493,11 @@ class AuthnzOrgInvitesRepo:
                 and "user_id" in msg
                 and ("unique" in msg or "duplicate" in msg)
             ):
-                logger.warning(f"User {user_id} already redeemed invite {invite_id}")
+                settings = get_settings()
+                if settings.PII_REDACT_LOGS:
+                    logger.warning("User already redeemed invite (details redacted)")
+                else:
+                    logger.warning(f"User {user_id} already redeemed invite {invite_id}")
                 raise ValueError(f"User {user_id} has already redeemed this invite") from exc
             logger.error(f"AuthnzOrgInvitesRepo.record_redemption failed: {exc}")
             raise
@@ -521,7 +534,7 @@ class AuthnzOrgInvitesRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 if self._is_postgres(conn):
                     if deactivate_only:
                         result = await conn.execute(

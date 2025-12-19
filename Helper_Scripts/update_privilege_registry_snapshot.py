@@ -6,17 +6,43 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-from tldw_Server_API.app.main import app as fastapi_app
-from tldw_Server_API.app.core.AuthNZ.privilege_catalog import load_catalog
-from tldw_Server_API.app.core.PrivilegeMaps.introspection import (
-    collect_privilege_route_registry,
-    serialize_route_registry,
-)
+
+def _apply_test_env_defaults() -> None:
+    """Align environment with pytest defaults so snapshots match CI expectations."""
+    os.environ["MINIMAL_TEST_APP"] = "1"
+    os.environ["TEST_MODE"] = "1"
+    os.environ["OTEL_SDK_DISABLED"] = "true"
+    existing_disable = os.getenv("ROUTES_DISABLE", "")
+    disable_parts = [p for p in existing_disable.replace(" ", ",").split(",") if p]
+    disable_lower = {p.lower() for p in disable_parts}
+    for key in ("research", "evaluations"):
+        if key not in disable_lower:
+            disable_parts.append(key)
+            disable_lower.add(key)
+    disable_parts = [p for p in disable_parts if p.lower() != "notes"]
+    os.environ["ROUTES_DISABLE"] = ",".join(dict.fromkeys(disable_parts))
+    existing_enable = os.getenv("ROUTES_ENABLE", "")
+    parts = [p for p in existing_enable.replace(" ", ",").split(",") if p]
+    lower_parts = {p.lower() for p in parts}
+    for key in ("workflows", "scheduler"):
+        if key not in lower_parts:
+            parts.append(key)
+            lower_parts.add(key)
+    os.environ["ROUTES_ENABLE"] = ",".join(dict.fromkeys(parts))
 
 
 def main() -> None:
+    _apply_test_env_defaults()
+    from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.core.AuthNZ.privilege_catalog import load_catalog
+    from tldw_Server_API.app.core.PrivilegeMaps.introspection import (
+        collect_privilege_route_registry,
+        serialize_route_registry,
+    )
+
     catalog = load_catalog()
     registry = collect_privilege_route_registry(fastapi_app, catalog, strict=False)
     serialized = serialize_route_registry(registry)

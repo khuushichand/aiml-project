@@ -317,7 +317,13 @@ async def api_security_health():
         service_instance = UnifiedAuditService()  # type: ignore[operator]
         initialize = getattr(service_instance, "initialize", None)
         if callable(initialize):
-            await initialize()
+            # Prefer a lightweight initialization that doesn't spawn background tasks
+            # for this one-off health read path.
+            try:
+                await initialize(start_background_tasks=False)
+            except TypeError:
+                # Back-compat for stubs/older signatures (tests monkeypatch this).
+                await initialize()
         summary = await service_instance.get_security_summary()  # type: ignore[assignment]
         response["summary"] = summary
         status_bits = _calculate_security_status(summary)

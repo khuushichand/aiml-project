@@ -5,6 +5,7 @@ Not suitable for production use.
 
 import asyncio
 from typing import List, Optional, Dict, Any
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import uuid
 from collections import defaultdict
@@ -37,6 +38,8 @@ class MemoryBackend(QueueBackend):
         self.queues: Dict[str, List[str]] = defaultdict(list)
         self.idempotency_keys: Dict[str, str] = {}
         self.leaders: Dict[str, Dict[str, Any]] = {}
+        self.dead_letter_queue: List[Task] = []
+        self._schema_version = 1
         self._lock = asyncio.Lock()
 
         logger.warning(
@@ -148,7 +151,7 @@ class MemoryBackend(QueueBackend):
 
             return True
 
-    async def nack(self, task_id: str, error: Optional[str] = None) -> bool:
+    async def nack(self, task_id: str, error: Optional[str] = None, retry: bool = True) -> bool:
         """Negative acknowledge."""
         async with self._lock:
             if task_id not in self.tasks:
@@ -160,7 +163,7 @@ class MemoryBackend(QueueBackend):
 
             task.error = error
 
-            if task.retry_count >= task.max_retries:
+            if not retry or task.retry_count >= task.max_retries:
                 task.status = TaskStatus.FAILED
             else:
                 task.status = TaskStatus.QUEUED
@@ -188,6 +191,43 @@ class MemoryBackend(QueueBackend):
                 seconds=self.config.lease_duration_seconds
             )
             return True
+
+    async def create_lease(self, lease_id: str, task_id: str,
+                           worker_id: str, expires_at: datetime) -> bool:
+        """Create a lease for a task."""
+        async with self._lock:
+            task = self.tasks.get(task_id)
+            if not task:
+                return False
+            task.lease_id = lease_id
+            task.worker_id = worker_id
+            task.lease_expires_at = expires_at
+            return True
+
+    async def delete_lease(self, lease_id: str) -> bool:
+        """Delete a lease by lease ID."""
+        async with self._lock:
+            for task in self.tasks.values():
+                if task.lease_id == lease_id:
+                    task.lease_id = None
+                    task.lease_expires_at = None
+                    return True
+            return False
+
+    async def get_expired_leases(self) -> List[Dict[str, Any]]:
+        """Get expired leases."""
+        expired = []
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        async with self._lock:
+            for task in self.tasks.values():
+                if task.lease_id and task.lease_expires_at and task.lease_expires_at < now:
+                    expired.append({
+                        'lease_id': task.lease_id,
+                        'task_id': task.id,
+                        'worker_id': task.worker_id,
+                        'expires_at': task.lease_expires_at
+                    })
+        return expired
 
     async def reclaim_expired_leases(self) -> int:
         """Reclaim tasks with expired leases."""
@@ -220,17 +260,59 @@ class MemoryBackend(QueueBackend):
         """Lookup task ID for a given idempotency key."""
         return self.idempotency_keys.get(idempotency_key)
 
+    async def update_task(self, task: Task) -> bool:
+        """Update task state."""
+        async with self._lock:
+            if task.id not in self.tasks:
+                return False
+            self.tasks[task.id] = task
+            return True
+
     async def get_queue_size(self, queue_name: str) -> int:
         """Get queue size."""
         return len(self.queues.get(queue_name, []))
 
-    async def get_ready_tasks(self) -> List[str]:
+    async def clear_queue(self, queue_name: str) -> int:
+        """Clear queued tasks for a queue."""
+        async with self._lock:
+            queue_ids = list(self.queues.get(queue_name, []))
+            removed = 0
+            for task_id in queue_ids:
+                task = self.tasks.get(task_id)
+                if task and task.status == TaskStatus.QUEUED:
+                    if task.idempotency_key:
+                        self.idempotency_keys.pop(task.idempotency_key, None)
+                    self.tasks.pop(task_id, None)
+                    removed += 1
+            self.queues[queue_name] = []
+            return removed
+
+    async def get_dead_letter_queue(self) -> List[Task]:
+        """Get tasks in the dead letter queue."""
+        return list(self.dead_letter_queue)
+
+    async def move_to_dlq(self, task_id: str, reason: str) -> bool:
+        """Move task to dead letter queue."""
+        async with self._lock:
+            task = self.tasks.get(task_id)
+            if not task:
+                return False
+            task.status = TaskStatus.DEAD
+            task.error = reason
+            if task.queue_name in self.queues and task_id in self.queues[task.queue_name]:
+                self.queues[task.queue_name].remove(task_id)
+            self.dead_letter_queue.append(task)
+            return True
+
+    async def get_ready_tasks(self, queue_name: Optional[str] = None) -> List[str]:
         """Get tasks ready to run."""
         ready = []
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         for task_id, task in self.tasks.items():
             if task.status != TaskStatus.QUEUED:
+                continue
+            if queue_name and task.queue_name != queue_name:
                 continue
 
             # Check scheduled time
@@ -292,6 +374,36 @@ class MemoryBackend(QueueBackend):
 
             del self.leaders[resource]
             return True
+
+    async def create_schema(self) -> None:
+        """No-op schema creation for memory backend."""
+        return None
+
+    async def get_schema_version(self) -> int:
+        """Return in-memory schema version."""
+        return self._schema_version
+
+    async def migrate_schema(self, target_version: int) -> None:
+        """No-op migration for memory backend."""
+        self._schema_version = max(self._schema_version, target_version)
+
+    @asynccontextmanager
+    async def transaction(self):
+        """Transaction context manager using the in-memory lock."""
+        async with self._lock:
+            yield self
+
+    async def fetch(self, query: str, *args) -> List[Dict[str, Any]]:
+        """Not supported for memory backend."""
+        raise NotImplementedError("Memory backend does not support raw queries")
+
+    async def fetchval(self, query: str, *args) -> Any:
+        """Not supported for memory backend."""
+        raise NotImplementedError("Memory backend does not support raw queries")
+
+    async def fetchrow(self, query: str, *args) -> Optional[Dict[str, Any]]:
+        """Not supported for memory backend."""
+        raise NotImplementedError("Memory backend does not support raw queries")
 
     async def execute(self, query: str, *args) -> Any:
         """Not supported for memory backend."""

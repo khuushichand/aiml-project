@@ -1013,6 +1013,24 @@ class TestMessageCRUD:
         assert retrieved["content"] == ""
         check_sync_log_entry(db, "messages", msg_id, "create", expected_version=1)
 
+    def test_add_message_image_only_allows_null_content(self, db: CharactersRAGDB, conv_id_for_msg: str):
+        data = {
+            "conversation_id": conv_id_for_msg,
+            "sender": "user",
+            "content": None,
+            "image_data": b"null_content_image",
+            "image_mime_type": "image/png",
+        }
+        msg_id = db.add_message(data)
+        assert msg_id is not None
+
+        retrieved = db.get_message_by_id(msg_id)
+        assert retrieved is not None
+        assert retrieved["content"] is None
+        assert retrieved["image_data"] == b"null_content_image"
+        assert retrieved["image_mime_type"] == "image/png"
+        check_sync_log_entry(db, "messages", msg_id, "create", expected_version=1)
+
     def test_add_message_text_and_image(self, db: CharactersRAGDB, conv_id_for_msg: str):
         data = sample_message_data(conversation_id=conv_id_for_msg, content="Look at this!",
                                    image_data=b"another_image", image_mime_type="image/jpeg")

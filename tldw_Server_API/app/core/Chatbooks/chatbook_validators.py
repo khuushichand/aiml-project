@@ -11,19 +11,28 @@ to prevent security vulnerabilities and ensure data integrity.
 
 import re
 import os
+import stat
 import zipfile
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any, List
 from loguru import logger
 
 
+def _get_env_int(name: str, default: int) -> int:
+    """Get integer value from environment variable with fallback to default."""
+    try:
+        return int(os.getenv(name, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+
 class ChatbookValidator:
     """Validator for chatbook operations."""
 
-    # File size limits
-    MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100MB compressed
-    MAX_UNCOMPRESSED_SIZE = 500 * 1024 * 1024  # 500MB uncompressed
-    MAX_FILE_IN_ARCHIVE = 50 * 1024 * 1024  # 50MB per file
+    # File size limits (configurable via environment variables)
+    MAX_UPLOAD_SIZE = _get_env_int("CHATBOOKS_MAX_UPLOAD_SIZE_MB", 100) * 1024 * 1024
+    MAX_UNCOMPRESSED_SIZE = _get_env_int("CHATBOOKS_MAX_UNCOMPRESSED_SIZE_MB", 500) * 1024 * 1024
+    MAX_FILE_IN_ARCHIVE = _get_env_int("CHATBOOKS_MAX_FILE_IN_ARCHIVE_MB", 50) * 1024 * 1024
 
     # Filename patterns
     SAFE_FILENAME_PATTERN = re.compile(r'^[a-zA-Z0-9._\-]+$')
@@ -33,11 +42,53 @@ class ChatbookValidator:
     PATH_TRAVERSAL_PATTERN = re.compile(r'(\.\./|\.\.\\|^/|^~)')
     DANGEROUS_PATHS = {'etc', 'usr', 'bin', 'sbin', 'var', 'proc', 'sys', 'dev'}
 
-    # Content validation
-    MAX_NAME_LENGTH = 255
-    MAX_DESCRIPTION_LENGTH = 5000
-    MAX_TAGS = 50
-    MAX_TAG_LENGTH = 50
+    # Content validation (configurable via environment variables)
+    MAX_NAME_LENGTH = _get_env_int("CHATBOOKS_MAX_NAME_LENGTH", 255)
+    MAX_DESCRIPTION_LENGTH = _get_env_int("CHATBOOKS_MAX_DESCRIPTION_LENGTH", 5000)
+    MAX_TAGS = _get_env_int("CHATBOOKS_MAX_TAGS", 50)
+    MAX_TAG_LENGTH = _get_env_int("CHATBOOKS_MAX_TAG_LENGTH", 50)
+
+    # Maximum manifest size to prevent DoS via large manifest files
+    MAX_MANIFEST_SIZE = _get_env_int("CHATBOOKS_MAX_MANIFEST_SIZE_MB", 10) * 1024 * 1024
+
+    # Maximum compression ratio to detect potential zip bombs
+    # Default 100:1; increase for text-heavy archives that compress well
+    MAX_COMPRESSION_RATIO = _get_env_int("CHATBOOKS_MAX_COMPRESSION_RATIO", 100)
+
+    @classmethod
+    def _is_symlink_entry(cls, zip_info: zipfile.ZipInfo) -> bool:
+        """
+        Check if a ZIP archive entry is a symlink.
+
+        This performs cross-platform detection using multiple methods:
+        1. Unix mode in external_attr (most common on Unix systems)
+        2. Check for stat.S_IFLNK in the file mode
+
+        Args:
+            zip_info: A ZipInfo object from the archive
+
+        Returns:
+            True if the entry appears to be a symlink, False otherwise
+        """
+        # Extract the Unix file mode from external_attr
+        # The upper 16 bits of external_attr contain the Unix mode
+        unix_mode = zip_info.external_attr >> 16
+
+        # Check if external_attr has Unix mode data (non-zero)
+        if unix_mode:
+            # Use stat.S_ISLNK for portable symlink detection
+            if stat.S_ISLNK(unix_mode):
+                return True
+            # Also check the raw mode value for symlinks (0xA000 is S_IFLNK)
+            if (unix_mode & 0xF000) == 0xA000:
+                return True
+
+        # Additional check: ZIP files from some tools use 0xA1ED pattern
+        # This is a fallback for Unix-created archives
+        if zip_info.external_attr >> 16 == 0xA1ED:
+            return True
+
+        return False
 
     @classmethod
     def validate_filename(cls, filename: str) -> Tuple[bool, Optional[str], str]:
@@ -60,9 +111,9 @@ class ChatbookValidator:
         if len(base_filename) > cls.MAX_NAME_LENGTH:
             return False, f"Filename too long (max {cls.MAX_NAME_LENGTH} characters)", ""
 
-        # Check extension - look for any valid extension in the basename
+        # Check extension - must end with a valid extension (not just contain it)
         lower_name = base_filename.lower()
-        has_valid_extension = any(valid_ext in lower_name for valid_ext in cls.VALID_EXTENSIONS)
+        has_valid_extension = any(lower_name.endswith(valid_ext) for valid_ext in cls.VALID_EXTENSIONS)
 
         if not has_valid_extension:
             return False, f"Invalid file type. Allowed: {', '.join(cls.VALID_EXTENSIONS)}", ""
@@ -153,10 +204,16 @@ class ChatbookValidator:
                     return False, error
 
                 # Check for zip bomb - excessive compression ratio
-                if file_size > 0:
-                    compression_ratio = total_uncompressed / file_size
-                    if compression_ratio > 100:  # More than 100:1 compression is suspicious
-                        return False, f"Suspicious compression ratio ({compression_ratio:.1f}:1) - possible zip bomb"
+                # Use total compressed size from archive (sum of compress_size) for consistency
+                # Threshold is configurable via CHATBOOKS_MAX_COMPRESSION_RATIO env var
+                total_compressed = sum(info.compress_size for info in zf.filelist)
+                if total_compressed > 0 and total_uncompressed > 0:
+                    compression_ratio = total_uncompressed / total_compressed
+                    if compression_ratio > cls.MAX_COMPRESSION_RATIO:
+                        return False, f"Suspicious compression ratio ({compression_ratio:.1f}:1, max {cls.MAX_COMPRESSION_RATIO}:1) - possible zip bomb"
+                elif total_uncompressed > 0 and total_compressed == 0:
+                    # Edge case: uncompressed data with zero compressed size is suspicious
+                    return False, "Invalid archive: uncompressed data with zero compressed size"
 
                 # Validate each file in archive
                 for info in zf.filelist:
@@ -165,8 +222,8 @@ class ChatbookValidator:
                         return False, "Archive contains files with invalid characters"
 
                     # Check for symlinks FIRST (they are never allowed)
-                    # Symlinks have external_attr with 0xA1ED0000 (symlink mode in Unix)
-                    if info.external_attr >> 16 == 0xA1ED:
+                    # Use cross-platform symlink detection
+                    if cls._is_symlink_entry(info):
                         return False, "Archive contains symlinks which are not allowed"
 
                     # Check for path traversal (most important security check)
@@ -186,9 +243,11 @@ class ChatbookValidator:
                         max_mb = cls.MAX_FILE_IN_ARCHIVE / (1024 * 1024)
                         return False, f"Archive contains files larger than {max_mb:.0f}MB limit"
 
-                    # Check for suspicious compression ratio per file
-                    if info.compress_size > 0 and info.file_size / info.compress_size > 100:
-                        return False, "Archive contains files with suspicious compression ratios"
+                    # Check for suspicious compression ratio per file (consistent with overall check)
+                    if info.compress_size > 0 and info.file_size > 0:
+                        per_file_ratio = info.file_size / info.compress_size
+                        if per_file_ratio > 100:
+                            return False, "Archive contains files with suspicious compression ratios"
 
                     # Check for suspicious file types
                     if cls._is_dangerous_file(info.filename):
@@ -197,6 +256,12 @@ class ChatbookValidator:
                 # Check for required files
                 if 'manifest.json' not in zf.namelist():
                     return False, "Invalid chatbook: manifest.json not found"
+
+                # Check manifest size to prevent DoS via large manifest files
+                manifest_info = zf.getinfo('manifest.json')
+                if manifest_info.file_size > cls.MAX_MANIFEST_SIZE:
+                    max_mb = cls.MAX_MANIFEST_SIZE / (1024 * 1024)
+                    return False, f"Manifest file too large (max {max_mb:.0f}MB)"
 
             return True, None
 
@@ -235,8 +300,11 @@ class ChatbookValidator:
             return False, "Name contains invalid characters"
 
         # Validate description
-        if description and len(description) > cls.MAX_DESCRIPTION_LENGTH:
-            return False, f"Description too long (max {cls.MAX_DESCRIPTION_LENGTH} characters)"
+        if description:
+            if len(description) > cls.MAX_DESCRIPTION_LENGTH:
+                return False, f"Description too long (max {cls.MAX_DESCRIPTION_LENGTH} characters)"
+            if not cls._is_safe_text(description):
+                return False, "Description contains invalid characters"
 
         # Validate tags
         if tags:
@@ -259,6 +327,44 @@ class ChatbookValidator:
                     return False, f"Category too long: {category[:20]}..."
                 if not cls._is_safe_text(category):
                     return False, f"Category contains invalid characters: {category}"
+
+        return True, None
+
+    @classmethod
+    def validate_media_quality(cls, media_quality: str) -> Tuple[bool, Optional[str]]:
+        """
+        Validate media quality value.
+
+        Args:
+            media_quality: Media quality setting
+
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        valid_qualities = {'thumbnail', 'compressed', 'original'}
+        if media_quality.lower() not in valid_qualities:
+            return False, f"Invalid media quality '{media_quality}'. Allowed: {', '.join(valid_qualities)}"
+        return True, None
+
+    @classmethod
+    def validate_author(cls, author: Optional[str]) -> Tuple[bool, Optional[str]]:
+        """
+        Validate author field.
+
+        Args:
+            author: Author name
+
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if author is None:
+            return True, None
+
+        if len(author) > cls.MAX_NAME_LENGTH:
+            return False, f"Author name too long (max {cls.MAX_NAME_LENGTH} characters)"
+
+        if not cls._is_safe_text(author):
+            return False, "Author name contains invalid characters"
 
         return True, None
 
@@ -328,8 +434,10 @@ class ChatbookValidator:
             return False, "Invalid content selections format"
 
         # Check for valid content types and IDs
+        # Must match ContentType enum values from chatbook_models.py
         valid_types = {'conversation', 'note', 'character', 'world_book',
-                      'dictionary', 'generated_document', 'media', 'embedding'}
+                      'dictionary', 'generated_document', 'media', 'embedding',
+                      'prompt', 'evaluation'}
 
         for content_type, ids in content_selections.items():
             if content_type not in valid_types:
@@ -394,9 +502,22 @@ class ChatbookValidator:
 
     @classmethod
     def _is_safe_text(cls, text: str) -> bool:
-        """Check if text contains only safe characters."""
-        # Allow alphanumeric, spaces, and common punctuation
-        safe_pattern = re.compile(r'^[\w\s\-.,!?\'\"()\[\]{}@#$%^&*+=/:;<>|`~]+$')
+        """Check if text contains only safe characters.
+
+        Excludes potentially dangerous characters:
+        - < > : XSS risk in HTML contexts
+        - | : Shell pipe injection risk
+        - ; : Command separator injection risk
+        - ` : Command substitution risk
+        - ~ : Home directory expansion risk
+        - # : SQL/URL comment injection risk
+        - & : Shell command chaining, URL parameter
+        - * : Glob/wildcard character
+        - ^ : Regex special character
+        """
+        # Allow alphanumeric, spaces, and safe punctuation only
+        # Explicitly excludes: < > | ; ` ~ / : # & * ^ = + (dangerous in various contexts)
+        safe_pattern = re.compile(r'^[\w\s\-.,!?\'"()\[\]{}@]+$')
         return bool(safe_pattern.match(text))
 
     @classmethod

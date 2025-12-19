@@ -41,8 +41,8 @@ from contextlib import asynccontextmanager
 from .exceptions import (
     ChatbookException, ValidationError, FileOperationError,
     DatabaseError, QuotaExceededError, SecurityError,
-    JobError, ImportError, ExportError, ArchiveError,
-    ConflictError, TemporaryError, TimeoutError,
+    JobError, ChatbookImportError, ExportError, ArchiveError,
+    ConflictError, TemporaryError, ChatbookTimeoutError,
     is_retryable, get_retry_delay
 )
 
@@ -82,6 +82,45 @@ except Exception:  # pragma: no cover
 class ChatbookService:
     """Service for creating and importing chatbooks with user isolation."""
 
+    @staticmethod
+    def _is_unsafe_archive_path(member_path: str) -> bool:
+        """
+        Check if an archive member path is potentially unsafe (path traversal).
+
+        This performs path-component aware checking to detect:
+        - Absolute paths
+        - Parent directory references (..)
+        - Paths that could escape the extraction directory
+
+        Args:
+            member_path: The path of a member within the archive
+
+        Returns:
+            True if the path is unsafe, False otherwise
+        """
+        # Normalize the path first
+        normalized = os.path.normpath(member_path)
+
+        # Check for absolute paths (Unix or Windows style)
+        if os.path.isabs(normalized) or normalized.startswith("/") or normalized.startswith("\\"):
+            return True
+
+        # Check for Windows drive letters (e.g., C:)
+        if len(normalized) >= 2 and normalized[1] == ':':
+            return True
+
+        # Split into path components and check each one
+        # This is more reliable than string matching ".." which could match "file..txt"
+        parts = Path(normalized).parts
+        for part in parts:
+            if part == "..":
+                return True
+            # Also check for null bytes which could cause issues
+            if '\x00' in part:
+                return True
+
+        return False
+
     def __init__(self, user_id: Union[str, int], db: CharactersRAGDB, user_id_int: Optional[int] = None):
         """
         Initialize the chatbook service for a specific user.
@@ -93,6 +132,11 @@ class ChatbookService:
         """
         self.user_id_raw = user_id
         self.user_id = str(user_id)
+
+        # Early validation: reject empty user_id to prevent security issues
+        if not self.user_id or self.user_id.strip() == "":
+            raise ValueError("user_id cannot be empty or whitespace-only")
+
         self.user_id_int: Optional[int] = user_id_int
         if self.user_id_int is None:
             try:
@@ -106,6 +150,9 @@ class ChatbookService:
 
         # In-process async task registry (best-effort cancellation)
         self._tasks: _Dict[str, asyncio.Task] = {}
+        # Worker loop control
+        self._shutdown_requested = False
+        self._max_consecutive_errors = 10  # Maximum consecutive errors before worker stops
         self._prompts_db: Optional["PromptsDatabase"] = None
         self._media_db: Optional["MediaDatabase"] = None
         self._evaluations_db: Optional["EvaluationsDatabase"] = None
@@ -270,8 +317,16 @@ class ChatbookService:
         if isinstance(value, (int, float)):
             try:
                 # Treat numeric input as Unix timestamp (UTC)
-                return datetime.utcfromtimestamp(value)
-            except Exception:
+                # Bounds check: reject timestamps before 1970 or after year 9999
+                # (approximately -86400 to 253402300800 seconds from epoch)
+                MIN_TIMESTAMP = -86400  # Allow small negative for timezone edge cases
+                MAX_TIMESTAMP = 253402300800  # Year 9999 approximately
+                if value < MIN_TIMESTAMP or value > MAX_TIMESTAMP:
+                    return None
+                # Use fromtimestamp with timezone.utc, then strip tzinfo to get naive UTC datetime
+                # (utcfromtimestamp is deprecated in Python 3.12+)
+                return datetime.fromtimestamp(value, tz=timezone.utc).replace(tzinfo=None)
+            except (OSError, OverflowError, ValueError):
                 return None
         if isinstance(value, str):
             text = value.strip()
@@ -461,7 +516,7 @@ class ChatbookService:
             logger.debug(f"No match found for '{name}' via FTS or direct query")
             return None
         except Exception as e:
-            logger.debug(f"Error searching for conversation by name: {e}")
+            logger.warning(f"Error searching for conversation by name: {e}")
             return None
 
     def _get_note_by_title(self, title: str) -> Optional[Dict[str, Any]]:
@@ -503,7 +558,7 @@ class ChatbookService:
             logger.debug(f"No match found for note '{title}' via FTS or direct query")
             return None
         except Exception as e:
-            logger.debug(f"Error searching for note by title: {e}")
+            logger.warning(f"Error searching for note by title: {e}")
             return None
 
     def _register_job_handlers(self):
@@ -588,7 +643,7 @@ class ChatbookService:
                         )
                         conv_ids = [c['id'] for c in conversations] if conversations else []
                     except Exception as e:
-                        logger.debug(f"Error getting conversations: {e}")
+                        logger.warning(f"Error getting conversations for export: {e}")
                     content_selections[ContentType.CONVERSATION] = conv_ids
                 elif ct == "characters":
                     # Get all character IDs when none specified
@@ -599,7 +654,7 @@ class ChatbookService:
                         )
                         char_ids = [str(c['id']) for c in characters] if characters else []
                     except Exception as e:
-                        logger.debug(f"Error getting characters: {e}")
+                        logger.warning(f"Error getting characters for export: {e}")
                     content_selections[ContentType.CHARACTER] = char_ids
                 elif ct == "notes":
                     # Get all note IDs when none specified
@@ -610,7 +665,7 @@ class ChatbookService:
                         )
                         note_ids = [n['id'] for n in notes] if notes else []
                     except Exception as e:
-                        logger.debug(f"Error getting notes: {e}")
+                        logger.warning(f"Error getting notes for export: {e}")
                     content_selections[ContentType.NOTE] = note_ids
                 elif ct == "world_books":
                     # Get all world book IDs when none specified
@@ -623,7 +678,7 @@ class ChatbookService:
                             # Fallback to direct database query
                             logger.debug("WorldBookService not available, using direct query")
                     except Exception as e:
-                        logger.debug(f"Error getting world books: {e}")
+                        logger.warning(f"Error getting world books for export: {e}")
                     content_selections[ContentType.WORLD_BOOK] = wb_ids
                 elif ct == "dictionaries":
                     # Get all dictionary IDs when none specified
@@ -636,7 +691,7 @@ class ChatbookService:
                             # Fallback to direct database query
                             logger.debug("ChatDictionary not available, using direct query")
                     except Exception as e:
-                        logger.debug(f"Error getting dictionaries: {e}")
+                        logger.warning(f"Error getting dictionaries for export: {e}")
                     content_selections[ContentType.DICTIONARY] = dict_ids
             kwargs['content_selections'] = content_selections
 
@@ -704,8 +759,8 @@ class ChatbookService:
         media_quality: str = "compressed",
         include_embeddings: bool = False,
         include_generated_content: bool = True,
-        tags: List[str] = None,
-        categories: List[str] = None,
+        tags: Optional[List[str]] = None,
+        categories: Optional[List[str]] = None,
         async_mode: bool = False,
         request_id: Optional[str] = None
     ) -> Tuple[bool, str, Optional[str]]:
@@ -748,7 +803,8 @@ class ChatbookService:
                     ps_job = self._ps_job_adapter.create_export_job(payload, request_id=request_id)
                     if ps_job and ps_job.get("id") is not None:
                         job_id = str(ps_job["id"])  # mirror PS id
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Failed to create PS export job, falling back to core: {e}")
                     job_id = None
             if job_id is None:
                 job_id = str(uuid4())
@@ -833,7 +889,7 @@ class ChatbookService:
                 try:
                     conn.execute("ROLLBACK")
                 except Exception as e2:
-                    logger.debug(f"Transaction rollback failed: error={e2}")
+                    logger.warning(f"Transaction rollback failed: error={e2}")
             logger.error(f"Transaction rolled back: {e}")
             raise
         finally:
@@ -842,7 +898,7 @@ class ChatbookService:
                 try:
                     conn.close()
                 except Exception as e3:
-                    logger.debug(f"Connection close failed after transaction: error={e3}")
+                    logger.warning(f"Connection close failed after transaction: error={e3}")
 
     async def _create_chatbook_sync_wrapper(
         self,
@@ -854,8 +910,8 @@ class ChatbookService:
         media_quality: str = "compressed",
         include_embeddings: bool = False,
         include_generated_content: bool = True,
-        tags: List[str] = None,
-        categories: List[str] = None
+        tags: Optional[List[str]] = None,
+        categories: Optional[List[str]] = None
     ) -> Tuple[bool, str, Optional[str]]:
         """
         Wrapper for synchronous chatbook creation.
@@ -995,14 +1051,14 @@ class ChatbookService:
                 try:
                     await asyncio.to_thread(output_path.unlink)
                 except Exception as cleanup_err:
-                    logger.debug(f"Failed to remove partial archive {output_path}: {cleanup_err}")
+                    logger.warning(f"Failed to remove partial archive {output_path}: {cleanup_err}")
             return False, f"Error creating chatbook: {str(e)}", None
         finally:
             if work_dir and work_dir.exists():
                 try:
                     await asyncio.to_thread(shutil.rmtree, work_dir)
                 except Exception as cleanup_err:
-                    logger.debug(f"Failed to remove work directory {work_dir}: {cleanup_err}")
+                    logger.warning(f"Failed to remove work directory {work_dir}: {cleanup_err}")
 
     async def _create_chatbook_job_async(
         self,
@@ -1029,14 +1085,14 @@ class ChatbookService:
         try:
             # Update job status
             job.status = ExportStatus.IN_PROGRESS
-            job.started_at = datetime.utcnow()
+            job.started_at = datetime.now(timezone.utc)
             self._save_export_job(job)
             # PS backend: reflect processing
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                 try:
                     self._ps_job_adapter.update_status(int(job.job_id), "in_progress")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"PS adapter update_status failed for export job {job.job_id}: {e}")
 
             # Create chatbook using the sync wrapper (could be made truly async)
             success, message, file_path = await self._create_chatbook_sync_wrapper(
@@ -1053,21 +1109,21 @@ class ChatbookService:
                     if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                         try:
                             self._ps_job_adapter.update_status(int(job.job_id), "cancelled")
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"PS adapter update_status (cancelled) failed for export job {job.job_id}: {e}")
                     return
                 job.status = ExportStatus.COMPLETED
-                job.completed_at = datetime.utcnow()
+                job.completed_at = datetime.now(timezone.utc)
                 job.output_path = file_path
                 job.file_size_bytes = Path(file_path).stat().st_size if file_path else None
                 # Build (optionally signed) download URL and expiry
                 ttl_seconds = int(os.getenv("CHATBOOKS_URL_TTL_SECONDS", "86400") or "86400")
-                job.expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
+                job.expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
                 job.download_url = self._build_download_url(job.job_id, job.expires_at)
             else:
                 # Update job with failure
                 job.status = ExportStatus.FAILED
-                job.completed_at = datetime.utcnow()
+                job.completed_at = datetime.now(timezone.utc)
                 job.error_message = message
             # PS backend: reflect terminal state
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
@@ -1076,21 +1132,21 @@ class ChatbookService:
                         self._ps_job_adapter.update_status(int(job.job_id), "completed", result={"path": job.output_path})
                     elif job.status == ExportStatus.FAILED:
                         self._ps_job_adapter.update_status(int(job.job_id), "failed", error_message=job.error_message)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"PS adapter update_status (completion) failed for export job {job.job_id}: {e}")
             self._save_export_job(job)
 
         except Exception as e:
             # Update job with error
             job.status = ExportStatus.FAILED
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.error_message = str(e)
             self._save_export_job(job)
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                 try:
                     self._ps_job_adapter.update_status(int(job.job_id), "failed", error_message=str(e))
-                except Exception:
-                    pass
+                except Exception as ps_err:
+                    logger.debug(f"PS adapter update_status (failed) failed for export job {job.job_id}: {ps_err}")
 
     async def import_chatbook(
         self,
@@ -1103,7 +1159,7 @@ class ChatbookService:
         import_embeddings: bool = False,
         async_mode: bool = False,
         request_id: Optional[str] = None
-    ) -> Tuple[bool, str, Optional[str]]:
+    ) -> Tuple[bool, str, Optional[Union[str, List[str]]]]:
         """
         Import a chatbook.
 
@@ -1117,7 +1173,9 @@ class ChatbookService:
             async_mode: Run as background job
 
         Returns:
-            Tuple of (success, message, job_id or None)
+            Tuple of (success, message, result) where result is:
+            - job_id (str) if async_mode=True
+            - warnings list (List[str]) if async_mode=False
         """
         # Handle both conflict_resolution and conflict_strategy (for test compatibility)
         if conflict_strategy and not conflict_resolution:
@@ -1128,7 +1186,11 @@ class ChatbookService:
             try:
                 conflict_resolution = ConflictResolution(conflict_resolution)
             except (ValueError, KeyError):
-                # Default to skip if invalid value provided
+                # Log and default to skip if invalid value provided
+                logger.warning(
+                    f"Invalid conflict_resolution value '{conflict_resolution}', "
+                    f"defaulting to 'skip'. Valid values: {[e.value for e in ConflictResolution]}"
+                )
                 conflict_resolution = ConflictResolution.SKIP
         elif conflict_resolution is None:
             # Default to skip if not specified
@@ -1151,7 +1213,8 @@ class ChatbookService:
                     ps_job = self._ps_job_adapter.create_import_job(payload, request_id=request_id)
                     if ps_job and ps_job.get("id") is not None:
                         job_id = str(ps_job["id"])  # mirror PS id
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Failed to create PS import job, falling back to core: {e}")
                     job_id = None
             if job_id is None:
                 job_id = str(uuid4())
@@ -1231,11 +1294,11 @@ class ChatbookService:
             from .chatbook_validators import ChatbookValidator
             ok, err = ChatbookValidator.validate_zip_file(file_path)
             if not ok:
-                # Surface specific validator detail while keeping consistent prefix
+                # Surface specific validator detail
                 detail = err or "Invalid or potentially malicious archive file"
                 if isinstance(detail, str) and detail.lower().startswith("file does not exist"):
                     detail = "Invalid or potentially malicious archive file"
-                return False, f"Error: {detail}", None
+                return False, detail, None
 
             # Extract chatbook to secure temp location
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1250,18 +1313,26 @@ class ChatbookService:
                     return False, "Archive too large (>500MB uncompressed)", None
 
                 # Extract with path validation
-                for member in zf.namelist():
-                    # Normalize and validate the path
-                    normalized_path = os.path.normpath(member)
-                    if os.path.isabs(normalized_path) or ".." in normalized_path or normalized_path.startswith("/"):
-                        return False, f"Unsafe path in archive: {member}", None
+                # Resolve extract_dir once (it exists at this point)
+                extract_dir_resolved = str(extract_dir.resolve())
 
-                    # Additional check: ensure the path stays within extract_dir
-                    target_path = os.path.join(extract_dir, member)
-                    real_extract_dir = os.path.realpath(extract_dir)
-                    real_target = os.path.realpath(os.path.dirname(target_path))
-                    if not real_target.startswith(real_extract_dir):
-                        return False, f"Path traversal attempt detected: {member}", None
+                for member in zf.namelist():
+                    # Validate path using path-component aware check
+                    if self._is_unsafe_archive_path(member):
+                        return False, "Unsafe path in archive detected", None
+
+                    # Additional check: ensure the normalized target stays within extract_dir
+                    normalized_path = os.path.normpath(member)
+                    # Use normpath + commonpath instead of realpath to avoid race conditions
+                    # (realpath would try to resolve symlinks on paths that don't exist yet)
+                    target_path = os.path.normpath(os.path.join(extract_dir_resolved, member))
+                    try:
+                        common = os.path.commonpath([extract_dir_resolved, target_path])
+                        if common != extract_dir_resolved:
+                            return False, "Path traversal attempt detected", None
+                    except ValueError:
+                        # commonpath raises ValueError if paths are on different drives (Windows)
+                        return False, "Path traversal attempt detected", None
 
                     # Extract individual file safely
                     zf.extract(member, extract_dir)
@@ -1269,15 +1340,16 @@ class ChatbookService:
             # Load manifest
             manifest_path = extract_dir / "manifest.json"
             if not manifest_path.exists():
-                return False, "Error: Invalid chatbook - manifest.json not found", None
+                return False, "Invalid chatbook - manifest.json not found", None
 
             with open(manifest_path, 'r', encoding='utf-8') as f:
                 manifest_data = json.load(f)
 
             manifest = ChatbookManifest.from_dict(manifest_data)
 
-            # Check version compatibility
-            if manifest.version != ChatbookVersion.V1:
+            # Check version compatibility (V1 and V1_LEGACY are both compatible)
+            compatible_versions = {ChatbookVersion.V1, ChatbookVersion.V1_LEGACY}
+            if manifest.version not in compatible_versions:
                 logger.warning(f"Chatbook version {manifest.version.value} may not be fully compatible")
 
             # Set up content selections if not provided
@@ -1391,13 +1463,13 @@ class ChatbookService:
         try:
             # Update job status
             job.status = ImportStatus.IN_PROGRESS
-            job.started_at = datetime.utcnow()
+            job.started_at = datetime.now(timezone.utc)
             self._save_import_job(job)
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                 try:
                     self._ps_job_adapter.update_status(int(job.job_id), "in_progress")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"PS adapter update_status failed for import job {job.job_id}: {e}")
 
             # Import chatbook synchronously using thread pool
             success, message, _ = await asyncio.to_thread(
@@ -1413,15 +1485,15 @@ class ChatbookService:
                     if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                         try:
                             self._ps_job_adapter.update_status(int(job.job_id), "cancelled")
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"PS adapter update_status (cancelled) failed for import job {job.job_id}: {e}")
                     return
                 job.status = ImportStatus.COMPLETED
             else:
                 job.status = ImportStatus.FAILED
                 job.error_message = message
 
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             self._save_import_job(job)
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                 try:
@@ -1429,19 +1501,19 @@ class ChatbookService:
                         self._ps_job_adapter.update_status(int(job.job_id), "completed")
                     elif job.status == ImportStatus.FAILED:
                         self._ps_job_adapter.update_status(int(job.job_id), "failed", error_message=job.error_message)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"PS adapter update_status (completion) failed for import job {job.job_id}: {e}")
 
         except Exception as e:
             job.status = ImportStatus.FAILED
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.error_message = str(e)
             self._save_import_job(job)
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                 try:
                     self._ps_job_adapter.update_status(int(job.job_id), "failed", error_message=str(e))
-                except Exception:
-                    pass
+                except Exception as ps_err:
+                    logger.debug(f"PS adapter update_status (failed) failed for import job {job.job_id}: {ps_err}")
         finally:
             # Ensure original import archive is removed for async mode
             try:
@@ -1449,7 +1521,7 @@ class ChatbookService:
                 if fp.exists() and fp.is_file():
                     fp.unlink()
             except Exception as _e:
-                logger.debug(f"Could not remove import archive (async) {file_path}: {_e}")
+                logger.warning(f"Could not remove import archive (async) {file_path}: {_e}")
 
     def preview_chatbook(self, file_path: str) -> Tuple[Optional[ChatbookManifest], Optional[str]]:
         """
@@ -1472,25 +1544,32 @@ class ChatbookService:
             except Exception:
                 # If validator import fails, continue with cautious extraction guards
                 pass
-            # Extract to temporary directory
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            extract_dir = self.temp_dir / f"preview_{timestamp}"
+            # Extract to temporary directory with UUID to prevent collisions
+            extract_dir = self.temp_dir / f"preview_{uuid4().hex}"
 
             # Extract archive with path validation
             with zipfile.ZipFile(file_path, 'r') as zf:
+                # Ensure extract_dir exists for path validation
+                extract_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+                extract_dir_resolved = str(extract_dir.resolve())
+
                 # Validate all paths before extraction to prevent path traversal
                 for member in zf.namelist():
-                    # Normalize and validate the path
-                    normalized_path = os.path.normpath(member)
-                    if os.path.isabs(normalized_path) or ".." in normalized_path or normalized_path.startswith("/"):
-                        return None, f"Unsafe path in archive: {member}"
+                    # Validate path using path-component aware check
+                    if self._is_unsafe_archive_path(member):
+                        return None, "Unsafe path in archive detected"
 
-                    # Additional check: ensure the path stays within extract_dir
-                    target_path = os.path.join(extract_dir, member)
-                    real_extract_dir = os.path.realpath(extract_dir)
-                    real_target = os.path.realpath(os.path.dirname(target_path))
-                    if not real_target.startswith(real_extract_dir):
-                        return None, f"Path traversal attempt detected: {member}"
+                    # Additional check: ensure the normalized target stays within extract_dir
+                    normalized_path = os.path.normpath(member)
+                    # Use normpath + commonpath instead of realpath to avoid race conditions
+                    target_path = os.path.normpath(os.path.join(extract_dir_resolved, member))
+                    try:
+                        common = os.path.commonpath([extract_dir_resolved, target_path])
+                        if common != extract_dir_resolved:
+                            return None, "Path traversal attempt detected"
+                    except ValueError:
+                        # commonpath raises ValueError if paths are on different drives (Windows)
+                        return None, "Path traversal attempt detected"
 
                 # Safe to extract after validation
                 zf.extractall(extract_dir)
@@ -1527,8 +1606,19 @@ class ChatbookService:
             return f"{base}?exp={exp}&token={sig}"
         return base
 
+    def request_shutdown(self):
+        """Request graceful shutdown of the worker loop."""
+        self._shutdown_requested = True
+        logger.info(f"Shutdown requested for chatbooks worker (user={self.user_id})")
+
     async def _core_worker_loop(self):
-        """Background loop to process Chatbooks jobs from core Jobs manager for this user."""
+        """Background loop to process Chatbooks jobs from core Jobs manager for this user.
+
+        The worker loop:
+        - Checks for shutdown requests between iterations
+        - Tracks consecutive errors and stops if max threshold is exceeded
+        - Sleeps between iterations to avoid tight loops
+        """
         try:
             from tldw_Server_API.app.core.Jobs.manager import JobManager
         except Exception:
@@ -1539,7 +1629,9 @@ class ChatbookService:
             jm = JobManager()
             self._core_jobs = jm
         worker_id = f"cb-worker-{self.user_id}"
-        while True:
+        consecutive_errors = 0
+
+        while not self._shutdown_requested:
             try:
                 job = jm.acquire_next_job(
                     domain="chatbooks", queue="default", lease_seconds=60, worker_id=worker_id, owner_user_id=self.user_id
@@ -1552,12 +1644,11 @@ class ChatbookService:
                 action = payload.get("action")
                 chatbooks_job_id = payload.get("chatbooks_job_id")
                 if action == "export":
-                    # Update Chatbooks job row to in_progress
-                    ej = self._get_export_job(chatbooks_job_id)
-                    if ej:
-                        ej.status = ExportStatus.IN_PROGRESS
-                        ej.started_at = datetime.utcnow()
-                        self._save_export_job(ej)
+                    # Atomically claim the job to prevent race conditions
+                    if not self._claim_export_job(chatbooks_job_id):
+                        # Job was already claimed by another worker, skip
+                        logger.debug(f"Export job {chatbooks_job_id} already claimed, skipping")
+                        continue
                     # run export
                     cs = {}
                     for k, v in (payload.get("content_selections") or {}).items():
@@ -1581,14 +1672,14 @@ class ChatbookService:
                         ej = self._get_export_job(chatbooks_job_id)
                         if ej and ej.status != ExportStatus.CANCELLED:
                             ej.status = ExportStatus.COMPLETED
-                            ej.completed_at = datetime.utcnow()
+                            ej.completed_at = datetime.now(timezone.utc)
                             ej.output_path = file_path
                             try:
                                 ej.file_size_bytes = Path(file_path).stat().st_size if file_path else None
                             except Exception:
                                 pass
                             ttl_seconds = int(os.getenv("CHATBOOKS_URL_TTL_SECONDS", "86400") or "86400")
-                            ej.expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
+                            ej.expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
                             ej.download_url = self._build_download_url(ej.job_id, ej.expires_at)
                             self._save_export_job(ej)
                         jm.complete_job(
@@ -1602,7 +1693,7 @@ class ChatbookService:
                         ej = self._get_export_job(chatbooks_job_id)
                         if ej:
                             ej.status = ExportStatus.FAILED
-                            ej.completed_at = datetime.utcnow()
+                            ej.completed_at = datetime.now(timezone.utc)
                             ej.error_message = msg
                             self._save_export_job(ej)
                         jm.fail_job(
@@ -1614,11 +1705,11 @@ class ChatbookService:
                             completion_token=lease_id,
                         )
                 elif action == "import":
-                    ij = self._get_import_job(chatbooks_job_id)
-                    if ij:
-                        ij.status = ImportStatus.IN_PROGRESS
-                        ij.started_at = datetime.utcnow()
-                        self._save_import_job(ij)
+                    # Atomically claim the job to prevent race conditions
+                    if not self._claim_import_job(chatbooks_job_id):
+                        # Job was already claimed by another worker, skip
+                        logger.debug(f"Import job {chatbooks_job_id} already claimed, skipping")
+                        continue
                     # reconstruct selections
                     cs = {}
                     for k, v in (payload.get("content_selections") or {}).items():
@@ -1638,7 +1729,7 @@ class ChatbookService:
                     if ok:
                         if ij and ij.status != ImportStatus.CANCELLED:
                             ij.status = ImportStatus.COMPLETED
-                            ij.completed_at = datetime.utcnow()
+                            ij.completed_at = datetime.now(timezone.utc)
                             self._save_import_job(ij)
                         jm.complete_job(
                             int(job["id"]),
@@ -1649,7 +1740,7 @@ class ChatbookService:
                     else:
                         if ij:
                             ij.status = ImportStatus.FAILED
-                            ij.completed_at = datetime.utcnow()
+                            ij.completed_at = datetime.now(timezone.utc)
                             ij.error_message = msg
                             self._save_import_job(ij)
                         jm.fail_job(
@@ -1669,9 +1760,17 @@ class ChatbookService:
                         lease_id=lease_id,
                         completion_token=lease_id,
                     )
+                # Reset consecutive error counter on successful iteration
+                consecutive_errors = 0
             except Exception as e:
-                logger.error(f"Core worker error: {e}")
+                consecutive_errors += 1
+                logger.error(f"Core worker error ({consecutive_errors}/{self._max_consecutive_errors}): {e}")
+                if consecutive_errors >= self._max_consecutive_errors:
+                    logger.error(f"Core worker for user {self.user_id} stopping after {consecutive_errors} consecutive errors")
+                    break
                 await asyncio.sleep(1)
+
+        logger.info(f"Core worker loop exited for user {self.user_id}")
 
     def get_export_job(self, job_id: str) -> Optional[ExportJob]:
         """Get export job status."""
@@ -1721,12 +1820,33 @@ class ChatbookService:
         return job
 
     def list_export_jobs(self, status: Optional[str] = None, limit: int = 100) -> List[ExportJob]:
-        """List all export jobs for this user."""
+        """List all export jobs for this user.
+
+        Args:
+            status: Optional status filter (pending, in_progress, completed, failed, cancelled, expired)
+            limit: Maximum number of jobs to return
+        """
+        # Sanity check: ensure user_id is set to prevent listing all jobs
+        if not self.user_id:
+            logger.warning("list_export_jobs called with empty user_id")
+            return []
+
         try:
-            cursor = self.db.execute_query(
-                "SELECT * FROM export_jobs WHERE user_id = ? ORDER BY created_at DESC",
-                (self.user_id,)
-            )
+            # Build query with optional status filter
+            query = "SELECT * FROM export_jobs WHERE user_id = ?"
+            params: list = [self.user_id]
+
+            if status:
+                # Validate status to prevent SQL injection
+                valid_statuses = {'pending', 'in_progress', 'completed', 'failed', 'cancelled', 'expired'}
+                if status.lower() in valid_statuses:
+                    query += " AND status = ?"
+                    params.append(status.lower())
+
+            query += " ORDER BY created_at DESC LIMIT ?"
+            params.append(limit)
+
+            cursor = self.db.execute_query(query, tuple(params))
 
             # Fetch results from cursor
             results = self._fetch_results(cursor)
@@ -1738,35 +1858,23 @@ class ChatbookService:
             for row in results:
                 # Handle both dict and tuple formats (for test compatibility)
                 if isinstance(row, dict):
-                    # Parse timestamps if they're strings
-                    def parse_ts(ts):
-                        if ts is None:
-                            return None
-                        if isinstance(ts, datetime):
-                            return ts
-                        if isinstance(ts, str):
-                            if 'T' in ts:
-                                return datetime.fromisoformat(ts)
-                            else:
-                                return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S.%f')
-                        return ts
-
+                    # Use class method for timestamp parsing
                     job = ExportJob(
                         job_id=row['job_id'],
                         user_id=row['user_id'],
                         status=ExportStatus(row['status']),
                         chatbook_name=row['chatbook_name'],
                         output_path=row['output_path'],
-                        created_at=parse_ts(row['created_at']),
-                        started_at=parse_ts(row['started_at']),
-                        completed_at=parse_ts(row['completed_at']),
+                        created_at=ChatbookService._parse_timestamp(row['created_at']),
+                        started_at=ChatbookService._parse_timestamp(row['started_at']),
+                        completed_at=ChatbookService._parse_timestamp(row['completed_at']),
                         error_message=row['error_message'],
                         progress_percentage=row['progress_percentage'] or 0,
                         total_items=row['total_items'] or 0,
                         processed_items=row['processed_items'] or 0,
                         file_size_bytes=row['file_size_bytes'],
                         download_url=row['download_url'],
-                        expires_at=parse_ts(row['expires_at']),
+                        expires_at=ChatbookService._parse_timestamp(row['expires_at']),
                         metadata={}  # Initialize empty metadata
                     )
                 else:
@@ -1780,16 +1888,16 @@ class ChatbookService:
                         status=ExportStatus(row[2]),
                         chatbook_name=row[3],
                         output_path=row[4],
-                        created_at=datetime.fromisoformat(row[5]) if row[5] else None,
-                        started_at=datetime.fromisoformat(row[6]) if row[6] else None,
-                        completed_at=datetime.fromisoformat(row[7]) if row[7] else None,
+                        created_at=ChatbookService._parse_timestamp(row[5]),
+                        started_at=ChatbookService._parse_timestamp(row[6]),
+                        completed_at=ChatbookService._parse_timestamp(row[7]),
                         error_message=row[8] if len(row) > 8 else None,
                         progress_percentage=row[9] if len(row) > 9 else 0,
                         total_items=row[10] if len(row) > 10 else 0,
                         processed_items=row[11] if len(row) > 11 else 0,
                         file_size_bytes=row[12] if len(row) > 12 else 0,
                         download_url=row[13] if len(row) > 13 else None,
-                        expires_at=datetime.fromisoformat(row[14]) if len(row) > 14 and row[14] else None,
+                        expires_at=ChatbookService._parse_timestamp(row[14]) if len(row) > 14 else None,
                         metadata={}  # Initialize empty metadata
                     )
                 # Reflect PS status if applicable
@@ -1818,12 +1926,33 @@ class ChatbookService:
             logger.error(f"Error listing export jobs: {e}")
             return []
     def list_import_jobs(self, status: Optional[str] = None, limit: int = 100) -> List[ImportJob]:
-        """List all import jobs for this user."""
+        """List all import jobs for this user.
+
+        Args:
+            status: Optional status filter (pending, validating, in_progress, completed, failed, cancelled)
+            limit: Maximum number of jobs to return
+        """
+        # Sanity check: ensure user_id is set to prevent listing all jobs
+        if not self.user_id:
+            logger.warning("list_import_jobs called with empty user_id")
+            return []
+
         try:
-            cursor = self.db.execute_query(
-                "SELECT * FROM import_jobs WHERE user_id = ? ORDER BY created_at DESC",
-                (self.user_id,)
-            )
+            # Build query with optional status filter
+            query = "SELECT * FROM import_jobs WHERE user_id = ?"
+            params: list = [self.user_id]
+
+            if status:
+                # Validate status to prevent SQL injection
+                valid_statuses = {'pending', 'validating', 'in_progress', 'completed', 'failed', 'cancelled'}
+                if status.lower() in valid_statuses:
+                    query += " AND status = ?"
+                    params.append(status.lower())
+
+            query += " ORDER BY created_at DESC LIMIT ?"
+            params.append(limit)
+
+            cursor = self.db.execute_query(query, tuple(params))
 
             # Fetch results from cursor
             results = self._fetch_results(cursor)
@@ -1835,27 +1964,15 @@ class ChatbookService:
             for row in results:
                 # Handle both dict and tuple formats (for test compatibility)
                 if isinstance(row, dict):
-                    # Parse timestamps if they're strings
-                    def parse_ts(ts):
-                        if ts is None:
-                            return None
-                        if isinstance(ts, datetime):
-                            return ts
-                        if isinstance(ts, str):
-                            if 'T' in ts:
-                                return datetime.fromisoformat(ts)
-                            else:
-                                return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S.%f')
-                        return ts
-
+                    # Use class method for timestamp parsing
                     job = ImportJob(
                         job_id=row['job_id'],
                         user_id=row['user_id'],
                         status=ImportStatus(row['status']),
                         chatbook_path=row['chatbook_path'],
-                        created_at=parse_ts(row['created_at']),
-                        started_at=parse_ts(row['started_at']),
-                        completed_at=parse_ts(row['completed_at']),
+                        created_at=ChatbookService._parse_timestamp(row['created_at']),
+                        started_at=ChatbookService._parse_timestamp(row['started_at']),
+                        completed_at=ChatbookService._parse_timestamp(row['completed_at']),
                         error_message=row['error_message'],
                         progress_percentage=row['progress_percentage'] or 0,
                         total_items=row['total_items'] or 0,
@@ -1877,9 +1994,9 @@ class ChatbookService:
                         user_id=row[1],
                         status=ImportStatus(row[2]),
                         chatbook_path=row[3],
-                        created_at=datetime.fromisoformat(row[4]) if row[4] else None,
-                        started_at=datetime.fromisoformat(row[5]) if row[5] else None,
-                        completed_at=datetime.fromisoformat(row[6]) if row[6] else None,
+                        created_at=ChatbookService._parse_timestamp(row[4]),
+                        started_at=ChatbookService._parse_timestamp(row[5]),
+                        completed_at=ChatbookService._parse_timestamp(row[6]),
                         error_message=row[7] if len(row) > 7 else None,
                         progress_percentage=row[8] if len(row) > 8 else 0,
                         total_items=row[9] if len(row) > 9 else 0,
@@ -1915,46 +2032,59 @@ class ChatbookService:
             logger.error(f"Error listing import jobs: {e}")
             return []
 
-    def cleanup_expired_exports(self) -> int:
-        """Clean up expired export files. Returns number of files deleted."""
+    def cleanup_expired_exports(self, batch_size: int = 100) -> int:
+        """Clean up expired export files. Returns number of files deleted.
+
+        Args:
+            batch_size: Number of jobs to process per batch to prevent memory issues
+        """
         try:
-            # Get expired jobs
-            now = datetime.utcnow()
-            cursor = self.db.execute_query(
-                "SELECT * FROM export_jobs WHERE user_id = ? AND expires_at < ? AND status = ?",
-                (self.user_id, now.isoformat(), ExportStatus.COMPLETED.value)
-            )
-            results = self._fetch_results(cursor)
-
-            if not results:
-                return 0
-
+            # Get expired jobs in batches to prevent memory issues with large result sets
+            now = datetime.now(timezone.utc)
             deleted_count = 0
-            for row in results:
-                # Support both dict and tuple rows
-                if isinstance(row, dict):
-                    output_path = row.get('output_path')
-                    job_id = row.get('job_id')
-                else:
-                    # tuple field order: job_id, user_id, status, chatbook_name, output_path, ...
-                    output_path = row[4] if len(row) > 4 else None
-                    job_id = row[0]
+            offset = 0
 
-                if output_path and Path(output_path).exists():
+            while True:
+                cursor = self.db.execute_query(
+                    "SELECT * FROM export_jobs WHERE user_id = ? AND expires_at < ? AND status = ? LIMIT ? OFFSET ?",
+                    (self.user_id, now.isoformat(), ExportStatus.COMPLETED.value, batch_size, offset)
+                )
+                results = self._fetch_results(cursor)
+
+                if not results:
+                    break
+
+                for row in results:
+                    # Support both dict and tuple rows
+                    if isinstance(row, dict):
+                        output_path = row.get('output_path')
+                        job_id = row.get('job_id')
+                    else:
+                        # tuple field order: job_id, user_id, status, chatbook_name, output_path, ...
+                        output_path = row[4] if len(row) > 4 else None
+                        job_id = row[0]
+
+                    if output_path and Path(output_path).exists():
+                        try:
+                            Path(output_path).unlink()
+                            deleted_count += 1
+                        except Exception as e:
+                            logger.error(f"Error deleting expired export: {e}")
+
+                    # Update job status
                     try:
-                        Path(output_path).unlink()
-                        deleted_count += 1
-                    except Exception as e:
-                        logger.error(f"Error deleting expired export: {e}")
+                        self.db.execute_query(
+                            "UPDATE export_jobs SET status = ? WHERE job_id = ?",
+                            ('expired', job_id)
+                        )
+                    except Exception as _e:
+                        logger.warning(f"Failed to mark job {job_id} expired: {_e}")
 
-                # Update job status
-                try:
-                    self.db.execute_query(
-                        "UPDATE export_jobs SET status = ? WHERE job_id = ?",
-                        ('expired', job_id)
-                    )
-                except Exception as _e:
-                    logger.debug(f"Failed to mark job {job_id} expired: {_e}")
+                # If we got fewer results than batch_size, we're done
+                if len(results) < batch_size:
+                    break
+
+                offset += batch_size
 
             return deleted_count
         except Exception as e:
@@ -2925,8 +3055,13 @@ class ChatbookService:
     # Database helper methods
 
     def _save_export_job(self, job: ExportJob):
-        """Save export job to database with transaction."""
-        def _save():
+        """Save export job to database.
+
+        Note: Uses execute_query with commit=True which handles its own transaction.
+        Previous _with_transaction wrapper was removed because it created a separate
+        connection that didn't share the transaction with execute_query's connection.
+        """
+        try:
             self.db.execute_query("""
                 INSERT OR REPLACE INTO export_jobs (
                     job_id, user_id, status, chatbook_name, output_path,
@@ -2944,12 +3079,75 @@ class ChatbookService:
                 job.processed_items, job.file_size_bytes, job.download_url,
                 job.expires_at.strftime('%Y-%m-%d %H:%M:%S.%f') if job.expires_at else None
             ), commit=True)
-
-        try:
-            self._with_transaction(_save)
         except Exception as e:
             logger.error(f"Error saving export job: {e}")
             raise
+
+    def _claim_export_job(self, job_id: str) -> bool:
+        """
+        Atomically claim an export job by updating its status from PENDING to IN_PROGRESS.
+
+        This prevents race conditions where multiple workers could process the same job.
+
+        Args:
+            job_id: The export job ID to claim
+
+        Returns:
+            True if the job was successfully claimed, False if already claimed or not found
+        """
+        try:
+            started_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')
+            cursor = self.db.execute_query(
+                """UPDATE export_jobs
+                   SET status = ?, started_at = ?
+                   WHERE job_id = ? AND user_id = ? AND status = ?""",
+                (ExportStatus.IN_PROGRESS.value, started_at, job_id, self.user_id, ExportStatus.PENDING.value),
+                commit=True
+            )
+            # Check if any row was actually updated
+            rows_affected = cursor.rowcount if hasattr(cursor, 'rowcount') else 0
+            if rows_affected > 0:
+                logger.debug(f"Successfully claimed export job {job_id}")
+                return True
+            else:
+                logger.debug(f"Export job {job_id} was already claimed or not found")
+                return False
+        except Exception as e:
+            logger.error(f"Error claiming export job {job_id}: {e}")
+            return False
+
+    def _claim_import_job(self, job_id: str) -> bool:
+        """
+        Atomically claim an import job by updating its status from PENDING to IN_PROGRESS.
+
+        This prevents race conditions where multiple workers could process the same job.
+
+        Args:
+            job_id: The import job ID to claim
+
+        Returns:
+            True if the job was successfully claimed, False if already claimed or not found
+        """
+        try:
+            started_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')
+            cursor = self.db.execute_query(
+                """UPDATE import_jobs
+                   SET status = ?, started_at = ?
+                   WHERE job_id = ? AND user_id = ? AND status = ?""",
+                (ImportStatus.IN_PROGRESS.value, started_at, job_id, self.user_id, ImportStatus.PENDING.value),
+                commit=True
+            )
+            # Check if any row was actually updated
+            rows_affected = cursor.rowcount if hasattr(cursor, 'rowcount') else 0
+            if rows_affected > 0:
+                logger.debug(f"Successfully claimed import job {job_id}")
+                return True
+            else:
+                logger.debug(f"Import job {job_id} was already claimed or not found")
+                return False
+        except Exception as e:
+            logger.error(f"Error claiming import job {job_id}: {e}")
+            return False
 
     def _get_export_job(self, job_id: str) -> Optional[ExportJob]:
         """Get export job from database."""
@@ -3029,8 +3227,13 @@ class ChatbookService:
             return None
 
     def _save_import_job(self, job: ImportJob):
-        """Save import job to database with transaction."""
-        def _save():
+        """Save import job to database.
+
+        Note: Uses execute_query with commit=True which handles its own transaction.
+        Previous _with_transaction wrapper was removed because it created a separate
+        connection that didn't share the transaction with execute_query's connection.
+        """
+        try:
             self.db.execute_query("""
                 INSERT OR REPLACE INTO import_jobs (
                     job_id, user_id, status, chatbook_path,
@@ -3048,9 +3251,6 @@ class ChatbookService:
                 job.processed_items, job.successful_items, job.failed_items,
                 job.skipped_items, json.dumps(job.conflicts), json.dumps(job.warnings)
             ), commit=True)
-
-        try:
-            self._with_transaction(_save)
         except Exception as e:
             logger.error(f"Error saving import job: {e}")
             raise
@@ -3116,9 +3316,26 @@ class ChatbookService:
             return None
 
     def _generate_unique_name(self, base_name: str, item_type: str) -> str:
-        """Generate a unique name for an item."""
+        """Generate a unique name for an item.
+
+        Args:
+            base_name: The base name to make unique
+            item_type: Type of item (conversation, note, character, world_book, dictionary)
+
+        Returns:
+            A unique name based on the base_name
+
+        Raises:
+            ValueError: If item_type is unknown or max iterations exceeded
+        """
+        MAX_ITERATIONS = 1000  # Prevent infinite loops
+        valid_types = {"conversation", "note", "character", "world_book", "dictionary"}
+
+        if item_type not in valid_types:
+            raise ValueError(f"Unknown item_type '{item_type}'. Valid types: {valid_types}")
+
         counter = 1
-        while True:
+        while counter <= MAX_ITERATIONS:
             new_name = f"{base_name} ({counter})"
 
             # Check if name exists based on item type
@@ -3152,6 +3369,9 @@ class ChatbookService:
 
             counter += 1
 
+        # If we've exhausted iterations, raise an error
+        raise ValueError(f"Could not generate unique name for '{base_name}' after {MAX_ITERATIONS} attempts")
+
     # Additional methods for test compatibility
 
     def create_export_job(self, name: str, description: str, content_types: List[str]) -> Dict[str, Any]:
@@ -3173,7 +3393,7 @@ class ChatbookService:
                 user_id=self.user_id,
                 status=ExportStatus.PENDING,
                 chatbook_name=name,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             )
 
             self._save_export_job(job)
@@ -3320,7 +3540,7 @@ class ChatbookService:
                 user_id=self.user_id,
                 status=ImportStatus.PENDING,
                 chatbook_path=file_path,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             )
 
             self._save_import_job(job)

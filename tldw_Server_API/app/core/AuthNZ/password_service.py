@@ -5,6 +5,7 @@
 import re
 import secrets
 import string
+import threading
 from typing import Tuple, Optional, List
 #
 # 3rd-party imports
@@ -39,13 +40,41 @@ class PasswordService:
         # Password requirements
         self.min_length = self.settings.PASSWORD_MIN_LENGTH
 
-        # Common weak passwords to check against
+        # Common weak passwords to check against (based on NCSC/HaveIBeenPwned data)
+        # This list includes the most commonly breached passwords
         self.common_passwords = {
-            "password", "123456", "password123", "admin", "letmein",
-            "qwerty", "monkey", "dragon", "master", "superman",
-            "password1", "123456789", "qwertyuiop", "1234567890",
-            "welcome", "welcome123", "admin123", "root", "toor",
-            "pass", "pass123", "password1234", "qwerty123"
+            # Top breached passwords
+            "password", "123456", "123456789", "12345678", "12345",
+            "1234567", "1234567890", "qwerty", "abc123", "password1",
+            "password123", "111111", "123123", "admin", "letmein",
+            "welcome", "monkey", "dragon", "master", "qwertyuiop",
+            "login", "passw0rd", "hello", "iloveyou", "trustno1",
+            "sunshine", "princess", "football", "baseball", "shadow",
+            "michael", "ashley", "654321", "superman", "qazwsx",
+            "000000", "access", "batman", "bailey", "1q2w3e4r",
+            "696969", "loveme", "mustang", "password2", "password12",
+            # Keyboard patterns
+            "qwerty123", "1qaz2wsx", "zxcvbnm", "asdfghjkl", "1q2w3e",
+            "qwe123", "asd123", "zxc123", "!qaz2wsx", "1qazxsw2",
+            "qweasdzxc", "asdfgh", "zxcvbn", "1234qwer", "qwer1234",
+            # Year-based
+            "2020", "2021", "2022", "2023", "2024", "2025",
+            "pass2020", "pass2021", "pass2022", "pass2023", "pass2024",
+            # Common word + number patterns
+            "welcome1", "welcome123", "admin123", "admin1", "admin1234",
+            "root", "toor", "pass", "pass123", "password1234",
+            "test", "test123", "guest", "guest123", "changeme",
+            "temp", "temp123", "default", "secret", "secret123",
+            # Application-specific weak passwords
+            "tldw", "tldw123", "tldwserver", "server", "server123",
+            "apikey", "api123", "media", "media123", "video", "video123",
+            # Additional common passwords from breach lists
+            "jennifer", "hunter", "thomas", "charlie", "andrew",
+            "joshua", "jessica", "amanda", "daniel", "matthew",
+            "whatever", "freedom", "starwars", "jordan23", "cheese",
+            "pepper", "guitar", "yankees", "ranger", "killer",
+            "mercedes", "harley", "maverick", "ginger", "corvette",
+            "computer", "internet", "server", "database", "network",
         }
 
         logger.debug(
@@ -149,7 +178,8 @@ class PasswordService:
             errors.append("Password must contain at least one number")
 
         # Check for at least one special character
-        if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+        # Expanded set includes: ! @ # $ % ^ & * ( ) - _ = + [ ] { } | ; : ' " , . < > / ? ~ `
+        if not re.search(r'[!@#$%^&*()\-_=+\[\]{}|;:\'",.<>/?~`\\]', password):
             errors.append("Password must contain at least one special character")
 
         # Check against common passwords
@@ -179,19 +209,11 @@ class PasswordService:
             all_letters = all(c.isalpha() for c in substring)
 
             if all_digits or all_letters:
-                # Check ascending sequence
+                # Check ascending sequence (e.g., "abc", "123")
                 if all(ord(substring[j+1]) - ord(substring[j]) == 1 for j in range(len(substring) - 1)):
-                    # Allow years 2000-2099 as special case
-                    if all_digits and len(substring) == 4:
-                        try:
-                            year = int(substring)
-                            if 2000 <= year <= 2099:
-                                continue  # Allow valid years
-                        except ValueError:
-                            pass
                     return True
 
-                # Check descending sequence
+                # Check descending sequence (e.g., "cba", "321")
                 if all(ord(substring[j]) - ord(substring[j+1]) == 1 for j in range(len(substring) - 1)):
                     return True
 
@@ -302,21 +324,34 @@ class PasswordService:
                 password_hashes = [row['password_hash'] for row in rows]
 
             # Check if new password matches any in history
+            # SECURITY: Use constant-time loop to prevent timing attacks
+            # Always check ALL hashes before returning to avoid leaking information
+            # about which position in history matched
+            match_found = False
             for old_hash in password_hashes:
                 is_match, _ = self.verify_password(new_password, old_hash)
                 if is_match:
-                    if self.settings.PII_REDACT_LOGS:
-                        logger.warning("Authenticated user attempted to reuse a recent password")
-                    else:
-                        logger.warning(f"User {user_id} attempted to reuse a recent password")
-                    return False
+                    match_found = True
+                    # Don't break early - continue checking all hashes for constant time
+
+            if match_found:
+                if self.settings.PII_REDACT_LOGS:
+                    logger.warning("Authenticated user attempted to reuse a recent password")
+                else:
+                    logger.warning(f"User {user_id} attempted to reuse a recent password")
+                return False
 
             return True
 
         except Exception as e:
-            logger.error(f"Error checking password history: {e}")
-            # On error, allow the password (don't block user)
-            return True
+            if self.settings.PII_REDACT_LOGS:
+                logger.error("Error checking password history (details redacted)")
+            else:
+                logger.error(f"Error checking password history: {e}")
+            # SECURITY: Fail closed - don't allow potentially reused password when history check fails.
+            # This prevents password reuse attacks if the history database becomes unavailable.
+            # Users may need to retry if there's a transient DB error.
+            return False
 
     async def add_to_password_history(
         self,
@@ -394,15 +429,19 @@ class PasswordService:
 #
 # Module Functions for convenience
 
-# Global instance
+# Global instance with thread-safe initialization
 _password_service: Optional[PasswordService] = None
+_password_service_lock = threading.Lock()
 
 
 def get_password_service() -> PasswordService:
-    """Get password service singleton instance"""
+    """Get password service singleton instance (thread-safe)"""
     global _password_service
-    if not _password_service:
-        _password_service = PasswordService()
+    if _password_service is None:
+        with _password_service_lock:
+            # Double-check locking pattern to avoid unnecessary lock acquisition
+            if _password_service is None:
+                _password_service = PasswordService()
     return _password_service
 
 

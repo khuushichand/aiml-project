@@ -3,6 +3,7 @@
 #
 # Imports
 import asyncio
+import json
 import time
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -10,7 +11,7 @@ from heapq import heappush, heappop
 from typing import Any, Dict, Optional, Callable, Tuple
 from loguru import logger
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from functools import partial
 
 #######################################################################################################################
@@ -73,6 +74,8 @@ class RequestQueue:
         self.processing_count = 0
         self.total_processed = 0
         self.total_rejected = 0
+        # Track active request IDs to prevent duplicates
+        self._active_request_ids: set = set()
 
         self._lock = asyncio.Lock()
         self._processing_semaphore = asyncio.Semaphore(max_concurrent)
@@ -160,38 +163,84 @@ class RequestQueue:
         """
         logger.debug("Worker {} started", worker_id)
 
+        # Timeout for waiting on empty queue (60 seconds) - prevents indefinite waits
+        wait_timeout = 60.0
+
         while self._running:
             try:
                 # Get next request from queue
                 request = await self._get_next_request()
                 if not request:
-                    # No requests; wait until enqueued instead of polling
-                    await self._has_items.wait()
+                    # No requests; wait until enqueued instead of polling, with timeout
+                    try:
+                        await asyncio.wait_for(self._has_items.wait(), timeout=wait_timeout)
+                    except asyncio.TimeoutError:
+                        # Timeout is expected when queue is idle; just continue loop
+                        continue
                     # Loop will attempt to fetch again
                     continue
 
                 # Check if request has timed out
                 if time.time() - request.timestamp > self.timeout:
                     logger.warning(f"Request {request.request_id} timed out in queue")
-                    request.future.set_exception(
-                        TimeoutError(f"Request timed out after {self.timeout}s in queue")
-                    )
+                    try:
+                        request.future.set_exception(
+                            TimeoutError(f"Request timed out after {self.timeout}s in queue")
+                        )
+                    except asyncio.InvalidStateError:
+                        logger.debug(f"Future already resolved for timed-out request {request.request_id}")
+                    # Clean up request ID for timed-out requests
+                    async with self._lock:
+                        self._active_request_ids.discard(request.request_id)
                     continue
 
                 # Process request
                 async with self._processing_semaphore:
                     self.processing_count += 1
+                    process_succeeded = False
                     try:
+                        # Check if the request was cancelled before starting
+                        if request.future.cancelled():
+                            logger.info(f"Request {request.request_id} was cancelled before processing")
+                            process_succeeded = True  # Count as processed (client initiated cancel)
+                            continue
+
                         # Execute the actual request processing
-                        # This would be replaced with actual chat processing
                         result = await self._process_request(request)
-                        request.future.set_result(result)
-                        self.total_processed += 1
+
+                        # Check if cancelled during processing
+                        if request.future.cancelled():
+                            logger.info(f"Request {request.request_id} was cancelled during processing")
+                            process_succeeded = True
+                            continue
+
+                        try:
+                            request.future.set_result(result)
+                            process_succeeded = True
+                        except asyncio.InvalidStateError:
+                            # Future was already resolved (e.g., cancelled by client)
+                            logger.debug(f"Future already resolved for request {request.request_id}")
+                            process_succeeded = True  # Still count as processed
+                    except asyncio.CancelledError:
+                        # Request was cancelled - propagate but count as handled
+                        logger.info(f"Request {request.request_id} processing was cancelled")
+                        process_succeeded = True
+                        raise
                     except Exception as e:
                         logger.error(f"Error processing request {request.request_id}: {e}")
-                        request.future.set_exception(e)
+                        try:
+                            if not request.future.cancelled():
+                                request.future.set_exception(e)
+                        except asyncio.InvalidStateError:
+                            logger.debug(f"Future already resolved for failed request {request.request_id}")
                     finally:
                         self.processing_count -= 1
+                        # Update total_processed only when process completed (success or client cancelled)
+                        if process_succeeded:
+                            self.total_processed += 1
+                        # Remove request ID from active tracking
+                        async with self._lock:
+                            self._active_request_ids.discard(request.request_id)
 
             except asyncio.CancelledError:
                 break
@@ -304,16 +353,38 @@ class RequestQueue:
                     pass
 
         def _pump_sync_iterator(sync_iter):
+            def _put_with_backpressure(item: Any) -> bool:
+                try:
+                    fut = asyncio.run_coroutine_threadsafe(request.stream_channel.put(item), loop)
+                except Exception as ch_e:
+                    logger.warning(f"Failed to enqueue stream chunk (sync) for {request.request_id}: {ch_e}")
+                    return False
+                while True:
+                    try:
+                        fut.result(timeout=1.0)
+                        return True
+                    except TimeoutError:
+                        if request.future.cancelled() or loop.is_closed() or not self._running:
+                            try:
+                                fut.cancel()
+                            except Exception:
+                                pass
+                            return False
+                    except Exception as ch_e:
+                        logger.warning(f"Failed to enqueue stream chunk (sync) for {request.request_id}: {ch_e}")
+                        return False
+
             try:
                 for chunk in sync_iter:
                     try:
-                        asyncio.run_coroutine_threadsafe(request.stream_channel.put(chunk), loop)
+                        if not _put_with_backpressure(chunk):
+                            break
                     except Exception as ch_e:
                         logger.warning(f"Failed to enqueue stream chunk (sync) for {request.request_id}: {ch_e}")
                         break
             finally:
                 try:
-                    asyncio.run_coroutine_threadsafe(request.stream_channel.put(None), loop)
+                    _put_with_backpressure(None)
                 except Exception:
                     pass
 
@@ -327,8 +398,9 @@ class RequestQueue:
             stream = await loop.run_in_executor(self._executor, fn)
         except Exception as e:
             # Emit SSE-style error payload to channel to gracefully end downstream streaming
-            sanitized = str(e).replace("\\", " ").replace("\n", " ")
-            err_msg = f'data: {{"error": {{"message": "{sanitized}"}}}}\n\n'
+            # Use json.dumps to properly escape the error message and prevent JSON injection
+            error_payload = json.dumps({"error": {"message": str(e)[:500]}})
+            err_msg = f'data: {error_payload}\n\n'
             try:
                 await request.stream_channel.put(err_msg)
                 await request.stream_channel.put("data: [DONE]\n\n")
@@ -369,11 +441,10 @@ class RequestQueue:
             return {"status": "stream_completed", "request_id": request.request_id}
         except Exception as e:
             # Best-effort to signal error and completion downstream
-            sanitized_stream_error = str(e).replace("\\", " ").replace("\n", " ")
+            # Use json.dumps to properly escape the error message and prevent JSON injection
+            error_payload = json.dumps({"error": {"message": f"Stream error: {str(e)[:500]}"}})
             try:
-                await request.stream_channel.put(
-                    f'data: {{"error": {{"message": "Stream error: {sanitized_stream_error}"}}}}\n\n'
-                )
+                await request.stream_channel.put(f'data: {error_payload}\n\n')
                 await request.stream_channel.put("data: [DONE]\n\n")
                 await request.stream_channel.put(None)
             except Exception:
@@ -419,13 +490,20 @@ class RequestQueue:
             Future that will contain the result
 
         Raises:
-            ValueError: If queue is full
+            ValueError: If queue is full or request ID is duplicate
         """
         async with self._lock:
+            # Check for duplicate request ID
+            if request_id in self._active_request_ids:
+                raise ValueError(f"Duplicate request ID: {request_id}")
+
             # Check queue size (backpressure)
             if len(self.queue) >= self.max_queue_size:
                 self.total_rejected += 1
                 raise ValueError(f"Queue full: {len(self.queue)} requests pending")
+
+            # Track the request ID
+            self._active_request_ids.add(request_id)
 
             # Create queued request
             future = asyncio.Future()
@@ -524,10 +602,14 @@ class RateLimitedQueue(RequestQueue):
         # Track request times for rate limiting
         self.global_request_times = []
         self.client_request_times = {}
+        # Lock for thread-safe rate limit state modifications
+        self._rate_limit_lock = asyncio.Lock()
 
-    def _check_rate_limit(self, client_id: str) -> bool:
+    async def _check_rate_limit(self, client_id: str) -> bool:
         """
         Check if request is within rate limits.
+
+        This method is thread-safe and uses locking to prevent race conditions.
 
         Args:
             client_id: Client identifier
@@ -538,32 +620,33 @@ class RateLimitedQueue(RequestQueue):
         current_time = time.time()
         minute_ago = current_time - 60
 
-        # Clean old entries
-        self.global_request_times = [
-            t for t in self.global_request_times if t > minute_ago
-        ]
-
-        if client_id in self.client_request_times:
-            self.client_request_times[client_id] = [
-                t for t in self.client_request_times[client_id] if t > minute_ago
+        async with self._rate_limit_lock:
+            # Clean old entries
+            self.global_request_times = [
+                t for t in self.global_request_times if t > minute_ago
             ]
 
-        # Check global rate limit
-        if len(self.global_request_times) >= self.global_rate_limit:
-            return False
+            if client_id in self.client_request_times:
+                self.client_request_times[client_id] = [
+                    t for t in self.client_request_times[client_id] if t > minute_ago
+                ]
 
-        # Check per-client rate limit
-        client_requests = self.client_request_times.get(client_id, [])
-        if len(client_requests) >= self.per_client_rate_limit:
-            return False
+            # Check global rate limit
+            if len(self.global_request_times) >= self.global_rate_limit:
+                return False
 
-        # Record request time
-        self.global_request_times.append(current_time)
-        if client_id not in self.client_request_times:
-            self.client_request_times[client_id] = []
-        self.client_request_times[client_id].append(current_time)
+            # Check per-client rate limit
+            client_requests = self.client_request_times.get(client_id, [])
+            if len(client_requests) >= self.per_client_rate_limit:
+                return False
 
-        return True
+            # Record request time
+            self.global_request_times.append(current_time)
+            if client_id not in self.client_request_times:
+                self.client_request_times[client_id] = []
+            self.client_request_times[client_id].append(current_time)
+
+            return True
 
     async def enqueue(
         self,
@@ -600,8 +683,8 @@ class RateLimitedQueue(RequestQueue):
         Raises:
             ValueError: If queue is full or rate limit exceeded
         """
-        # Check rate limits
-        if not self._check_rate_limit(client_id):
+        # Check rate limits (async with locking)
+        if not await self._check_rate_limit(client_id):
             raise ValueError(f"Rate limit exceeded for client {client_id}")
 
         if processor_kwargs is None:

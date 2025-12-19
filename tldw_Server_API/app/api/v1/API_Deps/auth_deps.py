@@ -53,6 +53,7 @@ from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
 from tldw_Server_API.app.core.External_Sources.connectors_service import get_policy
 from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
@@ -526,6 +527,28 @@ async def get_current_user(
     if not credentials and x_api_key:
         test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
         if test_mode:
+            # SECURITY: Warn loudly about TEST_MODE and block in production unless explicitly allowed
+            allow_test_in_prod = os.getenv("ALLOW_TEST_MODE_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes", "on"}
+            environment = os.getenv("ENVIRONMENT", "").strip().lower()
+            prod_flag = os.getenv("tldw_production", "false").strip().lower() in {"1", "true", "yes", "on", "y"}
+            is_production = environment in {"production", "prod"} or prod_flag
+            if is_production:
+                if not allow_test_in_prod:
+                    logger.critical(
+                        "TEST_MODE is enabled in production environment! "
+                        "This is a SEVERE security risk. Set ALLOW_TEST_MODE_IN_PRODUCTION=1 to override (NOT recommended)."
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Server configuration error"
+                    )
+                else:
+                    logger.warning(
+                        "TEST_MODE is enabled in production with explicit override. "
+                        "This bypasses normal authentication and should only be used for debugging."
+                    )
+            else:
+                logger.debug("TEST_MODE is enabled for non-production environment")
             try:
                 settings = get_settings()
             except Exception:
@@ -537,6 +560,19 @@ async def get_current_user(
             if settings and settings.SINGLE_USER_API_KEY:
                 allowed_keys.add(settings.SINGLE_USER_API_KEY)
             if x_api_key in allowed_keys:
+                client_ip = None
+                try:
+                    client = getattr(request, "client", None)
+                    if client is not None:
+                        client_ip = getattr(client, "host", None)
+                except Exception:
+                    client_ip = None
+                if settings and settings.AUTH_MODE == "single_user":
+                    if not is_single_user_ip_allowed(client_ip, settings):
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Invalid or missing API Key",
+                        )
                 try:
                     if settings and isinstance(settings.DATABASE_URL, str) and settings.DATABASE_URL.startswith("sqlite:///"):
                         from pathlib import Path as _Path
@@ -730,6 +766,97 @@ def require_permissions(*permissions: str) -> Callable[[AuthPrincipal], Awaitabl
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Permission denied: missing {', '.join(missing)}",
             )
+        return principal
+
+    return _checker
+
+
+def require_api_key_scope(
+    *scopes: str,
+    allow_jwt_bypass: bool = True,
+    allow_admin_bypass: bool = True,
+) -> Callable[..., Awaitable[AuthPrincipal]]:
+    """
+    Dependency factory that enforces API key scope requirements.
+
+    Creates a FastAPI dependency that verifies the authenticated principal
+    has one of the required scopes. This is specifically for API key scope
+    enforcement (separate from JWT token scopes or role-based permissions).
+
+    Args:
+        *scopes: One or more scope strings that satisfy the requirement (OR logic).
+                 Valid values: "read", "write", "admin", "service"
+        allow_jwt_bypass: If True, JWT-authenticated users bypass this check (default: True)
+        allow_admin_bypass: If True, principals with is_admin=True bypass this check (default: True)
+
+    Returns:
+        Dependency function that raises HTTP 403 if scope requirement not met
+
+    Example:
+        @router.get("/media/{id}")
+        async def get_media(
+            id: int,
+            _: AuthPrincipal = Depends(require_api_key_scope("read")),
+        ):
+            ...
+
+        @router.post("/media/process")
+        async def process_media(
+            request: MediaProcessRequest,
+            _: AuthPrincipal = Depends(require_api_key_scope("write", "admin")),
+        ):
+            ...
+    """
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import normalize_scope, has_scope
+
+    required_scopes = frozenset(s.strip().lower() for s in scopes if s)
+
+    async def _checker(
+        request: Request,
+        principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
+    ) -> AuthPrincipal:
+        # Admin bypass
+        if allow_admin_bypass and principal.is_admin:
+            # AUDIT: Log when admin bypasses API key scope check for security visibility
+            logger.info(
+                "Admin user {} bypassing API key scope check for scopes {} on endpoint {}",
+                principal.user_id, list(required_scopes), request.url.path
+            )
+            return principal
+
+        # JWT bypass (for JWT-authenticated users without API key context)
+        if allow_jwt_bypass and principal.kind == "user" and principal.api_key_id is None:
+            return principal
+
+        # API key scope check
+        if principal.api_key_id is not None:
+            # Retrieve scope from request.state (populated during auth)
+            key_scope = getattr(request.state, "_api_key_scope", None)
+            if key_scope is None:
+                # Fallback: allow if no scope info (graceful degradation for single-user mode)
+                if is_single_user_mode():
+                    return principal
+                # In multi-user mode, missing scope is an error
+                if _is_test_mode():
+                    logger.debug("require_api_key_scope: scope info unavailable for key {}", principal.api_key_id)
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="API key scope information unavailable",
+                )
+
+            key_scopes = normalize_scope(key_scope)
+
+            if not any(has_scope(key_scopes, rs) for rs in required_scopes):
+                if _is_test_mode():
+                    logger.debug(
+                        "require_api_key_scope denied: key_scopes={}, required_any_of={}",
+                        key_scopes, required_scopes
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"API key lacks required scope. Required: {', '.join(required_scopes)}",
+                )
+
         return principal
 
     return _checker

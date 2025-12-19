@@ -7,6 +7,7 @@ from typing import Final
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 
@@ -24,14 +25,13 @@ def admin_user():
 
     app.dependency_overrides[get_request_user] = _admin
 
-    async def _principal_override(request):
+    async def _principal_override(request: Request):
         """Override get_auth_principal with an admin AuthPrincipal for tests."""
-        from fastapi import Request
-        from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal, PrincipalKind
+        from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 
         token_type: Final[str] = "access"
         principal = AuthPrincipal(
-            kind=PrincipalKind.user,
+            kind="user",
             user_id=42,
             api_key_id=None,
             subject=None,

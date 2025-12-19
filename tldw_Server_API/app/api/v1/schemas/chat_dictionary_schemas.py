@@ -8,9 +8,65 @@ These schemas define the request and response models for the chat dictionary
 API endpoints, ensuring proper validation and serialization.
 """
 
+import re
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
+from loguru import logger
+
+# Maximum length for regex patterns to prevent complexity attacks
+MAX_REGEX_PATTERN_LENGTH = 500
+
+# Patterns that are known to cause ReDoS (catastrophic backtracking)
+# These are simplified checks - a full ReDoS detector would be more complex
+DANGEROUS_REGEX_PATTERNS = [
+    r'(.+)+',      # Nested quantifiers
+    r'(.*)*',      # Nested quantifiers
+    r'(.+)*',      # Nested quantifiers
+    r'(.*)+',      # Nested quantifiers
+    r'(.?)+',      # Many optional matches
+    r'(.?)*',      # Many optional matches
+    r'([a-zA-Z]+)*',  # Character class with nested quantifier
+]
+
+
+def validate_regex_pattern_safety(pattern: str) -> str:
+    """Validate a regex pattern for safety against ReDoS attacks.
+
+    Args:
+        pattern: The regex pattern to validate
+
+    Returns:
+        The pattern if valid
+
+    Raises:
+        ValueError: If the pattern is too long, invalid, or potentially dangerous
+    """
+    if len(pattern) > MAX_REGEX_PATTERN_LENGTH:
+        raise ValueError(f"Regex pattern too long (max {MAX_REGEX_PATTERN_LENGTH} chars)")
+
+    # Check if the pattern compiles
+    try:
+        re.compile(pattern)
+    except re.error as e:
+        raise ValueError(f"Invalid regex pattern: {str(e)[:100]}") from e
+
+    # Check for potentially dangerous patterns (basic ReDoS detection)
+    for dangerous in DANGEROUS_REGEX_PATTERNS:
+        if dangerous in pattern:
+            raise ValueError(
+                f"Potentially dangerous regex pattern detected (nested quantifiers). "
+                f"Pattern may cause catastrophic backtracking."
+            )
+
+    # Check for excessive quantifier nesting (heuristic)
+    # Count nested groups with quantifiers
+    quantifier_pattern = re.compile(r'\([^()]*[+*?][^()]*\)[+*?]')
+    if quantifier_pattern.search(pattern):
+        logger.warning(f"Regex pattern may have nested quantifiers: {pattern[:50]}...")
+        # Don't fail, just warn - some nested quantifiers are safe
+
+    return pattern
 
 
 class TimedEffects(BaseModel):
@@ -36,6 +92,13 @@ class DictionaryEntryCreate(DictionaryEntryBase):
     enabled: bool = Field(True, description="Whether the entry is enabled")
     case_sensitive: bool = Field(True, description="Case-sensitive matching for literal patterns")
 
+    @model_validator(mode="after")
+    def validate_regex_pattern(self) -> "DictionaryEntryCreate":
+        """Validate regex patterns for safety when type is 'regex'."""
+        if self.type == "regex":
+            validate_regex_pattern_safety(self.pattern)
+        return self
+
 
 class DictionaryEntryUpdate(BaseModel):
     """Schema for updating a dictionary entry."""
@@ -48,6 +111,17 @@ class DictionaryEntryUpdate(BaseModel):
     type: Optional[str] = Field(None, pattern="^(literal|regex)$", description="Entry type")
     enabled: Optional[bool] = Field(None, description="Whether the entry is enabled")
     case_sensitive: Optional[bool] = Field(None, description="Case-sensitive matching for literal patterns")
+
+    @model_validator(mode="after")
+    def validate_regex_pattern(self) -> "DictionaryEntryUpdate":
+        """Validate regex patterns for safety when type is 'regex'.
+
+        Note: This only validates when BOTH pattern and type are provided in the update.
+        If only pattern is updated, the caller must ensure the existing type is checked.
+        """
+        if self.type == "regex" and self.pattern is not None:
+            validate_regex_pattern_safety(self.pattern)
+        return self
 
 
 class DictionaryEntryResponse(DictionaryEntryBase):

@@ -7,6 +7,8 @@ Provides dependencies for checking and enforcing subscription limits.
 from __future__ import annotations
 
 import os
+import threading
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from enum import Enum
@@ -14,14 +16,18 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+# Environment variable for cache TTL (default 60 seconds)
+BILLING_CACHE_TTL_SECONDS = float(os.environ.get("BILLING_CACHE_TTL_SECONDS", "60.0"))
+
 from tldw_Server_API.app.core.Billing.plan_limits import SOFT_LIMIT_PERCENT
+from tldw_Server_API.app.core.Billing.stripe_client import is_billing_enabled
 
 
 class LimitCategory(str, Enum):
     """Categories of limits that can be enforced."""
     API_CALLS_DAY = "api_calls_day"
     LLM_TOKENS_MONTH = "llm_tokens_month"
-    STORAGE_GB = "storage_gb"
+    STORAGE_MB = "storage_mb"
     TEAM_MEMBERS = "team_members"
     TRANSCRIPTION_MINUTES_MONTH = "transcription_minutes_month"
     RAG_QUERIES_DAY = "rag_queries_day"
@@ -86,16 +92,17 @@ class BillingEnforcer:
         *,
         soft_limit_percent: float = SOFT_LIMIT_PERCENT,
         grace_period_days: int = 3,
+        cache_ttl: Optional[float] = None,
     ):
         self.soft_limit_percent = soft_limit_percent
         self.grace_period_days = grace_period_days
         self._usage_cache: Dict[int, Tuple[UsageSummary, float]] = {}
         self._limits_cache: Dict[int, Tuple[Dict[str, Any], float]] = {}
-        self._cache_ttl = 60.0  # 1 minute cache
+        # Use provided TTL, env var, or default to 60s
+        self._cache_ttl = cache_ttl if cache_ttl is not None else BILLING_CACHE_TTL_SECONDS
 
     async def get_org_limits(self, org_id: int) -> Dict[str, Any]:
         """Get subscription limits for an organization with caching."""
-        import time
         now = time.time()
 
         # Check cache
@@ -117,7 +124,7 @@ class BillingEnforcer:
             return {
                 "api_calls_day": 1000,
                 "llm_tokens_month": 10_000_000,
-                "storage_gb": 10,
+                "storage_mb": 10240,
                 "team_members": -1,
                 "transcription_minutes_month": 600,
                 "rag_queries_day": 500,
@@ -130,7 +137,6 @@ class BillingEnforcer:
 
         Aggregates from various usage tracking sources.
         """
-        import time
         now = time.time()
 
         # Check cache
@@ -154,12 +160,28 @@ class BillingEnforcer:
             # Get concurrent jobs
             summary.concurrent_jobs = await self._get_concurrent_jobs(org_id)
 
+            # Get storage usage
+            summary.storage_bytes = await self._get_storage_bytes(org_id)
+
+            # Get transcription minutes for this month
+            summary.transcription_minutes_month = await self._get_transcription_minutes_month(org_id)
+
+            # Get RAG queries for today
+            summary.rag_queries_today = await self._get_rag_queries_today(org_id)
+
             # Cache the result
             self._usage_cache[org_id] = (summary, now)
 
         except Exception as exc:
-            logger.warning(f"Failed to get org usage for {org_id}: {exc}")
-            # Return zeros on failure (fail open)
+            # Log at ERROR level since this affects billing enforcement
+            logger.error(f"Failed to get org usage for {org_id}: {exc}")
+            # Try to return cached value if available (even if expired)
+            if org_id in self._usage_cache:
+                cached, _ = self._usage_cache[org_id]
+                logger.warning(f"Using stale cached usage for org {org_id}")
+                return cached
+            # Otherwise return zeros (fail-open) but log warning
+            logger.warning(f"No cached usage for org {org_id}, returning zeros (fail-open)")
 
         return summary
 
@@ -269,8 +291,25 @@ class BillingEnforcer:
 
             pool = await get_db_pool()
             repo = AuthnzOrgsTeamsRepo(db_pool=pool)
-            members = await repo.list_org_members(org_id=org_id, limit=1000)
-            return len(members)
+            total_members = 0
+            offset = 0
+            batch_size = 1000
+
+            while True:
+                members = await repo.list_org_members(
+                    org_id=org_id,
+                    limit=batch_size,
+                    offset=offset,
+                )
+                if not members:
+                    break
+
+                total_members += len(members)
+                if len(members) < batch_size:
+                    break
+                offset += batch_size
+
+            return total_members
         except Exception as exc:
             logger.debug(f"Failed to get team members for org {org_id}: {exc}")
             return 0
@@ -315,6 +354,98 @@ class BillingEnforcer:
             logger.debug(f"Failed to get concurrent jobs for org {org_id}: {exc}")
             return 0
 
+    async def _get_storage_bytes(self, org_id: int) -> int:
+        """Sum storage_used_mb from users table for all org members."""
+        try:
+            from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+            from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
+
+            pool = await get_db_pool()
+            repo = AuthnzOrgsTeamsRepo(db_pool=pool)
+            members = await repo.list_org_members(org_id=org_id, limit=1000)
+            if not members:
+                return 0
+
+            user_ids = [m["user_id"] for m in members if m.get("user_id")]
+            if not user_ids:
+                return 0
+
+            async with pool.acquire() as conn:
+                if hasattr(conn, "fetchval"):
+                    # PostgreSQL
+                    result = await conn.fetchval(
+                        "SELECT COALESCE(SUM(storage_used_mb), 0) FROM users WHERE id = ANY($1)",
+                        user_ids
+                    )
+                else:
+                    # SQLite
+                    placeholders = ",".join("?" * len(user_ids))
+                    cur = await conn.execute(
+                        f"SELECT COALESCE(SUM(storage_used_mb), 0) FROM users WHERE id IN ({placeholders})",
+                        tuple(user_ids)
+                    )
+                    row = await cur.fetchone()
+                    result = row[0] if row else 0
+
+            # Convert MB to bytes
+            return int((result or 0) * 1024 * 1024)
+        except Exception as exc:
+            logger.debug(f"Failed to get storage for org {org_id}: {exc}")
+            return 0
+
+    async def _get_transcription_minutes_month(self, org_id: int) -> int:
+        """Get transcription minutes for current month from resource ledger."""
+        try:
+            from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import ResourceDailyLedger
+
+            ledger = ResourceDailyLedger()
+            await ledger.initialize()
+
+            now = datetime.now(timezone.utc)
+            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).date()
+            today = now.date()
+
+            # Query ledger for org-scoped minutes entries over the month-to-date window
+            window = await ledger.peek_range(
+                entity_scope="org",
+                entity_value=str(org_id),
+                category="minutes",
+                start_day_utc=month_start.isoformat(),
+                end_day_utc=today.isoformat(),
+            )
+
+            return int(window.get("total", 0)) if window else 0
+        except Exception as exc:
+            logger.debug(f"Failed to get transcription minutes for org {org_id}: {exc}")
+            return 0
+
+    async def _get_rag_queries_today(self, org_id: int) -> int:
+        """
+        Get RAG query count for today.
+
+        RAG queries are tracked via the shared ResourceDailyLedger using the
+        "rag_queries" category scoped to the organization. Each RAG endpoint
+        invocation can record one or more units for the active org.
+        """
+        try:
+            from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import ResourceDailyLedger
+
+            ledger = ResourceDailyLedger()
+            await ledger.initialize()
+
+            today = datetime.now(timezone.utc).date().isoformat()
+            total = await ledger.total_for_day(
+                entity_scope="org",
+                entity_value=str(org_id),
+                category="rag_queries",
+                day_utc=today,
+            )
+
+            return int(total or 0)
+        except Exception as exc:
+            logger.debug(f"Failed to get RAG queries for org {org_id}: {exc}")
+            return 0
+
     async def check_limit(
         self,
         org_id: int,
@@ -342,6 +473,9 @@ class BillingEnforcer:
             LimitCategory.LLM_TOKENS_MONTH: usage.llm_tokens_month,
             LimitCategory.TEAM_MEMBERS: usage.team_members,
             LimitCategory.CONCURRENT_JOBS: usage.concurrent_jobs,
+            LimitCategory.RAG_QUERIES_DAY: usage.rag_queries_today,
+            LimitCategory.TRANSCRIPTION_MINUTES_MONTH: usage.transcription_minutes_month,
+            LimitCategory.STORAGE_MB: usage.storage_bytes // (1024 ** 2),  # Convert bytes to MB
         }
 
         current = usage_map.get(category, 0)
@@ -420,7 +554,7 @@ class BillingEnforcer:
             self._usage_cache.clear()
             self._limits_cache.clear()
 
-    def apply_usage_delta(self, org_id: int, category: LimitCategory, units: int) -> None:
+    def apply_usage_delta(self, org_id: int, category: LimitCategory, units: int) -> bool:
         """
         Apply an in-memory usage delta for an organization.
 
@@ -434,19 +568,20 @@ class BillingEnforcer:
         try:
             delta = int(units)
         except Exception:
-            return
+            return False
 
         if delta <= 0:
-            return
+            return False
 
         cached = self._usage_cache.get(org_id)
         if not cached:
-            return
+            return False
 
         summary, cached_at = cached
         if not isinstance(summary, UsageSummary):
-            return
+            return False
 
+        updated = True
         if category == LimitCategory.API_CALLS_DAY:
             summary.api_calls_today += delta
         elif category == LimitCategory.LLM_TOKENS_MONTH:
@@ -459,20 +594,28 @@ class BillingEnforcer:
             summary.concurrent_jobs += delta
         else:
             # Other categories (e.g., storage) are not backed by this summary.
-            return
+            updated = False
+
+        if not updated:
+            return False
 
         self._usage_cache[org_id] = (summary, cached_at)
+        return True
 
 
-# Singleton instance
+# Singleton instance with thread-safe initialization
 _billing_enforcer: Optional[BillingEnforcer] = None
+_billing_enforcer_lock = threading.Lock()
 
 
 def get_billing_enforcer() -> BillingEnforcer:
-    """Get or create the billing enforcer singleton."""
+    """Get or create the billing enforcer singleton (thread-safe)."""
     global _billing_enforcer
     if _billing_enforcer is None:
-        _billing_enforcer = BillingEnforcer()
+        with _billing_enforcer_lock:
+            # Double-check pattern for thread safety
+            if _billing_enforcer is None:
+                _billing_enforcer = BillingEnforcer()
     return _billing_enforcer
 
 
@@ -542,13 +685,11 @@ async def check_billing_with_rg(
         return True  # Fail open
 
 
-# =============================================================================
-# Utility Functions
-# =============================================================================
+# Utility helpers
 
-def billing_enabled() -> bool:
-    """Check if billing enforcement is enabled."""
-    return os.environ.get("BILLING_ENABLED", "false").lower() == "true"
+# Alias the global billing feature flag so callers importing from this module
+# or from the Stripe client see consistent behavior.
+billing_enabled = is_billing_enabled
 
 
 def enforcement_enabled() -> bool:

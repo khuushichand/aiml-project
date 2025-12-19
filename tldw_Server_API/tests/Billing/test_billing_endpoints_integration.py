@@ -40,6 +40,7 @@ import uuid as uuid_lib
 
 from tldw_Server_API.tests.helpers.pg_env import get_pg_env
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
+from tldw_Server_API.app.core.Billing import stripe_client as stripe_client_module
 
 # Reuse Postgres AuthNZ fixtures
 pytest_plugins = ["tldw_Server_API.tests.AuthNZ.conftest"]
@@ -165,9 +166,34 @@ class TestBillingSubscriptionEndpoint:
                 VALUES ($1, $2, $3)
             """, org_id, user_id, "owner")
 
+            # Create a separate org for cross-org access checks.
+            other_user_uuid = str(uuid_lib.uuid4())
+            other_password_hash = password_service.hash_password("Other@Pass#2024!")
+            other_user_id = await conn.fetchval("""
+                INSERT INTO users (
+                    uuid, username, email, password_hash, role,
+                    is_active, is_verified, storage_quota_mb, storage_used_mb
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id
+            """, other_user_uuid, "billingother", "billing-other@example.com", other_password_hash,
+                "user", True, True, 5120, 0.0)
+
+            other_org_id = await conn.fetchval("""
+                INSERT INTO organizations (name, slug, owner_user_id)
+                VALUES ($1, $2, $3)
+                RETURNING id
+            """, "Other Org", "other-org", other_user_id)
+
+            await conn.execute("""
+                INSERT INTO org_members (org_id, user_id, role)
+                VALUES ($1, $2, $3)
+            """, other_org_id, other_user_id, "owner")
+
             self.client = client
             self.user_id = user_id
             self.org_id = org_id
+            self.other_org_id = other_org_id
             self.username = "billinguser"
             self.password = password
 
@@ -223,6 +249,21 @@ class TestBillingSubscriptionEndpoint:
 
         assert response.status_code in [200, 404]
 
+    def test_subscription_rejects_cross_org_access(self):
+        """Users should not access subscription data for other organizations."""
+        token = self._get_auth_token()
+        if not token:
+            pytest.skip("Could not get auth token")
+
+        response = self.client.get(
+            f"/api/v1/billing/subscription?org_id={self.other_org_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        if response.status_code == 404:
+            pytest.skip("Billing routes not available in test environment")
+        assert response.status_code == 403
+
 
 @pytest.mark.skipif(
     not _has_postgres_dependencies(),
@@ -274,9 +315,34 @@ class TestBillingUsageEndpoint:
                 VALUES ($1, $2, $3)
             """, org_id, user_id, "owner")
 
+            # Create a separate org for cross-org access checks.
+            other_user_uuid = str(uuid_lib.uuid4())
+            other_password_hash = password_service.hash_password("Other@Pass#2024!")
+            other_user_id = await conn.fetchval("""
+                INSERT INTO users (
+                    uuid, username, email, password_hash, role,
+                    is_active, is_verified, storage_quota_mb, storage_used_mb
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id
+            """, other_user_uuid, "usageother", "usage-other@example.com", other_password_hash,
+                "user", True, True, 5120, 0.0)
+
+            other_org_id = await conn.fetchval("""
+                INSERT INTO organizations (name, slug, owner_user_id)
+                VALUES ($1, $2, $3)
+                RETURNING id
+            """, "Usage Other Org", "usage-other-org", other_user_id)
+
+            await conn.execute("""
+                INSERT INTO org_members (org_id, user_id, role)
+                VALUES ($1, $2, $3)
+            """, other_org_id, other_user_id, "owner")
+
             self.client = client
             self.user_id = user_id
             self.org_id = org_id
+            self.other_org_id = other_org_id
             self.username = "usageuser"
             self.password = password
 
@@ -317,6 +383,211 @@ class TestBillingUsageEndpoint:
             data = response.json()
             # Should have usage metrics
             assert "limits" in data or "usage" in data or "org_id" in data
+
+    def test_usage_rejects_cross_org_access(self):
+        """Users should not access usage data for other organizations."""
+        token = self._get_auth_token()
+        if not token:
+            pytest.skip("Could not get auth token")
+
+        response = self.client.get(
+            f"/api/v1/billing/usage?org_id={self.other_org_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        if response.status_code == 404:
+            pytest.skip("Billing routes not available in test environment")
+        assert response.status_code == 403
+
+
+@pytest.mark.skipif(
+    not _has_postgres_dependencies(),
+    reason="Postgres dependencies missing (install psycopg[binary])",
+)
+class TestBillingCheckoutAndPortal:
+    """Tests for the /api/v1/billing/checkout and /portal endpoints."""
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def setup_test_user_and_org(self, isolated_test_environment, monkeypatch):
+        """Setup test user with organization ownership and enable billing."""
+        client, db_name = isolated_test_environment
+
+        conn = await asyncpg.connect(
+            host=TEST_DB_HOST,
+            port=TEST_DB_PORT,
+            user=TEST_DB_USER,
+            password=TEST_DB_PASSWORD,
+            database=db_name,
+        )
+
+        try:
+            password_service = PasswordService()
+            user_uuid = str(uuid_lib.uuid4())
+            password = "Test@Pass#2024!"
+            password_hash = password_service.hash_password(password)
+
+            # Create test user (org owner)
+            user_id = await conn.fetchval(
+                """
+                INSERT INTO users (
+                    uuid, username, email, password_hash, role,
+                    is_active, is_verified, storage_quota_mb, storage_used_mb
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id
+                """,
+                user_uuid,
+                "billingowner",
+                "billing-owner@example.com",
+                password_hash,
+                "user",
+                True,
+                True,
+                5120,
+                0.0,
+            )
+
+            # Create test organization owned by the user
+            org_id = await conn.fetchval(
+                """
+                INSERT INTO organizations (name, slug, owner_user_id)
+                VALUES ($1, $2, $3)
+                RETURNING id
+                """,
+                "Checkout Org",
+                "checkout-org",
+                user_id,
+            )
+
+            # Add user as org owner
+            await conn.execute(
+                """
+                INSERT INTO org_members (org_id, user_id, role)
+                VALUES ($1, $2, $3)
+                """,
+                org_id,
+                user_id,
+                "owner",
+            )
+
+            self.client = client
+            self.user_id = user_id
+            self.org_id = org_id
+            self.username = "billingowner"
+            self.password = password
+
+        finally:
+            await conn.close()
+
+        # Enable billing for these tests and force Stripe to be "available".
+        monkeypatch.setenv("BILLING_ENABLED", "true")
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Billing.subscription_service.is_billing_enabled",
+            lambda: True,
+            raising=False,
+        )
+
+        class _FakeStripeClient:
+            def __init__(self) -> None:
+                self.is_available = True
+
+            async def create_customer(self, *, email: str, name: str | None = None, metadata: dict[str, str] | None = None) -> str:
+                return "cus_int_123"
+
+            def get_price_id(self, plan_name: str, billing_cycle: str = "monthly") -> str | None:
+                return "price_int_123"
+
+            async def create_checkout_session(
+                self,
+                *,
+                customer_id: str,
+                price_id: str,
+                success_url: str,
+                cancel_url: str,
+                metadata: dict[str, str] | None = None,
+            ):
+                from tldw_Server_API.app.core.Billing.stripe_client import CheckoutSession
+
+                return CheckoutSession(id="sess_int_123", url="https://example.com/checkout")
+
+            async def create_portal_session(
+                self,
+                *,
+                customer_id: str,
+                return_url: str,
+            ):
+                from tldw_Server_API.app.core.Billing.stripe_client import PortalSession
+
+                return PortalSession(id="ps_int_123", url="https://example.com/portal")
+
+        # Patch the Stripe client singleton module-wide so checkout/portal use the fake implementation.
+        monkeypatch.setattr(
+            stripe_client_module,
+            "get_stripe_client",
+            lambda: _FakeStripeClient(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            stripe_client_module,
+            "STRIPE_AVAILABLE",
+            True,
+            raising=False,
+        )
+
+    def _get_auth_token(self):
+        """Get auth token for test user."""
+        response = self.client.post(
+            "/api/v1/auth/login",
+            data={"username": self.username, "password": self.password},
+        )
+        if response.status_code == 200:
+            return response.json()["access_token"]
+        return None
+
+    def test_checkout_creates_session_for_owner(self):
+        """Owner should be able to create a checkout session."""
+        token = self._get_auth_token()
+        if not token:
+            pytest.skip("Could not get auth token")
+
+        response = self.client.post(
+            f"/api/v1/billing/checkout?org_id={self.org_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "plan_name": "pro",
+                "billing_cycle": "monthly",
+                "success_url": "https://example.com/success",
+                "cancel_url": "https://example.com/cancel",
+            },
+        )
+
+        if response.status_code == 404:
+            pytest.skip("Billing routes not available in test environment")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("session_id") == "sess_int_123"
+        assert data.get("url") == "https://example.com/checkout"
+
+    def test_portal_creates_session_for_owner(self):
+        """Owner should be able to create a billing portal session."""
+        token = self._get_auth_token()
+        if not token:
+            pytest.skip("Could not get auth token")
+
+        response = self.client.post(
+            f"/api/v1/billing/portal?org_id={self.org_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"return_url": "https://example.com/account"},
+        )
+
+        if response.status_code == 404:
+            pytest.skip("Billing routes not available in test environment")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("session_id") == "ps_int_123"
+        assert data.get("url") == "https://example.com/portal"
 
 
 @pytest.mark.skipif(

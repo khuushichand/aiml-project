@@ -5,7 +5,7 @@
 import os
 import smtplib
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from email.mime.text import MIMEText
@@ -314,7 +314,7 @@ class EmailService:
     ) -> bool:
         """Send mock email for development/testing"""
 
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.now(timezone.utc).isoformat()
         email_id = f"{timestamp}_{to_email.replace('@', '_at_')}"
 
         # Create email data structure
@@ -449,7 +449,7 @@ class EmailService:
             "reset_link": reset_link,
             "expiry_hours": 1,
             "ip_address": ip_address,
-            "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         }
 
         # Render templates
@@ -505,7 +505,7 @@ class EmailService:
             "username": username,
             "backup_codes": backup_codes,
             "ip_address": ip_address,
-            "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         }
 
         # Render templates

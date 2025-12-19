@@ -22,6 +22,19 @@ def test_policy_is_file_type_allowed_cases():
     assert is_file_type_allowed(name="a.bin", mime="application/octet-stream", allowed=["text/"]) is False
 
 
+@pytest.mark.unit
+def test_policy_fail_closed_on_error():
+    from tldw_Server_API.app.core.External_Sources.policy import evaluate_policy_constraints
+
+    class _BadProvider:
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    ok, reason = evaluate_policy_constraints({"enabled_providers": [_BadProvider()]}, provider="drive")
+    assert ok is False
+    assert reason == "Policy evaluation failed"
+
+
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_notion_download_renders_nested_blocks(monkeypatch):
@@ -206,3 +219,172 @@ async def test_worker_drive_recursive_traversal(monkeypatch):
     res = jm.completed["result"]
     assert res["processed"] == 2
     assert res["total"] == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_worker_drive_non_recursive_paginates(monkeypatch):
+    import tldw_Server_API.app.services.connectors_worker as worker
+
+    class FakeJM:
+        def __init__(self):
+            self.completed = None
+
+        def renew_job_lease(self, *a, **kw):
+            pass
+
+        def complete_job(self, jid, result=None, worker_id=None, lease_id=None, completion_token=None):
+            self.completed = {"jid": jid, "result": result}
+
+    class FakeDriveConn:
+        name = "drive"
+        def authorize_url(self, *a, **kw):
+            return ""
+        async def exchange_code(self, *a, **kw):
+            return {}
+        async def list_files(self, account, parent_remote_id, *, page_size=50, cursor=None):
+            if cursor is None:
+                return ([{"id": "A", "name": "DocA.txt", "mimeType": "text/plain", "size": 10}], "c1")
+            if cursor == "c1":
+                return ([{"id": "B", "name": "DocB.txt", "mimeType": "text/plain", "size": 12}], None)
+            return ([], None)
+        async def download_file(self, account, file_id, *, mime_type=None, export_mime=None):
+            return f"content-{file_id}".encode()
+
+    import tldw_Server_API.app.core.External_Sources as ext_pkg
+    monkeypatch.setattr(ext_pkg, "get_connector_by_name", lambda name: FakeDriveConn())
+
+    async def _fake_get_source_by_id(db, user_id, source_id):
+        return {"id": source_id, "provider": "drive", "account_id": 123, "remote_id": "root", "type": "folder", "path": "/", "options": {"recursive": False}}
+
+    async def _fake_get_account_tokens(db, user_id, account_id):
+        return {"access_token": "tok"}
+
+    async def _fake_should_ingest_item(db, **kwargs):
+        return True
+
+    async def _fake_record_ingested_item(db, **kwargs):
+        return None
+
+    import tldw_Server_API.app.core.External_Sources.connectors_service as svc
+    monkeypatch.setattr(svc, "get_source_by_id", _fake_get_source_by_id)
+    monkeypatch.setattr(svc, "get_account_tokens", _fake_get_account_tokens)
+    monkeypatch.setattr(svc, "should_ingest_item", _fake_should_ingest_item)
+    monkeypatch.setattr(svc, "record_ingested_item", _fake_record_ingested_item)
+
+    class _DummyTx:
+        async def __aenter__(self):
+            return object()
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+    class _DummyPool:
+        def transaction(self):
+            return _DummyTx()
+    async def _fake_get_db_pool():
+        return _DummyPool()
+    import tldw_Server_API.app.core.AuthNZ.database as dbmod
+    monkeypatch.setattr(dbmod, "get_db_pool", _fake_get_db_pool)
+
+    import tldw_Server_API.app.core.AuthNZ.orgs_teams as orgs
+    async def _fake_list_memberships_for_user(user_id: int):
+        return []
+    monkeypatch.setattr(orgs, "list_memberships_for_user", _fake_list_memberships_for_user)
+
+    class _FakeMDB:
+        def __init__(self, *a, **kw):
+            self.records = []
+        def add_media_with_keywords(self, *, url, title, media_type, content, keywords, overwrite=False):
+            self.records.append((url, title, content))
+            return 1, "uuid", "ok"
+    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
+    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
+
+    jm = FakeJM()
+    await worker._process_import_job(jm, jid=1, lease_id="L", worker_id="W", source_id=99, user_id=42)
+
+    assert jm.completed is not None
+    res = jm.completed["result"]
+    assert res["processed"] == 2
+    assert res["total"] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_worker_skips_record_on_ingest_failure(monkeypatch):
+    import tldw_Server_API.app.services.connectors_worker as worker
+
+    class FakeJM:
+        def __init__(self):
+            self.completed = None
+
+        def renew_job_lease(self, *a, **kw):
+            pass
+
+        def complete_job(self, jid, result=None, worker_id=None, lease_id=None, completion_token=None):
+            self.completed = {"jid": jid, "result": result}
+
+    class FakeDriveConn:
+        name = "drive"
+        def authorize_url(self, *a, **kw):
+            return ""
+        async def exchange_code(self, *a, **kw):
+            return {}
+        async def list_files(self, account, parent_remote_id, *, page_size=50, cursor=None):
+            return ([{"id": "A", "name": "DocA.txt", "mimeType": "text/plain", "size": 10}], None)
+        async def download_file(self, account, file_id, *, mime_type=None, export_mime=None):
+            return b"content-A"
+
+    import tldw_Server_API.app.core.External_Sources as ext_pkg
+    monkeypatch.setattr(ext_pkg, "get_connector_by_name", lambda name: FakeDriveConn())
+
+    async def _fake_get_source_by_id(db, user_id, source_id):
+        return {"id": source_id, "provider": "drive", "account_id": 123, "remote_id": "root", "type": "folder", "path": "/", "options": {"recursive": False}}
+
+    async def _fake_get_account_tokens(db, user_id, account_id):
+        return {"access_token": "tok"}
+
+    async def _fake_should_ingest_item(db, **kwargs):
+        return True
+
+    recorded: list = []
+    async def _fake_record_ingested_item(db, **kwargs):
+        recorded.append(kwargs)
+
+    import tldw_Server_API.app.core.External_Sources.connectors_service as svc
+    monkeypatch.setattr(svc, "get_source_by_id", _fake_get_source_by_id)
+    monkeypatch.setattr(svc, "get_account_tokens", _fake_get_account_tokens)
+    monkeypatch.setattr(svc, "should_ingest_item", _fake_should_ingest_item)
+    monkeypatch.setattr(svc, "record_ingested_item", _fake_record_ingested_item)
+
+    class _DummyTx:
+        async def __aenter__(self):
+            return object()
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+    class _DummyPool:
+        def transaction(self):
+            return _DummyTx()
+    async def _fake_get_db_pool():
+        return _DummyPool()
+    import tldw_Server_API.app.core.AuthNZ.database as dbmod
+    monkeypatch.setattr(dbmod, "get_db_pool", _fake_get_db_pool)
+
+    import tldw_Server_API.app.core.AuthNZ.orgs_teams as orgs
+    async def _fake_list_memberships_for_user(user_id: int):
+        return []
+    monkeypatch.setattr(orgs, "list_memberships_for_user", _fake_list_memberships_for_user)
+
+    class _FailMDB:
+        def __init__(self, *a, **kw):
+            pass
+        def add_media_with_keywords(self, *, url, title, media_type, content, keywords, overwrite=False):
+            raise RuntimeError("ingest failed")
+    import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
+    monkeypatch.setattr(mdb_mod, "MediaDatabase", _FailMDB)
+
+    jm = FakeJM()
+    await worker._process_import_job(jm, jid=1, lease_id="L", worker_id="W", source_id=99, user_id=42)
+
+    assert jm.completed is not None
+    assert jm.completed["result"]["processed"] == 0
+    assert recorded == []

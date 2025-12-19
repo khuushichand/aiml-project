@@ -24,7 +24,8 @@ def _get_chunking_bool(key: str, default: bool) -> bool:
                 v = cp.get('Chunking', key, fallback=str(default))
         s = str(v).strip().lower() if v is not None else str(default).lower()
         return s in ("1", "true", "yes", "on", "y")
-    except Exception:
+    except (ImportError, AttributeError, KeyError, ValueError) as e:
+        logger.debug(f"_get_chunking_bool: config lookup failed for '{key}', using default={default}: {e}")
         return default
 
 def _get_chunking_str(key: str, default: str) -> str:
@@ -37,7 +38,8 @@ def _get_chunking_str(key: str, default: str) -> str:
             if hasattr(cp, 'has_section') and cp.has_section('Chunking'):
                 v = cp.get('Chunking', key, fallback=default)
         return str(v) if v is not None else default
-    except Exception:
+    except (ImportError, AttributeError, KeyError, ValueError) as e:
+        logger.debug(f"_get_chunking_str: config lookup failed for '{key}', using default='{default}': {e}")
         return default
 from ..exceptions import InvalidInputError, ChunkingError
 from ..security_logger import get_security_logger, SecurityEventType
@@ -121,9 +123,12 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
         except InvalidInputError:
             # Propagate as intended security validation error
             raise
-        except Exception:
-            # If our estimator fails for any reason, continue to json.loads which will raise appropriately
-            pass
+        except (MemoryError, RecursionError) as e:
+            # If our estimator runs out of memory or stack, the JSON is likely too deep
+            logger.warning(f"JSON nesting depth check failed with {type(e).__name__}, continuing to parser")
+        except (TypeError, ValueError) as e:
+            # If our estimator fails for other reasons, continue to json.loads which will raise appropriately
+            logger.debug(f"JSON nesting depth estimation failed: {e}")
 
         # Parse JSON
         try:
@@ -152,6 +157,344 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
             return [json.dumps(chunk, indent=2) for chunk in chunks]
         else:
             return [self._json_to_text(chunk) for chunk in chunks]
+
+    def chunk_with_metadata(self,
+                            text: str,
+                            max_size: int,
+                            overlap: int = 0,
+                            **options) -> List[ChunkResult]:
+        """Chunk JSON and return metadata with source offsets aligned to the original text."""
+        if not self.validate_parameters(text, max_size, overlap):
+            return []
+
+        if len(text) > self.MAX_JSON_SIZE:
+            raise InvalidInputError(
+                f"JSON text size ({len(text)} bytes) exceeds maximum "
+                f"allowed size ({self.MAX_JSON_SIZE} bytes)"
+            )
+
+        def _estimate_nesting_depth(s: str, limit: int = 2000) -> None:
+            in_str = False
+            esc = False
+            depth = 0
+            for ch in s:
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == '\\':
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                else:
+                    if ch == '"':
+                        in_str = True
+                    elif ch in '{[':
+                        depth += 1
+                        if depth > limit:
+                            raise InvalidInputError(f"JSON nesting depth exceeds safe limit ({limit})")
+                    elif ch in '}]':
+                        if depth > 0:
+                            depth -= 1
+
+        _estimate_nesting_depth(text, limit=2000)
+
+        try:
+            json_data = json.loads(text)
+        except (json.JSONDecodeError, RecursionError) as e:
+            logger.error(f"Invalid or excessively nested JSON data: {e}")
+            raise InvalidInputError(f"Invalid or excessively nested JSON data: {e}") from e
+
+        output_format = options.get('output_format', 'json')
+        if max_size <= 0:
+            raise ValueError("max_size must be positive")
+        if overlap >= max_size:
+            logger.warning(f"Overlap {overlap} >= max_size {max_size}. Setting to 0.")
+            overlap = 0
+
+        results: List[ChunkResult] = []
+
+        def _emit_chunks(spans: List[Tuple[int, int]], method_opts: Dict[str, Any]) -> None:
+            step = max(1, max_size - overlap)
+            idx = 0
+            for i in range(0, len(spans), step):
+                window = spans[i:i + max_size]
+                if not window:
+                    continue
+                start_char = window[0][0]
+                end_char = window[-1][1]
+                try:
+                    end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
+                except Exception:
+                    pass
+                chunk_text = text[start_char:end_char]
+                md = ChunkMetadata(
+                    index=idx,
+                    start_char=start_char,
+                    end_char=end_char,
+                    word_count=len(chunk_text.split()) if chunk_text else 0,
+                    language=self.language,
+                    overlap_with_previous=overlap if i > 0 else 0,
+                    overlap_with_next=overlap if (i + step) < len(spans) else 0,
+                    method='json',
+                    options=method_opts,
+                )
+                results.append(ChunkResult(text=chunk_text, metadata=md))
+                idx += 1
+
+        if isinstance(json_data, list):
+            spans = self._scan_top_level_array_spans(text)
+            if not spans or len(spans) != len(json_data):
+                logger.debug("Array span scan mismatch; falling back to serialized element search")
+                spans = []
+                cursor = 0
+                for item in json_data:
+                    try:
+                        item_str = json.dumps(item, ensure_ascii=False)
+                    except Exception:
+                        item_str = str(item)
+                    idx = text.find(item_str, cursor)
+                    if idx == -1:
+                        idx = cursor
+                    end = min(len(text), idx + len(item_str))
+                    spans.append((idx, end))
+                    cursor = end
+            _emit_chunks(spans, {'output_format': output_format})
+            return results
+
+        if isinstance(json_data, dict):
+            chunkable_key = options.get('chunkable_key', 'data')
+            preserve_metadata = options.get('preserve_metadata', True)
+            pairs = self._scan_top_level_object_pairs(text)
+            key_map = {p.get('key'): p for p in pairs if p.get('key') is not None}
+
+            def _emit_pair_chunks(pair_spans: List[Tuple[int, int]], note: Dict[str, Any]) -> None:
+                _emit_chunks(pair_spans, {**note, 'chunkable_key': chunkable_key, 'preserve_metadata': preserve_metadata})
+
+            if chunkable_key in json_data:
+                target = json_data[chunkable_key]
+                pair = key_map.get(chunkable_key)
+                if pair and isinstance(target, list):
+                    vstart, vend = pair.get('value_span') or (None, None)
+                    if isinstance(vstart, int) and isinstance(vend, int) and vstart < vend:
+                        sub = text[vstart:vend]
+                        sub_spans = self._scan_top_level_array_spans(sub)
+                        if sub_spans:
+                            spans = [(vstart + s, vstart + e) for (s, e) in sub_spans]
+                            _emit_chunks(spans, {'output_format': output_format, 'chunkable_key': chunkable_key})
+                            return results
+                elif pair and isinstance(target, dict):
+                    vstart, vend = pair.get('value_span') or (None, None)
+                    if isinstance(vstart, int) and isinstance(vend, int) and vstart < vend:
+                        sub = text[vstart:vend]
+                        sub_pairs = self._scan_top_level_object_pairs(sub)
+                        if sub_pairs:
+                            spans = [(vstart + p['pair_span'][0], vstart + p['pair_span'][1]) for p in sub_pairs]
+                            _emit_chunks(spans, {'output_format': output_format, 'chunkable_key': chunkable_key})
+                            return results
+
+            # Default: chunk by top-level keys
+            pair_spans = [p['pair_span'] for p in pairs]
+            _emit_pair_chunks(pair_spans, {'output_format': output_format, 'chunkable_key': chunkable_key})
+            return results
+
+        raise InvalidInputError(
+            "JSON must be a top-level array or object. "
+            f"Got: {type(json_data).__name__}"
+        )
+
+    def _scan_top_level_array_spans(self, text: str) -> List[Tuple[int, int]]:
+        """Return spans of top-level array elements in the original JSON text."""
+        spans: List[Tuple[int, int]] = []
+        n = len(text)
+        i = 0
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n or text[i] != '[':
+            return spans
+        i += 1
+        depth = 1
+        in_str = False
+        esc = False
+        elem_start: Optional[int] = None
+        last_non_ws: Optional[int] = None
+        while i < n:
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == '\\':
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                i += 1
+                continue
+            if ch == '"':
+                in_str = True
+                if depth == 1 and elem_start is None:
+                    elem_start = i
+                    last_non_ws = i
+                i += 1
+                continue
+            if ch in '[{':
+                if depth == 1 and elem_start is None:
+                    elem_start = i
+                    last_non_ws = i
+                depth += 1
+                i += 1
+                continue
+            if ch in ']}':
+                if depth == 1:
+                    if elem_start is not None:
+                        end = (last_non_ws + 1) if last_non_ws is not None else i
+                        spans.append((elem_start, end))
+                        elem_start = None
+                        last_non_ws = None
+                    depth -= 1
+                    i += 1
+                    break
+                depth -= 1
+                if elem_start is not None and not ch.isspace():
+                    last_non_ws = i
+                i += 1
+                continue
+            if depth == 1:
+                if ch == ',':
+                    if elem_start is not None:
+                        end = (last_non_ws + 1) if last_non_ws is not None else i
+                        spans.append((elem_start, end))
+                        elem_start = None
+                        last_non_ws = None
+                elif not ch.isspace():
+                    if elem_start is None:
+                        elem_start = i
+                    last_non_ws = i
+            i += 1
+        return spans
+
+    def _scan_top_level_object_pairs(self, text: str) -> List[Dict[str, Any]]:
+        """Return spans for top-level key/value pairs in the original JSON text."""
+        pairs: List[Dict[str, Any]] = []
+        n = len(text)
+        i = 0
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n or text[i] != '{':
+            return pairs
+        i += 1
+        depth = 1
+        in_str = False
+        esc = False
+        pair_start: Optional[int] = None
+        last_non_ws: Optional[int] = None
+        key_buf: Optional[List[str]] = None
+        reading_key = False
+        current_key: Optional[str] = None
+        expecting_key = True
+        expecting_value = False
+        value_start: Optional[int] = None
+        while i < n:
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == '\\':
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                    if reading_key and key_buf is not None:
+                        key_raw = '"' + ''.join(key_buf) + '"'
+                        try:
+                            current_key = json.loads(key_raw)
+                        except Exception:
+                            current_key = ''.join(key_buf)
+                        reading_key = False
+                        expecting_key = False
+                    if pair_start is not None:
+                        last_non_ws = i
+                else:
+                    if reading_key and key_buf is not None:
+                        key_buf.append(ch)
+                i += 1
+                continue
+            if ch == '"':
+                in_str = True
+                if depth == 1 and expecting_key:
+                    reading_key = True
+                    key_buf = []
+                    if pair_start is None:
+                        pair_start = i
+                if depth == 1 and expecting_value and value_start is None:
+                    value_start = i
+                    expecting_value = False
+                if pair_start is not None:
+                    last_non_ws = i
+                i += 1
+                continue
+            if ch in '[{':
+                if depth == 1 and expecting_value and value_start is None:
+                    value_start = i
+                    expecting_value = False
+                if pair_start is not None and not ch.isspace():
+                    last_non_ws = i
+                depth += 1
+                i += 1
+                continue
+            if ch in ']}':
+                if depth == 1:
+                    if pair_start is not None:
+                        end = (last_non_ws + 1) if last_non_ws is not None else i
+                        pairs.append({
+                            'key': current_key,
+                            'pair_span': (pair_start, end),
+                            'value_span': (value_start if value_start is not None else pair_start, end),
+                        })
+                        pair_start = None
+                        last_non_ws = None
+                        current_key = None
+                        value_start = None
+                        expecting_key = True
+                        expecting_value = False
+                    depth -= 1
+                    i += 1
+                    break
+                depth -= 1
+                if pair_start is not None and not ch.isspace():
+                    last_non_ws = i
+                i += 1
+                continue
+            if depth == 1:
+                if ch == ':':
+                    expecting_value = True
+                    i += 1
+                    continue
+                if ch == ',':
+                    if pair_start is not None:
+                        end = (last_non_ws + 1) if last_non_ws is not None else i
+                        pairs.append({
+                            'key': current_key,
+                            'pair_span': (pair_start, end),
+                            'value_span': (value_start if value_start is not None else pair_start, end),
+                        })
+                    pair_start = None
+                    last_non_ws = None
+                    current_key = None
+                    value_start = None
+                    expecting_key = True
+                    expecting_value = False
+                    i += 1
+                    continue
+                if not ch.isspace():
+                    if pair_start is None:
+                        pair_start = i
+                    last_non_ws = i
+                    if expecting_value and value_start is None:
+                        value_start = i
+                        expecting_value = False
+            else:
+                if pair_start is not None and not ch.isspace():
+                    last_non_ws = i
+            i += 1
+        return pairs
 
     def _chunk_json_list(self,
                         json_list: List[Any],
@@ -228,7 +571,8 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
                 try:
                     import hashlib as _hash
                     meta_ref_id = _hash.sha1(json.dumps(meta_payload, sort_keys=True).encode('utf-8')).hexdigest()[:12]
-                except Exception:
+                except (TypeError, ValueError, json.JSONDecodeError) as e:
+                    logger.debug(f"Failed to generate metadata reference hash: {e}")
                     meta_ref_id = 'meta'
                 # Emit a leading metadata chunk
                 chunks.append({ref_key: meta_ref_id, 'metadata': meta_payload})
@@ -257,7 +601,8 @@ class JSONChunkingStrategy(BaseChunkingStrategy):
                 try:
                     import hashlib as _hash
                     meta_ref_id = _hash.sha1(json.dumps(meta_payload, sort_keys=True).encode('utf-8')).hexdigest()[:12]
-                except Exception:
+                except (TypeError, ValueError, json.JSONDecodeError) as e:
+                    logger.debug(f"Failed to generate metadata reference hash: {e}")
                     meta_ref_id = 'meta'
                 chunks.append({ref_key: meta_ref_id, 'metadata': meta_payload})
             for chunk_dict in chunked_dicts:
@@ -454,6 +799,145 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
 
         return result
 
+    def chunk_with_metadata(self,
+                            text: str,
+                            max_size: int,
+                            overlap: int = 0,
+                            **options) -> List[ChunkResult]:
+        """Chunk XML data and return results with source offsets."""
+        if not self.validate_parameters(text, max_size, overlap):
+            return []
+
+        if len(text) > self.MAX_XML_SIZE:
+            raise InvalidInputError(
+                f"XML text size ({len(text)} bytes) exceeds maximum "
+                f"allowed size ({self.MAX_XML_SIZE} bytes)"
+            )
+
+        try:
+            try:
+                import defusedxml.ElementTree as DefusedET
+                from defusedxml import common as defused_common
+
+                if 'DOCTYPE' in text and 'SYSTEM' in text:
+                    logger.error("XML contains DOCTYPE SYSTEM declaration")
+                    self._security_logger.log_xxe_attempt(text[:500], source="xml_chunk")
+                    raise InvalidInputError("XML contains DOCTYPE SYSTEM declaration which is not allowed for security reasons")
+
+                try:
+                    root = DefusedET.fromstring(text)
+                    logger.debug("Using defusedxml for secure XML parsing")
+                except (defused_common.EntitiesForbidden,
+                        defused_common.ExternalReferenceForbidden,
+                        defused_common.DTDForbidden,
+                        defused_common.NotSupportedError) as e:
+                    logger.error(f"Blocked potential XXE attack: {e}")
+                    raise InvalidInputError(f"XML contains forbidden constructs (potential XXE attack): {e}")
+            except ImportError:
+                parser = ET.XMLParser()
+                parser.entity = {}
+                parser.default = lambda x: None
+
+                if '<!DOCTYPE' in text or '<!ENTITY' in text or 'SYSTEM' in text:
+                    raise InvalidInputError(
+                        "XML contains potentially dangerous DTD/Entity declarations. "
+                        "These are not allowed for security reasons."
+                    )
+
+                root = ET.fromstring(text, parser=parser)
+                logger.debug("Using standard xml.etree with security checks")
+        except ParseError as e:
+            logger.error(f"Invalid XML data: {e}")
+            raise InvalidInputError(f"Invalid XML data: {e}") from e
+
+        output_format = options.get('output_format', 'text')
+        include_paths = options.get('include_paths', True)
+
+        elements_raw = self._extract_xml_elements_with_raw(root)
+        if not elements_raw:
+            return []
+
+        # Map element content to source spans using rolling search for stability.
+        cursor = 0
+        element_entries: List[Tuple[str, str, ET.Element, int, int]] = []
+        for path, raw_text, elem in elements_raw:
+            raw = raw_text
+            if not raw:
+                continue
+            idx = text.find(raw, cursor)
+            if idx == -1:
+                stripped = raw.strip()
+                if stripped:
+                    idx = text.find(stripped, cursor)
+                    if idx != -1:
+                        raw = stripped
+            if idx == -1:
+                idx = cursor
+            end = min(len(text), idx + len(raw))
+            cursor = end
+            element_entries.append((path, raw, elem, idx, end))
+
+        # Chunk elements by word count, with overlap in element units.
+        if max_size <= 0:
+            raise ValueError("max_size must be positive")
+        if overlap >= len(element_entries) and len(element_entries) > 0:
+            logger.warning(f"Overlap {overlap} >= total elements. Setting to 0.")
+            overlap = 0
+
+        chunks: List[List[Tuple[str, str, ET.Element, int, int]]] = []
+        current_chunk: List[Tuple[str, str, ET.Element, int, int]] = []
+        current_word_count = 0
+
+        for entry in element_entries:
+            _path, raw, _elem, _s, _e = entry
+            content = raw.strip()
+            if not content:
+                continue
+            word_count = len(content.split())
+
+            if current_word_count + word_count > max_size and current_chunk:
+                chunks.append(current_chunk)
+                if overlap > 0 and len(current_chunk) > overlap:
+                    current_chunk = current_chunk[-overlap:]
+                    current_word_count = sum(len(e[1].strip().split()) for e in current_chunk)
+                else:
+                    current_chunk = []
+                    current_word_count = 0
+
+            current_chunk.append(entry)
+            current_word_count += word_count
+
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        results: List[ChunkResult] = []
+        for idx, chunk in enumerate(chunks):
+            start_char = min(e[3] for e in chunk)
+            end_char = max(e[4] for e in chunk)
+            try:
+                end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
+            except Exception:
+                pass
+            # Build chunk text in requested output format (offsets still refer to source).
+            if output_format == 'xml':
+                chunk_elements = [(p, t.strip(), el) for (p, t, el, _s, _e) in chunk]
+                chunk_text = self._elements_to_xml(chunk_elements, root.tag, root.attrib)
+            else:
+                chunk_elements = [(p, t.strip(), el) for (p, t, el, _s, _e) in chunk]
+                chunk_text = self._elements_to_text(chunk_elements, include_paths)
+            md = ChunkMetadata(
+                index=idx,
+                start_char=start_char,
+                end_char=end_char,
+                word_count=len(chunk_text.split()) if chunk_text else 0,
+                language=self.language,
+                method='xml',
+                options={'output_format': output_format, 'include_paths': include_paths},
+            )
+            results.append(ChunkResult(text=chunk_text, metadata=md))
+
+        return results
+
     def _extract_xml_elements(self,
                              element: ET.Element,
                              path: str = "") -> List[Tuple[str, str, ET.Element]]:
@@ -488,6 +972,26 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
             if child.tail:
                 tail_text = child.tail.strip()
                 if tail_text:
+                    results.append((f"{current_path}[tail]", tail_text, element))
+
+        return results
+
+    def _extract_xml_elements_with_raw(self,
+                                       element: ET.Element,
+                                       path: str = "") -> List[Tuple[str, str, ET.Element]]:
+        """Extract XML elements preserving raw text for offset mapping."""
+        results = []
+        current_path = f"{path}/{element.tag}" if path else element.tag
+
+        raw_text = element.text if element.text is not None else ""
+        if raw_text and raw_text.strip():
+            results.append((current_path, raw_text, element))
+
+        for child in element:
+            results.extend(self._extract_xml_elements_with_raw(child, current_path))
+            if child.tail:
+                tail_text = child.tail
+                if tail_text and tail_text.strip():
                     results.append((f"{current_path}[tail]", tail_text, element))
 
         return results
@@ -575,7 +1079,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
                         root_tag: str,
                         root_attrib: Dict[str, str]) -> str:
         """
-        Reconstruct XML from elements.
+        Reconstruct XML from elements, preserving hierarchy based on path.
 
         Args:
             elements: List of (path, content, element) tuples
@@ -588,15 +1092,38 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
         # Create new root
         new_root = ET.Element(root_tag, root_attrib)
 
-        # Track added elements to avoid duplicates
+        # Track added elements and path-to-element mapping
         added_elements = set()
+        path_to_element: Dict[str, ET.Element] = {root_tag: new_root}
 
         for path, content, elem in elements:
-            if elem not in added_elements:
-                # Simplified: just add as child of root
-                # In production, would reconstruct full hierarchy
-                new_elem = ET.SubElement(new_root, elem.tag, elem.attrib)
-                new_elem.text = content
-                added_elements.add(elem)
+            if elem in added_elements:
+                continue
+
+            # Parse path to reconstruct hierarchy
+            # Path format: "root/parent/child" or "root/parent[0]/child[1]"
+            path_parts = path.split('/')
+
+            # Build parent path and ensure all ancestors exist
+            current_parent = new_root
+            current_path = root_tag
+
+            for i, part in enumerate(path_parts[1:-1] if len(path_parts) > 1 else []):
+                # Strip array index if present (e.g., "item[0]" -> "item")
+                tag_name = part.split('[')[0] if '[' in part else part
+                current_path = f"{current_path}/{part}"
+
+                if current_path not in path_to_element:
+                    # Create intermediate element
+                    intermediate = ET.SubElement(current_parent, tag_name)
+                    path_to_element[current_path] = intermediate
+
+                current_parent = path_to_element[current_path]
+
+            # Add the actual element as child of its parent
+            new_elem = ET.SubElement(current_parent, elem.tag, elem.attrib)
+            new_elem.text = content
+            added_elements.add(elem)
+            path_to_element[path] = new_elem
 
         return ET.tostring(new_root, encoding='unicode')

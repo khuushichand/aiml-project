@@ -206,9 +206,12 @@ async def process_large_json_async(data: Any) -> str:
     Returns:
         JSON string
     """
+    def _json_dump(payload: Any) -> str:
+        return json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+
     # For small payloads, process inline
     if isinstance(data, (str, int, float, bool, type(None))):
-        return json.dumps(data)
+        return _json_dump(data)
 
     # For larger payloads, offload to thread pool
     try:
@@ -221,7 +224,7 @@ async def process_large_json_async(data: Any) -> str:
             estimated_size = 1000
 
         if estimated_size < 10000:  # Small payload
-            return json.dumps(data)
+            return _json_dump(data)
         else:  # Large payload
             return await run_cpu_bound_thread(json_encode_heavy, data)
     except Exception as e:
@@ -257,12 +260,13 @@ async def decode_large_base64_async(encoded: str) -> bytes:
     Returns:
         Decoded binary data
     """
+    cleaned = ''.join(encoded.split())
     # For small payloads, process inline
-    if len(encoded) < 10000:  # Less than 10KB
-        return base64.b64decode(encoded)
+    if len(cleaned) < 10000:  # Less than 10KB
+        return base64.b64decode(cleaned)
 
     # For larger payloads, offload to thread pool
-    return await run_cpu_bound_thread(base64_decode_large, encoded)
+    return await run_cpu_bound_thread(base64_decode_large, cleaned)
 
 
 class CPUBoundBatcher:

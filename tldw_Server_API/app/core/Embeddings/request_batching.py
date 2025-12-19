@@ -190,6 +190,8 @@ class RequestBatcher:
         """
         queue = self.queues[queue_key]
         provider, model, _ = queue_key
+        idle_timeout_s = max(5.0, self.batch_timeout_ms / 1000.0 * 10.0)
+        idle_start: Optional[float] = None
 
         while True:
             try:
@@ -198,10 +200,18 @@ class RequestBatcher:
 
                 if not batch:
                     # No requests, wait a bit
+                    if idle_start is None:
+                        idle_start = time.time()
+                    elif time.time() - idle_start >= idle_timeout_s:
+                        logger.debug(
+                            f"Processing task for queue {self._queue_label(queue_key)} idle for {idle_timeout_s:.2f}s; exiting."
+                        )
+                        break
                     await asyncio.sleep(0.01)
                     continue
 
                 # Process batch
+                idle_start = None
                 await self._process_batch(batch, provider, model)
 
             except asyncio.CancelledError:
@@ -311,6 +321,8 @@ class RequestBatcher:
 
             # Distribute results
             for i, req in enumerate(batch):
+                if req.future.done():
+                    continue
                 if i < len(embeddings):
                     req.future.set_result(embeddings[i])
                 else:
@@ -395,13 +407,14 @@ class RequestBatcher:
         user_id = metadata.get("user_id")
 
         provider_candidates = []
-        for candidate in (
-            provider,
-            self._normalize_provider_name(provider),
-            self._alias_provider_name(provider),
-        ):
+        normalized_provider = self._normalize_provider_name(provider)
+        for candidate in (provider, normalized_provider):
             if candidate and candidate not in provider_candidates:
                 provider_candidates.append(candidate)
+        if normalized_provider != "local_api":
+            alias = self._alias_provider_name(provider)
+            if alias and alias not in provider_candidates:
+                provider_candidates.append(alias)
 
         last_provider_error: Optional[ValueError] = None
         for candidate in provider_candidates:
@@ -624,8 +637,30 @@ class RequestBatcher:
                     int(self.adaptive_params['current_timeout'] * 1.1)
                 )
 
+    def cleanup_empty_queues(self) -> int:
+        """
+        Remove empty queue entries to prevent memory accumulation.
+
+        Returns:
+            Number of empty queues removed.
+        """
+        empty_keys = [
+            key for key, queue in self.queues.items()
+            if not queue and key not in self.processing_tasks
+        ]
+        for key in empty_keys:
+            del self.queues[key]
+
+        if empty_keys:
+            logger.debug(f"Cleaned up {len(empty_keys)} empty queue keys from batcher")
+
+        return len(empty_keys)
+
     def get_statistics(self) -> Dict[str, Any]:
         """Get batching statistics"""
+        # Opportunistically clean up empty queues during status check
+        self.cleanup_empty_queues()
+
         queue_sizes = {
             self._queue_label(key): len(queue) for key, queue in self.queues.items()
         }
@@ -674,6 +709,10 @@ class RequestBatcher:
         if tasks_to_await:
             await asyncio.gather(*tasks_to_await, return_exceptions=True)
         self.processing_tasks.clear()
+
+        # Clean up empty queues
+        self.cleanup_empty_queues()
+        self.queues.clear()
 
         logger.info("Request batcher shutdown complete")
 

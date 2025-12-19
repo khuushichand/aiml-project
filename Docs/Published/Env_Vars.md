@@ -93,6 +93,7 @@ Module-specific toggles exist; see the repo `Env_Vars.md` or the respective modu
 
 Monitoring & Telemetry
 - `METRICS_ENABLED`: Enable text metrics endpoints.
+- `METRICS_RING_BUFFER_MAXLEN`: Rolling metrics sample window size (default `10000`). Set `0` or a negative value to disable the limit.
 - OpenTelemetry export is controlled via standard `OTEL_*` environment variables (e.g., `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_EXPORTER`). See the Deployment/Monitoring docs.
 
 ## Workflows (Auth & Scheduler)

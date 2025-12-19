@@ -6,6 +6,8 @@ from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.api.v1.endpoints import workflows as wf_mod
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
 
 pytestmark = pytest.mark.integration
@@ -18,10 +20,37 @@ def client_with_wf(tmp_path):
     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
 
+    async def override_principal(request=None):
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject="test",
+            token_type="test",
+            jti=None,
+            roles=["admin"],
+            permissions=[],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        if request is not None:
+            try:
+                request.state.auth = AuthContext(
+                    principal=principal,
+                    ip=None,
+                    user_agent=None,
+                    request_id=None,
+                )
+            except Exception:
+                pass
+        return principal
+
     def override_db():
         return db
 
     app.dependency_overrides[get_request_user] = override_user
+    app.dependency_overrides[get_auth_principal] = override_principal
     app.dependency_overrides[wf_mod._get_db] = override_db
 
     with TestClient(app) as client:

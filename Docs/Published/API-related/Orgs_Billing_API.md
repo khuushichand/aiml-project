@@ -411,7 +411,9 @@ Authorization: Bearer <token>
 
 Base Path: `/api/v1/billing`
 
-Requires `BILLING_ENABLED=true`.
+Stripe-backed billing operations (checkout, portal, subscription cancel/resume,
+webhooks) require `BILLING_ENABLED=true`. Read-only endpoints (plans,
+subscription status, usage, invoices) are available regardless of this flag.
 
 ### List Available Plans
 
@@ -430,7 +432,7 @@ Authorization: Bearer <token>
       "price_usd_monthly": 0,
       "price_usd_yearly": 0,
       "limits": {
-        "storage_gb": 1,
+        "storage_mb": 1024,
         "api_calls_day": 100,
         "llm_tokens_month": 300000,
         "team_members": 1,
@@ -443,7 +445,7 @@ Authorization: Bearer <token>
       "price_usd_monthly": 29,
       "price_usd_yearly": 290,
       "limits": {
-        "storage_gb": 10,
+        "storage_mb": 10240,
         "api_calls_day": 5000,
         "llm_tokens_month": 15000000,
         "team_members": 5,
@@ -472,7 +474,7 @@ Authorization: Bearer <token>
   "current_period_end": "2024-02-01T00:00:00Z",
   "trial_end": null,
   "limits": {
-    "storage_gb": 10,
+    "storage_mb": 10240,
     "api_calls_day": 5000,
     "llm_tokens_month": 15000000,
     "team_members": 5

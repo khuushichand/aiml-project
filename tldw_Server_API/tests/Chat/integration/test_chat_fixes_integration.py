@@ -445,11 +445,11 @@ class TestValidationImprovements:
         long_message = ChatCompletionRequest(
             model="test-model",
             messages=[
-                ChatCompletionUserMessageParam(role="user", content="x" * 500000)  # Over limit
+                ChatCompletionUserMessageParam(role="user", content="x" * 2000)  # Over limit for test validator
             ]
         )
 
-        is_valid, error = await validate_request_payload(long_message, max_text_length=400000)
+        is_valid, error = await validate_request_payload(long_message, max_text_length=1000)
         assert not is_valid
         assert "too long" in error.lower()
 

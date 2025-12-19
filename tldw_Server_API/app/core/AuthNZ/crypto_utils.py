@@ -13,6 +13,8 @@ import hashlib
 import os
 from typing import List, Optional
 
+from loguru import logger
+
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
 
@@ -104,6 +106,20 @@ def derive_hmac_key_candidates(settings: Optional[Settings] = None) -> List[byte
                 "derive_hmac_key could not locate a configured secret. "
                 "Set API_KEY_PEPPER (recommended) or provide JWT_SECRET_KEY / JWT_PRIVATE_KEY."
             )
+        # SECURITY: Additional production guard - never use fallback in production environment
+        environment = os.getenv("ENVIRONMENT", "").strip().lower()
+        prod_flag = os.getenv("tldw_production", "false").strip().lower() in {"1", "true", "yes", "on", "y"}
+        if environment in {"production", "prod"} or prod_flag:
+            raise ValueError(
+                "CRITICAL: Test fallback secret cannot be used in production environment. "
+                "Configure API_KEY_PEPPER or JWT_SECRET_KEY for production use."
+            )
+        # Log warning about using deterministic fallback key
+        logger.warning(
+            "Using deterministic test fallback HMAC key. "
+            "This is only safe in test environments. "
+            "Configure API_KEY_PEPPER or JWT_SECRET_KEY for production."
+        )
         digest_sources.append(b"tldw_default_api_key_hmac")
 
     # Hash each material to produce uniform 32-byte HMAC keys

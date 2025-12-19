@@ -76,6 +76,20 @@ class _Svc:
             return 'pass', None, None, None
         return 'pass', None, None, None
 
+    def redact_text(self, text: str, policy: _Policy) -> str:
+        if 'user@example.com' in text:
+            cats = policy.categories_enabled
+            if not cats or ('pii' in cats or 'pii_email' in cats):
+                return text.replace('user@example.com', '[PII]')
+        return text
+
+    def check_text(self, text: str, policy: _Policy):
+        if 'user@example.com' in text:
+            cats = policy.categories_enabled
+            if not cats or ('pii' in cats or 'pii_email' in cats):
+                return True, "email"
+        return False, None
+
 
 @pytest.mark.unit
 def test_categories_allow_pii_redaction():

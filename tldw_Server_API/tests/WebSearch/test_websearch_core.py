@@ -4,13 +4,17 @@ from typing import Any, Dict
 
 import pytest
 
-from tldw_Server_API.app.core.WebSearch import Web_Search as web_search
+from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as web_search
 
 
 def test_aggregate_results_returns_structured_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_chat_api_call(**_: Any) -> str:
         return "Aggregated answer text."
 
+    def fake_summarize(**_: Any) -> str:
+        return "Chunk summary"
+
+    monkeypatch.setattr(web_search, "summarize", fake_summarize)
     monkeypatch.setattr(web_search, "chat_api_call", fake_chat_api_call)
 
     relevant_results = {
@@ -91,7 +95,7 @@ async def test_search_result_relevance_filters_irrelevant_results(monkeypatch: p
     monkeypatch.setattr(web_search, "summarize", fake_summarize)
     monkeypatch.setattr(web_search, "chat_api_call", fake_chat_api_call)
     monkeypatch.setattr(web_search.asyncio, "sleep", instant_sleep)
-    monkeypatch.setattr(web_search.random, "uniform", lambda *_: 0.0)
+    monkeypatch.setattr(web_search, "get_loaded_config", lambda: {})
 
     search_results = [
         {"id": "keep", "url": "https://example.com/keep", "content": "Snippet keep"},
@@ -129,8 +133,8 @@ def test_search_web_brave_builds_expected_request(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(web_search, "brave_http_get", fake_get)
     monkeypatch.setattr(
         web_search,
-        "loaded_config_data",
-        {
+        "get_loaded_config",
+        lambda: {
             "search_engines": {
                 "brave_search_ai_api_key": "ai-key",
                 "brave_search_api_key": "web-key",

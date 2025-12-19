@@ -227,13 +227,16 @@ class PromptImprover:
 
         except Exception as e:
             if fallback:
-                # Return original on error
+                # Return original on error, but log the warning
+                logger.warning(f"Prompt improvement failed (fallback enabled): strategy={strategy.value}, error={e}")
                 return ImprovementResult(
                     original_prompt=prompt,
                     improved_prompt=prompt,
                     strategy=strategy,
                     metadata={"error": str(e)}
                 )
+            # Log and re-raise when fallback is disabled
+            logger.error(f"Prompt improvement failed: strategy={strategy.value}, error={e}")
             raise
 
     def improve_multi(self, prompt: str, strategies: List[ImprovementStrategy]) -> ImprovementResult:
@@ -627,67 +630,66 @@ class PromptImprover:
             Improved prompt data
         """
         try:
-            # Get existing prompt
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
+            with self.db.transaction() as conn:
+                cursor = conn.cursor()
 
-            cursor.execute("""
-                SELECT id, project_id, signature_id, name, system_prompt,
-                       user_prompt, few_shot_examples
-                FROM prompt_studio_prompts
-                WHERE id = ? AND deleted = 0
-            """, (prompt_id,))
+                # Get existing prompt
+                cursor.execute("""
+                    SELECT id, project_id, signature_id, name, system_prompt,
+                           user_prompt, few_shot_examples
+                    FROM prompt_studio_prompts
+                    WHERE id = ? AND deleted = 0
+                """, (prompt_id,))
 
-            prompt_data = cursor.fetchone()
-            if not prompt_data:
-                raise ValueError(f"Prompt {prompt_id} not found")
+                prompt_data = cursor.fetchone()
+                if not prompt_data:
+                    raise ValueError(f"Prompt {prompt_id} not found")
 
-            # Default strategies if none specified
-            if not strategies:
-                strategies = ["clarity", "structure", "specificity"]
+                # Default strategies if none specified
+                if not strategies:
+                    strategies = ["clarity", "structure", "specificity"]
 
-            # Apply improvements
-            improved_system = self._improve_text(
-                prompt_data[4],  # system_prompt
-                strategies,
-                "system prompt",
-                model_name
-            )
-
-            improved_user = self._improve_text(
-                prompt_data[5],  # user_prompt
-                strategies,
-                "user prompt",
-                model_name
-            )
-
-            # Create new version
-            cursor.execute("""
-                INSERT INTO prompt_studio_prompts (
-                    uuid, project_id, signature_id, name, system_prompt,
-                    user_prompt, parent_version_id, change_description,
-                    version_number, client_id
-                ) VALUES (
-                    lower(hex(randomblob(16))), ?, ?, ?, ?, ?, ?, ?,
-                    (SELECT COALESCE(MAX(version_number), 0) + 1
-                     FROM prompt_studio_prompts
-                     WHERE project_id = ? AND name = ?),
-                    ?
+                # Apply improvements
+                improved_system = self._improve_text(
+                    prompt_data[4],  # system_prompt
+                    strategies,
+                    "system prompt",
+                    model_name
                 )
-            """, (
-                prompt_data[1],  # project_id
-                prompt_data[2],  # signature_id
-                prompt_data[3],  # name
-                improved_system,
-                improved_user,
-                prompt_id,
-                f"Improved using strategies: {', '.join(strategies)}",
-                prompt_data[1], prompt_data[3],  # for version subquery
-                self.client_id
-            ))
 
-            new_prompt_id = cursor.lastrowid
-            conn.commit()
+                improved_user = self._improve_text(
+                    prompt_data[5],  # user_prompt
+                    strategies,
+                    "user prompt",
+                    model_name
+                )
+
+                # Create new version
+                cursor.execute("""
+                    INSERT INTO prompt_studio_prompts (
+                        uuid, project_id, signature_id, name, system_prompt,
+                        user_prompt, parent_version_id, change_description,
+                        version_number, client_id
+                    ) VALUES (
+                        lower(hex(randomblob(16))), ?, ?, ?, ?, ?, ?, ?,
+                        (SELECT COALESCE(MAX(version_number), 0) + 1
+                         FROM prompt_studio_prompts
+                         WHERE project_id = ? AND name = ?),
+                        ?
+                    )
+                """, (
+                    prompt_data[1],  # project_id
+                    prompt_data[2],  # signature_id
+                    prompt_data[3],  # name
+                    improved_system,
+                    improved_user,
+                    prompt_id,
+                    f"Improved using strategies: {', '.join(strategies)}",
+                    prompt_data[1], prompt_data[3],  # for version subquery
+                    self.client_id
+                ))
+
+                new_prompt_id = cursor.lastrowid
 
             logger.info(f"Created improved version {new_prompt_id} of prompt {prompt_id}")
 
@@ -720,20 +722,20 @@ class PromptImprover:
         """
         try:
             # Get prompt
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
+            with self.db.transaction() as conn:
+                cursor = conn.cursor()
 
-            cursor.execute("""
-                SELECT system_prompt, user_prompt
-                FROM prompt_studio_prompts
-                WHERE id = ? AND deleted = 0
-            """, (prompt_id,))
+                cursor.execute("""
+                    SELECT system_prompt, user_prompt
+                    FROM prompt_studio_prompts
+                    WHERE id = ? AND deleted = 0
+                """, (prompt_id,))
 
-            prompt_data = cursor.fetchone()
-            if not prompt_data:
-                raise ValueError(f"Prompt {prompt_id} not found")
+                prompt_data = cursor.fetchone()
+                if not prompt_data:
+                    raise ValueError(f"Prompt {prompt_id} not found")
 
-            # Analyze with LLM
+            # Analyze with LLM (outside transaction to avoid holding locks)
             analysis_prompt = f"""Analyze this prompt for potential improvements:
 
 SYSTEM PROMPT:
@@ -787,22 +789,22 @@ Format as JSON.
             Standardized prompt data
         """
         try:
-            # Get prompt
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
+            with self.db.transaction() as conn:
+                cursor = conn.cursor()
 
-            cursor.execute("""
-                SELECT project_id, signature_id, name, system_prompt, user_prompt
-                FROM prompt_studio_prompts
-                WHERE id = ? AND deleted = 0
-            """, (prompt_id,))
+                # Get prompt
+                cursor.execute("""
+                    SELECT project_id, signature_id, name, system_prompt, user_prompt
+                    FROM prompt_studio_prompts
+                    WHERE id = ? AND deleted = 0
+                """, (prompt_id,))
 
-            prompt_data = cursor.fetchone()
-            if not prompt_data:
-                raise ValueError(f"Prompt {prompt_id} not found")
+                prompt_data = cursor.fetchone()
+                if not prompt_data:
+                    raise ValueError(f"Prompt {prompt_id} not found")
 
-            # Convert to XML format
-            xml_system = f"""<role>
+                # Convert to XML format
+                xml_system = f"""<role>
     You are an AI assistant that follows structured instructions precisely.
 </role>
 
@@ -810,31 +812,30 @@ Format as JSON.
     {prompt_data[3]}
 </capabilities>"""
 
-            xml_user = self._convert_to_xml_format(prompt_data[4])
+                xml_user = self._convert_to_xml_format(prompt_data[4])
 
-            # Create new version
-            cursor.execute("""
-                INSERT INTO prompt_studio_prompts (
-                    uuid, project_id, signature_id, name, system_prompt,
-                    user_prompt, parent_version_id, change_description,
-                    version_number, client_id
-                ) VALUES (
-                    lower(hex(randomblob(16))), ?, ?, ?, ?, ?, ?, ?,
-                    (SELECT COALESCE(MAX(version_number), 0) + 1
-                     FROM prompt_studio_prompts
-                     WHERE project_id = ? AND name = ?),
-                    ?
-                )
-            """, (
-                prompt_data[0], prompt_data[1], prompt_data[2],
-                xml_system, xml_user, prompt_id,
-                "Standardized to XML format",
-                prompt_data[0], prompt_data[2],
-                self.client_id
-            ))
+                # Create new version
+                cursor.execute("""
+                    INSERT INTO prompt_studio_prompts (
+                        uuid, project_id, signature_id, name, system_prompt,
+                        user_prompt, parent_version_id, change_description,
+                        version_number, client_id
+                    ) VALUES (
+                        lower(hex(randomblob(16))), ?, ?, ?, ?, ?, ?, ?,
+                        (SELECT COALESCE(MAX(version_number), 0) + 1
+                         FROM prompt_studio_prompts
+                         WHERE project_id = ? AND name = ?),
+                        ?
+                    )
+                """, (
+                    prompt_data[0], prompt_data[1], prompt_data[2],
+                    xml_system, xml_user, prompt_id,
+                    "Standardized to XML format",
+                    prompt_data[0], prompt_data[2],
+                    self.client_id
+                ))
 
-            new_prompt_id = cursor.lastrowid
-            conn.commit()
+                new_prompt_id = cursor.lastrowid
 
             return {
                 "id": new_prompt_id,
@@ -993,6 +994,27 @@ Provide only the improved text, no explanations.
         Returns:
             XML-formatted text
         """
+        import re
+        from html import escape as html_escape
+
+        def sanitize_tag_name(name: str) -> str:
+            """Sanitize a string to be a valid XML tag name."""
+            # Remove leading/trailing whitespace
+            name = name.strip()
+            # Replace spaces with underscores
+            name = name.replace(' ', '_')
+            # Remove characters that are invalid in XML tag names
+            # Valid: letters, digits, hyphens, underscores, periods (but not at start)
+            name = re.sub(r'[^a-zA-Z0-9_\-.]', '', name)
+            # Tag names can't start with digits, hyphens, or periods
+            name = re.sub(r'^[^a-zA-Z_]+', '', name)
+            # Default if empty after sanitization
+            return name.lower() if name else 'section'
+
+        def escape_xml_content(content: str) -> str:
+            """Escape special XML characters in content."""
+            return html_escape(content, quote=False)
+
         # Simple conversion - could be enhanced with more sophisticated parsing
         lines = text.split('\n')
         xml_parts = ["<instructions>"]
@@ -1001,12 +1023,13 @@ Provide only the improved text, no explanations.
             line = line.strip()
             if line:
                 if line.endswith(':'):
-                    # Section header
-                    tag = line[:-1].lower().replace(' ', '_')
+                    # Section header - sanitize tag name
+                    tag = sanitize_tag_name(line[:-1])
                     xml_parts.append(f"  <{tag}>")
                 else:
-                    # Content
-                    xml_parts.append(f"    {line}")
+                    # Content - escape special characters
+                    escaped_line = escape_xml_content(line)
+                    xml_parts.append(f"    {escaped_line}")
 
         xml_parts.append("</instructions>")
 

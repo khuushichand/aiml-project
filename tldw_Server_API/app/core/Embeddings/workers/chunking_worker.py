@@ -57,15 +57,9 @@ class ChunkingWorker(BaseWorker):
     def __init__(self, config: WorkerConfig):
         super().__init__(config)
         self.embedding_queue = config.queue_name.replace("chunking", "embedding")
-        # Initialize v2 chunker if available
-        self._v2_chunker = None
+        # Per-job chunker policy: create a fresh v2 Chunker per message
+        self._v2_chunker_failure_logged = False
         self._template_mgr = None
-        if V2Chunker is not None:
-            try:
-                self._v2_chunker = V2Chunker()
-                logger.debug("Initialized v2 Chunker for embeddings chunking worker")
-            except Exception as e:
-                logger.warning(f"Failed to initialize v2 Chunker; will use simple chunking. Error: {e}")
         if TemplateManager is not None:
             try:
                 self._template_mgr = TemplateManager()
@@ -232,7 +226,17 @@ class ChunkingWorker(BaseWorker):
             return []
 
         # Prefer v2 chunker for consistency with API/templates
-        if self._v2_chunker is not None:
+        v2_chunker = None
+        if V2Chunker is not None:
+            try:
+                v2_chunker = V2Chunker()
+            except Exception as e:
+                if not self._v2_chunker_failure_logged:
+                    logger.warning(f"Failed to initialize v2 Chunker; will use simple chunking. Error: {e}")
+                    self._v2_chunker_failure_logged = True
+                else:
+                    logger.debug(f"Failed to initialize v2 Chunker; using fallback. Error: {e}")
+        if v2_chunker is not None:
             try:
                 # 1) Template path
                 if getattr(cfg, 'template_name', None) and self._template_mgr is not None:
@@ -274,7 +278,7 @@ class ChunkingWorker(BaseWorker):
                     chunk_size_val = max(1, chunk_size_val // 5)
                     overlap_val = max(0, overlap_val // 5)
 
-                results = self._v2_chunker.chunk_text_with_metadata(
+                results = v2_chunker.chunk_text_with_metadata(
                     text,
                     method=method,
                     max_size=chunk_size_val,

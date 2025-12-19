@@ -59,6 +59,8 @@ class MIPROOptimizer:
         self.metrics = EvaluationMetrics()
         # Optional context populated by callers (e.g., JobProcessor)
         self.optimization_id: Optional[int] = None
+        # Model config for internal LLM calls (set during optimize())
+        self._internal_model_config: Dict[str, Any] = {}
 
     async def optimize(self, initial_prompt_id: int, test_case_ids: List[int],
                        model_config: Dict[str, Any], max_iterations: int = 20,
@@ -80,6 +82,9 @@ class MIPROOptimizer:
         """
         with log_context(ps_component="opt_engine", strategy="mipro", prompt_id=initial_prompt_id, optimization_id=getattr(self, "optimization_id", None)):
             logger.info("Starting MIPRO optimization for prompt {}", initial_prompt_id)
+
+        # Store model_config for use in internal LLM calls (instruction generation)
+        self._internal_model_config = model_config
 
         # Initialize
         current_prompt_id = initial_prompt_id
@@ -221,15 +226,18 @@ Original instruction:
 Rephrased instruction:"""
 
         try:
+            # Use configured provider/model, falling back to defaults
+            provider = self._internal_model_config.get("provider", "openai")
+            model = self._internal_model_config.get("model", "gpt-3.5-turbo")
             result = await self.executor._call_llm(
-                provider="openai",
-                model="gpt-3.5-turbo",
+                provider=provider,
+                model=model,
                 prompt=prompt,
                 parameters={"temperature": 0.7, "max_tokens": 500}
             )
             return result["content"].strip()
         except Exception as e:
-            logger.debug(f"_add_constraints failed to call LLM: error={e}")
+            logger.warning(f"_rephrase_instruction failed to call LLM: error={e}")
             return None
 
     async def _add_details(self, instruction: str, current_score: float) -> Optional[str]:
@@ -243,15 +251,18 @@ Current instruction:
 Enhanced instruction with more details:"""
 
         try:
+            # Use configured provider/model, falling back to defaults
+            provider = self._internal_model_config.get("provider", "openai")
+            model = self._internal_model_config.get("model", "gpt-3.5-turbo")
             result = await self.executor._call_llm(
-                provider="openai",
-                model="gpt-3.5-turbo",
+                provider=provider,
+                model=model,
                 prompt=prompt,
                 parameters={"temperature": 0.8, "max_tokens": 500}
             )
             return result["content"].strip()
         except Exception as e:
-            logger.debug(f"_add_details failed to call LLM: error={e}")
+            logger.warning(f"_add_details failed to call LLM: error={e}")
             return None
 
     async def _simplify_instruction(self, instruction: str) -> Optional[str]:
@@ -265,15 +276,18 @@ Complex instruction:
 Simplified instruction:"""
 
         try:
+            # Use configured provider/model, falling back to defaults
+            provider = self._internal_model_config.get("provider", "openai")
+            model = self._internal_model_config.get("model", "gpt-3.5-turbo")
             result = await self.executor._call_llm(
-                provider="openai",
-                model="gpt-3.5-turbo",
+                provider=provider,
+                model=model,
                 prompt=prompt,
                 parameters={"temperature": 0.5, "max_tokens": 300}
             )
             return result["content"].strip()
         except Exception as e:
-            logger.debug(f"_simplify_instruction failed to call LLM: error={e}")
+            logger.warning(f"_simplify_instruction failed to call LLM: error={e}")
             return None
 
     async def _add_examples(self, instruction: str) -> Optional[str]:
@@ -325,28 +339,27 @@ Follow these examples for consistency."""
         prompt = self._get_prompt(base_prompt_id)
 
         # Create new prompt variant: update system_prompt (instructions), preserve user_prompt
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            INSERT INTO prompt_studio_prompts (
-                uuid, project_id, signature_id, name, system_prompt,
-                user_prompt, version_number, parent_version_id, client_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            f"opt-{datetime.utcnow().timestamp()}",
-            prompt["project_id"],
-            prompt.get("signature_id"),
-            f"{prompt['name']} (Optimized)",
-            new_instruction,
-            prompt.get("user_prompt"),
-            (prompt.get("version_number") or 0) + 1,
-            base_prompt_id,
-            self.db.client_id
-        ))
+            cursor.execute("""
+                INSERT INTO prompt_studio_prompts (
+                    uuid, project_id, signature_id, name, system_prompt,
+                    user_prompt, version_number, parent_version_id, client_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                f"opt-{datetime.utcnow().timestamp()}",
+                prompt["project_id"],
+                prompt.get("signature_id"),
+                f"{prompt['name']} (Optimized)",
+                new_instruction,
+                prompt.get("user_prompt"),
+                (prompt.get("version_number") or 0) + 1,
+                base_prompt_id,
+                self.db.client_id
+            ))
 
-        new_prompt_id = cursor.lastrowid
-        conn.commit()
+            new_prompt_id = cursor.lastrowid
 
         return new_prompt_id
 
@@ -363,14 +376,14 @@ Follow these examples for consistency."""
 
     def _get_prompt(self, prompt_id: int) -> Dict[str, Any]:
         """Get prompt from database."""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("SELECT * FROM prompt_studio_prompts WHERE id = ?", (prompt_id,))
-        row = cursor.fetchone()
+            cursor.execute("SELECT * FROM prompt_studio_prompts WHERE id = ?", (prompt_id,))
+            row = cursor.fetchone()
 
-        if row:
-            return self.db._row_to_dict(cursor, row)
+            if row:
+                return self.db._row_to_dict(cursor, row)
         return {}
 
 ########################################################################################################################
@@ -532,45 +545,44 @@ class BootstrapOptimizer:
     async def _create_prompt_with_examples(self, base_prompt_id: int,
                                           examples: List[Dict[str, Any]]) -> int:
         """Create new prompt with few-shot examples."""
-        # Get base prompt
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("SELECT * FROM prompt_studio_prompts WHERE id = ?", (base_prompt_id,))
-        row = cursor.fetchone()
-        prompt = self.db._row_to_dict(cursor, row)
+            # Get base prompt
+            cursor.execute("SELECT * FROM prompt_studio_prompts WHERE id = ?", (base_prompt_id,))
+            row = cursor.fetchone()
+            prompt = self.db._row_to_dict(cursor, row)
 
-        # Build examples text
-        examples_text = "Here are some examples:\n\n"
-        for i, example in enumerate(examples, 1):
-            examples_text += f"Example {i}:\n"
-            examples_text += f"Input: {json.dumps(example.get('inputs', {}), indent=2)}\n"
-            examples_text += f"Output: {json.dumps(example.get('actual_output', {}), indent=2)}\n\n"
+            # Build examples text
+            examples_text = "Here are some examples:\n\n"
+            for i, example in enumerate(examples, 1):
+                examples_text += f"Example {i}:\n"
+                examples_text += f"Input: {json.dumps(example.get('inputs', {}), indent=2)}\n"
+                examples_text += f"Output: {json.dumps(example.get('actual_output', {}), indent=2)}\n\n"
 
-        # Add examples to user prompt (preserve system_prompt)
-        base_user_prompt = prompt.get("user_prompt") or ""
-        new_user_prompt = f"{examples_text}{base_user_prompt}"
+            # Add examples to user prompt (preserve system_prompt)
+            base_user_prompt = prompt.get("user_prompt") or ""
+            new_user_prompt = f"{examples_text}{base_user_prompt}"
 
-        # Create new prompt
-        cursor.execute("""
-            INSERT INTO prompt_studio_prompts (
-                uuid, project_id, signature_id, name, system_prompt,
-                user_prompt, version_number, parent_version_id, client_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            f"bootstrap-{datetime.utcnow().timestamp()}",
-            prompt["project_id"],
-            prompt.get("signature_id"),
-            f"{prompt['name']} (Bootstrap)",
-            prompt.get("system_prompt"),
-            new_user_prompt,
-            (prompt.get("version_number") or 0) + 1,
-            base_prompt_id,
-            self.db.client_id
-        ))
+            # Create new prompt
+            cursor.execute("""
+                INSERT INTO prompt_studio_prompts (
+                    uuid, project_id, signature_id, name, system_prompt,
+                    user_prompt, version_number, parent_version_id, client_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                f"bootstrap-{datetime.utcnow().timestamp()}",
+                prompt["project_id"],
+                prompt.get("signature_id"),
+                f"{prompt['name']} (Bootstrap)",
+                prompt.get("system_prompt"),
+                new_user_prompt,
+                (prompt.get("version_number") or 0) + 1,
+                base_prompt_id,
+                self.db.client_id
+            ))
 
-        new_prompt_id = cursor.lastrowid
-        conn.commit()
+            new_prompt_id = cursor.lastrowid
 
         return new_prompt_id
 

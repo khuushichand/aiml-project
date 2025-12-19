@@ -1355,3 +1355,117 @@ class AuthnzOrgsTeamsRepo:
                 f"AuthnzOrgsTeamsRepo.list_org_memberships_for_user failed: {exc}"
             )
             raise
+
+    async def list_organizations_for_user(
+        self,
+        user_id: int,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        with_total: bool = False,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        List organizations a given user is a member of with pagination support.
+
+        Returns (rows, total). When with_total=False, total is returned as 0.
+        """
+        try:
+            if self._is_postgres():
+                rows = await self.db_pool.fetchall(
+                    """
+                    SELECT DISTINCT
+                        o.id,
+                        o.name,
+                        o.slug,
+                        o.owner_user_id,
+                        o.is_active,
+                        o.created_at,
+                        o.updated_at,
+                        m.role AS membership_role
+                    FROM organizations o
+                    JOIN org_members m ON m.org_id = o.id
+                    WHERE m.user_id = $1
+                    ORDER BY o.created_at DESC, o.id DESC
+                    LIMIT $2 OFFSET $3
+                    """,
+                    user_id,
+                    limit,
+                    offset,
+                )
+                total = (
+                    await self.db_pool.fetchval(
+                        """
+                        SELECT COUNT(DISTINCT o.id)
+                        FROM organizations o
+                        JOIN org_members m ON m.org_id = o.id
+                        WHERE m.user_id = $1
+                        """,
+                        user_id,
+                    )
+                    if with_total
+                    else 0
+                )
+
+                normalized: List[Dict[str, Any]] = []
+                for r in rows:
+                    d = dict(r)
+                    d["is_active"] = bool(d.get("is_active", True))
+                    normalized.append(d)
+                return normalized, int(total or 0)
+
+            async with self.db_pool.acquire() as conn:
+                cursor = await conn.execute(
+                    """
+                    SELECT DISTINCT
+                        o.id,
+                        o.name,
+                        o.slug,
+                        o.owner_user_id,
+                        o.is_active,
+                        o.created_at,
+                        o.updated_at,
+                        m.role AS membership_role
+                    FROM organizations o
+                    JOIN org_members m ON m.org_id = o.id
+                    WHERE m.user_id = ?
+                    ORDER BY o.created_at DESC, o.id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (user_id, limit, offset),
+                )
+                rows_raw = await cursor.fetchall()
+                rows = [
+                    {
+                        "id": r[0],
+                        "name": r[1],
+                        "slug": r[2],
+                        "owner_user_id": r[3],
+                        "is_active": bool(r[4]),
+                        "created_at": r[5],
+                        "updated_at": r[6],
+                        "membership_role": r[7],
+                    }
+                    for r in rows_raw
+                ]
+
+                if with_total:
+                    cur2 = await conn.execute(
+                        """
+                        SELECT COUNT(DISTINCT o.id)
+                        FROM organizations o
+                        JOIN org_members m ON m.org_id = o.id
+                        WHERE m.user_id = ?
+                        """,
+                        (user_id,),
+                    )
+                    total_row = await cur2.fetchone()
+                    total = int(total_row[0]) if total_row else 0
+                else:
+                    total = 0
+
+                return rows, int(total or 0)
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(
+                f"AuthnzOrgsTeamsRepo.list_organizations_for_user failed: {exc}"
+            )
+            raise

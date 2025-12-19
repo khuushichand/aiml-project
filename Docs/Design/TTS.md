@@ -79,6 +79,11 @@ https://github.com/PyAV-Org/PyAV
 https://github.com/santinic/audiblez
 https://github.com/nazdridoy/kokoro-tts
 https://huggingface.co/FunAudioLLM/Fun-CosyVoice3-0.5B-2512
+https://huggingface.co/Aratako/T5Gemma-TTS-2b-2b
+https://huggingface.co/blog/YatharthS/llm-tts-models
+    https://github.com/ysharma3501/MiraTTS?tab=readme-ov-file
+    https://huggingface.co/YatharthS/MiraTTS/tree/main
+
 https://huggingface.co/FunAudioLLM/Fun-ASR-MLT-Nano-2512
 https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512
 https://huggingface.co/ResembleAI/chatterbox-turbo

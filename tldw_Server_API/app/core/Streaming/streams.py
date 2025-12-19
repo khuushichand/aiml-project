@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 import time
 from typing import Any, AsyncIterator, Callable, Dict, Optional, Tuple
@@ -7,6 +6,7 @@ from typing import Any, AsyncIterator, Callable, Dict, Optional, Tuple
 from loguru import logger
 
 from tldw_Server_API.app.core.LLM_Calls.sse import (
+    ensure_sse_control_line,
     ensure_sse_line,
     sse_data,
     sse_done,
@@ -93,7 +93,7 @@ class SSEStream:
     - Bounded queue (default maxsize 256; block on full)
     - Heartbeats (comment or data mode)
     - Provider control pass-through toggle for upstream normalization flows
-    - Idle timeout and max duration enforcement (emit error + DONE)
+    - Idle timeout and max duration enforcement (idle tracks last emitted line for connection liveness)
     - Optional labels dict for metrics tagging (not enforced here)
     """
 
@@ -148,34 +148,65 @@ class SSEStream:
         self._labels = {"transport": "sse"}
         self._labels.update(self.labels)
 
-    async def send_event(self, event: str, data: Any | None = None) -> None:
-        # Emit event: <name> followed by data line
-        await self._enqueue(ensure_sse_line(f"event: {event}"))
+    async def send_event(
+        self,
+        event: str,
+        data: Any | None = None,
+        *,
+        event_id: Optional[str] = None,
+        retry: Optional[int] = None,
+    ) -> None:
+        # Compose a single SSE frame: optional id/retry, event line, then data or a blank line.
+        if event_id is not None:
+            await self._enqueue(ensure_sse_control_line(f"id: {event_id}"))
+        if retry is not None:
+            await self._enqueue(ensure_sse_control_line(f"retry: {retry}"))
+        await self._enqueue(ensure_sse_control_line(f"event: {event}"))
         if data is not None:
             await self.send_json(data)
         else:
             # SSE requires a blank line to dispatch event
             await self._enqueue("\n")
 
-    async def send_json(self, payload: Dict[str, Any]) -> None:
-        await self._enqueue(sse_data(payload))
+    async def send_json(self, payload: Dict[str, Any], *, force: bool = False) -> None:
+        await self._enqueue(sse_data(payload), force=force)
 
     async def send_raw_sse_line(self, line: str) -> None:
-        await self._enqueue(ensure_sse_line(line))
+        if "\n" in line:
+            lower = line.lower()
+            if "data:" in lower:
+                await self._enqueue(ensure_sse_line(line))
+            else:
+                await self._enqueue(ensure_sse_control_line(line))
+            return
+        stripped = line.lstrip()
+        lower = stripped.lower()
+        if lower.startswith(("event:", "id:", "retry:", ":")):
+            await self._enqueue(ensure_sse_control_line(line))
+        else:
+            await self._enqueue(ensure_sse_line(line))
 
-    async def error(self, code: str, message: str, *, data: Optional[Dict[str, Any]] = None, close: Optional[bool] = None) -> None:
+    async def error(
+        self,
+        code: str,
+        message: str,
+        *,
+        data: Optional[Dict[str, Any]] = None,
+        close: Optional[bool] = None,
+        force: bool = False,
+    ) -> None:
         payload: Dict[str, Any] = {"error": {"code": code, "message": message}}
         if data is not None:
             payload["error"]["data"] = data
-        await self.send_json(payload)
+        await self.send_json(payload, force=force)
         should_close = self.close_on_error if close is None else bool(close)
         if should_close:
-            await self.done()
+            await self.done(force=force)
 
-    async def done(self) -> None:
+    async def done(self, *, force: bool = False) -> None:
         if not self._done_enqueued:
             self._done_enqueued = True
-            await self._enqueue(sse_done())
+            await self._enqueue(sse_done(), force=force)
         self._closed = True
 
     async def iter_sse(self) -> AsyncIterator[str]:
@@ -188,7 +219,11 @@ class SSEStream:
             # Enforce max duration proactively even when data continues flowing
             if self.max_duration_s and self.max_duration_s > 0:
                 if now >= start_ts + self.max_duration_s:
-                    await self.error("max_duration_exceeded", "stream exceeded maximum duration")
+                    await self.error(
+                        "max_duration_exceeded",
+                        "stream exceeded maximum duration",
+                        force=True,
+                    )
                     break
             # Compute deadlines
             next_heartbeat_delta = None
@@ -196,6 +231,7 @@ class SSEStream:
                 hb_due_at = last_hb_ts + self.heartbeat_interval_s
                 next_heartbeat_delta = max(0.0, hb_due_at - now)
 
+            # Idle timeout is based on last emitted line (including heartbeats) for liveness tracking.
             idle_delta = None
             if self.idle_timeout_s and self.idle_timeout_s > 0:
                 idle_due_at = last_emit_ts + self.idle_timeout_s
@@ -232,7 +268,7 @@ class SSEStream:
                 # Check terminal conditions first
                 if self.idle_timeout_s and self.idle_timeout_s > 0:
                     if now >= last_emit_ts + self.idle_timeout_s:
-                        await self.error("idle_timeout", "idle timeout")
+                        await self.error("idle_timeout", "idle timeout", force=True)
                         # error() enqueues DONE when close_on_error
                         break
                 # Max duration is also enforced above to cover active-stream cases
@@ -268,9 +304,23 @@ class SSEStream:
             except asyncio.QueueEmpty:
                 break
 
-    async def _enqueue(self, line: str) -> None:
-        # Blocking (default) backpressure policy
-        await self._queue.put((line, time.monotonic()))
+    async def _enqueue(self, line: str, *, force: bool = False) -> None:
+        # Blocking (default) backpressure policy; force=True drops oldest to ensure termination frames.
+        enq_ts = time.monotonic()
+        if not force:
+            await self._queue.put((line, enq_ts))
+        else:
+            try:
+                self._queue.put_nowait((line, enq_ts))
+            except asyncio.QueueFull:
+                try:
+                    _ = self._queue.get_nowait()
+                except Exception:
+                    pass
+                try:
+                    self._queue.put_nowait((line, enq_ts))
+                except Exception:
+                    return
         try:
             qsize = self._queue.qsize()
             if qsize > self._high_watermark:
@@ -410,15 +460,21 @@ class WebSocketStream:
 
     async def _send_json_with_metrics(self, payload: Dict[str, Any], *, kind: str) -> None:
         t0 = time.monotonic()
+        sent = False
         try:
             await maybe_await(self.ws.send_json(payload))
+            sent = True
+        except Exception:
+            self._running = False
+            raise
         finally:
             dt_ms = max(0.0, (time.monotonic() - t0) * 1000.0)
             try:
                 get_metrics_registry().observe("ws_send_latency_ms", dt_ms, {**self._labels, "kind": kind})
             except Exception:
                 pass
-            self.mark_activity()
+            if sent:
+                self.mark_activity()
 
     async def _ping_loop(self) -> None:
         reg = get_metrics_registry()
@@ -430,7 +486,8 @@ class WebSocketStream:
                     reg.increment("ws_pings_total", 1, self._labels)
                 except Exception:
                     reg.increment("ws_ping_failures_total", 1, self._labels)
-                    # Continue loop; failures counted
+                    self._running = False
+                    break
         except asyncio.CancelledError:
             return
 

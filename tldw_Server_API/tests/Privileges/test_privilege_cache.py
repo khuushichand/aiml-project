@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import time
 
 import pytest
 
@@ -93,6 +95,38 @@ def test_distributed_privilege_cache_basic_roundtrip(monkeypatch, backend):
         final_entry_value = entry_samples[-1]
         local_store = getattr(cache._local, "_store", {})  # noqa: SLF001 - test visibility
         assert final_entry_value == float(len(local_store))
+    finally:
+        cache.close()
+        reset_privilege_cache()
+
+
+def test_privilege_cache_ttl_none_does_not_inherit_previous(monkeypatch):
+    monkeypatch.setenv("PRIVILEGE_CACHE_BACKEND", "redis")
+    monkeypatch.setenv("PRIVILEGE_CACHE_REDIS_URL", "redis://127.0.0.1:6399/15")
+
+    reset_privilege_cache()
+    cache = get_privilege_cache()
+
+    try:
+        cache.set("key-with-ttl", {"value": "ttl"}, ttl_sec=60)
+
+        key_no_ttl = "key-no-ttl"
+        redis_key = cache._redis_key(key_no_ttl)
+        payload = json.dumps(
+            {
+                "payload": {"value": "no-ttl"},
+                "ttl": None,
+                "__cached_ts": time.time(),
+            }
+        )
+        cache._redis.set(redis_key, payload)  # type: ignore[union-attr]
+
+        cached = cache.get(key_no_ttl)
+        assert cached == {"value": "no-ttl"}
+
+        redis_core = getattr(cache._redis, "_core", None)
+        assert redis_core is not None
+        assert redis_key not in redis_core._expiry
     finally:
         cache.close()
         reset_privilege_cache()

@@ -19,6 +19,7 @@ def connectors_client() -> Tuple[TestClient, dict]:
     os.environ["ROUTES_ENABLE"] = "connectors"
     os.environ.setdefault("AUTH_MODE", "single_user")
     os.environ.setdefault("TESTING", "true")
+    os.environ.setdefault("ORG_POLICY_SINGLE_USER_PRINCIPAL", "0")
 
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     from tldw_Server_API.app.main import app
@@ -55,6 +56,9 @@ def test_add_source_success(connectors_client, monkeypatch):
 
     import tldw_Server_API.app.api.v1.endpoints.connectors as ep
     monkeypatch.setattr(ep, "create_source", _fake_create_source)
+    async def _fake_get_account_for_user(db, user_id, account_id):
+        return {"id": account_id, "user_id": user_id, "provider": "drive"}
+    monkeypatch.setattr(ep, "get_account_for_user", _fake_get_account_for_user)
 
     payload = {
         "account_id": 1,
@@ -70,6 +74,46 @@ def test_add_source_success(connectors_client, monkeypatch):
     assert body["id"] == 101
     assert body["provider"] == "drive"
     assert body["options"]["recursive"] is True
+
+
+@pytest.mark.integration
+def test_add_source_rejects_missing_account(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    async def _fake_get_account_for_user(db, user_id, account_id):
+        return None
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+    monkeypatch.setattr(ep, "get_account_for_user", _fake_get_account_for_user)
+
+    payload = {
+        "account_id": 999,
+        "provider": "drive",
+        "remote_id": "root",
+        "type": "folder",
+    }
+    r = client.post("/api/v1/connectors/sources", json=payload, headers=headers)
+    assert r.status_code == 404
+
+
+@pytest.mark.integration
+def test_add_source_rejects_provider_mismatch(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    async def _fake_get_account_for_user(db, user_id, account_id):
+        return {"id": account_id, "user_id": user_id, "provider": "notion"}
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+    monkeypatch.setattr(ep, "get_account_for_user", _fake_get_account_for_user)
+
+    payload = {
+        "account_id": 1,
+        "provider": "drive",
+        "remote_id": "root",
+        "type": "folder",
+    }
+    r = client.post("/api/v1/connectors/sources", json=payload, headers=headers)
+    assert r.status_code == 400
 
 
 @pytest.mark.integration
@@ -147,3 +191,72 @@ def test_patch_source_forbid_extra_fields(connectors_client):
         headers=headers,
     )
     assert r.status_code == 422
+
+
+@pytest.mark.integration
+def test_oauth_callback_rejects_invalid_state(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    async def _fake_consume_oauth_state(db, *, user_id, provider, state, max_age_minutes=10):
+        return False
+
+    class _FakeConn:
+        name = "notion"
+        def authorize_url(self, *a, **kw):
+            return ""
+        async def exchange_code(self, *a, **kw):
+            raise AssertionError("exchange_code should not be called on invalid state")
+
+    monkeypatch.setattr(ep, "consume_oauth_state", _fake_consume_oauth_state)
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+
+    r = client.get(
+        "/api/v1/connectors/providers/notion/callback",
+        params={"code": "abc", "state": "bad"},
+        headers=headers,
+    )
+    assert r.status_code == 403
+
+
+@pytest.mark.integration
+def test_oauth_callback_accepts_valid_state(connectors_client, monkeypatch):
+    client, headers = connectors_client
+
+    import tldw_Server_API.app.api.v1.endpoints.connectors as ep
+
+    async def _fake_consume_oauth_state(db, *, user_id, provider, state, max_age_minutes=10):
+        return True
+
+    class _FakeConn:
+        name = "notion"
+        def authorize_url(self, *a, **kw):
+            return ""
+        async def exchange_code(self, code, redirect_uri):
+            return {
+                "access_token": "tok",
+                "refresh_token": "rtok",
+                "provider": "notion",
+                "display_name": "Notion Account",
+                "workspace_id": "ws1",
+                "workspace_name": "Workspace",
+            }
+
+    async def _fake_create_account(db, user_id, provider, display_name, email, tokens):
+        return {"id": 123, "display_name": display_name, "email": email, "created_at": "now"}
+
+    monkeypatch.setattr(ep, "consume_oauth_state", _fake_consume_oauth_state)
+    monkeypatch.setattr(ep, "get_connector_by_name", lambda provider: _FakeConn())
+    monkeypatch.setattr(ep, "create_account", _fake_create_account)
+    monkeypatch.setenv("ORG_CONNECTORS_ACCOUNT_LINKING_ROLE", "member")
+
+    r = client.get(
+        "/api/v1/connectors/providers/notion/callback",
+        params={"code": "abc", "state": "good"},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["id"] == 123
+    assert body["provider"] == "notion"

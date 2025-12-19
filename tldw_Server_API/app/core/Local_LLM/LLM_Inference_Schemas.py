@@ -4,7 +4,7 @@
 # Imports
 from pathlib import Path
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, ConfigDict, DirectoryPath, FilePath, HttpUrl
+from pydantic import BaseModel, ConfigDict
 #
 #########################################################################################################################
 #
@@ -14,11 +14,13 @@ class BaseHandlerConfig(BaseModel):
     enabled: bool = True
 
 class OllamaConfig(BaseHandlerConfig):
-    models_dir: Optional[DirectoryPath] = None # Ollama manages its own models, but can be specified
+    models_dir: Optional[Path] = None # Ollama manages its own models, but can be specified
     default_port: int = 11434
+    max_pull_retries: int = 2  # Number of retries for model pull operations
+    port_check_retries: int = 3  # Number of retries for port availability checks
 
 class HuggingFaceConfig(BaseHandlerConfig):
-    models_dir: DirectoryPath = Path("models/huggingface_models") # Default path
+    models_dir: Path = Path("models/huggingface_models") # Default path
     default_device_map: str = "auto"
     default_torch_dtype: str = "torch.bfloat16" # Store as string, convert later
 
@@ -35,11 +37,13 @@ class LlamafileConfig(BaseHandlerConfig):
     port_autoselect: bool = True
     port_probe_max: int = 10
     allowed_paths: Optional[list[Path]] = None
-    # Add other llamafile specific defaults if needed from the `start_llamafile` args
+    http_timeout: float = 120.0  # HTTP request timeout in seconds
+    readiness_timeout: float = 30.0  # Server readiness poll timeout in seconds
+    stderr_read_timeout: float = 5.0  # Timeout for reading stderr during startup failures
 
 class LlamaCppConfig(BaseHandlerConfig):
-    executable_path: FilePath = Path("vendor/llama.cpp/server") # Default path to llama.cpp server executable
-    models_dir: DirectoryPath = Path("models/gguf_models")    # Directory for GGUF model files
+    executable_path: Path = Path("vendor/llama.cpp/server") # Default path to llama.cpp server executable
+    models_dir: Path = Path("models/gguf_models")    # Directory for GGUF model files
     default_host: str = "127.0.0.1"
     default_port: int = 8080
     default_n_gpu_layers: int = 0  # Sensible default, user should override
@@ -50,14 +54,13 @@ class LlamaCppConfig(BaseHandlerConfig):
     port_autoselect: bool = True
     port_probe_max: int = 10
     allowed_paths: Optional[list[Path]] = None
-    # Add other common llama.cpp server arguments you want to default or control
-    # e.g., default_main_gpu, default_tensor_split, etc.
+    http_timeout: float = 120.0  # HTTP request timeout in seconds
+    readiness_timeout: float = 30.0  # Server readiness poll timeout in seconds
+    stderr_read_timeout: float = 5.0  # Timeout for reading stderr during startup failures
     log_output_file: Optional[Path] = None # Optional: Path to save llama.cpp server logs
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    # If executable_path or models_dir might not exist at config load time,
-    # you might need to remove FilePath/DirectoryPath validation temporarily
-    # or ensure they are created before loading the config.
+    # executable_path/models_dir are validated at runtime by handlers instead of on config creation.
 
 class LLMManagerConfig(BaseModel):
     ollama: Optional[OllamaConfig] = OllamaConfig()

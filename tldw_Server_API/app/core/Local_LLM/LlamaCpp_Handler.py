@@ -12,14 +12,20 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 #
 # Third-party imports
-import httpx  # For making API calls to the Llama.cpp server
-# from loguru import logger # Assuming you have a global logger or pass one
+import httpx
 #
 # Local imports
 from .LLM_Base_Handler import BaseLLMHandler
 from .LLM_Inference_Exceptions import ModelNotFoundError, ServerError, InferenceError
 from .LLM_Inference_Schemas import LlamaCppConfig
 from tldw_Server_API.app.core.Local_LLM import http_utils
+from tldw_Server_API.app.core.Local_LLM import handler_utils
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    ensure_sse_line,
+    sse_done,
+    sse_data,
+    openai_delta_chunk,
+)
 
 
 def create_async_client(*args, **kwargs):
@@ -35,7 +41,6 @@ async def request_json(*args, **kwargs):
 async def wait_for_http_ready(*args, **kwargs):
     """Proxy wait_for_http_ready preserving signature expectations."""
     return await http_utils.wait_for_http_ready(*args, **kwargs)
-# from .Utils import download_file, verify_checksum # If you need model downloading later
 #########################################################################################################################
 #
 # Functions:
@@ -58,42 +63,10 @@ class LlamaCppHandler(BaseLLMHandler):
         self._active_server_log_handle = None
 
         # Apply environment overrides for handler config
-        def _env_bool(name: str):
-            v = os.getenv(name)
-            if v is None:
-                return None
-            return str(v).strip().lower() in {"1", "true", "yes", "on"}
-
-        def _env_int(name: str):
-            v = os.getenv(name)
-            if v is None:
-                return None
-            try:
-                return int(v)
-            except ValueError:
-                return None
-
-        def _env_paths(name: str):
-            v = os.getenv(name)
-            if not v:
-                return None
-            parts = [p.strip() for p in v.split(",") if p.strip()]
-            return [Path(p) for p in parts]
-
-        b = _env_bool("LOCAL_LLM_ALLOW_CLI_SECRETS")
-        if b is not None:
-            self.config.allow_cli_secrets = b
-        b = _env_bool("LOCAL_LLM_PORT_AUTOSELECT")
-        if b is not None:
-            self.config.port_autoselect = b
-        i = _env_int("LOCAL_LLM_PORT_PROBE_MAX")
-        if i is not None:
-            self.config.port_probe_max = i
-        paths = _env_paths("LOCAL_LLM_ALLOWED_PATHS")
-        if paths is not None:
-            self.config.allowed_paths = paths
+        handler_utils.apply_env_overrides(self.config)
 
         self._setup_signal_handlers()  # For cleaning up on exit
+        self._cleanup_done = False  # Guard against duplicate cleanup
         # Lightweight metrics
         self.metrics = {
             "starts": 0,
@@ -109,57 +82,41 @@ class LlamaCppHandler(BaseLLMHandler):
     def get_metrics(self) -> Dict[str, Any]:
         return dict(self.metrics)
 
-    # --- Utilities ---
+    # --- Utilities (delegating to shared handler_utils) ---
     def _is_port_free(self, host: str, port: int) -> bool:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                s.bind((host, port))
-                return True
-            except OSError:
-                return False
+        return handler_utils.is_port_free(host, port)
 
     def _pick_port(self, host: str, start_port: int) -> int:
+        """Find an available port. Uses self._is_port_free for testability."""
         if not getattr(self.config, "port_autoselect", True):
             return start_port
         max_probe = int(getattr(self.config, "port_probe_max", 10) or 0)
-        p = int(start_port)
         for i in range(max_probe + 1):
-            cand = p + i
-            if self._is_port_free(host, cand):
-                return cand
+            candidate = start_port + i
+            if self._is_port_free(host, candidate):
+                return candidate
         return start_port  # Fallback
 
     def _denylist_check(self, args: Dict[str, Any]):
-        deny = {"hf_token", "token", "openai_api_key", "anthropic_api_key"}
-        if not getattr(self.config, "allow_cli_secrets", False):
-            bad = [k for k in args.keys() if k in deny]
-            if bad:
-                raise ServerError(
-                    f"Refusing secret flags {bad}. Set environment variables (e.g., HF_TOKEN) instead or enable allow_cli_secrets.")
+        try:
+            handler_utils.check_denylist(
+                args,
+                allow_secrets=getattr(self.config, "allow_cli_secrets", False),
+            )
+        except ValueError as e:
+            raise ServerError(str(e))
 
     def _is_path_allowed(self, p: Path) -> bool:
-        try:
-            pr = p.resolve()
-        except Exception:
-            return False
-        bases = [self.models_dir.resolve()]
-        extra = getattr(self.config, "allowed_paths", None) or []
-        try:
-            bases.extend([Path(x).resolve() for x in extra])
-        except Exception:
-            pass
-        return any(str(pr).startswith(str(base)) for base in bases)
+        """Check if path is under allowed directories."""
+        base_dirs = handler_utils.build_allowed_paths(
+            self.models_dir,
+            getattr(self.config, "allowed_paths", None),
+        )
+        return handler_utils.is_path_allowed(p, base_dirs)
 
     def _safe_log(self, level: str, msg: str, *args):
         """Log defensively to avoid errors when sinks are closed during atexit."""
-        try:
-            log_fn = getattr(self.logger, level, None)
-            if callable(log_fn):
-                log_fn(msg, *args)
-        except Exception:
-            # Swallow logging errors on interpreter shutdown / closed sinks
-            pass
+        handler_utils.safe_log(self.logger, level, msg, *args)
 
     async def list_models(self) -> List[str]:
         """Lists locally available GGUF models."""
@@ -188,11 +145,34 @@ class LlamaCppHandler(BaseLLMHandler):
         if not model_path.is_file():
             raise ModelNotFoundError(f"Model file {model_filename} not found in {self.models_dir}.")
 
-        # --- Model Swapping Logic ---
+        # --- Model Swapping Logic with Rollback ---
+        prev_process = None
+        prev_model = None
+        prev_port = None
+        prev_host = None
+        prev_log_handle = None
+
         if self._active_server_process and self._active_server_process.returncode is None:
+            # Save state for potential rollback
+            prev_process = self._active_server_process
+            prev_model = self._active_server_model
+            prev_port = self._active_server_port
+            prev_host = self._active_server_host
+            prev_log_handle = self._active_server_log_handle
+
             self.logger.info(
                 f"Stopping existing Llama.cpp server (PID: {self._active_server_process.pid}) to swap model.")
-            await self.stop_server()  # stop_server will clear _active_server_process etc.
+            try:
+                await self.stop_server()
+            except ServerError as e:
+                # Restore previous state on stop failure
+                self.logger.warning(f"Failed to stop server for model swap: {e}. Restoring previous state.")
+                self._active_server_process = prev_process
+                self._active_server_model = prev_model
+                self._active_server_port = prev_port
+                self._active_server_host = prev_host
+                self._active_server_log_handle = prev_log_handle
+                raise ServerError(f"Model swap failed: could not stop existing server: {e}")
 
         args = server_args or {}
         self._denylist_check(args)
@@ -250,9 +230,9 @@ class LlamaCppHandler(BaseLLMHandler):
             "cache_type_k": lambda v: ["--cache-type-k", str(v)],
             "cache_type_v": lambda v: ["--cache-type-v", str(v)],
             # Model download / HF
+            # Note: hf_token is intentionally NOT in allowlist (use HF_TOKEN env var instead)
             "hf_repo": lambda v: ["--hf-repo", str(v)],
             "hf_file": lambda v: ["--hf-file", str(v)],
-            "hf_token": lambda v: ["--hf-token", str(v)],
             "offline": lambda v: (["--offline"] if v else []),
             # Chat / conversation toggles
             "conversation": lambda v: (["--conversation"] if v else []),
@@ -335,7 +315,9 @@ class LlamaCppHandler(BaseLLMHandler):
         raw_port = int(args.get("port", self.config.default_port))
         host = str(args.get("host", self.config.default_host))
         port = self._pick_port(host, raw_port)
-        n_gpu_layers = int(args.get("n_gpu_layers", args.get("ngl", self.config.default_n_gpu_layers)))
+        n_gpu_layers = int(
+            args.get("n_gpu_layers", args.get("ngl", args.get("gpu_layers", self.config.default_n_gpu_layers)))
+        )
         ctx_size = int(args.get("ctx_size", args.get("c", self.config.default_ctx_size)))
         threads = args.get("threads", args.get("t", self.config.default_threads))
 
@@ -419,8 +401,13 @@ class LlamaCppHandler(BaseLLMHandler):
                 # Consider reading last few lines of log_output_file if it exists.
                 stderr_output = ""
                 if stderr_redir == asyncio.subprocess.PIPE and process.stderr:  # Check if stderr was piped
-                    err_bytes = await process.stderr.read()  # This might hang if server is still writing
-                    stderr_output = err_bytes.decode(errors='ignore').strip()
+                    try:
+                        # Use timeout to prevent blocking indefinitely if server is still writing
+                        err_bytes = await asyncio.wait_for(process.stderr.read(), timeout=5.0)
+                        stderr_output = err_bytes.decode(errors='ignore').strip()
+                    except asyncio.TimeoutError:
+                        stderr_output = "(stderr read timed out after 5s)"
+                        self.logger.warning("stderr read timed out during startup failure diagnosis")
                 self.logger.error(
                     f"Llama.cpp server failed to start or become ready for {model_filename}. Exit code: {process.returncode}. Stderr: {stderr_output}"
                 )
@@ -601,13 +588,17 @@ class LlamaCppHandler(BaseLLMHandler):
                 return result
             except httpx.HTTPStatusError as e:
                 error_text = e.response.text
-                self.logger.error("Llama.cpp API error ({}) from {}: {}", e.response.status_code, target_url, error_text,
-                                  exc_info=True)
+                self.logger.error(
+                    f"Llama.cpp API error ({e.response.status_code}) from {target_url}: {error_text}",
+                    exc_info=True
+                )
                 self.metrics["inference_error_count"] += 1
                 raise InferenceError(f"Llama.cpp API error ({e.response.status_code}): {error_text}")
             except httpx.RequestError as e:
-                self.logger.error("Could not connect or communicate with Llama.cpp server at {}: {}", target_url, e,
-                                  exc_info=True)
+                self.logger.error(
+                    f"Could not connect or communicate with Llama.cpp server at {target_url}: {e}",
+                    exc_info=True
+                )
                 self.metrics["inference_error_count"] += 1
                 raise ServerError(f"Could not connect/communicate with Llama.cpp server at {target_url}: {e}")
 
@@ -627,7 +618,6 @@ class LlamaCppHandler(BaseLLMHandler):
         payload["stream"] = True
         headers = {"Content-Type": "application/json"}
 
-        from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, sse_done, sse_data, openai_delta_chunk, finalize_stream
         async with create_async_client(timeout=kwargs.get("timeout", 120.0)) as client:
             try:
                 async with client.stream("POST", target_url, json=payload, headers=headers) as resp:
@@ -655,50 +645,74 @@ class LlamaCppHandler(BaseLLMHandler):
 
     # --- Cleanup ---
     def _cleanup_managed_server_sync(self):
-        # Avoid logging here: during interpreter shutdown, logging sinks may be closed.
+        """Synchronous cleanup for atexit/signal handlers.
+
+        Uses _safe_log to avoid errors when logging sinks are closed during shutdown.
+        """
+        # Guard against duplicate cleanup
+        if self._cleanup_done:
+            return
+        self._cleanup_done = True
+
         if self._active_server_process and self._active_server_process.returncode is None:
             proc = self._active_server_process
             pid = proc.pid
+            self._safe_log("info", f"Cleanup: stopping Llama.cpp server PID {pid}")
             try:
                 if platform.system() == "Windows":
-                    # Use subprocess for synchronous Popen if asyncio process is tricky here
-                    # Or just call terminate on the asyncio process if it works in sync context
                     if hasattr(proc, "terminate"):
                         proc.terminate()
                 else:
                     try:
                         pgid = os.getpgid(pid)
                         os.killpg(pgid, signal.SIGTERM)
+                        self._safe_log("debug", f"Sent SIGTERM to process group {pgid}")
                     except ProcessLookupError:
                         if hasattr(proc, "terminate"):
-                            proc.terminate()  # Fallback
-                    except Exception:  # Broad except for pgid issues
+                            proc.terminate()
+                    except Exception:
                         if hasattr(proc, "terminate"):
                             proc.terminate()
 
-                # Synchronous wait is tricky with asyncio.subprocess.Process.
-                # For atexit, sending TERM/KILL is often the best effort.
-                # If you need guaranteed wait, you might need to use `subprocess.Popen` for the server.
-                # Do not log here to avoid closed sink errors.
+                # Best-effort wait: try to reap using running event loop if available
+                try:
+                    loop = asyncio.get_running_loop()
+                    # Schedule async wait in the event loop
+                    asyncio.run_coroutine_threadsafe(proc.wait(), loop)
+                except RuntimeError:
+                    # No running event loop - best effort, OS will reap eventually
+                    pass
 
-            except Exception as e:
-                # Avoid logging; best-effort kill if needed
-                if proc.returncode is None:  # Check again before kill
+            except Exception:
+                # Best-effort kill if needed
+                if proc.returncode is None:
                     if platform.system() == "Windows":
                         if hasattr(proc, "kill"):
-                            proc.kill()
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
                     else:
                         try:
                             os.killpg(os.getpgid(pid), signal.SIGKILL)
-                        except (ProcessLookupError, PermissionError, OSError) as e:
-                            # Fall back to direct kill
+                        except (ProcessLookupError, PermissionError, OSError):
                             if hasattr(proc, "kill"):
-                                proc.kill()
+                                try:
+                                    proc.kill()
+                                except Exception:
+                                    pass
             if self._active_server_log_handle:
-                self._active_server_log_handle.close()
+                try:
+                    self._active_server_log_handle.close()
+                except Exception:
+                    pass
 
-        self._active_server_process = None  # Clear state
-        # Avoid logging at atexit
+        self._active_server_process = None
+        self._active_server_model = None
+        self._active_server_port = None
+        self._active_server_host = None
+        self._active_server_log_handle = None
+        self._safe_log("debug", "Cleanup complete")
 
     def _signal_handler(self, sig, frame):
         self._cleanup_managed_server_sync()

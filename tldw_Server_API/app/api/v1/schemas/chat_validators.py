@@ -20,8 +20,12 @@ CONVERSATION_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,100}$')
 # Valid character ID pattern (numeric or name)
 CHARACTER_ID_PATTERN = re.compile(r'^(\d+|[a-zA-Z0-9_\- ]{1,100})$')
 
-# Maximum tool definition size
-MAX_TOOL_DEFINITION_SIZE = 10000  # characters
+# Pre-compiled pattern for redacting base64 image data in request size validation
+# Matches data:image URIs and captures the prefix for redaction
+DATA_URI_REDACT_PATTERN = re.compile(r'(data:image[^,]*,)[^"\s]+')
+
+# Maximum tool definition size (reduced from 10KB to 5KB for security)
+MAX_TOOL_DEFINITION_SIZE = 5000  # characters
 
 # Maximum total request size
 def _get_max_request_size() -> int:
@@ -37,8 +41,8 @@ def _get_max_request_size() -> int:
         env_val = os.getenv("CHAT_REQUEST_MAX_SIZE")
         if env_val is not None:
             return max(1, int(env_val))
-    except Exception:
-        pass
+    except (ValueError, TypeError) as env_err:
+        logger.debug(f"Failed to parse CHAT_REQUEST_MAX_SIZE env var: {env_err}")
     # Config override
     try:
         from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -47,8 +51,8 @@ def _get_max_request_size() -> int:
             raw = cfg.get('Chat-Module', 'max_request_size_chars', fallback=None)
             if raw is not None:
                 return max(1, int(raw))
-    except Exception:
-        pass
+    except Exception as cfg_err:
+        logger.debug(f"Failed to load max_request_size from config: {cfg_err}")
     return 1_000_000
 
 MAX_REQUEST_SIZE = _get_max_request_size()
@@ -73,6 +77,10 @@ def validate_conversation_id(conversation_id: Optional[str]) -> Optional[str]:
     if conversation_id is None:
         return None
 
+    # Type guard
+    if not isinstance(conversation_id, str):
+        raise ValueError(f"Conversation ID must be a string, got {type(conversation_id)}")
+
     # Check if it's a valid UUID
     try:
         uuid.UUID(conversation_id)
@@ -82,9 +90,11 @@ def validate_conversation_id(conversation_id: Optional[str]) -> Optional[str]:
 
     # Check against pattern
     if not CONVERSATION_ID_PATTERN.match(conversation_id):
+        # Safe truncation with type guard already applied above
+        display_id = conversation_id[:50] if len(conversation_id) > 50 else conversation_id
         raise ValueError(
             f"Invalid conversation_id format. Must be UUID or alphanumeric "
-            f"with hyphens/underscores (max 100 chars): {conversation_id[:50]}"
+            f"with hyphens/underscores (max 100 chars): {display_id}"
         )
 
     return conversation_id
@@ -106,10 +116,16 @@ def validate_character_id(character_id: Optional[str]) -> Optional[str]:
     if character_id is None:
         return None
 
+    # Type guard
+    if not isinstance(character_id, str):
+        raise ValueError(f"Character ID must be a string, got {type(character_id)}")
+
     if not CHARACTER_ID_PATTERN.match(character_id):
+        # Safe truncation with type guard already applied above
+        display_id = character_id[:50] if len(character_id) > 50 else character_id
         raise ValueError(
             f"Invalid character_id format. Must be numeric or valid name "
-            f"(alphanumeric with spaces, hyphens, underscores, max 100 chars): {character_id[:50]}"
+            f"(alphanumeric with spaces, hyphens, underscores, max 100 chars): {display_id}"
         )
 
     return character_id
@@ -276,10 +292,8 @@ def validate_request_size(request_data: Any) -> bool:
     try:
         # If it's already a JSON string, avoid re-serializing: redact via regex only.
         if isinstance(request_data, str):
-            # Regex: replace base64 payload until next quote/space with <redacted>
-            # Pattern: (data:image... ,)<base64>
-            pattern = re.compile(r'(data:image[^,]*,)[^"\s]+')
-            request_json = pattern.sub(r'\1<redacted>', request_data)
+            # Use pre-compiled pattern to replace base64 payload with <redacted>
+            request_json = DATA_URI_REDACT_PATTERN.sub(r'\1<redacted>', request_data)
         else:
             # Convert to a serializable dict and sanitize recursively
             if hasattr(request_data, 'model_dump'):
@@ -344,6 +358,15 @@ def validate_model_name(model: Optional[str]) -> Optional[str]:
     """
     Validate model name format.
 
+    Model names can contain:
+    - Alphanumeric characters
+    - Underscores, hyphens, periods
+    - Forward slashes (for HuggingFace-style names like 'meta-llama/Llama-2-70b')
+    - Spaces (some models have spaces in names)
+
+    Colons are NOT allowed as they can be used for URL/port injection.
+    Path traversal patterns (..) are also rejected.
+
     Args:
         model: Model name
 
@@ -359,28 +382,81 @@ def validate_model_name(model: Optional[str]) -> Optional[str]:
     if not isinstance(model, str):
         raise ValueError(f"Model name must be a string, got {type(model)}")
 
+    # Check for empty string
+    if not model or not model.strip():
+        raise ValueError("Model name cannot be empty or whitespace-only")
+
     if len(model) > 100:
         raise ValueError(f"Model name too long (max 100 chars, got {len(model)})")
 
-    # Basic sanity check for model name
-    if not re.match(r'^[a-zA-Z0-9_\-./: ]+$', model):
-        raise ValueError(f"Model name contains invalid characters: {model[:50]}")
+    # Reject colon character (can be used for URL/port injection)
+    if ':' in model:
+        raise ValueError("Model name cannot contain colons")
 
-    return model
+    # Reject path traversal patterns
+    if '..' in model:
+        raise ValueError("Model name cannot contain path traversal patterns")
+
+    # Basic sanity check for model name - allows alphanumeric, underscore, hyphen, period, slash, space
+    # Removed colon from allowed characters for security
+    if not re.match(r'^[a-zA-Z0-9_\-./ ]+$', model):
+        # Safe truncation with type guard
+        display_model = model[:50] if isinstance(model, str) else str(model)[:50]
+        raise ValueError(f"Model name contains invalid characters: {display_model}")
+
+    # Reject names that start or end with slash (potential path issues)
+    if model.startswith('/') or model.endswith('/'):
+        raise ValueError("Model name cannot start or end with a slash")
+
+    # Return stripped model name to prevent issues with leading/trailing whitespace
+    return model.strip()
 
 
-def validate_provider_name(provider: Optional[str]) -> Optional[str]:
+# Maximum length for provider names
+MAX_PROVIDER_NAME_LENGTH = 50
+
+# Allowed providers - frozen set for O(1) lookup
+# Includes all supported providers plus 'aphrodite' and potential future providers
+ALLOWED_PROVIDERS: frozenset = frozenset([
+    "bedrock",
+    "anthropic",
+    "cohere",
+    "deepseek",
+    "google",
+    "groq",
+    "qwen",
+    "huggingface",
+    "mistral",
+    "openai",
+    "openrouter",
+    "llama.cpp",
+    "kobold",
+    "ollama",
+    "ooba",
+    "tabbyapi",
+    "vllm",
+    "local-llm",
+    "aphrodite",
+    "custom-openai-api",
+    "custom-openai-api-2",
+    "moonshot",
+    "zai",
+])
+
+
+def validate_provider_name(provider: Optional[str], strict: bool = True) -> Optional[str]:
     """
     Validate provider name format.
 
     Args:
         provider: Provider name
+        strict: If True, reject unknown providers. If False, just warn. Defaults to True.
 
     Returns:
         Validated provider name or None
 
     Raises:
-        ValueError: If provider name is invalid
+        ValueError: If provider name is invalid or unknown (when strict=True)
     """
     if provider is None:
         return None
@@ -388,20 +464,26 @@ def validate_provider_name(provider: Optional[str]) -> Optional[str]:
     if not isinstance(provider, str):
         raise ValueError(f"Provider name must be a string, got {type(provider)}")
 
+    # Length check
+    if len(provider) > MAX_PROVIDER_NAME_LENGTH:
+        raise ValueError(f"Provider name too long (max {MAX_PROVIDER_NAME_LENGTH} chars)")
+
     # Convert to lowercase for consistency
-    provider = provider.lower()
+    provider = provider.lower().strip()
 
-    # List of known providers (can be extended)
-    known_providers = [
-        "openai", "anthropic", "cohere", "groq", "openrouter",
-        "deepseek", "mistral", "google", "huggingface", "qwen",
-        "llama.cpp", "kobold", "ollama", "ooba", "tabbyapi",
-        "vllm", "local-llm", "aphrodite",
-        "custom-openai-api", "custom-openai-api-2"
-    ]
+    # Empty string check
+    if not provider:
+        return None
 
-    if provider not in known_providers:
-        logger.warning(f"Unknown provider '{provider}', proceeding anyway")
+    # Character validation - only alphanumeric, hyphen, period, underscore
+    if not re.match(r'^[a-zA-Z0-9_.\-]+$', provider):
+        raise ValueError("Provider name contains invalid characters (allowed: alphanumeric, underscore, hyphen, period)")
+
+    if provider not in ALLOWED_PROVIDERS:
+        if strict:
+            raise ValueError(f"Unknown provider: {provider}. Allowed providers: {', '.join(sorted(ALLOWED_PROVIDERS))}")
+        else:
+            logger.warning(f"Unknown provider '{provider}', proceeding anyway")
 
     return provider
 

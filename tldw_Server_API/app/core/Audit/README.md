@@ -105,7 +105,7 @@ connection and locks) to avoid blocking the event loop.
 | `AUDIT_PII_USE_RAG_PATTERNS` | Merge RAG security filter regexes into the PII detector. |
 | `AUDIT_PII_PATTERNS` | Dict of overrides or new patterns (`{label: regex or [regex...]}`). |
 | `AUDIT_PII_SCAN_FIELDS` | Comma-separated string/list of additional event fields to inspect. |
-| `AUDIT_MAX_DB_MB` | Optional soft cap; flush will trim buffered events if the DB is larger. |
+| `AUDIT_MAX_DB_MB` | Optional soft cap (MB); currently logs a warning during cleanup when the audit DB exceeds the limit. |
 | `TEST_MODE` / `TLDW_TEST_MODE` | Disable background loops and reduce I/O for tests. |
 
 Constructor kwargs (`retention_days`, `buffer_size`, `flush_interval`, `enable_pii_detection`,

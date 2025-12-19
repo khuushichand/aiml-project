@@ -208,6 +208,7 @@ class ONNXModelCfg(BaseModelCfg):
 class OpenAIModelCfg(BaseModelCfg):
     provider: str = "openai"
     api_key: Optional[str] = None
+    dimensions: Optional[int] = None
 
 
 class LocalAPICfg(BaseModelCfg):
@@ -595,23 +596,42 @@ def evict_lru_models(keep_model_id: Optional[str] = None) -> None:
 
 def _remove_model(model_id: str) -> None:
     """Remove a model from memory and clean up resources."""
-    if model_id in embedding_models:
-        try:
-            model = embedding_models[model_id]
-            # Attempt to clean up model resources
-            if hasattr(model, 'unload'):
-                model.unload()
-            elif hasattr(model, 'model'):
-                del model.model
-            elif hasattr(model, 'session'):  # ONNX
-                model.session = None
-        except Exception as e:
-            logging.warning(f"Error cleaning up model {model_id}: {e}")
+    if model_id not in embedding_models:
+        return
 
+    model = embedding_models.get(model_id)
+    provider_label = ""
+    if isinstance(model, HuggingFaceEmbedder):
+        provider_label = "huggingface"
+    elif isinstance(model, ONNXEmbedder):
+        provider_label = "onnx"
+    elif model is not None and hasattr(model, "provider"):
+        try:
+            provider_label = str(getattr(model, "provider") or "")
+        except Exception:
+            provider_label = ""
+
+    try:
+        # Attempt to clean up model resources
+        if hasattr(model, "unload_model"):
+            model.unload_model()
+        elif hasattr(model, "unload"):
+            model.unload()
+        elif hasattr(model, "model"):
+            del model.model
+        elif hasattr(model, "session"):  # ONNX
+            model.session = None
+    except Exception as e:
+        logging.warning(f"Error cleaning up model {model_id}: {e}")
+    finally:
         del embedding_models[model_id]
         model_last_used.pop(model_id, None)
         model_memory_usage.pop(model_id, None)
-        ACTIVE_EMBEDDERS.labels(provider="", model_id=model_id).set(0)
+        if provider_label:
+            try:
+                ACTIVE_EMBEDDERS.labels(provider=provider_label, model_id=model_id).set(0)
+            except Exception:
+                pass
         logging.info(f"Removed model {model_id} from memory")
 
 
@@ -820,6 +840,14 @@ class HuggingFaceEmbedder:
             torch = _import_torch()
             embeddings_tensor: Optional["torch.Tensor"] = None
 
+            def _mean_pool(hidden_state, attention_mask):
+                if attention_mask is None:
+                    return hidden_state.mean(dim=1)
+                mask = attention_mask.unsqueeze(-1).expand(hidden_state.size()).float()
+                summed = (hidden_state * mask).sum(dim=1)
+                denom = mask.sum(dim=1).clamp(min=1e-9)
+                return summed / denom
+
             try:
                 # Qwen3 Embeddings: apply instruction-aware formatting and use last-token pooling
                 model_l = (self.config.model_name_or_path or "").lower()
@@ -883,8 +911,8 @@ class HuggingFaceEmbedder:
                     else:
                         embeddings_tensor = last_hidden_state[:, -1, :]
                 else:
-                    # default: mean pooling
-                    embeddings_tensor = last_hidden_state.mean(dim=1)
+                    # default: mean pooling with attention mask
+                    embeddings_tensor = _mean_pool(last_hidden_state, inputs.get("attention_mask"))
 
             except RuntimeError as e:
                 # Handle BFloat16 issue
@@ -925,7 +953,7 @@ class HuggingFaceEmbedder:
                         else:
                             embeddings_tensor = last_hidden_state[:, -1, :]
                     else:
-                        embeddings_tensor = last_hidden_state.mean(dim=1)
+                        embeddings_tensor = _mean_pool(last_hidden_state, inputs.get("attention_mask"))
                 else:
                     log_counter("huggingface_create_embeddings_failure", labels={"model_id": self.model_identifier})
                     logging.error(f"RuntimeError during HuggingFace embedding for {self.model_identifier}: {e}",
@@ -1282,6 +1310,7 @@ def create_embeddings_batch(
         raise ValueError(f"Invalid `model_id` or configuration missing: {mid}")
 
     resolved_key, model_spec = _resolve_model_key(embedding_service_config.models, model_id_to_use)
+    model_id_to_use = resolved_key
 
     provider = model_spec.provider
     # Ensure model_storage_base_dir exists
@@ -1411,12 +1440,21 @@ def create_embeddings_batch(
                 logging.error("`get_openai_embeddings_batch` is not available or not callable.")
                 raise NotImplementedError("OpenAI batch embedding function is not properly set up.")
 
+            openai_app_config = user_app_config
+            if model_spec.api_key:
+                openai_section = dict(user_app_config.get("openai_api", {}) or {})
+                if not openai_section.get("api_key"):
+                    openai_section["api_key"] = model_spec.api_key
+                if openai_section != user_app_config.get("openai_api", {}):
+                    openai_app_config = {**user_app_config, "openai_api": openai_section}
+
             # Pass the full user_app_config as it might contain API keys or other necessary settings
             # for get_openai_embeddings_batch
             embeddings_list = get_openai_embeddings_batch(
                 texts,
                 model=model_spec.model_name_or_path,
-                app_config=user_app_config  # Or pass only relevant parts if get_openai_embeddings_batch is refactored
+                app_config=openai_app_config,  # Or pass only relevant parts if get_openai_embeddings_batch is refactored
+                dimensions=model_spec.dimensions,
             )
 
         elif provider.lower() == "local_api":
@@ -1435,7 +1473,7 @@ def create_embeddings_batch(
             # The requests.post call is already wrapped by @exponential_backoff and @limiter
             from tldw_Server_API.app.core.http_client import fetch as _fetch
             resp = _fetch(method="POST", url=model_spec.api_url, headers=headers, json=payload, timeout=60)
-            if resp.status_code() >= 400:
+            if resp.status_code >= 400:
                 resp.raise_for_status()
             response_data = resp.json()
             if 'embeddings' not in response_data or not isinstance(response_data['embeddings'], list):

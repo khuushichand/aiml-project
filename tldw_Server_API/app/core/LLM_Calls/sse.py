@@ -51,6 +51,15 @@ def ensure_sse_line(line: str) -> str:
     return line
 
 
+def ensure_sse_control_line(line: str) -> str:
+    """Ensure a control line ends with a single newline (no dispatch blank line)."""
+    if line.endswith("\n\n"):
+        return line
+    if line.endswith("\n"):
+        return line
+    return line + "\n"
+
+
 def openai_delta_chunk(text: str) -> str:
     """Wrap a plain text delta into an OpenAI-compatible SSE chunk."""
     return sse_data({"choices": [{"delta": {"content": text}}]})
@@ -93,8 +102,8 @@ def normalize_provider_line(
                     if mapped is None:
                         return None
                     name, value = mapped
-                # Preserve control line, ensure proper SSE termination
-                return ensure_sse_line(f"{name}: {value}")
+                # Preserve control line without dispatching a blank line
+                return ensure_sse_control_line(f"{name}: {value}")
             try:
                 logger.debug(f"Dropping provider control line: {stripped}")
             except Exception:

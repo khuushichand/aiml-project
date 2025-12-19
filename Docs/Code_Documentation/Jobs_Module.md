@@ -424,7 +424,7 @@ jm.fail_job(job["id"], error="boom", retryable=True, worker_id=worker_id, lease_
   - `JOBS_QUOTA_SUBMITS_PER_MIN` / `..._<DOMAIN>` / `..._USER_<USER_ID>` / `..._<DOMAIN>_USER_<USER_ID>`
   - `JOBS_QUOTA_MAX_INFLIGHT` / `..._<DOMAIN>` / `..._USER_<USER_ID>` / `..._<DOMAIN>_USER_<USER_ID>`
   - Precedence: domain+user > user > domain > global.
-  - Notes: If `owner_user_id` is not supplied, inflight checks are skipped; configure workers to pass `owner_user_id` when needed.
+  - Notes: If `owner_user_id` is not supplied, inflight checks are skipped; configure workers to pass `owner_user_id` when needed. Inflight counts only `processing` jobs with a live lease (`leased_until` in the future); expired leases do not count.
 
 ### Encryption & Rotation
 

@@ -11,20 +11,13 @@ import asyncio
 import time
 from datetime import datetime
 from typing import List, Optional, Dict, Any, Annotated
-from fastapi import APIRouter, HTTPException, Depends, status, Query, Request, Response, Header, BackgroundTasks, UploadFile, File, Form
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import APIRouter, HTTPException, Depends, status, Query, Request, Response, Header, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
 from loguru import logger
 
 # Import unified schemas
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
-    # OpenAI-compatible schemas
-    CreateEvaluationRequest, UpdateEvaluationRequest, EvaluationResponse,
-    CreateRunRequest, RunResponse, RunResultsResponse,
-    CreateDatasetRequest, DatasetResponse,
-    EvaluationListResponse, RunListResponse, DatasetListResponse,
-
     # tldw-specific schemas
     GEvalRequest, GEvalResponse,
     RAGEvaluationRequest, RAGEvaluationResponse,
@@ -35,16 +28,11 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     EvaluationComparisonRequest, EvaluationComparisonResponse,
     EvaluationHistoryRequest, EvaluationHistoryResponse,
 
-    # Webhook schemas
-    WebhookRegistrationRequest, WebhookRegistrationResponse,
-    WebhookUpdateRequest, WebhookStatusResponse,
-    WebhookTestRequest, WebhookTestResponse,
     RateLimitStatusResponse,
 
     # Common schemas
-    ErrorResponse, ErrorDetail, HealthCheckResponse,
+    HealthCheckResponse,
     EvaluationMetric,
-    PipelinePresetCreate, PipelinePresetResponse, PipelinePresetListResponse, PipelineCleanupResponse
 )
 
 # Import unified service
@@ -54,43 +42,15 @@ from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager, WebhookEvent
-from tldw_Server_API.app.core.RAG.rag_service.vector_stores import VectorStoreFactory
-
-# Import auth and rate limiting
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
-from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
-from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_limiter
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
 
 # Import additional services
 from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
 from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
-from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
-    EmbeddingsABTestCreateRequest,
-    EmbeddingsABTestCreateResponse,
-    EmbeddingsABTestStatusResponse,
-    EmbeddingsABTestResultsResponse,
-    EmbeddingsABTestResultSummary,
-    ArmSummary,
-)
-from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
-    build_collections_vector_only,
-    run_vector_search_and_score,
-    compute_significance,
-    run_abtest_full,
-)
-from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_roles
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode
 
 # Create router
 router = APIRouter(prefix="/evaluations", tags=["evaluations"])
-
-# Security
-security = HTTPBearer(auto_error=False)
 
 _webhook_managers: dict = {}
 _wm_lock = None
@@ -103,7 +63,7 @@ from .evaluations_auth import (
     _apply_rate_limit_headers,
     enforce_heavy_evaluations_admin,
 )
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope, get_auth_principal
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
@@ -496,262 +456,13 @@ async def get_rate_limit_status(
 
 
 from .evaluations_rag_pipeline import pipeline_router
-from .evaluations_datasets import datasets_router, _normalize_dataset_payload
+from .evaluations_datasets import datasets_router
 from .evaluations_webhooks import webhooks_router
 from .evaluations_crud import crud_router
 router.include_router(pipeline_router)
 router.include_router(datasets_router)
 router.include_router(webhooks_router)
 router.include_router(crud_router)
-
-@router.post("", response_model=EvaluationResponse, status_code=status.HTTP_201_CREATED)
-async def create_evaluation_root(
-    eval_request: CreateEvaluationRequest,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
-    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
-    response: Response = None,
-):
-    """Alias for POST /api/v1/evaluations without trailing slash.
-
-    Mirrors the CRUD create endpoint to avoid 307 redirects in clients/tests
-    that use the non-slash form.
-    """
-    try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
-        if idempotency_key:
-            try:
-                existing_id = svc.db.lookup_idempotency("evaluation", idempotency_key, user_id)
-                if existing_id:
-                    existing = await svc.get_evaluation(existing_id)
-                    if existing:
-                        try:
-                            if response is not None:
-                                response.headers["X-Idempotent-Replay"] = "true"
-                                response.headers["Idempotency-Key"] = idempotency_key
-                        except Exception:
-                            pass
-                        return EvaluationResponse(**existing)
-            except Exception:
-                pass
-        evaluation = await svc.create_evaluation(
-            name=eval_request.name,
-            description=eval_request.description,
-            eval_type=eval_request.eval_type,
-            eval_spec=model_dump_compat(eval_request.eval_spec),
-            dataset_id=eval_request.dataset_id,
-            dataset=[model_dump_compat(s) for s in eval_request.dataset] if eval_request.dataset else None,
-            metadata=model_dump_compat(eval_request.metadata) if eval_request.metadata else None,
-            created_by=user_id,
-        )
-        try:
-            if idempotency_key and evaluation.get("id"):
-                svc.db.record_idempotency("evaluation", idempotency_key, evaluation["id"], user_id)
-        except Exception:
-            pass
-        return EvaluationResponse(**evaluation)
-    except Exception as e:
-        logger.error(f"Failed to create evaluation (alias): {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create evaluation: {sanitize_error_message(e, 'evaluation creation')}"
-        )
-
-
-@router.get("", response_model=EvaluationListResponse)
-async def list_evaluations_root(
-    limit: int = Query(20, ge=1, le=100),
-    after: Optional[str] = Query(None),
-    eval_type: Optional[str] = Query(None),
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
-):
-    """Alias for GET /api/v1/evaluations without trailing slash.
-
-    Mirrors the CRUD list endpoint to avoid 307 redirects.
-    """
-    try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
-        evaluations, has_more = await svc.list_evaluations(
-            limit=limit,
-            after=after,
-            eval_type=eval_type,
-            created_by=current_user.id,
-        )
-        first_id = evaluations[0]["id"] if evaluations else None
-        last_id = evaluations[-1]["id"] if evaluations else None
-        return EvaluationListResponse(
-            object="list",
-            data=[EvaluationResponse(**eval) for eval in evaluations],
-            has_more=has_more,
-            first_id=first_id,
-            last_id=last_id,
-        )
-    except Exception as e:
-        logger.error(f"Failed to list evaluations (alias): {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list evaluations: {sanitize_error_message(e, 'listing evaluations')}"
-        )
-
-@router.post("/datasets", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
-async def create_dataset(
-    dataset_request: CreateDatasetRequest,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
-    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
-    response: Response = None,
-):
-    """Create a new dataset"""
-    try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
-
-        # Idempotency: reuse if mapping exists
-        if idempotency_key:
-            try:
-                existing_id = svc.db.lookup_idempotency("dataset", idempotency_key, user_id)
-                if existing_id:
-                    existing = await svc.get_dataset(existing_id)
-                    if existing:
-                        try:
-                            if response is not None:
-                                response.headers["X-Idempotent-Replay"] = "true"
-                                response.headers["Idempotency-Key"] = idempotency_key
-                        except Exception:
-                            pass
-                        return DatasetResponse(**_normalize_dataset_payload(existing))
-            except Exception:
-                pass
-        dataset_id = await svc.create_dataset(
-            name=dataset_request.name,
-            description=dataset_request.description,
-            samples=[model_dump_compat(s) for s in dataset_request.samples],
-            metadata=model_dump_compat(dataset_request.metadata) if dataset_request.metadata else None,
-            created_by=user_id
-        )
-
-        dataset = await svc.get_dataset(dataset_id)
-        if not dataset:
-            raise ValueError("Failed to retrieve created dataset")
-        dataset = _normalize_dataset_payload(dataset)
-
-        # Record idempotency mapping
-        try:
-            if idempotency_key:
-                svc.db.record_idempotency("dataset", idempotency_key, dataset_id, user_id)
-        except Exception:
-            pass
-
-        return DatasetResponse(**dataset)
-
-    except Exception as e:
-        logger.exception(f"Failed to create dataset: {e}")
-        raise create_error_response(
-            message=f"Failed to create dataset: {sanitize_error_message(e, 'creating dataset')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@router.get("/datasets", response_model=DatasetListResponse)
-async def list_datasets(
-    limit: int = Query(20, ge=1, le=100),
-    after: Optional[str] = Query(None),
-    offset: int = Query(0, ge=0),
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
-):
-    """List datasets with pagination"""
-    try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
-        datasets, has_more = await svc.list_datasets(
-            limit=limit,
-            after=after,
-            offset=offset
-        )
-
-        first_id = datasets[0]["id"] if datasets else None
-        last_id = datasets[-1]["id"] if datasets else None
-
-        normalized = [_normalize_dataset_payload(ds) for ds in datasets]
-        return DatasetListResponse(
-            object="list",
-            data=[DatasetResponse(**ds) for ds in normalized],
-            has_more=has_more,
-            first_id=first_id,
-            last_id=last_id,
-            total=len(normalized)
-        )
-
-    except Exception as e:
-        logger.exception(f"Failed to list datasets: {e}")
-        raise create_error_response(
-            message=f"Failed to list datasets: {sanitize_error_message(e, 'listing datasets')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@router.get("/datasets/{dataset_id}", response_model=DatasetResponse)
-async def get_dataset(
-    dataset_id: str,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
-):
-    """Get dataset by ID"""
-    try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
-        dataset = await svc.get_dataset(dataset_id)
-        if not dataset:
-            raise create_error_response(
-                message=f"Dataset {dataset_id} not found",
-                error_type="not_found_error",
-                param="dataset_id",
-                status_code=status.HTTP_404_NOT_FOUND
-            )
-
-        return DatasetResponse(**dataset)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get dataset {dataset_id}: {e}")
-        raise create_error_response(
-            message=f"Failed to get dataset: {sanitize_error_message(e, 'retrieving dataset')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@router.delete("/datasets/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_dataset(
-    dataset_id: str,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
-):
-    """Delete a dataset"""
-    try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
-        success = await svc.delete_dataset(dataset_id, deleted_by=user_id)
-        if not success:
-            raise create_error_response(
-                message=f"Dataset {dataset_id} not found",
-                error_type="not_found_error",
-                param="dataset_id",
-                status_code=status.HTTP_404_NOT_FOUND
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to delete dataset {dataset_id}: {e}")
-        raise create_error_response(
-            message=f"Failed to delete dataset: {sanitize_error_message(e, 'deleting dataset')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
 # ============= Health & Metrics Endpoints =============
 
 @router.get("/health", response_model=HealthCheckResponse)
@@ -822,221 +533,6 @@ async def get_metrics(request: Request):
 
 
 """Webhook endpoints moved to evaluations_webhooks module."""
-
-
-@router.get("/{eval_id}", response_model=EvaluationResponse)
-async def get_evaluation(
-    eval_id: str,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
-):
-    """Get evaluation by ID"""
-    try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
-        evaluation = await svc.get_evaluation(eval_id)
-        if not evaluation:
-            raise create_error_response(
-                message=f"Evaluation {eval_id} not found",
-                error_type="not_found_error",
-                param="eval_id",
-                status_code=status.HTTP_404_NOT_FOUND
-            )
-
-        return EvaluationResponse(**evaluation)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get evaluation {eval_id}: {e}")
-        raise create_error_response(
-            message=f"Failed to get evaluation: {sanitize_error_message(e, 'retrieving evaluation')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@router.patch("/{eval_id}", response_model=EvaluationResponse)
-async def update_evaluation(
-    eval_id: str,
-    update_request: UpdateEvaluationRequest,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
-):
-    """Update evaluation definition"""
-    try:
-        updates = model_dump_compat(update_request, exclude_unset=True)
-        if not updates:
-            raise create_error_response(
-                message="No updates provided",
-                error_type="invalid_request_error"
-            )
-
-        svc = get_unified_evaluation_service_for_user(current_user.id)
-        success = await svc.update_evaluation(
-            eval_id, updates, updated_by=user_id
-        )
-
-        if not success:
-            raise create_error_response(
-                message=f"Evaluation {eval_id} not found",
-                error_type="not_found_error",
-                param="eval_id",
-                status_code=status.HTTP_404_NOT_FOUND
-            )
-
-        evaluation = await svc.get_evaluation(eval_id)
-        return EvaluationResponse(**evaluation)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to update evaluation {eval_id}: {e}")
-        raise create_error_response(
-            message=f"Failed to update evaluation: {sanitize_error_message(e, 'updating evaluation')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@router.delete("/{eval_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_evaluation(
-    eval_id: str,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
-):
-    """Delete an evaluation"""
-    try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
-        success = await svc.delete_evaluation(eval_id, deleted_by=user_id)
-        if not success:
-            raise create_error_response(
-                message=f"Evaluation {eval_id} not found",
-                error_type="not_found_error",
-                param="eval_id",
-                status_code=status.HTTP_404_NOT_FOUND
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to delete evaluation {eval_id}: {e}")
-        raise create_error_response(
-            message=f"Failed to delete evaluation: {sanitize_error_message(e, 'deleting evaluation')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-# ============= Run Management Endpoints =============
-
-
-@router.post(
-    "/{eval_id}/runs",
-    response_model=RunResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-async def create_run(
-    eval_id: str,
-    run_request: CreateRunRequest,
-    background_tasks: BackgroundTasks,
-    user_id: str = Depends(verify_api_key),
-    _: None = Depends(check_evaluation_rate_limit),
-    __: None = Depends(require_token_scope("workflows", require_if_present=True, require_schedule_match=False, allow_admin_bypass=True, endpoint_id="evals.create_run", count_as="run")),
-    current_user: User = Depends(get_request_user),
-    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
-    response: Response = None,
-):
-    """Create and start an evaluation run"""
-    try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
-        # Idempotency: return existing run if key provided
-        if idempotency_key:
-            try:
-                existing_id = svc.db.lookup_idempotency("run", idempotency_key, user_id)
-                if existing_id:
-                    existing = await svc.get_run(existing_id)
-                    if existing:
-                        try:
-                            if response is not None:
-                                response.headers["X-Idempotent-Replay"] = "true"
-                                response.headers["Idempotency-Key"] = idempotency_key
-                        except Exception:
-                            pass
-                        return RunResponse(**existing)
-            except Exception:
-                pass
-        run = await svc.create_run(
-            eval_id=eval_id,
-            target_model=run_request.target_model,
-            config=model_dump_compat(run_request.config) if run_request.config else None,
-            dataset_override=model_dump_compat(run_request.dataset_override) if run_request.dataset_override else None,
-            webhook_url=str(run_request.webhook_url) if run_request.webhook_url else None,
-            created_by=user_id
-        )
-        # Record idempotency mapping
-        try:
-            if idempotency_key and run.get("id"):
-                svc.db.record_idempotency("run", idempotency_key, run["id"], user_id)
-        except Exception:
-            pass
-
-        return RunResponse(**run)
-
-    except ValueError as e:
-        raise create_error_response(
-            message=sanitize_error_message(e, "creating run"),
-            error_type="not_found_error",
-            param="eval_id",
-            status_code=status.HTTP_404_NOT_FOUND
-        )
-    except Exception as e:
-        logger.error(f"Failed to create run: {e}")
-        raise create_error_response(
-            message=f"Failed to create run: {sanitize_error_message(e, 'creating run')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@router.get("/{eval_id}/runs", response_model=RunListResponse)
-async def list_runs(
-    eval_id: str,
-    limit: int = Query(20, ge=1, le=100),
-    after: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
-):
-    """List runs for an evaluation"""
-    try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
-        runs, has_more = await svc.list_runs(
-            eval_id=eval_id,
-            status=status,
-            limit=limit,
-            after=after
-        )
-
-        first_id = runs[0]["id"] if runs else None
-        last_id = runs[-1]["id"] if runs else None
-
-        return RunListResponse(
-            object="list",
-            data=[RunResponse(**run) for run in runs],
-            has_more=has_more,
-            first_id=first_id,
-            last_id=last_id
-        )
-
-    except Exception as e:
-        logger.error(f"Failed to list runs: {e}")
-        raise create_error_response(
-            message=f"Failed to list runs: {sanitize_error_message(e, 'listing runs')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
 # ============= tldw-Specific Evaluation Endpoints =============
 
 @router.post("/geval", response_model=GEvalResponse, dependencies=[Depends(check_evaluation_rate_limit)])
@@ -1608,70 +1104,6 @@ async def evaluate_propositions_endpoint(
 
 
 
-
-
-# ============= Additional Run Endpoints =============
-
-@router.get("/runs/{run_id}", response_model=RunResponse)
-async def get_run(
-    run_id: str,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
-):
-    """Get run status and details"""
-    try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
-        run = await svc.get_run(run_id)
-        if not run:
-            raise create_error_response(
-                message=f"Run {run_id} not found",
-                error_type="not_found_error",
-                param="run_id",
-                status_code=status.HTTP_404_NOT_FOUND
-            )
-
-        return RunResponse(**run)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get run {run_id}: {e}")
-        raise create_error_response(
-            message=f"Failed to get run: {sanitize_error_message(e, 'retrieving run')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-@router.post("/runs/{run_id}/cancel")
-async def cancel_run(
-    run_id: str,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
-):
-    """Cancel a running evaluation"""
-    try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
-        success = await svc.cancel_run(run_id, cancelled_by=user_id)
-
-        if success:
-            return {"status": "cancelled", "id": run_id}
-        else:
-            raise create_error_response(
-                message=f"Failed to cancel run {run_id}",
-                error_type="server_error",
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to cancel run {run_id}: {e}")
-        raise create_error_response(
-            message=f"Failed to cancel run: {sanitize_error_message(e, 'cancelling run')}",
-            error_type="server_error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
 
 
 # ============= Batch Evaluation Endpoint =============

@@ -6,8 +6,9 @@ Coordinates between the billing repository and Stripe client.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -21,13 +22,7 @@ from tldw_Server_API.app.core.Billing.stripe_client import (
     CheckoutSession,
     PortalSession,
 )
-from tldw_Server_API.app.core.Billing.plan_limits import (
-    get_plan_limits,
-    check_limit,
-    PlanTier,
-    DEFAULT_LIMITS,
-    PAYMENT_GRACE_PERIOD_DAYS,
-)
+from tldw_Server_API.app.core.Billing.plan_limits import get_plan_limits, check_limit
 
 
 @dataclass
@@ -157,11 +152,12 @@ class SubscriptionService:
     # Subscriptions
     # =========================================================================
 
-    async def get_subscription(self, org_id: int) -> Optional[SubscriptionStatus]:
+    async def get_subscription(self, org_id: int) -> SubscriptionStatus:
         """
         Get the subscription status for an organization.
 
-        Returns None if org has no subscription (implicitly on free tier).
+        Organizations without an explicit subscription are treated as being
+        on the implicit free tier.
         """
         repo = await self._get_billing_repo()
         sub = await repo.get_org_subscription(org_id)
@@ -211,10 +207,10 @@ class SubscriptionService:
         # Get plan ID
         plan = await repo.get_plan_by_name(plan_name)
         if not plan:
-            # Create with default free plan
-            plan = await repo.get_plan_by_name("free")
-            if not plan:
-                raise ValueError(f"Plan '{plan_name}' not found")
+            # Unknown plan names are treated as errors rather than silently
+            # downgrading to the free tier. Callers should validate plan_name
+            # against the available plans before invoking this method.
+            raise ValueError(f"Plan '{plan_name}' not found")
 
         sub = await repo.create_org_subscription(
             org_id=org_id,
@@ -282,6 +278,8 @@ class SubscriptionService:
         customer_id = sub.get("stripe_customer_id") if sub else None
 
         if not customer_id:
+            # Create Stripe customer record first so we have a stable id for
+            # downstream billing flows, then ensure the requested plan exists.
             customer_id = await stripe.create_customer(
                 email=org_email,
                 name=org_name,
@@ -291,22 +289,30 @@ class SubscriptionService:
             if sub:
                 await repo.update_org_subscription(org_id, stripe_customer_id=customer_id)
             else:
-                # Create pending subscription
+                # Create pending subscription; unknown plans are treated as an
+                # error rather than silently defaulting to an arbitrary plan.
                 plan = await repo.get_plan_by_name(plan_name)
+                if not plan:
+                    raise ValueError(f"Plan '{plan_name}' not found")
                 await repo.create_org_subscription(
                     org_id=org_id,
-                    plan_id=plan["id"] if plan else 1,
+                    plan_id=plan["id"],
                     stripe_customer_id=customer_id,
                     billing_cycle=billing_cycle,
                     status="pending",
                 )
 
         # Get price ID
-        price_id = stripe.get_price_id(plan_name, billing_cycle)
+        normalized_cycle = billing_cycle.lower()
+        price_id = stripe.get_price_id(plan_name, normalized_cycle)
         if not price_id:
             # Try to get from database plan
             plan = await repo.get_plan_by_name(plan_name)
-            price_id = plan.get("stripe_price_id") if plan else None
+            if plan:
+                if normalized_cycle == "yearly":
+                    price_id = plan.get("stripe_price_id_yearly")
+                else:
+                    price_id = plan.get("stripe_price_id")
 
         if not price_id:
             raise ValueError(f"No Stripe price configured for plan '{plan_name}'")
@@ -442,7 +448,7 @@ class SubscriptionService:
                 result = await stripe.resume_subscription(sub["stripe_subscription_id"])
 
         # Update local status
-        await repo.update_org_subscription(org_id, status="active")
+        await repo.update_org_subscription(org_id, status="active", cancel_at_period_end=False)
 
         # Log the action
         await repo.log_billing_action(
@@ -499,7 +505,7 @@ class SubscriptionService:
 
         return UsageStatus(
             org_id=org_id,
-            plan_name=sub.plan_name if sub else "free",
+            plan_name=sub.plan_name,
             limits=limits,
             usage=current_usage,
             limit_checks=limit_checks,
@@ -551,13 +557,17 @@ class SubscriptionService:
         """Handle checkout.session.completed event."""
         session = event_data.get("object", {})
         metadata = session.get("metadata", {})
-        org_id = metadata.get("org_id")
+        org_id_str = metadata.get("org_id")
 
-        if not org_id:
+        if not org_id_str:
             logger.warning("Checkout completed without org_id in metadata")
             return {"handled": False, "reason": "missing_org_id"}
 
-        org_id = int(org_id)
+        try:
+            org_id = int(org_id_str)
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Checkout completed with invalid org_id '{org_id_str}': {e}")
+            return {"handled": False, "reason": "invalid_org_id"}
         subscription_id = session.get("subscription")
         customer_id = session.get("customer")
 
@@ -597,19 +607,66 @@ class SubscriptionService:
 
         org_id = sub["org_id"]
 
-        # Update status
-        await repo.update_org_subscription(
-            org_id,
-            stripe_subscription_status=subscription.get("status"),
-            current_period_start=datetime.fromtimestamp(
-                subscription.get("current_period_start", 0)
-            ).isoformat() if subscription.get("current_period_start") else None,
-            current_period_end=datetime.fromtimestamp(
-                subscription.get("current_period_end", 0)
-            ).isoformat() if subscription.get("current_period_end") else None,
-        )
+        # Try to determine the active plan from the subscription items so that
+        # local plan_id / limits stay in sync with Stripe when upgrades or
+        # downgrades are initiated from the Billing Portal.
+        plan_updates: Dict[str, Any] = {}
+        items = (subscription.get("items") or {}).get("data") or []
+        if items:
+            item0 = items[0] or {}
+            price_obj = item0.get("price") or {}
+            plan_obj = item0.get("plan") or {}
 
-        logger.info(f"Subscription updated for org {org_id}: status={subscription.get('status')}")
+            price_id = price_obj.get("id") or item0.get("price_id")
+            product_id = price_obj.get("product") or plan_obj.get("product")
+            recurring = price_obj.get("recurring") or {}
+            interval = recurring.get("interval") or plan_obj.get("interval")
+
+            new_plan: Optional[Dict[str, Any]] = None
+            if price_id:
+                new_plan = await repo.get_plan_by_stripe_price_id(price_id)
+            if not new_plan and product_id:
+                new_plan = await repo.get_plan_by_stripe_product_id(product_id)
+
+            if new_plan:
+                plan_updates["plan_id"] = new_plan["id"]
+
+            if interval == "year":
+                plan_updates["billing_cycle"] = "yearly"
+            elif interval == "month":
+                plan_updates["billing_cycle"] = "monthly"
+
+        # Always update status and period timestamps; merge any plan updates.
+        stripe_status = subscription.get("status")
+        update_fields: Dict[str, Any] = {
+            "stripe_subscription_status": stripe_status,
+            "current_period_start": datetime.fromtimestamp(
+                subscription.get("current_period_start", 0),
+                tz=timezone.utc,
+            ).isoformat() if subscription.get("current_period_start") else None,
+            "current_period_end": datetime.fromtimestamp(
+                subscription.get("current_period_end", 0),
+                tz=timezone.utc,
+            ).isoformat() if subscription.get("current_period_end") else None,
+            "trial_end": datetime.fromtimestamp(
+                subscription.get("trial_end", 0),
+                tz=timezone.utc,
+            ).isoformat() if subscription.get("trial_end") else None,
+            **plan_updates,
+        }
+        if stripe_status is not None:
+            update_fields["status"] = stripe_status
+        if subscription.get("cancel_at_period_end") is not None:
+            update_fields["cancel_at_period_end"] = bool(subscription.get("cancel_at_period_end"))
+
+        await repo.update_org_subscription(org_id, **update_fields)
+
+        logger.info(
+            "Subscription updated for org %s: status=%s, plan_updated=%s",
+            org_id,
+            subscription.get("status"),
+            bool(plan_updates),
+        )
         return {"handled": True, "org_id": org_id}
 
     async def _handle_subscription_deleted(
@@ -695,8 +752,10 @@ class SubscriptionService:
             org_id=org_id,
             stripe_invoice_id=invoice.get("id"),
             amount_cents=invoice.get("amount_due", 0),
+            currency=invoice.get("currency", "usd"),
             status="failed",
             description="Payment failed",
+            invoice_pdf_url=invoice.get("invoice_pdf"),
         )
 
         # Update subscription status to past_due
@@ -730,13 +789,17 @@ class SubscriptionService:
         return await repo.list_payments(org_id, limit=limit, offset=offset)
 
 
-# Singleton instance
+# Singleton instance with async-safe initialization
 _subscription_service: Optional[SubscriptionService] = None
+_subscription_service_lock = asyncio.Lock()
 
 
 async def get_subscription_service() -> SubscriptionService:
-    """Get or create the subscription service singleton."""
+    """Get or create the subscription service singleton (async-safe)."""
     global _subscription_service
     if _subscription_service is None:
-        _subscription_service = SubscriptionService()
+        async with _subscription_service_lock:
+            # Double-check pattern for async safety
+            if _subscription_service is None:
+                _subscription_service = SubscriptionService()
     return _subscription_service

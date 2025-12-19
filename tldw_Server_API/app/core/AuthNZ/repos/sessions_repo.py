@@ -21,6 +21,13 @@ class AuthnzSessionsRepo:
 
     db_pool: DatabasePool
 
+    @staticmethod
+    def _normalize_datetime_for_postgres(dt: Optional[datetime]) -> Optional[datetime]:
+        """Strip timezone info for PostgreSQL TIMESTAMP columns (not TIMESTAMPTZ)."""
+        if dt is None:
+            return None
+        return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
+
     def _normalize_session_details(self, details: Dict[str, Any]) -> Dict[str, Any]:
         """
         Normalize datetime fields across backends so callers always
@@ -832,6 +839,9 @@ class AuthnzSessionsRepo:
                 session_row: Optional[Any] = None
 
                 if hasattr(conn, "fetchrow"):
+                    # Normalize datetimes for PostgreSQL TIMESTAMP columns
+                    pg_access_expires = self._normalize_datetime_for_postgres(access_expires_at)
+                    pg_refresh_expires = self._normalize_datetime_for_postgres(refresh_expires_at)
                     await conn.execute(
                         """
                         UPDATE sessions
@@ -850,8 +860,8 @@ class AuthnzSessionsRepo:
                         refresh_token_hash,
                         access_jti,
                         refresh_jti,
-                        access_expires_at,
-                        refresh_expires_at,
+                        pg_access_expires,
+                        pg_refresh_expires,
                         encrypted_access_token,
                         encrypted_refresh_token,
                     )

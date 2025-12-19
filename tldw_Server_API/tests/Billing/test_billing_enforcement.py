@@ -125,7 +125,7 @@ class TestPlanLimits:
     def test_free_tier_has_limits(self):
         """Free tier should have restrictive limits."""
         limits = DEFAULT_LIMITS[PlanTier.FREE]
-        assert limits.storage_gb == 1
+        assert limits.storage_mb == 1024
         assert limits.api_calls_day == 100
         assert limits.team_members == 1
         assert limits.advanced_analytics is False
@@ -134,7 +134,7 @@ class TestPlanLimits:
         """Pro tier should have higher limits than Free."""
         free_limits = DEFAULT_LIMITS[PlanTier.FREE]
         pro_limits = DEFAULT_LIMITS[PlanTier.PRO]
-        assert pro_limits.storage_gb > free_limits.storage_gb
+        assert pro_limits.storage_mb > free_limits.storage_mb
         assert pro_limits.api_calls_day > free_limits.api_calls_day
         assert pro_limits.advanced_analytics is True
 
@@ -146,7 +146,7 @@ class TestPlanLimits:
     def test_get_plan_limits_free(self):
         """get_plan_limits should return correct limits for free tier."""
         limits = get_plan_limits("free")
-        assert limits["storage_gb"] == 1
+        assert limits["storage_mb"] == 1024
         assert limits["api_calls_day"] == 100
 
     def test_get_plan_limits_unknown_defaults_to_free(self):
@@ -329,6 +329,88 @@ class TestBillingEnforcer:
             result = await enforcer.check_feature_access(org_id=1, feature="advanced_analytics")
 
             assert result is False
+
+    @pytest.mark.asyncio
+    async def test_get_transcription_minutes_month_uses_ledger_total(self, monkeypatch):
+        """_get_transcription_minutes_month should use ResourceDailyLedger.peek_range total."""
+
+        class _FakeLedger:
+            def __init__(self, *args, **kwargs):
+                self.init_called = False
+                self.peek_args = None
+
+            async def initialize(self):
+                self.init_called = True
+
+            async def peek_range(
+                self,
+                *,
+                entity_scope,
+                entity_value,
+                category,
+                start_day_utc,
+                end_day_utc,
+            ):
+                # Record arguments for basic sanity checks
+                self.peek_args = {
+                    "entity_scope": entity_scope,
+                    "entity_value": entity_value,
+                    "category": category,
+                    "start_day_utc": start_day_utc,
+                    "end_day_utc": end_day_utc,
+                }
+                # Simulate a monthly total of 42 minutes
+                return {"days": [], "total": 42}
+
+        # Patch the ResourceDailyLedger used by BillingEnforcer
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger.ResourceDailyLedger",
+            _FakeLedger,
+            raising=False,
+        )
+
+        enforcer = BillingEnforcer()
+        minutes = await enforcer._get_transcription_minutes_month(org_id=123)
+
+        assert minutes == 42
+
+    @pytest.mark.asyncio
+    async def test_get_rag_queries_today_uses_ledger_total(self, monkeypatch):
+        """_get_rag_queries_today should use ResourceDailyLedger.total_for_day."""
+
+        class _FakeLedger:
+            def __init__(self, *args, **kwargs):
+                self.init_called = False
+                self.total_args = None
+
+            async def initialize(self):
+                self.init_called = True
+
+            async def total_for_day(
+                self,
+                entity_scope: str,
+                entity_value: str,
+                category: str,
+                day_utc: str | None = None,
+            ) -> int:
+                self.total_args = {
+                    "entity_scope": entity_scope,
+                    "entity_value": entity_value,
+                    "category": category,
+                    "day_utc": day_utc,
+                }
+                return 7
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger.ResourceDailyLedger",
+            _FakeLedger,
+            raising=False,
+        )
+
+        enforcer = BillingEnforcer()
+        count = await enforcer._get_rag_queries_today(org_id=321)
+
+        assert count == 7
 
 
 class TestModuleFunctions:

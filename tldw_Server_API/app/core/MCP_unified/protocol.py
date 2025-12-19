@@ -207,6 +207,16 @@ class MCPProtocol:
             return [str(item) for item in raw if isinstance(item, str)]
         return []
 
+    def _mcp_scopes(self, context: RequestContext) -> List[str]:
+        scopes: List[str] = []
+        for scope in self._scoped_permissions(context):
+            try:
+                if scope.lower().startswith("mcp:"):
+                    scopes.append(scope)
+            except Exception:
+                continue
+        return scopes
+
     def _scope_matches(self, scope: str, resource_kind: str, identifier: Optional[str]) -> bool:
         scope = scope.strip().lower()
         if not scope.startswith("mcp:"):
@@ -229,36 +239,39 @@ class MCPProtocol:
         return value == identifier.lower()
 
     def _scope_allows(self, context: RequestContext, resource_kind: str, identifier: Optional[str]) -> bool:
+        scopes = self._mcp_scopes(context)
+        if not scopes:
+            return True
         identifier_norm = identifier.lower() if isinstance(identifier, str) else None
-        for scope in self._scoped_permissions(context):
+        for scope in scopes:
             if self._scope_matches(scope, resource_kind, identifier_norm):
                 return True
         return False
 
     async def _has_module_permission(self, context: RequestContext, module_id: Optional[str]) -> bool:
         module_id_norm = module_id or ""
-        if await self._rbac_check(context.user_id, Resource.MODULE, Action.READ, module_id_norm):
-            return True
-        return self._scope_allows(context, "module", module_id_norm)
+        if not await self._rbac_check(context.user_id, Resource.MODULE, Action.READ, module_id_norm):
+            return False
+        return self._scope_allows(context, Resource.MODULE.value, module_id_norm or None)
 
     async def _has_tool_permission(self, context: RequestContext, tool_name: str) -> bool:
-        if await self._rbac_check(context.user_id, Resource.TOOL, Action.EXECUTE, tool_name):
-            return True
-        return self._scope_allows(context, "tool", tool_name)
+        if not await self._rbac_check(context.user_id, Resource.TOOL, Action.EXECUTE, tool_name):
+            return False
+        return self._scope_allows(context, Resource.TOOL.value, tool_name)
 
     async def _has_resource_permission(self, context: RequestContext, resource_uri: str, module_id: Optional[str]) -> bool:
         if await self._rbac_check(context.user_id, Resource.RESOURCE, Action.READ, resource_uri):
-            return True
+            return self._scope_allows(context, Resource.RESOURCE.value, resource_uri)
         if await self._has_module_permission(context, module_id):
-            return True
-        return self._scope_allows(context, "resource", resource_uri)
+            return self._scope_allows(context, Resource.RESOURCE.value, resource_uri)
+        return False
 
     async def _has_prompt_permission(self, context: RequestContext, prompt_name: str, module_id: Optional[str]) -> bool:
         if await self._rbac_check(context.user_id, Resource.PROMPT, Action.READ, prompt_name):
-            return True
+            return self._scope_allows(context, Resource.PROMPT.value, prompt_name)
         if await self._has_module_permission(context, module_id):
-            return True
-        return self._scope_allows(context, "prompt", prompt_name)
+            return self._scope_allows(context, Resource.PROMPT.value, prompt_name)
+        return False
 
     @staticmethod
     def _hash_arguments(arguments: Dict[str, Any]) -> Optional[str]:
@@ -622,7 +635,9 @@ class MCPProtocol:
 
         # tools/list: allow any authenticated user (deny if unauthenticated)
         if method == "tools/list":
-            return bool(context.user_id)
+            if not context.user_id:
+                return False
+            return self._scope_allows(context, Resource.TOOL.value, None)
 
         # Map methods to resources and actions
         method_permissions = {
@@ -652,8 +667,12 @@ class MCPProtocol:
             except Exception:
                 resource_id = None
             if inspect.iscoroutinefunction(fn):
-                return await fn(context.user_id, resource, action, resource_id)
-            return fn(context.user_id, resource, action, resource_id)
+                allowed = await fn(context.user_id, resource, action, resource_id)
+            else:
+                allowed = fn(context.user_id, resource, action, resource_id)
+            if not allowed:
+                return False
+            return self._scope_allows(context, resource.value, resource_id)
 
         # Unknown method - deny by default
         return False
@@ -1248,8 +1267,16 @@ class MCPProtocol:
         if not await self._has_resource_permission(context, uri, module_id):
             raise PermissionError(f"Permission denied for resource: {uri}")
 
-        # Read resource
-        content = await module.read_resource(uri)
+        # Read resource (pass context when supported)
+        read_fn = getattr(module, "read_resource")
+        try:
+            params = inspect.signature(read_fn).parameters
+        except (TypeError, ValueError):
+            params = {}
+        if "context" in params:
+            content = await read_fn(uri, context=context)
+        else:
+            content = await read_fn(uri)
 
         return {"contents": [content]}
 

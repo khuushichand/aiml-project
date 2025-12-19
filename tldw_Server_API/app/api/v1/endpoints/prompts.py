@@ -12,18 +12,17 @@ from typing import List, Optional, Union, Tuple
 from fastapi import (
     APIRouter,
     Depends,
+    Header,
     HTTPException,
     Query,
     Body,
+    Request,
     status,
-    Header,
     File,
     UploadFile
 )
 from starlette.responses import FileResponse # For serving exported files
-from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.v1_endpoint_deps import verify_token
 #
 # Local Imports
 from tldw_Server_API.app.core.Prompt_Management.Prompts_Interop import (
@@ -40,9 +39,8 @@ from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
 )
 from tldw_Server_API.app.api.v1.API_Deps.Prompts_DB_Deps import get_prompts_db_for_user
 from tldw_Server_API.app.api.v1.schemas import prompt_schemas as schemas
-# For auth, assuming similar setup to chat.py
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 #
 # DB Mgmt
 from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
@@ -54,6 +52,98 @@ from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
 # Functions:
 
 router = APIRouter()
+
+async def verify_token(
+    request: Request = None,
+    Token: Optional[str] = Header(None, alias="Token"),
+    x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    Authorization: Optional[str] = Header(None, alias="Authorization"),
+) -> bool:
+    """
+    Validate the legacy Token header for prompts endpoints.
+
+    Single-user mode validates against SINGLE_USER_API_KEY. Multi-user mode
+    defers to the unified AuthNZ path for API keys/JWTs and enforces admin.
+    """
+    raw_token = None
+    for candidate in (Token, x_api_key, Authorization):
+        if isinstance(candidate, str) and candidate.strip():
+            raw_token = candidate.strip()
+            break
+
+    if not raw_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication token",
+        )
+
+    normalized = raw_token
+    if normalized.lower().startswith("bearer "):
+        normalized = normalized[len("Bearer ") :].strip()
+
+    if settings.get("SINGLE_USER_MODE"):
+        expected = settings.get("SINGLE_USER_API_KEY")
+        if not expected:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Server authentication misconfigured (API key missing).",
+            )
+        if normalized != expected:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication token",
+            )
+        return True
+
+    if request is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication token",
+        )
+
+    bearer_token = None
+    api_key = None
+    legacy_header = None
+
+    if isinstance(Authorization, str) and Authorization.strip():
+        scheme, _, credential = Authorization.strip().partition(" ")
+        if scheme.lower() == "bearer" and credential:
+            bearer_token = credential.strip()
+
+    if isinstance(Token, str) and Token.strip():
+        legacy_header = Token.strip()
+        if legacy_header.lower().startswith("bearer "):
+            bearer_token = legacy_header[len("Bearer ") :].strip()
+        elif api_key is None:
+            api_key = legacy_header
+
+    if isinstance(x_api_key, str) and x_api_key.strip():
+        api_key = x_api_key.strip()
+
+    try:
+        user = await get_request_user(
+            request,
+            api_key=api_key,
+            token=bearer_token,
+            legacy_token_header=legacy_header,
+        )
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication token",
+            ) from exc
+        raise
+
+    roles = getattr(user, "roles", []) or []
+    is_admin = bool(getattr(user, "is_admin", False) or ("admin" in roles))
+    if not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied. Required role(s): admin",
+        )
+
+    return True
 
 @router.get(
     "/health",
@@ -124,12 +214,8 @@ async def prompts_health():
 async def get_sync_log(
     since_change_id: int = Query(0, ge=0),
     limit: Optional[int] = Query(100, ge=1, le=1000),
-    Token: str = Header(None, description="Bearer token for authentication."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user) # User specific sync log
 ):
-    # Add admin role check here if you have role-based auth
-    # if not current_user.is_admin:
-    #     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
     try:
         entries = db.get_sync_log_entries(since_change_id=since_change_id, limit=limit)
         return [schemas.SyncLogEntryResponse(**entry) for entry in entries]
@@ -153,7 +239,6 @@ async def search_all_prompts(
     page: int = Query(1, ge=1),
     results_per_page: int = Query(20, ge=1, le=100),
     include_deleted: bool = Query(False),
-    Token: str = Header(None, description="Bearer token for authentication."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
@@ -189,7 +274,6 @@ async def search_all_prompts(
 )
 async def create_keyword(
     keyword_data: schemas.KeywordCreate,
-    Token: str = Header(None, description="Bearer token for authentication."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
@@ -262,7 +346,6 @@ async def list_all_keywords(
 )
 async def delete_keyword(
     keyword_text: str,
-    Token: str = Header(None, description="Bearer token for authentication."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
@@ -296,7 +379,6 @@ async def export_prompts_api(
     include_author: bool = Query(True),
     include_associated_keywords: bool = Query(True),
     markdown_template_name: Optional[str] = Query("Basic Template"),
-    Token: str = Header(None, description="Bearer token for authentication."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
@@ -348,7 +430,6 @@ async def export_prompts_api(
     dependencies=[Depends(verify_token)]
 )
 async def export_keywords_api(
-    Token: str = Header(None, description="Bearer token for authentication."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
@@ -381,7 +462,6 @@ async def export_keywords_api(
 )
 async def legacy_create_prompt(
     payload: schemas.LegacyPromptCreateRequest = Body(...),
-    Token: str = Header(None, description="Authentication token."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
@@ -419,7 +499,7 @@ async def legacy_create_prompt(
     response_model=schemas.PromptResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new prompt",
-    dependencies=[Depends(verify_token)] # Apply token verification
+    dependencies=[Depends(verify_token)]
 )
 @router.post(
     "",
@@ -430,7 +510,6 @@ async def legacy_create_prompt(
 )
 async def create_prompt(
     prompt_data: schemas.PromptCreate,
-    Token: str = Header(None, description="Bearer token for authentication."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
@@ -500,7 +579,6 @@ async def list_all_prompts(
     page: int = Query(1, ge=1, description="Page number"),
     per_page: int = Query(10, ge=1, le=100, description="Items per page"),
     include_deleted: bool = Query(False, description="Include soft-deleted prompts"),
-    Token: str = Header(None, description="Bearer token for authentication."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
@@ -530,7 +608,6 @@ async def list_all_prompts(
 )
 async def create_prompt_compat(
     payload: schemas.CreatePromptCompatRequest = Body(...),
-    Token: str = Header(None, description="Authentication token."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
@@ -574,7 +651,6 @@ async def create_prompt_compat(
 async def get_prompt(
     prompt_identifier: Union[int, str], # Path param will be string, FastAPI can convert to int if possible
     include_deleted: bool = Query(False, description="Include if soft-deleted"),
-    Token: str = Header(None, description="Bearer token for authentication."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
@@ -603,7 +679,6 @@ async def get_prompt(
 async def update_prompt(
     prompt_identifier: Union[int, str],
     prompt_data: schemas.PromptCreate, # Using PromptCreate for full replacement, or PromptUpdate for partial
-    Token: str = Header(None, description="Bearer token for authentication."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     # This uses add_prompt with overwrite=True logic.
@@ -672,7 +747,6 @@ async def update_prompt(
 )
 async def delete_prompt(
     prompt_identifier: Union[int, str],
-    Token: str = Header(None, description="Bearer token for authentication."),
     db: PromptsDatabase = Depends(get_prompts_db_for_user)
 ):
     try:
@@ -711,7 +785,6 @@ def _get_collections_store():
 )
 async def create_collection(
     payload: schemas.PromptCollectionCreateRequest = Body(...),
-    Token: str = Header(None, description="Authentication token.")
 ):
     name = payload.name
     description = payload.description
@@ -735,7 +808,6 @@ async def create_collection(
 )
 async def get_collection(
     collection_id: int,
-    Token: str = Header(None, description="Authentication token.")
 ):
     store = _get_collections_store()
     item = store["items"].get(collection_id)

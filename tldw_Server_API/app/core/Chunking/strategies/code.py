@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
+from bisect import bisect_right
 from loguru import logger
 
 from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
@@ -157,9 +158,13 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
         brace_count = 0
         found = False
         while i < len(lines):
-            brace_count += lines[i].count('{') - lines[i].count('}')
-            if '{' in lines[i]:
+            line = lines[i]
+            if '{' in line:
+                brace_count = line.count('{') - line.count('}')
                 found = True
+                if brace_count <= 0:
+                    return i + 1
+                i += 1
                 break
             # In some languages, the brace may be on the next line after signature
             i += 1
@@ -170,7 +175,6 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
                 j += 1
             return j
         # Now find when brace_count returns to zero from this point
-        i += 1
         while i < len(lines):
             brace_count += lines[i].count('{') - lines[i].count('}')
             if brace_count <= 0:
@@ -217,7 +221,8 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
                 if buf:
                     chunks.append(buf)
                 if len(text) > max_chars:
-                    # Split oversized block into windows
+                    # Split oversized block into non-overlapping windows.
+                    # Overlap is added later via prefixing tails.
                     t = text
                     while t:
                         part = t[:max_chars]
@@ -225,8 +230,7 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
                         if len(t) <= max_chars:
                             t = ''
                         else:
-                            # apply overlap
-                            t = t[max(1, max_chars - max(0, overlap_chars)) : ]
+                            t = t[max_chars:]
                     buf = ''
                 else:
                     buf = text
@@ -360,7 +364,13 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
             nonlocal buf_start_char, buf_end_char, buf_blocks
             if buf_start_char is None or buf_end_char is None:
                 return
-            ch_text = text[buf_start_char:buf_end_char]
+            end_char = buf_end_char
+            # Expand end bound to avoid splitting graphemes in metadata
+            try:
+                end_char = self._expand_end_to_grapheme_boundary(text, end_char)
+            except Exception:
+                end_char = buf_end_char
+            ch_text = text[buf_start_char:end_char]
             # Compute line span for this chunk
             # Find first line index where start_char >= line_start
             start_line_idx = 0
@@ -371,19 +381,14 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
                     break
             end_line_idx = start_line_idx
             for i, ls in enumerate(line_starts):
-                if ls < buf_end_char:
+                if ls < end_char:
                     end_line_idx = i
                 else:
                     break
-            # Expand end bound to avoid splitting graphemes in metadata
-            try:
-                buf_end_char = self._expand_end_to_grapheme_boundary(text, buf_end_char)
-            except Exception:
-                pass
             md = ChunkMetadata(
                 index=len(results),
                 start_char=buf_start_char,
-                end_char=buf_end_char,
+                end_char=end_char,
                 word_count=len(ch_text.split()),
                 language=language,
                 method='code',
@@ -416,23 +421,23 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
                     buf_end_char = e_char
                     buf_blocks = [(s_line, e_line, btype, name)]
                 else:
-                    # Split oversized block into windows with intra-block overlap
+                    # Split oversized block into windows; overlap is applied via prefixing tails.
                     start = s_char
                     while start < e_char:
                         end = min(e_char, start + max_size)
                         md_blocks = [(s_line, e_line, btype, name)]
-                        ch_text = text[start:end]
                         # Calculate line indices
-                        start_line_idx = max(0, max([i for i, ls in enumerate(line_starts) if ls <= start], default=0))
-                        end_line_idx = max(start_line_idx, max([i for i, ls in enumerate(line_starts) if ls < end], default=start_line_idx))
                         try:
-                            end = self._expand_end_to_grapheme_boundary(text, end)
+                            end_expanded = self._expand_end_to_grapheme_boundary(text, end)
                         except Exception:
-                            pass
+                            end_expanded = end
+                        ch_text = text[start:end_expanded]
+                        start_line_idx = max(0, max([i for i, ls in enumerate(line_starts) if ls <= start], default=0))
+                        end_line_idx = max(start_line_idx, max([i for i, ls in enumerate(line_starts) if ls < end_expanded], default=start_line_idx))
                         md = ChunkMetadata(
                             index=len(results),
                             start_char=start,
-                            end_char=end,
+                            end_char=end_expanded,
                             word_count=len(ch_text.split()),
                             language=language,
                             method='code',
@@ -447,11 +452,10 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
                             }
                         )
                         results.append(ChunkResult(text=ch_text, metadata=md))
-                        if end >= e_char:
+                        if end_expanded >= e_char:
                             break
-                        # Apply intra-block overlap when continuing
-                        step = max(1, max_size - max(0, overlap))
-                        start = start + step
+                        # Split continues without intra-block overlap; overlap is applied via prefixing tails.
+                        start = start + max_size
                     # Reset buffer
                     buf_start_char = None
                     buf_end_char = None
@@ -474,17 +478,17 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
                         start = s_char
                         while start < e_char:
                             end = min(e_char, start + max_size)
-                            ch_text = text[start:end]
-                            start_line_idx = max(0, max([i for i, ls in enumerate(line_starts) if ls <= start], default=0))
-                            end_line_idx = max(start_line_idx, max([i for i, ls in enumerate(line_starts) if ls < end], default=start_line_idx))
                             try:
-                                end = self._expand_end_to_grapheme_boundary(text, end)
+                                end_expanded = self._expand_end_to_grapheme_boundary(text, end)
                             except Exception:
-                                pass
+                                end_expanded = end
+                            ch_text = text[start:end_expanded]
+                            start_line_idx = max(0, max([i for i, ls in enumerate(line_starts) if ls <= start], default=0))
+                            end_line_idx = max(start_line_idx, max([i for i, ls in enumerate(line_starts) if ls < end_expanded], default=start_line_idx))
                             md = ChunkMetadata(
                                 index=len(results),
                                 start_char=start,
-                                end_char=end,
+                                end_char=end_expanded,
                                 word_count=len(ch_text.split()),
                                 language=language,
                                 method='code',
@@ -499,15 +503,56 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
                                 }
                             )
                             results.append(ChunkResult(text=ch_text, metadata=md))
-                            if end >= e_char:
+                            if end_expanded >= e_char:
                                 break
-                            step = max(1, max_size - max(0, overlap))
-                            start = start + step
+                            # Split continues without intra-block overlap; overlap is applied via prefixing tails.
+                            start = start + max_size
                         buf_start_char = None
                         buf_end_char = None
                         buf_blocks = []
 
         # Flush any remaining buffer
         flush_chunk()
+
+        # Apply prefix-tail overlap so chunks can grow beyond max_size while preserving metadata offsets.
+        if overlap > 0 and results:
+            def _line_index_for_char(pos: int) -> int:
+                if pos <= 0:
+                    return 0
+                if pos >= total_chars:
+                    return max(0, len(line_starts) - 1)
+                return max(0, bisect_right(line_starts, pos) - 1)
+
+            prev = results[0]
+            for cur in results[1:]:
+                try:
+                    prev_start = int(prev.metadata.start_char)
+                    prev_end = int(prev.metadata.end_char)
+                    cur_start = int(cur.metadata.start_char)
+                    cur_end = int(cur.metadata.end_char)
+                except Exception:
+                    prev = cur
+                    continue
+                prev_len = max(0, prev_end - prev_start)
+                tail_len = min(overlap, prev_len)
+                if tail_len <= 0:
+                    prev = cur
+                    continue
+                new_start = max(0, prev_end - tail_len)
+                if new_start < cur_start and cur_end > new_start:
+                    cur.metadata.start_char = new_start
+                    cur.metadata.char_count = cur_end - new_start
+                    cur.metadata.overlap_with_previous = tail_len
+                    prev.metadata.overlap_with_next = tail_len
+                    cur.text = text[new_start:cur_end]
+                    cur.metadata.word_count = len(cur.text.split()) if cur.text else 0
+                    if isinstance(cur.metadata.options, dict):
+                        start_line_idx = _line_index_for_char(new_start)
+                        end_line_idx = _line_index_for_char(cur_end - 1 if cur_end > 0 else 0)
+                        cur.metadata.options['start_line'] = start_line_idx + 1
+                        cur.metadata.options['end_line'] = end_line_idx + 1
+                        cur.metadata.options['lines_in_chunk'] = (end_line_idx - start_line_idx + 1)
+                prev = cur
+
         logger.info(f"CodeChunkingStrategy produced {len(results)} chunks with metadata (language={language})")
         return results

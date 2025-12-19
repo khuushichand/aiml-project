@@ -683,6 +683,32 @@ class WatchlistsDatabase:
         ).rows
         return [r.get("name") for r in rows if r.get("name")]
 
+    def set_source_groups(self, source_id: int, group_ids: List[int]) -> List[int]:
+        clean_ids: List[int] = []
+        seen: set[int] = set()
+        for gid in group_ids or []:
+            try:
+                val = int(gid)
+            except Exception:
+                continue
+            if val in seen:
+                continue
+            seen.add(val)
+            clean_ids.append(val)
+        self.backend.execute("DELETE FROM source_groups WHERE source_id = ?", (source_id,))
+        for gid in clean_ids:
+            try:
+                self.backend.execute(
+                    "INSERT INTO source_groups (source_id, group_id) VALUES (?, ?) ON CONFLICT(source_id, group_id) DO NOTHING",
+                    (source_id, gid),
+                )
+            except Exception:
+                self.backend.execute(
+                    "INSERT INTO source_groups (source_id, group_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM source_groups WHERE source_id = ? AND group_id = ?)",
+                    (source_id, gid, source_id, gid),
+                )
+        return clean_ids
+
     def delete_source(self, source_id: int) -> bool:
         res = self.backend.execute("DELETE FROM sources WHERE id = ? AND user_id = ?", (source_id, self.user_id))
         return res.rowcount > 0

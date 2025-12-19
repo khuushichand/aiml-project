@@ -9,12 +9,13 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+from tldw_Server_API.app.core.Billing.plan_limits import get_plan_limits
 
 
 @dataclass
@@ -24,10 +25,48 @@ class AuthnzBillingRepo:
     db_pool: DatabasePool
 
     def _is_postgres(self, conn: Optional[Any] = None) -> bool:
-        """Detect whether the current backend is PostgreSQL."""
-        if conn is not None:
-            return hasattr(conn, "fetchrow")
+        """Detect whether the current AuthNZ backend is PostgreSQL.
+
+        Relies on the DatabasePool backend configuration rather than
+        per-connection heuristics.
+        """
         return getattr(self.db_pool, "pool", None) is not None
+
+    @staticmethod
+    def _row_to_dict(cursor, row: tuple) -> Dict[str, Any]:
+        """Convert a SQLite row tuple to a dict using cursor.description."""
+        if row is None:
+            return {}
+        return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
+
+    @staticmethod
+    def _rows_to_dicts(cursor, rows: List[tuple]) -> List[Dict[str, Any]]:
+        """Convert multiple SQLite row tuples to dicts using cursor.description."""
+        if not rows:
+            return []
+        columns = [col[0] for col in cursor.description]
+        return [{columns[idx]: val for idx, val in enumerate(row)} for row in rows]
+
+    @staticmethod
+    def _normalize_storage_limits(limits: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize storage limit keys to storage_mb."""
+        if not limits:
+            return limits
+
+        normalized = dict(limits)
+        if "storage_mb" in normalized:
+            normalized.pop("storage_gb", None)
+            return normalized
+
+        if "storage_gb" in normalized:
+            try:
+                storage_mb = int(float(normalized["storage_gb"]) * 1024)
+                normalized["storage_mb"] = storage_mb
+            except (TypeError, ValueError):
+                pass
+            normalized.pop("storage_gb", None)
+
+        return normalized
 
     # =========================================================================
     # Subscription Plans
@@ -63,7 +102,8 @@ class AuthnzBillingRepo:
                     rows = await conn.fetch(
                         f"""
                         SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
-                               price_usd_monthly, price_usd_yearly, limits_json, is_active, is_public,
+                               stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
+                               is_public,
                                sort_order, created_at
                         FROM subscription_plans
                         {where_clause}
@@ -75,7 +115,8 @@ class AuthnzBillingRepo:
                     cur = await conn.execute(
                         f"""
                         SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
-                               price_usd_monthly, price_usd_yearly, limits_json, is_active, is_public,
+                               stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
+                               is_public,
                                sort_order, created_at
                         FROM subscription_plans
                         {where_clause}
@@ -83,16 +124,12 @@ class AuthnzBillingRepo:
                         """
                     )
                     rows = await cur.fetchall()
-                    return [
-                        self._plan_row_to_dict({
-                            "id": r[0], "name": r[1], "display_name": r[2], "description": r[3],
-                            "stripe_product_id": r[4], "stripe_price_id": r[5],
-                            "price_usd_monthly": r[6], "price_usd_yearly": r[7],
-                            "limits_json": r[8], "is_active": bool(r[9]), "is_public": bool(r[10]),
-                            "sort_order": r[11], "created_at": r[12],
-                        })
-                        for r in rows
-                    ]
+                    row_dicts = self._rows_to_dicts(cur, rows)
+                    # Convert bool fields for SQLite (stored as 0/1)
+                    for rd in row_dicts:
+                        rd["is_active"] = bool(rd.get("is_active"))
+                        rd["is_public"] = bool(rd.get("is_public"))
+                    return [self._plan_row_to_dict(rd) for rd in row_dicts]
         except Exception as exc:
             logger.error(f"AuthnzBillingRepo.list_plans failed: {exc}")
             raise
@@ -105,7 +142,8 @@ class AuthnzBillingRepo:
                     row = await conn.fetchrow(
                         """
                         SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
-                               price_usd_monthly, price_usd_yearly, limits_json, is_active, is_public,
+                               stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
+                               is_public,
                                sort_order, created_at
                         FROM subscription_plans
                         WHERE name = $1
@@ -117,7 +155,8 @@ class AuthnzBillingRepo:
                     cur = await conn.execute(
                         """
                         SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
-                               price_usd_monthly, price_usd_yearly, limits_json, is_active, is_public,
+                               stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
+                               is_public,
                                sort_order, created_at
                         FROM subscription_plans
                         WHERE name = ?
@@ -127,15 +166,92 @@ class AuthnzBillingRepo:
                     row = await cur.fetchone()
                     if not row:
                         return None
-                    return self._plan_row_to_dict({
-                        "id": row[0], "name": row[1], "display_name": row[2], "description": row[3],
-                        "stripe_product_id": row[4], "stripe_price_id": row[5],
-                        "price_usd_monthly": row[6], "price_usd_yearly": row[7],
-                        "limits_json": row[8], "is_active": bool(row[9]), "is_public": bool(row[10]),
-                        "sort_order": row[11], "created_at": row[12],
-                    })
+                    row_dict = self._row_to_dict(cur, row)
+                    row_dict["is_active"] = bool(row_dict.get("is_active"))
+                    row_dict["is_public"] = bool(row_dict.get("is_public"))
+                    return self._plan_row_to_dict(row_dict)
         except Exception as exc:
             logger.error(f"AuthnzBillingRepo.get_plan_by_name failed: {exc}")
+            raise
+
+    async def get_plan_by_stripe_price_id(self, price_id: str) -> Optional[Dict[str, Any]]:
+        """Get a subscription plan by its Stripe price ID."""
+        try:
+            async with self.db_pool.acquire() as conn:
+                if self._is_postgres(conn):
+                    row = await conn.fetchrow(
+                        """
+                        SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
+                               stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
+                               is_public,
+                               sort_order, created_at
+                        FROM subscription_plans
+                        WHERE stripe_price_id = $1 OR stripe_price_id_yearly = $1
+                        """,
+                        price_id,
+                    )
+                    return self._plan_row_to_dict(dict(row)) if row else None
+                else:
+                    cur = await conn.execute(
+                        """
+                        SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
+                               stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
+                               is_public,
+                               sort_order, created_at
+                        FROM subscription_plans
+                        WHERE stripe_price_id = ? OR stripe_price_id_yearly = ?
+                        """,
+                        (price_id, price_id),
+                    )
+                    row = await cur.fetchone()
+                    if not row:
+                        return None
+                    row_dict = self._row_to_dict(cur, row)
+                    row_dict["is_active"] = bool(row_dict.get("is_active"))
+                    row_dict["is_public"] = bool(row_dict.get("is_public"))
+                    return self._plan_row_to_dict(row_dict)
+        except Exception as exc:
+            logger.error(f"AuthnzBillingRepo.get_plan_by_stripe_price_id failed: {exc}")
+            raise
+
+    async def get_plan_by_stripe_product_id(self, product_id: str) -> Optional[Dict[str, Any]]:
+        """Get a subscription plan by its Stripe product ID."""
+        try:
+            async with self.db_pool.acquire() as conn:
+                if self._is_postgres(conn):
+                    row = await conn.fetchrow(
+                        """
+                        SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
+                               stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
+                               is_public,
+                               sort_order, created_at
+                        FROM subscription_plans
+                        WHERE stripe_product_id = $1
+                        """,
+                        product_id,
+                    )
+                    return self._plan_row_to_dict(dict(row)) if row else None
+                else:
+                    cur = await conn.execute(
+                        """
+                        SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
+                               stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
+                               is_public,
+                               sort_order, created_at
+                        FROM subscription_plans
+                        WHERE stripe_product_id = ?
+                        """,
+                        (product_id,),
+                    )
+                    row = await cur.fetchone()
+                    if not row:
+                        return None
+                    row_dict = self._row_to_dict(cur, row)
+                    row_dict["is_active"] = bool(row_dict.get("is_active"))
+                    row_dict["is_public"] = bool(row_dict.get("is_public"))
+                    return self._plan_row_to_dict(row_dict)
+        except Exception as exc:
+            logger.error(f"AuthnzBillingRepo.get_plan_by_stripe_product_id failed: {exc}")
             raise
 
     async def get_plan_by_id(self, plan_id: int) -> Optional[Dict[str, Any]]:
@@ -146,7 +262,8 @@ class AuthnzBillingRepo:
                     row = await conn.fetchrow(
                         """
                         SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
-                               price_usd_monthly, price_usd_yearly, limits_json, is_active, is_public,
+                               stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
+                               is_public,
                                sort_order, created_at
                         FROM subscription_plans WHERE id = $1
                         """,
@@ -157,7 +274,8 @@ class AuthnzBillingRepo:
                     cur = await conn.execute(
                         """
                         SELECT id, name, display_name, description, stripe_product_id, stripe_price_id,
-                               price_usd_monthly, price_usd_yearly, limits_json, is_active, is_public,
+                               stripe_price_id_yearly, price_usd_monthly, price_usd_yearly, limits_json, is_active,
+                               is_public,
                                sort_order, created_at
                         FROM subscription_plans WHERE id = ?
                         """,
@@ -166,13 +284,10 @@ class AuthnzBillingRepo:
                     row = await cur.fetchone()
                     if not row:
                         return None
-                    return self._plan_row_to_dict({
-                        "id": row[0], "name": row[1], "display_name": row[2], "description": row[3],
-                        "stripe_product_id": row[4], "stripe_price_id": row[5],
-                        "price_usd_monthly": row[6], "price_usd_yearly": row[7],
-                        "limits_json": row[8], "is_active": bool(row[9]), "is_public": bool(row[10]),
-                        "sort_order": row[11], "created_at": row[12],
-                    })
+                    row_dict = self._row_to_dict(cur, row)
+                    row_dict["is_active"] = bool(row_dict.get("is_active"))
+                    row_dict["is_public"] = bool(row_dict.get("is_public"))
+                    return self._plan_row_to_dict(row_dict)
         except Exception as exc:
             logger.error(f"AuthnzBillingRepo.get_plan_by_id failed: {exc}")
             raise
@@ -190,6 +305,7 @@ class AuthnzBillingRepo:
                 result["limits"] = {}
         else:
             result["limits"] = {}
+        result["limits"] = self._normalize_storage_limits(result["limits"])
         return result
 
     # =========================================================================
@@ -234,25 +350,7 @@ class AuthnzBillingRepo:
                     row = await cur.fetchone()
                     if not row:
                         return None
-                    return self._subscription_row_to_dict({
-                        "id": row[0],
-                        "org_id": row[1],
-                        "plan_id": row[2],
-                        "stripe_customer_id": row[3],
-                        "stripe_subscription_id": row[4],
-                        "stripe_subscription_status": row[5],
-                        "billing_cycle": row[6],
-                        "current_period_start": row[7],
-                        "current_period_end": row[8],
-                        "status": row[9],
-                        "trial_end": row[10],
-                        "cancel_at_period_end": row[11],
-                        "custom_limits_json": row[12],
-                        "created_at": row[13],
-                        "plan_name": row[14],
-                        "plan_display_name": row[15],
-                        "plan_limits_json": row[16],
-                    })
+                    return self._subscription_row_to_dict(self._row_to_dict(cur, row))
         except Exception as exc:
             logger.error(f"AuthnzBillingRepo.get_org_subscription failed: {exc}")
             raise
@@ -271,7 +369,7 @@ class AuthnzBillingRepo:
         """Create a subscription for an organization."""
         trial_end = None
         if trial_days:
-            trial_end = datetime.utcnow() + timedelta(days=trial_days)
+            trial_end = datetime.now(timezone.utc) + timedelta(days=trial_days)
 
         try:
             async with self.db_pool.transaction() as conn:
@@ -290,7 +388,8 @@ class AuthnzBillingRepo:
                             trial_end = EXCLUDED.trial_end
                         RETURNING id, org_id, plan_id, stripe_customer_id, stripe_subscription_id,
                                   stripe_subscription_status, billing_cycle, current_period_start,
-                                  current_period_end, status, trial_end, custom_limits_json, created_at
+                                  current_period_end, status, trial_end, cancel_at_period_end,
+                                  custom_limits_json, created_at
                         """,
                         org_id, plan_id, stripe_customer_id, stripe_subscription_id,
                         billing_cycle, status, trial_end,
@@ -321,14 +420,7 @@ class AuthnzBillingRepo:
                         (org_id,),
                     )
                     row = await cur.fetchone()
-                    return {
-                        "id": row[0], "org_id": row[1], "plan_id": row[2],
-                        "stripe_customer_id": row[3], "stripe_subscription_id": row[4],
-                        "stripe_subscription_status": row[5], "billing_cycle": row[6],
-                        "current_period_start": row[7], "current_period_end": row[8],
-                        "status": row[9], "trial_end": row[10], "custom_limits_json": row[11],
-                        "created_at": row[12],
-                    }
+                    return self._row_to_dict(cur, row)
         except Exception as exc:
             logger.error(f"AuthnzBillingRepo.create_org_subscription failed: {exc}")
             raise
@@ -355,6 +447,10 @@ class AuthnzBillingRepo:
 
         if not updates:
             return await self.get_org_subscription(org_id)
+
+        # SECURITY: Verify column names are in the allowed whitelist before dynamic SQL
+        # This assertion should never fail since we filtered above, but provides defense-in-depth
+        assert all(k in allowed_fields for k in updates.keys()), "Invalid column name in updates"
 
         try:
             async with self.db_pool.transaction() as conn:
@@ -417,6 +513,7 @@ class AuthnzBillingRepo:
                 result["custom_limits"] = {}
         else:
             result["custom_limits"] = {}
+        result["custom_limits"] = self._normalize_storage_limits(result["custom_limits"])
 
         # Parse plan limits
         if result.get("plan_limits_json"):
@@ -429,6 +526,7 @@ class AuthnzBillingRepo:
                 result["plan_limits"] = {}
         else:
             result["plan_limits"] = {}
+        result["plan_limits"] = self._normalize_storage_limits(result["plan_limits"])
 
         # Merge limits: custom overrides plan
         result["effective_limits"] = {**result["plan_limits"], **result["custom_limits"]}
@@ -482,11 +580,7 @@ class AuthnzBillingRepo:
                         (payment_id,),
                     )
                     row = await cur2.fetchone()
-                    return {
-                        "id": row[0], "org_id": row[1], "stripe_invoice_id": row[2],
-                        "amount_cents": row[3], "currency": row[4], "status": row[5],
-                        "description": row[6], "invoice_pdf_url": row[7], "created_at": row[8],
-                    }
+                    return self._row_to_dict(cur2, row)
         except Exception as exc:
             logger.error(f"AuthnzBillingRepo.add_payment failed: {exc}")
             raise
@@ -536,14 +630,7 @@ class AuthnzBillingRepo:
                         (org_id,),
                     )
                     total_row = await cur2.fetchone()
-                    payments = [
-                        {
-                            "id": r[0], "org_id": r[1], "stripe_invoice_id": r[2],
-                            "amount_cents": r[3], "currency": r[4], "status": r[5],
-                            "description": r[6], "invoice_pdf_url": r[7], "created_at": r[8],
-                        }
-                        for r in rows
-                    ]
+                    payments = self._rows_to_dicts(cur, rows)
                     return payments, int(total_row[0]) if total_row else 0
         except Exception as exc:
             logger.error(f"AuthnzBillingRepo.list_payments failed: {exc}")
@@ -592,11 +679,7 @@ class AuthnzBillingRepo:
                         (log_id,),
                     )
                     row = await cur2.fetchone()
-                    return {
-                        "id": row[0], "org_id": row[1], "user_id": row[2],
-                        "action": row[3], "details": row[4], "ip_address": row[5],
-                        "created_at": row[6],
-                    }
+                    return self._row_to_dict(cur2, row)
         except Exception as exc:
             logger.error(f"AuthnzBillingRepo.log_billing_action failed: {exc}")
             raise
@@ -645,6 +728,46 @@ class AuthnzBillingRepo:
                         return False
         except Exception as exc:
             logger.error(f"AuthnzBillingRepo.record_webhook_event failed: {exc}")
+            raise
+
+    async def try_claim_webhook_event(
+        self,
+        stripe_event_id: str,
+    ) -> bool:
+        """
+        Atomically try to claim a webhook event for processing.
+
+        Uses UPDATE ... WHERE status = 'pending' to ensure only one processor
+        can claim the event, preventing race conditions.
+
+        Returns True if successfully claimed, False if already claimed/processed.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres(conn):
+                    # Atomic claim: only succeeds if status is still 'pending'
+                    result = await conn.execute(
+                        """
+                        UPDATE stripe_webhook_events
+                        SET status = 'processing', processed_at = CURRENT_TIMESTAMP
+                        WHERE stripe_event_id = $1 AND status = 'pending'
+                        """,
+                        stripe_event_id,
+                    )
+                    # PostgreSQL returns "UPDATE N" - extract row count
+                    return result and "UPDATE 1" in result
+                else:
+                    cur = await conn.execute(
+                        """
+                        UPDATE stripe_webhook_events
+                        SET status = 'processing', processed_at = CURRENT_TIMESTAMP
+                        WHERE stripe_event_id = ? AND status = 'pending'
+                        """,
+                        (stripe_event_id,),
+                    )
+                    return cur.rowcount > 0
+        except Exception as exc:
+            logger.error(f"AuthnzBillingRepo.try_claim_webhook_event failed: {exc}")
             raise
 
     async def mark_webhook_processed(
@@ -697,12 +820,11 @@ class AuthnzBillingRepo:
             free_plan = await self.get_plan_by_name("free")
             if free_plan:
                 return free_plan.get("limits", {})
-            # Ultimate fallback
-            return {
-                "storage_gb": 1,
-                "api_calls_day": 100,
-                "llm_tokens_month": 300000,
-                "team_members": 1,
-            }
+            # Ultimate fallback to canonical defaults
+            return get_plan_limits("free")
 
-        return subscription.get("effective_limits", {})
+        plan_name = subscription.get("plan_name", "free")
+        base_limits = get_plan_limits(plan_name)
+        effective_limits = subscription.get("effective_limits", {})
+        # Merge defaults so newly added categories are not silently unlimited.
+        return {**base_limits, **effective_limits}

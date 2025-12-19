@@ -8,13 +8,13 @@ from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as user_handling
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
-def _build_request() -> Request:
+def _build_request(client_ip: str = "127.0.0.1") -> Request:
     scope = {
         "type": "http",
         "method": "GET",
         "path": "/test",
         "headers": [],
-        "client": ("127.0.0.1", 0),
+        "client": (client_ip, 0),
     }
     request = Request(scope)
     return request
@@ -46,6 +46,45 @@ async def test_verify_single_user_api_key_accepts_bearer(monkeypatch):
     # Missing credentials should raise 401.
     with pytest.raises(HTTPException):
         await user_handling.verify_single_user_api_key(request, api_key=None, authorization=None)
+
+@pytest.mark.asyncio
+async def test_authenticate_api_key_user_rejects_disallowed_single_user_ip(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-1234567890")
+    monkeypatch.setenv("SINGLE_USER_ALLOWED_IPS", "203.0.113.10")
+    monkeypatch.setenv("SINGLE_USER_FIXED_ID", "99")
+    reset_settings()
+
+    request = _build_request(client_ip="198.51.100.5")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await user_handling.authenticate_api_key_user(request, "test-api-key-1234567890")
+
+    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+    assert exc_info.value.detail == "Invalid or missing API Key"
+
+    for env_key in ("AUTH_MODE", "SINGLE_USER_API_KEY", "SINGLE_USER_ALLOWED_IPS", "SINGLE_USER_FIXED_ID"):
+        monkeypatch.delenv(env_key, raising=False)
+    reset_settings()
+
+
+@pytest.mark.asyncio
+async def test_authenticate_api_key_user_allows_allowed_single_user_ip(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-1234567890")
+    monkeypatch.setenv("SINGLE_USER_ALLOWED_IPS", "203.0.113.10")
+    monkeypatch.setenv("SINGLE_USER_FIXED_ID", "99")
+    reset_settings()
+
+    request = _build_request(client_ip="203.0.113.10")
+    user = await user_handling.authenticate_api_key_user(request, "test-api-key-1234567890")
+
+    assert user.id == 99
+    assert user.is_admin is True
+
+    for env_key in ("AUTH_MODE", "SINGLE_USER_API_KEY", "SINGLE_USER_ALLOWED_IPS", "SINGLE_USER_FIXED_ID"):
+        monkeypatch.delenv(env_key, raising=False)
+    reset_settings()
 
 
 @pytest.mark.asyncio

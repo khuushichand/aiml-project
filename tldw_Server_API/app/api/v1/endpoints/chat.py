@@ -66,6 +66,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
     DEFAULT_LLM_PROVIDER,
     API_KEYS as SCHEMAS_API_KEYS,
+    get_api_keys,
 )
 from tldw_Server_API.app.core.Chat.chat_orchestrator import (
     chat_api_call as perform_chat_api_call,
@@ -115,6 +116,11 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     execute_non_stream_call,
     queue_is_active,
 )
+from tldw_Server_API.app.core.Chat.prompt_template_manager import (
+    load_template,
+    apply_template_to_string,
+)
+from tldw_Server_API.app.core.Chat.document_generator import DocumentGeneratorService
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
     require_token_scope,
@@ -143,6 +149,12 @@ from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
 )
 from tldw_Server_API.app.core.Chat.validate_dictionary import validate_dictionary as _validate_dictionary
 from . import chat_dictionaries, chat_documents
+from .chat_dictionaries import (
+    add_dictionary_entry,
+    get_chat_dictionary,
+    update_dictionary_entry,
+    list_chat_dictionaries,
+)
 #######################################################################################################################
 #
 # ---------------------------------------------------------------------------
@@ -272,24 +284,32 @@ def _get_active_request_lock() -> asyncio.Lock:
 
 
 async def _increment_active_request(user_id: str) -> int:
-    """Increment the active request counter for a user and return the new count."""
+    """Increment the active request counter for a user and return the new count.
+
+    Note: Uses only asyncio.Lock for synchronization. The threading.Lock
+    (_active_request_guard) is only used for lazy initialization of the
+    per-loop asyncio lock, not for protecting the counter dict operations.
+    This avoids deadlock risk from nested sync/async locking.
+    """
     lock = _get_active_request_lock()
     async with lock:
-        with _active_request_guard:
-            _active_request_counts[user_id] += 1
-            return _active_request_counts[user_id]
+        _active_request_counts[user_id] += 1
+        return _active_request_counts[user_id]
 
 
 async def _decrement_active_request(user_id: str) -> None:
-    """Decrement the active request counter for a user."""
+    """Decrement the active request counter for a user.
+
+    Note: Uses only asyncio.Lock for synchronization. See _increment_active_request
+    for rationale on avoiding nested sync/async locking.
+    """
     lock = _get_active_request_lock()
     async with lock:
-        with _active_request_guard:
-            current = _active_request_counts.get(user_id, 0)
-            if current <= 1:
-                _active_request_counts.pop(user_id, None)
-            else:
-                _active_request_counts[user_id] = current - 1
+        current = _active_request_counts.get(user_id, 0)
+        if current <= 1:
+            _active_request_counts.pop(user_id, None)
+        else:
+            _active_request_counts[user_id] = current - 1
 
 
 async def _maybe_rg_shadow_chat_decision(
@@ -737,7 +757,7 @@ async def _save_message_turn_to_db(
     metrics = get_chat_metrics()
     current_loop = asyncio.get_running_loop()
     role = message_obj.get("role")
-    if role not in ("user", "assistant"):
+    if role not in ("user", "assistant", "tool"):
         logger.warning("Skip DB save: invalid role='%s' for conv=%s", role, conversation_id)
         return None
 
@@ -777,6 +797,17 @@ async def _save_message_turn_to_db(
     serialized_extra: Optional[Dict[str, Any]] = None
     if function_call_raw is not None:
         serialized_extra = {"function_call": _jsonify_metadata_payload(function_call_raw)}
+    tool_call_id_raw = message_obj.get("tool_call_id")
+    if tool_call_id_raw is not None:
+        if serialized_extra is None:
+            serialized_extra = {}
+        serialized_extra["tool_call_id"] = _jsonify_metadata_payload(tool_call_id_raw)
+    if role == "tool":
+        tool_name = message_obj.get("name")
+        if tool_name:
+            if serialized_extra is None:
+                serialized_extra = {}
+            serialized_extra["tool_name"] = _jsonify_metadata_payload(tool_name)
     placeholder_reason: Optional[str] = None
 
     if not text_parts and not images:
@@ -823,9 +854,12 @@ async def _save_message_turn_to_db(
     if not text_parts and normalized_images:
         text_parts = [f"<Image attachment x{len(normalized_images)}>"]
 
+    sender = message_obj.get("name") or role
+    if role == "tool":
+        sender = "tool"
     db_payload = {
         "conversation_id": conversation_id,
-        "sender": message_obj.get("name") or role,
+        "sender": sender,
         "content": "\n".join(text_parts) if text_parts else "",
         "image_data": primary_image_data,
         "image_mime_type": primary_image_mime,
@@ -838,15 +872,34 @@ async def _save_message_turn_to_db(
     try:
         async with metrics.track_database_operation("save_message"):
             if use_transaction:
+                def _persist_with_transaction() -> tuple[Optional[str], int]:
+                    retries = 0
+                    max_retries = 3
+                    while True:
+                        try:
+                            with db.transaction():
+                                return (
+                                    _persist_message_sync(
+                                        db,
+                                        db_payload,
+                                        serialized_tool_calls,
+                                        serialized_extra,
+                                    ),
+                                    retries,
+                                )
+                        except ConflictError:
+                            retries += 1
+                            if retries >= max_retries:
+                                raise
+                            time.sleep(0.1 * (2 ** retries))
+                        except InputError:
+                            raise
+                        except CharactersRAGDBError:
+                            raise
+
                 try:
-                    async with db_transaction(db):
-                        result = _persist_message_sync(
-                            db,
-                            db_payload,
-                            serialized_tool_calls,
-                            serialized_extra,
-                        )
-                    metrics.track_transaction(success=True, retries=0)
+                    result, retries = await current_loop.run_in_executor(None, _persist_with_transaction)
+                    metrics.track_transaction(success=True, retries=retries)
                     metrics.track_message_saved(conversation_id, role)
                     return result
                 except Exception:
@@ -1023,15 +1076,13 @@ async def create_chat_completion(
         logger.debug(f"Usage event logging failed: {_usage_log_err}")
 
     # Start tracking the request
-    # Serialize request once and reuse
-    request_json = json.dumps(request_data.model_dump())
-    request_json_bytes = request_json.encode()
 
     # Resource Governor token reservation handle (endpoint-level). This is used to
     # enforce token budgets with correct per-request units and to commit/refund
     # after the completion is generated.
     _rg_handle_id = None
     _rg_policy_id = None
+    rg_finalized = False
 
     _track_request_cm = metrics.track_request(
         provider=provider,
@@ -1041,9 +1092,6 @@ async def create_chat_completion(
     )
     span = await _track_request_cm.__aenter__()
     try:
-        # Track request size
-        metrics.metrics.request_size_bytes.record(len(request_json_bytes))
-
         # Authentication is enforced via get_request_user dependency (JWT or X-API-KEY).
         # If it fails, FastAPI raises 401 before reaching here. No further checks needed.
 
@@ -1083,271 +1131,6 @@ async def create_chat_completion(
             if request_data.max_tokens is not None:
                 request_data.max_tokens = validate_max_tokens(request_data.max_tokens)
 
-            # Validate overall request size (reuse cached JSON)
-            validate_request_size(request_json)
-
-            # Apply rate limiting.
-            #
-            # When ResourceGovernor is active (via RGSimpleMiddleware), request-level
-            # limits are already enforced at ingress and we prefer RG for token
-            # accounting as well to avoid double enforcement.
-            rate_limiter = get_rate_limiter()
-            # In some test scenarios we patch dependencies with Mocks. Historically we
-            # disabled rate limiting when mocks were detected to simplify unit tests.
-            # However, Chat_NEW integration tests rely on deterministic TEST_MODE rate
-            # limits to validate 429 behavior. So we only bypass the limiter for mocks
-            # when not running in TEST_MODE.
-            try:
-                _is_test_mode = os.getenv("TEST_MODE", "").lower() == "true"
-            except Exception:
-                _is_test_mode = False
-            if not _is_test_mode and (isinstance(chat_db, Mock) or isinstance(perform_chat_api_call, Mock)):
-                rate_limiter = None
-            # Ensure a limiter exists in TEST_MODE even if startup didn't init it
-            if _is_test_mode and rate_limiter is None:
-                try:
-                    from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter, RateLimitConfig
-                    # Passing None lets initialize_rate_limiter read TEST_MODE env overrides
-                    rate_limiter = initialize_rate_limiter()  # type: ignore[arg-type]
-                except Exception:
-                    rate_limiter = None
-            # ResourceGovernor is attached in middleware and the governor/policy_loader
-            # are stored on app.state. Use them when present to enforce tokens with
-            # correct per-request units (and durable tokens/day caps via the ledger).
-            rg_gov = None
-            rg_loader = None
-            if request is not None:
-                try:
-                    rg_gov = getattr(request.app.state, "rg_governor", None)
-                    rg_loader = getattr(request.app.state, "rg_policy_loader", None)
-                except Exception as exc:
-                    logger.debug(
-                        "Chat RG: governor/policy_loader lookup failed; falling back to legacy limiter only: {}",
-                        exc,
-                    )
-                    rg_gov = None
-                    rg_loader = None
-
-            rg_reserved = False
-            if rate_limiter or (rg_gov is not None and rg_loader is not None):
-                active_count = await _increment_active_request(user_id)
-                try:
-                    # Estimate tokens for rate limiting (heuristic).
-                    estimated_tokens = estimate_tokens_from_json(_sanitize_json_for_rate_limit(request_json))
-
-                    # Reserve tokens via ResourceGovernor when available; this is the
-                    # preferred enforcement path once RG is enabled.
-                    if request is not None and rg_gov is not None and rg_loader is not None:
-                        try:
-                            # Derive policy_id from middleware route_map when present.
-                            policy_id = str(
-                                getattr(request.state, "rg_policy_id", None) or "chat.default"
-                            )
-                            _rg_policy_id = policy_id
-
-                            entity = derive_entity_key(request)
-                            try:
-                                entity_scope, entity_value = entity.split(":", 1)
-                            except Exception as exc:
-                                logger.debug(
-                                    "Chat RG: entity split failed, using user fallback: {}",
-                                    exc,
-                                )
-                                entity_scope, entity_value = "user", str(getattr(current_user, "id", "1"))
-
-                            # Best-effort backfill: if a tokens.daily_cap is configured,
-                            # mirror today's legacy llm_usage_log totals into the ledger
-                            # so upgrades preserve in-progress daily caps.
-                            daily_cap = 0
-                            try:
-                                pol = rg_loader.get_policy(policy_id) or {}
-                                daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
-                            except Exception as exc:
-                                logger.debug(
-                                    "Chat RG: tokens.daily_cap lookup failed for policy_id={}: {}",
-                                    policy_id,
-                                    exc,
-                                )
-                                daily_cap = 0
-                            if daily_cap > 0:
-                                # Best-effort helper is idempotent and internally guarded
-                                # by a per-process entity/day set, so hot-path overhead is
-                                # minimal after the first backfill.
-                                try:
-                                    await backfill_legacy_tokens_to_ledger(
-                                        entity_scope=str(entity_scope),
-                                        entity_value=str(entity_value),
-                                    )
-                                except Exception as exc:
-                                    logger.debug(
-                                        "Chat RG: legacy tokens backfill failed for entity_scope={} entity_value={}: {}",
-                                        entity_scope,
-                                        entity_value,
-                                        exc,
-                                    )
-
-                            completion_budget = 0
-                            try:
-                                completion_budget = int(getattr(request_data, "max_tokens", 0) or 0)
-                            except Exception:
-                                completion_budget = 0
-
-                            reserve_units = max(1, int(estimated_tokens or 0) + max(0, completion_budget))
-                            dec, hid = await rg_gov.reserve(
-                                RGRequest(
-                                    entity=entity,
-                                    categories={"tokens": {"units": reserve_units}},
-                                    tags={"policy_id": policy_id, "endpoint": request.url.path},
-                                ),
-                                op_id=request_id,
-                            )
-                            if not bool(getattr(dec, "allowed", False)):
-                                retry_after = int(getattr(dec, "retry_after", None) or 1)
-                                headers = {"Retry-After": str(retry_after)}
-                                try:
-                                    pol = rg_loader.get_policy(policy_id) or {}
-                                    per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
-                                    limit_val = per_min or int((pol.get("tokens") or {}).get("daily_cap") or 0)
-                                    if limit_val:
-                                        headers.update(
-                                            {
-                                                "X-RateLimit-Limit": str(limit_val),
-                                                "X-RateLimit-Remaining": "0",
-                                                "X-RateLimit-Reset": str(retry_after),
-                                            }
-                                        )
-                                        if per_min > 0:
-                                            headers.update(
-                                                {
-                                                    "X-RateLimit-PerMinute-Limit": str(per_min),
-                                                    "X-RateLimit-PerMinute-Remaining": "0",
-                                                    "X-RateLimit-Tokens-Remaining": "0",
-                                                }
-                                            )
-                                except Exception as exc:
-                                    logger.debug(
-                                        "Chat RG: header enrichment from policy failed for policy_id={}: {}",
-                                        policy_id,
-                                        exc,
-                                    )
-                                raise HTTPException(
-                                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                                    detail="Rate limit exceeded",
-                                    headers=headers,
-                                )
-                            _rg_handle_id = hid
-                            rg_reserved = bool(hid)
-                        except HTTPException:
-                            raise
-                        except Exception as rg_exc:
-                            logger.debug(f"RG tokens reserve skipped: {rg_exc}")
-                            rg_reserved = False
-
-                    # In TEST_MODE, avoid cross-test flakiness by scoping limiter to this request
-                    # when no explicit conversation_id is provided. This prevents cumulative
-                    # state from prior tests from causing 429s here, while leaving production
-                    # behavior unchanged.
-                    limiter_conversation_id = request_data.conversation_id
-                    if _is_test_mode and not limiter_conversation_id:
-                        limiter_conversation_id = request_id
-
-                    if rate_limiter and not rg_reserved:
-                        # Heuristic: detect concurrent bursts for this user (TEST_MODE only)
-                        per_user_limit = getattr(getattr(rate_limiter, "config", None), "per_user_rpm", None)
-                        enable_burst_suppression = (
-                            _is_test_mode
-                            and isinstance(per_user_limit, (int, float))
-                            and per_user_limit >= _RECENT_CALLS_MIN_CONCURRENT
-                        )
-                        concurrent_burst = active_count > 1
-                        if enable_burst_suppression and not concurrent_burst:
-                            try:
-                                now_ts = time.time()
-                                dq = _recent_calls_by_user[str(user_id)]
-                                # prune window
-                                while dq and (now_ts - dq[0]) > _RECENT_CALLS_WINDOW_SEC:
-                                    dq.popleft()
-                                dq.append(now_ts)
-                                concurrent_burst = len(dq) >= _RECENT_CALLS_MIN_CONCURRENT
-                            except Exception:
-                                concurrent_burst = False
-
-                        limiter_user_id = user_id
-                        if enable_burst_suppression and concurrent_burst:
-                            try:
-                                limiter_user_id = f"{user_id}:{request_id}"
-                            except Exception:
-                                limiter_user_id = user_id
-
-                        allowed, rate_error = await rate_limiter.check_rate_limit(
-                            user_id=limiter_user_id,
-                            conversation_id=limiter_conversation_id,
-                            estimated_tokens=estimated_tokens,
-                        )
-
-                        # Shadow-mode comparison between legacy limiter and ResourceGovernor (observability-only).
-                        if request is not None:
-                            try:
-                                await _maybe_rg_shadow_chat_decision(
-                                    request=request,
-                                    limiter_user_id=str(limiter_user_id),
-                                    limiter_conversation_id=limiter_conversation_id,
-                                    estimated_tokens=int(estimated_tokens or 0),
-                                    legacy_allowed=bool(allowed),
-                                )
-                            except Exception as exc:  # noqa: BLE001 - defensive: RG shadow must not affect rate limiting
-                                # Shadow path must never affect primary rate-limiting behavior.
-                                logger.debug(
-                                    "RG shadow helper failed; ignoring and continuing: {}",
-                                    exc,
-                                )
-
-                        if not allowed:
-                            metrics.track_rate_limit(user_id)
-                            if audit_service and context:
-                                await audit_service.log_event(
-                                    event_type=AuditEventType.API_RATE_LIMITED,
-                                    context=context,
-                                    action="rate_limit_exceeded",
-                                    metadata={"reason": rate_error},
-                                )
-                            # In TEST_MODE, try a short wait-for-capacity to reduce
-                            # suite-order flakiness in concurrency tests. If still denied,
-                            # surface as 503 (service busy) rather than 429 which those
-                            # tests do not assert on.
-                            if _is_test_mode:
-                                # Only apply wait/503 fallback for global capacity exhaustion;
-                                # keep 429 for per-user/conversation/token limits to satisfy
-                                # deterministic rate-limit tests.
-                                is_global_cap = (rate_error or "").lower().startswith("global rate limit exceeded")
-                                if is_global_cap or concurrent_burst:
-                                    try:
-                                        allowed_after_wait, _ = await rate_limiter.wait_for_capacity(
-                                            user_id=limiter_user_id,
-                                            conversation_id=limiter_conversation_id,
-                                            estimated_tokens=estimated_tokens,
-                                            timeout=5.0,
-                                        )
-                                    except Exception:
-                                        allowed_after_wait = False
-                                    if not allowed_after_wait:
-                                        raise HTTPException(
-                                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                            detail="Service busy. Please retry.",
-                                        )
-                                    # If capacity became available, continue processing
-                                else:
-                                    raise HTTPException(
-                                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                                        detail=rate_error or "Rate limit exceeded",
-                                    )
-                            else:
-                                raise HTTPException(
-                                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                                    detail=rate_error or "Rate limit exceeded",
-                                )
-                finally:
-                    await _decrement_active_request(user_id)
         except ValueError as e:
             logger.warning(f"Input validation error: {e}")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -1425,8 +1208,8 @@ async def create_chat_completion(
                                 inj_mod['action'] = action
                                 inj_mod['category'] = category
                                 inj_mod['pattern'] = matched
-                                if action == 'redact' and isinstance(redacted, str):
-                                    moderated_content_text = redacted
+                                if action == 'redact':
+                                    moderated_content_text = moderation.redact_text(content_text, policy)
                                     inj_mod['redacted'] = True
                                 elif action == 'block':
                                     inj_mod['blocked'] = True
@@ -1522,6 +1305,330 @@ async def create_chat_completion(
                                     request_data.messages.append({'role': 'system', 'content': moderated_content_text, 'name': 'system-command', 'metadata': {'tldw_injection': inj_meta, 'moderation': inj_mod}})
         except Exception as _cmd_err:
             logger.debug(f"Slash command handling skipped due to error: {_cmd_err}")
+
+        # Recompute request payload after slash command injection and revalidate/rate-limit
+        validation_start = time.time()
+        is_valid, error_message = await validate_request_payload(
+            request_data,
+            max_messages=MAX_MESSAGES_PER_REQUEST,
+            max_images=MAX_IMAGES_PER_REQUEST,
+            max_text_length=MAX_TEXT_LENGTH
+        )
+        metrics.metrics.validation_duration.record(time.time() - validation_start)
+
+        if not is_valid:
+            metrics.track_validation_failure("payload_post_injection", error_message)
+            logger.warning(f"Request validation failed after slash command injection: {error_message}")
+            if "too many" in error_message.lower() or "too long" in error_message.lower():
+                raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=error_message)
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_message)
+
+        request_json = json.dumps(request_data.model_dump())
+        request_json_bytes = request_json.encode()
+        metrics.metrics.request_size_bytes.record(len(request_json_bytes))
+
+        try:
+            # Validate overall request size (post-injection JSON)
+            validate_request_size(request_json)
+        except ValueError as e:
+            logger.warning(f"Input validation error: {e}")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+        # Apply rate limiting after slash command mutation so estimates are accurate.
+        #
+        # When ResourceGovernor is active (via RGSimpleMiddleware), request-level
+        # limits are already enforced at ingress and we prefer RG for token
+        # accounting as well to avoid double enforcement.
+        rate_limiter = get_rate_limiter()
+        # In some test scenarios we patch dependencies with Mocks. Historically we
+        # disabled rate limiting when mocks were detected to simplify unit tests.
+        # However, Chat_NEW integration tests rely on deterministic TEST_MODE rate
+        # limits to validate 429 behavior. So we only bypass the limiter for mocks
+        # when not running in TEST_MODE.
+        try:
+            _is_test_mode = _to_bool(os.getenv("TEST_MODE", ""))
+        except Exception:
+            _is_test_mode = False
+        rg_enabled_for_chat = False
+        try:
+            from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag
+
+            rg_enabled_for_chat = bool(_rg_enabled_flag(False))
+        except Exception:
+            rg_enabled_for_chat = False
+
+        if (
+            not _is_test_mode
+            and not rg_enabled_for_chat
+            and (isinstance(chat_db, Mock) or isinstance(perform_chat_api_call, Mock))
+        ):
+            rate_limiter = None
+        # Ensure a limiter exists in TEST_MODE even if startup didn't init it
+        if _is_test_mode and rate_limiter is None:
+            try:
+                from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter, RateLimitConfig
+                # Passing None lets initialize_rate_limiter read TEST_MODE env overrides
+                rate_limiter = initialize_rate_limiter()  # type: ignore[arg-type]
+            except Exception:
+                rate_limiter = None
+        # ResourceGovernor is attached in middleware and the governor/policy_loader
+        # are stored on app.state. Use them when present to enforce tokens with
+        # correct per-request units (and durable tokens/day caps via the ledger).
+        rg_gov = None
+        rg_loader = None
+        rg_active = False
+        if request is not None:
+            try:
+                from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag
+
+                rg_active = bool(_rg_enabled_flag(False))
+            except Exception as exc:
+                logger.debug(
+                    "Chat RG: rg_enabled lookup failed; disabling RG path: {}",
+                    exc,
+                )
+                rg_active = False
+            try:
+                rg_gov = getattr(request.app.state, "rg_governor", None)
+                rg_loader = getattr(request.app.state, "rg_policy_loader", None)
+            except Exception as exc:
+                logger.debug(
+                    "Chat RG: governor/policy_loader lookup failed; falling back to legacy limiter only: {}",
+                    exc,
+                )
+                rg_gov = None
+                rg_loader = None
+
+            if not rg_active:
+                try:
+                    if _is_test_mode and rg_gov is not None and rg_loader is not None:
+                        rg_active = True
+                except Exception:
+                    rg_active = False
+
+        rg_reserved = False
+        if rate_limiter or (rg_active and rg_gov is not None and rg_loader is not None):
+            active_count = await _increment_active_request(user_id)
+            try:
+                # Estimate tokens for rate limiting (heuristic).
+                estimated_tokens = estimate_tokens_from_json(_sanitize_json_for_rate_limit(request_json))
+
+                # Reserve tokens via ResourceGovernor when available; this is the
+                # preferred enforcement path once RG is enabled.
+                if request is not None and rg_active and rg_gov is not None and rg_loader is not None:
+                    try:
+                        # Derive policy_id from middleware route_map when present.
+                        policy_id = str(
+                            getattr(request.state, "rg_policy_id", None) or "chat.default"
+                        )
+                        _rg_policy_id = policy_id
+
+                        entity = derive_entity_key(request)
+                        try:
+                            entity_scope, entity_value = entity.split(":", 1)
+                        except Exception as exc:
+                            logger.debug(
+                                "Chat RG: entity split failed, using user fallback: {}",
+                                exc,
+                            )
+                            entity_scope, entity_value = "user", str(getattr(current_user, "id", "1"))
+
+                        # Best-effort backfill: if a tokens.daily_cap is configured,
+                        # mirror today's legacy llm_usage_log totals into the ledger
+                        # so upgrades preserve in-progress daily caps.
+                        daily_cap = 0
+                        try:
+                            pol = rg_loader.get_policy(policy_id) or {}
+                            daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
+                        except Exception as exc:
+                            logger.debug(
+                                "Chat RG: tokens.daily_cap lookup failed for policy_id={}: {}",
+                                policy_id,
+                                exc,
+                            )
+                            daily_cap = 0
+                        if daily_cap > 0:
+                            # Best-effort helper is idempotent and internally guarded
+                            # by a per-process entity/day set, so hot-path overhead is
+                            # minimal after the first backfill.
+                            try:
+                                await backfill_legacy_tokens_to_ledger(
+                                    entity_scope=str(entity_scope),
+                                    entity_value=str(entity_value),
+                                )
+                            except Exception as exc:
+                                logger.debug(
+                                    "Chat RG: legacy tokens backfill failed for entity_scope={} entity_value={}: {}",
+                                    entity_scope,
+                                    entity_value,
+                                    exc,
+                                )
+
+                        completion_budget = 0
+                        try:
+                            completion_budget = int(getattr(request_data, "max_tokens", 0) or 0)
+                        except Exception:
+                            completion_budget = 0
+
+                        reserve_units = max(1, int(estimated_tokens or 0) + max(0, completion_budget))
+                        dec, hid = await rg_gov.reserve(
+                            RGRequest(
+                                entity=entity,
+                                categories={"tokens": {"units": reserve_units}},
+                                tags={"policy_id": policy_id, "endpoint": request.url.path},
+                            ),
+                            op_id=request_id,
+                        )
+                        if not bool(getattr(dec, "allowed", False)):
+                            retry_after = int(getattr(dec, "retry_after", None) or 1)
+                            detail = f"Rate limit exceeded (ResourceGovernor policy={policy_id})"
+                            if retry_after >= 0:
+                                detail = f"{detail}; retry_after={retry_after}s"
+                            headers = {"Retry-After": str(retry_after)}
+                            try:
+                                pol = rg_loader.get_policy(policy_id) or {}
+                                per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
+                                limit_val = per_min or int((pol.get("tokens") or {}).get("daily_cap") or 0)
+                                if limit_val:
+                                    headers.update(
+                                        {
+                                            "X-RateLimit-Limit": str(limit_val),
+                                            "X-RateLimit-Remaining": "0",
+                                            "X-RateLimit-Reset": str(retry_after),
+                                        }
+                                    )
+                                    if per_min > 0:
+                                        headers.update(
+                                            {
+                                                "X-RateLimit-PerMinute-Limit": str(per_min),
+                                                "X-RateLimit-PerMinute-Remaining": "0",
+                                                "X-RateLimit-Tokens-Remaining": "0",
+                                            }
+                                    )
+                            except Exception as exc:
+                                logger.debug(
+                                    "Chat RG: header enrichment from policy failed for policy_id={}: {}",
+                                    policy_id,
+                                    exc,
+                                )
+                            raise HTTPException(
+                                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail=detail,
+                                headers=headers,
+                            )
+                        _rg_handle_id = hid
+                        rg_reserved = bool(hid)
+                    except HTTPException:
+                        raise
+                    except Exception as rg_exc:
+                        logger.debug(f"RG tokens reserve skipped: {rg_exc}")
+                        rg_reserved = False
+
+                # In TEST_MODE, avoid cross-test flakiness by scoping limiter to this request
+                # when no explicit conversation_id is provided. This prevents cumulative
+                # state from prior tests from causing 429s here, while leaving production
+                # behavior unchanged.
+                limiter_conversation_id = request_data.conversation_id
+                if _is_test_mode and not limiter_conversation_id:
+                    limiter_conversation_id = request_id
+
+                if rate_limiter and not rg_reserved:
+                    # Heuristic: detect concurrent bursts for this user (TEST_MODE only)
+                    per_user_limit = getattr(getattr(rate_limiter, "config", None), "per_user_rpm", None)
+                    enable_burst_suppression = (
+                        _is_test_mode
+                        and isinstance(per_user_limit, (int, float))
+                        and per_user_limit >= _RECENT_CALLS_MIN_CONCURRENT
+                    )
+                    concurrent_burst = active_count > 1
+                    if enable_burst_suppression and not concurrent_burst:
+                        try:
+                            now_ts = time.time()
+                            dq = _recent_calls_by_user[str(user_id)]
+                            # prune window
+                            while dq and (now_ts - dq[0]) > _RECENT_CALLS_WINDOW_SEC:
+                                dq.popleft()
+                            dq.append(now_ts)
+                            concurrent_burst = len(dq) >= _RECENT_CALLS_MIN_CONCURRENT
+                        except Exception:
+                            concurrent_burst = False
+
+                    limiter_user_id = user_id
+                    if enable_burst_suppression and concurrent_burst:
+                        try:
+                            limiter_user_id = f"{user_id}:{request_id}"
+                        except Exception:
+                            limiter_user_id = user_id
+
+                    allowed, rate_error = await rate_limiter.check_rate_limit(
+                        user_id=limiter_user_id,
+                        conversation_id=limiter_conversation_id,
+                        estimated_tokens=estimated_tokens,
+                    )
+
+                    # Shadow-mode comparison between legacy limiter and ResourceGovernor (observability-only).
+                    if request is not None:
+                        try:
+                            await _maybe_rg_shadow_chat_decision(
+                                request=request,
+                                limiter_user_id=str(limiter_user_id),
+                                limiter_conversation_id=limiter_conversation_id,
+                                estimated_tokens=int(estimated_tokens or 0),
+                                legacy_allowed=bool(allowed),
+                            )
+                        except Exception as exc:  # noqa: BLE001 - defensive: RG shadow must not affect rate limiting
+                            # Shadow path must never affect primary rate-limiting behavior.
+                            logger.debug(
+                                "RG shadow helper failed; ignoring and continuing: {}",
+                                exc,
+                            )
+
+                    if not allowed:
+                        metrics.track_rate_limit(user_id)
+                        if audit_service and context:
+                            await audit_service.log_event(
+                                event_type=AuditEventType.API_RATE_LIMITED,
+                                context=context,
+                                action="rate_limit_exceeded",
+                                metadata={"reason": rate_error},
+                            )
+                        # In TEST_MODE, try a short wait-for-capacity to reduce
+                        # suite-order flakiness in concurrency tests. If still denied,
+                        # surface as 503 (service busy) rather than 429 which those
+                        # tests do not assert on.
+                        if _is_test_mode:
+                            # Only apply wait/503 fallback for global capacity exhaustion;
+                            # keep 429 for per-user/conversation/token limits to satisfy
+                            # deterministic rate-limit tests.
+                            is_global_cap = (rate_error or "").lower().startswith("global rate limit exceeded")
+                            if is_global_cap or concurrent_burst:
+                                try:
+                                    allowed_after_wait, _ = await rate_limiter.wait_for_capacity(
+                                        user_id=limiter_user_id,
+                                        conversation_id=limiter_conversation_id,
+                                        estimated_tokens=estimated_tokens,
+                                        timeout=5.0,
+                                    )
+                                except Exception:
+                                    allowed_after_wait = False
+                                if not allowed_after_wait:
+                                    raise HTTPException(
+                                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                        detail="Service busy. Please retry.",
+                                    )
+                                # If capacity became available, continue processing
+                            else:
+                                raise HTTPException(
+                                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                    detail=rate_error or "Rate limit exceeded",
+                                )
+                        else:
+                            raise HTTPException(
+                                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail=rate_error or "Rate limit exceeded",
+                            )
+            finally:
+                await _decrement_active_request(user_id)
 
         # Moderation: apply global/per-user policy to input messages (redact or block)
         try:
@@ -1781,8 +1888,8 @@ async def create_chat_completion(
             # perform an admission check to apply backpressure/fairness.
             if queue is not None:
                 try:
-                    # Estimate tokens for queue gating (reuse serialized JSON size)
-                    est_tokens_for_queue = max(1, len(request_json) // 4)
+                    # Estimate tokens for queue gating (sanitize base64 payloads)
+                    est_tokens_for_queue = _estimate_tokens_for_queue(request_json)
                     # Use user_id for per-client fairness; HIGH priority for streaming
                     priority = RequestPriority.HIGH if bool(request_data.stream) else RequestPriority.NORMAL
                     # Use request_id generated for this call
@@ -1890,9 +1997,12 @@ async def create_chat_completion(
 
                     return _stream_generator()
 
-                prompt_tokens = max(1, len(json.dumps(messages_payload)) // 4)
-                completion_tokens = max(1, len(content) // 4)
-                total_tokens = prompt_tokens + completion_tokens
+                # Token estimation with reasonable caps to prevent overflow
+                # Max tokens capped at 1M to prevent integer overflow issues
+                MAX_TOKEN_CAP = 1_000_000
+                prompt_tokens = min(MAX_TOKEN_CAP, max(1, len(json.dumps(messages_payload)) // 4))
+                completion_tokens = min(MAX_TOKEN_CAP, max(1, len(content) // 4))
+                total_tokens = min(MAX_TOKEN_CAP * 2, prompt_tokens + completion_tokens)
 
                 return {
                     "id": f"mock-{provider}-{uuid.uuid4().hex[:8]}",
@@ -1947,6 +2057,10 @@ async def create_chat_completion(
                         (lambda total: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": int(total)}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
                         if _rg_handle_id else None
                     ),
+                    rg_refund_cb=(
+                        (lambda **_kwargs: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": 0}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
+                        if _rg_handle_id else None
+                    ),
                 )
 
             else: # Non-streaming
@@ -1999,6 +2113,7 @@ async def create_chat_completion(
                         except Exception:
                             actual = None
                         await gov.commit(_rg_handle_id, actuals=actual)
+                        rg_finalized = True
                 except Exception as _rg_commit_err:
                     logger.debug(f"RG tokens commit skipped/failed: {_rg_commit_err}")
                 return JSONResponse(content=encoded_payload)
@@ -2161,6 +2276,32 @@ async def create_chat_completion(
                 getattr(e_chat, 'status_code', 'N/A'),
                 exc_info=True
             )
+            if not is_chat_lib_error and err_status == status.HTTP_500_INTERNAL_SERVER_ERROR:
+                try:
+                    conversation_id_for_error = locals().get("final_conversation_id")
+                    unexpected_error = ChatModuleException(
+                        code=ChatErrorCode.INT_UNEXPECTED_ERROR,
+                        message=f"Unexpected error in chat completion endpoint: {str(e_chat)}",
+                        details={
+                            "error_type": type(e_chat).__name__,
+                            "error_str": str(e_chat),
+                            "request_id": request_id,
+                            "conversation_id": conversation_id_for_error,
+                        },
+                        cause=e_chat,
+                        user_message=(
+                            "An unexpected error occurred. Please try again or contact support "
+                            "if the issue persists."
+                        ),
+                    )
+                    unexpected_error.log(level="critical")
+                    if hasattr(e_chat, "__module__") and "sqlite" not in e_chat.__module__:
+                        logger.critical(
+                            "ALERT: Critical error in chat module - Request ID: {}",
+                            request_id,
+                        )
+                except Exception:
+                    pass
             # Standardize error messages - never expose internal details for 5xx errors
             if err_status < 500:
                 # Client errors can have more detail; ensure non-empty
@@ -2181,41 +2322,16 @@ async def create_chat_completion(
             raise HTTPException(status_code=err_status, detail=client_detail)
 
 
-
-        except Exception as e_final:
-            # Log the full traceback for debugging
-            import traceback
-            logger.error(f"Unexpected error in chat completion: {type(e_final).__name__}: {str(e_final)}")
-            logger.error(f"Full traceback:\n{traceback.format_exc()}")
-
-            # Create a structured error for unexpected exceptions
-            unexpected_error = ChatModuleException(
-                code=ChatErrorCode.INT_UNEXPECTED_ERROR,
-                message=f"Unexpected error in chat completion endpoint: {str(e_final)}",
-                details={
-                    "error_type": type(e_final).__name__,
-                    "error_str": str(e_final),
-                    "request_id": request_id if 'request_id' in locals() else None,
-                    "conversation_id": final_conversation_id if 'final_conversation_id' in locals() else None
-                },
-                cause=e_final,
-                user_message="An unexpected error occurred. Please try again or contact support if the issue persists."
-            )
-            unexpected_error.log(level="critical")
-
-            # Send alert for critical errors
-            if hasattr(e_final, '__module__') and 'sqlite' not in e_final.__module__:
-                # Don't alert for database errors, they're handled separately
-                logger.critical(f"ALERT: Critical error in chat module - Request ID: {request_id if 'request_id' in locals() else 'Not set'}")
-
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An unexpected internal server error occurred."
-            )
-
-
     finally:
         exc_type, exc_value, exc_tb = sys.exc_info()
+        if exc_type is not None and _rg_handle_id and not rg_finalized:
+            try:
+                gov = getattr(request.app.state, "rg_governor", None) if request is not None else None
+                if gov is not None:
+                    await gov.commit(_rg_handle_id, actuals={"tokens": 0})
+                    rg_finalized = True
+            except Exception as _rg_refund_err:
+                logger.debug(f"RG tokens refund skipped/failed: {_rg_refund_err}")
         await _track_request_cm.__aexit__(exc_type, exc_value, exc_tb)
 
 
@@ -2291,6 +2407,15 @@ def _sanitize_json_for_rate_limit(request_json: str) -> str:
         return request_json
 
 
+def _estimate_tokens_for_queue(request_json: str) -> int:
+    """Estimate tokens for queue admission, ignoring base64 payload bulk."""
+    try:
+        sanitized = _sanitize_json_for_rate_limit(request_json)
+        return max(1, len(sanitized) // 4)
+    except Exception:
+        return 1
+
+
 @router.post(
     "/knowledge/save",
     response_model=KnowledgeSaveResponse,
@@ -2314,16 +2439,18 @@ async def save_chat_knowledge(
         if not conversation or conversation.get("deleted"):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
         conv_client_id = conversation.get("client_id")
-        if conv_client_id is None or current_user.id is None:
+        user_id = current_user.id
+        if conv_client_id is None or user_id is None:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
         try:
-            if int(conv_client_id) != int(current_user.id):
+            if int(conv_client_id) != int(user_id):
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Forbidden for this conversation",
-            ) from None
+        except (TypeError, ValueError):
+            if str(conv_client_id) != str(user_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Forbidden for this conversation",
+                ) from None
 
         if payload.message_id:
             message = db.get_message_by_id(payload.message_id)

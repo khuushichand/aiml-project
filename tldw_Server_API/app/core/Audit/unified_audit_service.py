@@ -13,6 +13,17 @@ Features:
 - Risk scoring and anomaly detection
 - Configurable retention and rotation policies
 - Export capabilities for compliance
+
+Environment Variables:
+- AUDIT_HIGH_RISK_SCORE: Threshold for high-risk events (default: 70, range: 0-100)
+- AUDIT_EXPORT_MAX_ROWS: Max rows for non-streaming export (default: 10000)
+- AUDIT_PII_USE_RAG_PATTERNS: Merge PII patterns from RAG module (default: false)
+- AUDIT_PII_PATTERNS: Dict of custom PII regex patterns (via settings)
+- AUDIT_PII_SCAN_FIELDS: Comma-separated list of extra fields to scan for PII
+- AUDIT_ACTION_RISK_BONUS: Dict of action names to risk score bonuses (via settings)
+- AUDIT_HIGH_RISK_OPERATIONS: Comma-separated list of high-risk operation keywords
+- AUDIT_SUSPICIOUS_THRESHOLDS: Dict of threshold overrides (failed_auth, data_export, etc.)
+- TEST_MODE/TLDW_TEST_MODE: Enable test mode (disables background tasks)
 """
 #
 # Imports
@@ -22,7 +33,6 @@ import hashlib
 import json
 import os
 import re
-import sqlite3
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field, is_dataclass
@@ -320,7 +330,9 @@ class PIIDetector:
         "ip_address": r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
         "passport": r"\b[A-Z]{1,2}[0-9]{6,9}\b",
         "driver_license": r"\b[A-Z]{1,2}[\s-]?\d{6,8}\b",
-        "bank_account": r"\b\d{8,17}\b",
+        # Bank account pattern is more specific: requires routing number format or context
+        # US routing (9 digits) + account (8-17 digits) OR account with context keyword
+        "bank_account": r"(?:\b\d{9}[-\s]?\d{8,17}\b|(?:account|acct|routing)[\s#:]*\d{8,17}\b)",
         "iban": r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}(?:[A-Z0-9]?){0,16}\b",
         "api_key": r"\b(?:sk|pk|api[_-]?key)[_-]?[A-Za-z0-9]{32,}\b",
         "jwt_token": r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
@@ -420,12 +432,25 @@ class PIIDetector:
         return value
 
     def redact_obj(self, data: Any, placeholder_format: str = "[{type}_REDACTED]") -> Any:
-        """Recursively redact PII from dict/list structures and strings."""
+        """Recursively redact PII from nested dict/list/tuple/set structures and strings."""
         try:
             if isinstance(data, dict):
                 return {k: self.redact_obj(v, placeholder_format) for k, v in data.items()}
             if isinstance(data, list):
                 return [self.redact_obj(v, placeholder_format) for v in data]
+            if isinstance(data, tuple):
+                return tuple(self.redact_obj(v, placeholder_format) for v in data)
+            if isinstance(data, set):
+                try:
+                    return {self.redact_obj(v, placeholder_format) for v in data}
+                except TypeError:
+                    # Fallback: preserve values in a list when elements become unhashable after redaction.
+                    return [self.redact_obj(v, placeholder_format) for v in data]
+            if isinstance(data, frozenset):
+                try:
+                    return frozenset(self.redact_obj(v, placeholder_format) for v in data)
+                except TypeError:
+                    return [self.redact_obj(v, placeholder_format) for v in data]
             # Strings handled via value redaction; primitives returned as-is
             return self._redact_value(data, placeholder_format)
         except Exception:
@@ -548,6 +573,21 @@ class RiskScorer:
         """Calculate risk score for an event (0-100)"""
         score = 0
 
+        def _safe_int(val: Any, default: int = 0) -> int:
+            try:
+                if val is None or isinstance(val, bool):
+                    return default
+                if isinstance(val, int):
+                    return val
+                if isinstance(val, float):
+                    return int(val)
+                s = str(val).strip()
+                if s == "":
+                    return default
+                return int(s)
+            except Exception:
+                return default
+
         # Event type risk
         if event.event_type in [
             AuditEventType.SECURITY_VIOLATION,
@@ -588,7 +628,8 @@ class RiskScorer:
         if event.timestamp.weekday() >= 5:
             score += 5
 
-        # Multiple consecutive failures (from metadata)
+        # Normalize metadata to dict for risk calculations
+        # Handles dict (normal), str (JSON-serialized), or fallback to empty
         metadata: Dict[str, Any] = {}
         raw_metadata = event.metadata
         if isinstance(raw_metadata, dict):
@@ -599,17 +640,7 @@ class RiskScorer:
                 if isinstance(parsed, dict):
                     metadata = parsed
             except Exception:
-                metadata = {}
-        elif isinstance(raw_metadata, (list, tuple)):
-            try:
-                metadata = dict(raw_metadata)  # type: ignore[arg-type]
-            except Exception:
-                metadata = {}
-        else:
-            try:
-                metadata = dict(raw_metadata)  # type: ignore[arg-type]
-            except Exception:
-                metadata = {}
+                pass  # Keep empty dict
 
         failed_thr = 3
         try:
@@ -617,7 +648,7 @@ class RiskScorer:
             failed_thr = int(v) if not isinstance(v, bool) else 3
         except Exception:
             failed_thr = 3
-        if metadata.get("consecutive_failures", 0) > failed_thr:
+        if _safe_int(metadata.get("consecutive_failures"), 0) > failed_thr:
             score += 20
 
         # Large data operations
@@ -627,7 +658,7 @@ class RiskScorer:
             export_thr = int(v2) if not isinstance(v2, bool) else 1000
         except Exception:
             export_thr = 1000
-        if event.result_count and event.result_count > export_thr:
+        if _safe_int(event.result_count, 0) > export_thr:
             score += 15
 
         # Action-specific adjustments (case-insensitive exact match on action label)
@@ -691,6 +722,19 @@ class UnifiedAuditService:
         self.buffer_size = buffer_size
         self.flush_interval = flush_interval
         self.non_stream_max_rows = DEFAULT_NON_STREAM_MAX_ROWS
+        if max_db_mb is None:
+            try:
+                raw_max = _app_settings.get("AUDIT_MAX_DB_MB", None)
+            except Exception:
+                raw_max = None
+            try:
+                if raw_max is None:
+                    max_db_mb = None
+                else:
+                    s = str(raw_max).strip()
+                    max_db_mb = int(s) if s else None
+            except Exception:
+                max_db_mb = None
         self.max_db_mb = max_db_mb
         self._owner_loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -754,6 +798,7 @@ class UnifiedAuditService:
         # Ad-hoc flush tasks created for high-risk/buffer-full conditions
         # Tracked so they can be awaited during graceful shutdown
         self._flush_futures: Set[asyncio.Task] = set()
+        self._flush_futures_lock = asyncio.Lock()  # Protects _flush_futures set
 
         # Statistics
         self.stats = {
@@ -763,8 +808,15 @@ class UnifiedAuditService:
             "high_risk_events": 0
         }
 
-    async def initialize(self):
-        """Initialize database and start background tasks"""
+    async def initialize(self, *, start_background_tasks: bool = True) -> None:
+        """Initialize database and optionally start background tasks.
+
+        Args:
+            start_background_tasks: When True (default), starts the periodic flush,
+                cleanup, and fallback replay loops (unless running in test mode).
+                Set to False for one-off/ephemeral usage where the caller will
+                explicitly call `flush()` and `stop()`.
+        """
         self._owner_loop = asyncio.get_running_loop()
         await self._init_database()
         # In test mode, avoid opening a persistent pooled connection to prevent
@@ -775,7 +827,7 @@ class UnifiedAuditService:
         # Avoid starting background tasks in test environments where asyncio.sleep
         # may be monkeypatched to return immediately, which would otherwise cause
         # tight loops and starve the event loop.
-        if not self._test_mode:
+        if start_background_tasks and not self._test_mode:
             await self.start_background_tasks()
 
     async def _init_database(self):
@@ -866,9 +918,17 @@ class UnifiedAuditService:
                     total_cost REAL DEFAULT 0.0,
                     total_tokens INTEGER DEFAULT 0,
                     avg_duration_ms REAL,
+                    duration_count INTEGER DEFAULT 0,
                     PRIMARY KEY (date, category)
                 )
             """)
+
+            # Migration: add duration_count column if missing (for existing databases)
+            try:
+                await db.execute("ALTER TABLE audit_daily_stats ADD COLUMN duration_count INTEGER DEFAULT 0")
+            except Exception:
+                # Column already exists
+                pass
 
             await db.commit()
 
@@ -879,18 +939,26 @@ class UnifiedAuditService:
         # here for non-test callers.
         async with self._pool_lock:
             if self._db_pool is None:
-                self._db_pool = await aiosqlite.connect(self.db_path)
+                conn = await aiosqlite.connect(self.db_path)
                 try:
-                    await self._db_pool.execute("PRAGMA journal_mode=WAL;")
-                    await self._db_pool.execute("PRAGMA synchronous=NORMAL;")
-                    await self._db_pool.execute("PRAGMA temp_store=MEMORY;")
-                    await self._db_pool.execute("PRAGMA foreign_keys=ON;")
-                    await self._db_pool.execute("PRAGMA busy_timeout=5000;")
+                    await conn.execute("PRAGMA journal_mode=WAL;")
+                    await conn.execute("PRAGMA synchronous=NORMAL;")
+                    await conn.execute("PRAGMA temp_store=MEMORY;")
+                    await conn.execute("PRAGMA foreign_keys=ON;")
+                    await conn.execute("PRAGMA busy_timeout=5000;")
                     # Return rows as mappings consistently across this service
-                    self._db_pool.row_factory = aiosqlite.Row
-                    await self._db_pool.commit()
+                    conn.row_factory = aiosqlite.Row
+                    await conn.commit()
+                    # Only assign to pool after successful setup
+                    self._db_pool = conn
                 except Exception as e:
+                    # Close connection on failure to avoid resource leak
+                    try:
+                        await conn.close()
+                    except Exception:
+                        pass
                     logger.warning(f"Failed to apply PRAGMAs on pooled audit DB connection: {e}")
+                    raise
         return self._db_pool  # type: ignore[return-value]
 
     async def start_background_tasks(self):
@@ -913,33 +981,58 @@ class UnifiedAuditService:
         # Enforce same-loop shutdown only when the owner loop is still alive.
         if self._owner_loop and (not owner_closed) and current_loop is not self._owner_loop:
             raise RuntimeError("UnifiedAuditService.stop must run on the owner event loop")
-        # Cancel background tasks
-        if self._flush_task:
-            self._flush_task.cancel()
+        def _task_loop(task: asyncio.Task) -> Optional[asyncio.AbstractEventLoop]:
             try:
-                await self._flush_task
-            except asyncio.CancelledError:
+                return task.get_loop()
+            except Exception:
+                return None
+
+        async def _cancel_and_await(task: Optional[asyncio.Task]) -> None:
+            if task is None:
+                return
+            try:
+                task.cancel()
+            except Exception:
                 pass
 
-        if self._cleanup_task:
-            self._cleanup_task.cancel()
-            try:
-                await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
-        if self._replay_task:
-            self._replay_task.cancel()
-            try:
-                await self._replay_task
-            except asyncio.CancelledError:
-                pass
+            task_loop = _task_loop(task)
+            if task_loop is None or task_loop is current_loop:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        # Cancel background tasks (await only when bound to the current loop).
+        await _cancel_and_await(self._flush_task)
+        self._flush_task = None
+        await _cancel_and_await(self._cleanup_task)
+        self._cleanup_task = None
+        await _cancel_and_await(self._replay_task)
+        self._replay_task = None
 
         # Await any outstanding ad-hoc flushes first to avoid contention
-        if self._flush_futures:
-            try:
-                await asyncio.gather(*list(self._flush_futures), return_exceptions=True)
-            finally:
+        futures_snapshot: List[asyncio.Task] = []
+        try:
+            async with self._flush_futures_lock:
+                futures_snapshot = list(self._flush_futures)
                 self._flush_futures.clear()
+        except Exception:
+            futures_snapshot = list(self._flush_futures)
+            self._flush_futures.clear()
+
+        if futures_snapshot:
+            same_loop_futures: List[asyncio.Task] = []
+            for fut in futures_snapshot:
+                fut_loop = _task_loop(fut)
+                if fut_loop is None or fut_loop is current_loop:
+                    same_loop_futures.append(fut)
+                else:
+                    try:
+                        fut.cancel()
+                    except Exception:
+                        pass
+            if same_loop_futures:
+                await asyncio.gather(*same_loop_futures, return_exceptions=True)
 
         # If the owner loop has been closed, a pooled aiosqlite connection created
         # on that loop may not be usable here. Close and recreate on the current loop
@@ -1073,6 +1166,7 @@ class UnifiedAuditService:
         if self.enable_pii_detection:
             # Detect/redact in metadata
             if metadata is not None:
+                normalized_for_detection: Any | None = None
                 try:
                     normalized_for_detection = _normalize_json_value(metadata)
                     metadata_str = json.dumps(normalized_for_detection, ensure_ascii=False)
@@ -1083,13 +1177,13 @@ class UnifiedAuditService:
                     event.pii_detected = True
                     if "pii_detected" not in event.compliance_flags:
                         event.compliance_flags.append("pii_detected")
-                    # Redact PII from metadata preserving structure when possible
-                    if isinstance(metadata, (dict, list, str)):
-                        event.metadata = self.pii_detector.redact_obj(metadata)
+                    # Redact PII from the normalized form to ensure we handle nested
+                    # dataclasses / pydantic models / non-primitive values correctly.
+                    if normalized_for_detection is not None:
+                        event.metadata = self.pii_detector.redact_obj(normalized_for_detection)
                     else:
-                        # For non-JSON-serializable metadata, store a JSON object with redacted text
-                        redacted_str = self.pii_detector.redact(metadata_str)
-                        event.metadata = {"redacted_text": redacted_str}
+                        # For metadata that cannot be normalized, store a JSON object with redacted text.
+                        event.metadata = {"redacted_text": self.pii_detector.redact(metadata_str)}
             # Detect/redact in configured string fields outside metadata
             def _redact_if_needed(val: Optional[str]) -> Optional[str]:
                 if isinstance(val, str) and val:
@@ -1134,11 +1228,9 @@ class UnifiedAuditService:
             self.stats["events_logged"] += 1
 
             # Flush if buffer is full or high-risk event
+            # Task is tracked via _flush_futures in _tracked_flush() for graceful shutdown
             if len(self.event_buffer) >= self.buffer_size or event.risk_score >= HIGH_RISK_SCORE:
-                task = asyncio.create_task(self.flush())
-                # Track and auto-remove on completion
-                self._flush_futures.add(task)
-                task.add_done_callback(lambda t: self._flush_futures.discard(t))
+                asyncio.create_task(self._tracked_flush())
 
         return event.event_id
 
@@ -1165,6 +1257,23 @@ class UnifiedAuditService:
             context=ctx,
             metadata={"username": username},
         )
+
+    async def _tracked_flush(self) -> None:
+        """Flush with proper tracking in _flush_futures for graceful shutdown.
+
+        This wrapper ensures the task is added to and removed from the tracking
+        set under the appropriate lock to avoid race conditions.
+        """
+        task = asyncio.current_task()
+        async with self._flush_futures_lock:
+            if task is not None:
+                self._flush_futures.add(task)
+        try:
+            await self.flush()
+        finally:
+            async with self._flush_futures_lock:
+                if task is not None:
+                    self._flush_futures.discard(task)
 
     async def flush(self):
         """Flush buffered events to database"""
@@ -1318,7 +1427,9 @@ class UnifiedAuditService:
             stats[key]["total"] += 1
             if event.risk_score >= HIGH_RISK_SCORE:
                 stats[key]["high_risk"] += 1
-            if event.result != "success":
+            # Treat only explicit failures/errors as failures; allow non-terminal
+            # statuses like "started" without inflating failure counts.
+            if (event.result or "").lower() in {"failure", "error"}:
                 stats[key]["failed"] += 1
             if event.estimated_cost:
                 stats[key]["cost"] += event.estimated_cost
@@ -1329,30 +1440,38 @@ class UnifiedAuditService:
 
         # Update database
         for (date, category), data in stats.items():
+            duration_count = len(data["durations"])
             avg_duration = (
-                sum(data["durations"]) / len(data["durations"])
-                if data["durations"] else None
+                sum(data["durations"]) / duration_count
+                if duration_count > 0 else None
             )
 
             await db.execute("""
                 INSERT INTO audit_daily_stats (
                     date, category, total_events, high_risk_events,
-                    failed_events, total_cost, total_tokens, avg_duration_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    failed_events, total_cost, total_tokens, avg_duration_ms,
+                    duration_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(date, category) DO UPDATE SET
                     total_events = total_events + excluded.total_events,
                     high_risk_events = high_risk_events + excluded.high_risk_events,
                     failed_events = failed_events + excluded.failed_events,
                     total_cost = total_cost + excluded.total_cost,
                     total_tokens = total_tokens + excluded.total_tokens,
-                    avg_duration_ms = COALESCE(
-                        (avg_duration_ms * total_events + excluded.avg_duration_ms * excluded.total_events)
-                        / (total_events + excluded.total_events),
-                        excluded.avg_duration_ms
-                    )
+                    duration_count = COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0),
+                    avg_duration_ms = CASE
+                        WHEN COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0) = 0 THEN NULL
+                        WHEN COALESCE(duration_count, 0) = 0 THEN excluded.avg_duration_ms
+                        WHEN COALESCE(excluded.duration_count, 0) = 0 THEN avg_duration_ms
+                        ELSE (
+                            COALESCE(avg_duration_ms, 0) * COALESCE(duration_count, 0) +
+                            COALESCE(excluded.avg_duration_ms, 0) * COALESCE(excluded.duration_count, 0)
+                        ) / (COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0))
+                    END
             """, (
                 date, category, data["total"], data["high_risk"],
-                data["failed"], data["cost"], data["tokens"], avg_duration
+                data["failed"], data["cost"], data["tokens"], avg_duration,
+                duration_count
             ))
 
     async def cleanup_old_logs(self):
@@ -1508,6 +1627,35 @@ class UnifiedAuditService:
                 ts = _parse_timestamp(record.get("timestamp"))
                 if ts is None:
                     return None
+
+                # Parse compliance_flags from JSON string (fix for data loss)
+                flags_raw = record.get("compliance_flags")
+                if isinstance(flags_raw, str):
+                    try:
+                        compliance_flags = json.loads(flags_raw)
+                        if not isinstance(compliance_flags, list):
+                            compliance_flags = []
+                    except Exception:
+                        compliance_flags = []
+                elif isinstance(flags_raw, list):
+                    compliance_flags = flags_raw
+                else:
+                    compliance_flags = []
+
+                # Parse metadata from JSON string (fix for data loss)
+                meta_raw = record.get("metadata")
+                if isinstance(meta_raw, str):
+                    try:
+                        metadata = json.loads(meta_raw)
+                        if not isinstance(metadata, dict):
+                            metadata = {}
+                    except Exception:
+                        metadata = {}
+                elif isinstance(meta_raw, dict):
+                    metadata = meta_raw
+                else:
+                    metadata = {}
+
                 return AuditEvent(
                     event_id=str(record.get("event_id") or uuid4()),
                     timestamp=ts,
@@ -1525,8 +1673,8 @@ class UnifiedAuditService:
                     result_count=_safe_int(record.get("result_count")),
                     risk_score=_safe_int(record.get("risk_score"), 0) or 0,
                     pii_detected=bool(record.get("pii_detected") or False),
-                    compliance_flags=[],
-                    metadata={},
+                    compliance_flags=compliance_flags,
+                    metadata=metadata,
                 )
 
             async def _flush_chunk(
@@ -1572,78 +1720,113 @@ class UnifiedAuditService:
                     await _do_write()
                 return len(records_chunk)
 
-            async def _replay_stream(
-                db: aiosqlite.Connection,
-                fb_file,
-                use_db_lock: bool,
-            ) -> int:
-                total_inserted = 0
-                records_chunk: List[Dict[str, Any]] = []
-                stats_events: List[AuditEvent] = []
-
-                while True:
-                    line = await asyncio.to_thread(fb_file.readline)
-                    if not line:
-                        break
-                    try:
-                        data = json.loads(line)
-                    except Exception:
-                        continue
-                    if not isinstance(data, dict):
-                        continue
-                    records_chunk.append(data)
-                    ev = _record_to_event(data)
-                    if ev:
-                        stats_events.append(ev)
-                    if len(records_chunk) >= max_batch:
-                        chunk_records = list(records_chunk)
-                        chunk_events = list(stats_events)
-                        records_chunk.clear()
-                        stats_events.clear()
-                        total_inserted += await _flush_chunk(db, chunk_records, chunk_events, use_db_lock)
-
-                if records_chunk:
-                    total_inserted += await _flush_chunk(
-                        db, list(records_chunk), list(stats_events), use_db_lock
-                    )
-
-                return total_inserted
-
+            temp_path = fb_path.with_suffix(".tmp")
             inserted = 0
             had_error = False
-            fb_file = None
-            try:
-                fb_file = await asyncio.to_thread(lambda: fb_path.open("r", encoding="utf-8"))
-            except Exception as e:
-                logger.error(f"Failed to read audit fallback queue: {e}")
-                return 0
+            wrote_temp = False
+
+            async def _replay_stream(
+                db: aiosqlite.Connection,
+                use_db_lock: bool,
+            ) -> int:
+                """Replay lines in a streaming fashion, rewriting only unprocessed lines."""
+                nonlocal inserted, had_error, wrote_temp
+                records_chunk: List[Dict[str, Any]] = []
+                stats_events: List[AuditEvent] = []
+                lines_chunk: List[str] = []
+
+                try:
+                    with fb_path.open("r", encoding="utf-8") as src, temp_path.open("w", encoding="utf-8") as dst:
+                        for line in src:
+                            if not line:
+                                continue
+                            try:
+                                data = json.loads(line)
+                            except Exception:
+                                continue
+                            if not isinstance(data, dict):
+                                continue
+
+                            records_chunk.append(data)
+                            lines_chunk.append(line)
+                            ev = _record_to_event(data)
+                            if ev:
+                                stats_events.append(ev)
+
+                            if len(records_chunk) >= max_batch:
+                                try:
+                                    count = await _flush_chunk(
+                                        db, list(records_chunk), list(stats_events), use_db_lock
+                                    )
+                                except Exception as exc:
+                                    had_error = True
+                                    dst.writelines(lines_chunk)
+                                    for rest in src:
+                                        dst.write(rest)
+                                    wrote_temp = True
+                                    logger.error(f"Failed to replay audit fallback queue: {exc}")
+                                    break
+                                inserted += count
+                                records_chunk.clear()
+                                stats_events.clear()
+                                lines_chunk.clear()
+
+                        if not had_error and records_chunk:
+                            try:
+                                count = await _flush_chunk(
+                                    db, list(records_chunk), list(stats_events), use_db_lock
+                                )
+                                inserted += count
+                            except Exception as exc:
+                                had_error = True
+                                dst.writelines(lines_chunk)
+                                wrote_temp = True
+                                logger.error(f"Failed to replay audit fallback queue: {exc}")
+
+                except Exception as e:
+                    had_error = True
+                    logger.error(f"Failed to read audit fallback queue: {e}")
+
+                return inserted
 
             try:
                 if self._test_mode:
                     async with aiosqlite.connect(self.db_path) as db:
                         db.row_factory = aiosqlite.Row
-                        inserted = await _replay_stream(db, fb_file, use_db_lock=False)
+                        inserted = await _replay_stream(db, use_db_lock=False)
                 else:
                     db = await self._ensure_db_pool()
-                    inserted = await _replay_stream(db, fb_file, use_db_lock=True)
+                    inserted = await _replay_stream(db, use_db_lock=True)
             except asyncio.CancelledError:
                 had_error = True
                 raise
             except Exception as e:
                 had_error = True
                 logger.error(f"Failed to replay audit fallback queue: {e}")
-            finally:
-                if fb_file:
-                    try:
-                        await asyncio.to_thread(fb_file.close)
-                    except Exception:
-                        pass
 
             if not had_error:
                 try:
-                    fb_path.unlink()
+                    if fb_path.exists():
+                        fb_path.unlink()
                 except Exception:
                     pass
+                try:
+                    if temp_path.exists():
+                        temp_path.unlink()
+                except Exception:
+                    pass
+            else:
+                if wrote_temp and temp_path.exists():
+                    try:
+                        temp_path.replace(fb_path)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        if temp_path.exists():
+                            temp_path.unlink()
+                    except Exception:
+                        pass
 
             if inserted and not had_error:
                 logger.info(f"Replayed {inserted} audit events from fallback queue")
@@ -1841,9 +2024,11 @@ class UnifiedAuditService:
             request_id: Only events for this request
             correlation_id: Only events for this correlation
             min_risk_score: Minimum risk score to include
-            format: 'json' or 'csv'
+            format: 'json', 'jsonl', or 'csv'
             file_path: If provided, write to this path; otherwise return content string
             chunk_size: Batch size when scanning DB
+            stream: When True and file_path is None, return an async generator that yields output incrementally
+            max_rows: Hard cap on rows returned/written
 
         Returns:
             If file_path is None: the exported content as a string
@@ -1875,9 +2060,17 @@ class UnifiedAuditService:
             rows_written = 0
 
             with p.open("w", encoding="utf-8", newline="") as f:
-                writer = None
+                writer = csv.DictWriter(f, fieldnames=CSV_HEADERS, extrasaction="ignore")
+                writer.writeheader()
                 offset = 0
                 while True:
+                    if max_rows is not None:
+                        remaining = max_rows - rows_written
+                        if remaining <= 0:
+                            break
+                        limit = min(chunk_size, remaining)
+                    else:
+                        limit = chunk_size
                     chunk = await self.query_events(
                         start_time=start_time,
                         end_time=end_time,
@@ -1891,20 +2084,19 @@ class UnifiedAuditService:
                         endpoint=endpoint,
                         method=method,
                         min_risk_score=min_risk_score,
-                        limit=chunk_size,
+                        limit=limit,
                         offset=offset,
                     )
                     if not chunk:
                         break
-                    if writer is None:
-                        writer = csv.DictWriter(f, fieldnames=CSV_HEADERS, extrasaction="ignore")
-                        writer.writeheader()
                     for r in chunk:
+                        if max_rows is not None and rows_written >= max_rows:
+                            break
                         writer.writerow(r)
                         rows_written += 1
-                    if len(chunk) < chunk_size:
+                    if len(chunk) < limit or (max_rows is not None and rows_written >= max_rows):
                         break
-                    offset += chunk_size
+                    offset += len(chunk)
             return rows_written
 
         # Streaming CSV directly to the caller (no prefetch) when requested
@@ -1989,6 +2181,8 @@ class UnifiedAuditService:
                         written += 1
                     # backpressure: yield control
                     await asyncio.sleep(0)
+                    if max_rows is not None and written >= max_rows:
+                        break
                     if len(rows) < chunk_size:
                         break
                     offset += chunk_size
@@ -2240,39 +2434,91 @@ class UnifiedAuditService:
             Dictionary with summary stats: high_risk_events, failure_events,
             unique_security_users, top_failing_ips
         """
-        from collections import Counter
-
         start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
-        # Paginate to avoid undercounting busy windows
-        events: List[Dict[str, Any]] = []
-        offset = 0
-        chunk = 5000
-        while True:
-            rows = await self.query_events(
-                start_time=start_time,
-                categories=[AuditEventCategory.SECURITY],
-                limit=chunk,
-                offset=offset,
-            )
-            if not rows:
-                break
-            events.extend(rows)
-            if len(rows) < chunk:
-                break
-            offset += chunk
-        high_risk = sum(1 for e in events if (e.get("risk_score") or 0) >= HIGH_RISK_SCORE)
-        failures = sum(1 for e in events if (e.get("result") or "success") != "success")
-        unique_users = len({e.get("context_user_id") for e in events if e.get("context_user_id")})
-        ip_counts = Counter([e.get("context_ip_address") for e in events if e.get("context_ip_address")])
-        top_ips = [ip for ip, _ in ip_counts.most_common(5)]
+        start_iso = start_time.isoformat()
+        cat = AuditEventCategory.SECURITY.value
 
-        return {
-            "high_risk_events": high_risk,
-            "failure_events": failures,
-            "unique_security_users": unique_users,
-            "top_failing_ips": top_ips,
-            "total_events": len(events),
-        }
+        async def _summarize(db: aiosqlite.Connection) -> Dict[str, Any]:
+            # Total security events in window
+            async with db.execute(
+                "SELECT COUNT(*) FROM audit_events WHERE timestamp >= ? AND category = ?",
+                (start_iso, cat),
+            ) as cur:
+                row = await cur.fetchone()
+                total_events = int(row[0]) if row else 0
+
+            # High-risk security events in window
+            async with db.execute(
+                "SELECT COUNT(*) FROM audit_events WHERE timestamp >= ? AND category = ? AND risk_score >= ?",
+                (start_iso, cat, HIGH_RISK_SCORE),
+            ) as cur:
+                row = await cur.fetchone()
+                high_risk_events = int(row[0]) if row else 0
+
+            # Failures (exclude non-terminal statuses like 'started')
+            async with db.execute(
+                """
+                SELECT COUNT(*)
+                FROM audit_events
+                WHERE timestamp >= ?
+                  AND category = ?
+                  AND LOWER(COALESCE(result, '')) IN ('failure', 'error')
+                """,
+                (start_iso, cat),
+            ) as cur:
+                row = await cur.fetchone()
+                failure_events = int(row[0]) if row else 0
+
+            async with db.execute(
+                """
+                SELECT COUNT(DISTINCT context_user_id)
+                FROM audit_events
+                WHERE timestamp >= ?
+                  AND category = ?
+                  AND context_user_id IS NOT NULL
+                  AND context_user_id != ''
+                """,
+                (start_iso, cat),
+            ) as cur:
+                row = await cur.fetchone()
+                unique_security_users = int(row[0]) if row else 0
+
+            # Top IPs observed for security events
+            top_failing_ips: List[str] = []
+            async with db.execute(
+                """
+                SELECT context_ip_address, COUNT(*) AS cnt
+                FROM audit_events
+                WHERE timestamp >= ?
+                  AND category = ?
+                  AND context_ip_address IS NOT NULL
+                  AND context_ip_address != ''
+                GROUP BY context_ip_address
+                ORDER BY cnt DESC
+                LIMIT 5
+                """,
+                (start_iso, cat),
+            ) as cur:
+                rows = await cur.fetchall()
+                top_failing_ips = [str(r[0]) for r in rows if r and r[0]]
+
+            return {
+                "high_risk_events": high_risk_events,
+                "failure_events": failure_events,
+                "unique_security_users": unique_security_users,
+                "top_failing_ips": top_failing_ips,
+                "total_events": total_events,
+            }
+
+        if self._test_mode:
+            async with aiosqlite.connect(self.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                return await _summarize(db)
+
+        db = await self._ensure_db_pool()
+        # Use the same DB lock as writers to avoid concurrent cursor usage on a single pooled connection.
+        async with self._db_lock:
+            return await _summarize(db)
 
     def decode_row_fields(self, row: Dict[str, Any]) -> Dict[str, Any]:
         """Return a copy of a row dict with JSON fields decoded.

@@ -203,19 +203,7 @@ class Scheduler:
         if existing_task_id:
             return existing_task_id
 
-        # Add to write buffer
-        add_result = self.write_buffer.add(task)
-        try:
-            import inspect
-            if inspect.isawaitable(add_result):
-                task_id = await add_result
-            else:
-                task_id = add_result
-        except TypeError:
-            # Fallback: not awaitable
-            task_id = add_result
-
-        # Dependency validation (moved after adding to buffer)
+        # Dependency validation before buffering to avoid enqueuing invalid tasks
         if depends_on and self.dependency_service:
             # Validate that all dependencies exist in persistent store or are pending in buffer
             missing_deps = await self.dependency_service.validate_dependencies(task)
@@ -235,6 +223,18 @@ class Scheduler:
             except Exception:
                 # If detection can't be completed (e.g., due to buffered tasks), skip here
                 pass
+
+        # Add to write buffer
+        add_result = self.write_buffer.add(task)
+        try:
+            import inspect
+            if inspect.isawaitable(add_result):
+                task_id = await add_result
+            else:
+                task_id = add_result
+        except TypeError:
+            # Fallback: not awaitable
+            task_id = add_result
 
         logger.debug(f"Task {task_id} submitted to queue {task.queue_name}")
         return task_id
@@ -528,7 +528,18 @@ class Scheduler:
     ) -> tuple[Optional[Task], Optional[str]]:
         """Validate inputs and build a Task instance matching single-submit semantics."""
 
-        queue = queue_name or self.config.default_queue_name
+        # Handler validation
+        import re
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", handler or ""):
+            logger.error(f"Invalid handler name format: {handler}")
+            raise ValueError(f"Handler name contains invalid characters: {handler}")
+
+        if handler not in self.registry:
+            logger.error(f"Attempted to submit task with unregistered handler: {handler}")
+            raise ValueError(f"Handler '{handler}' not registered. Available handlers: {self.registry.list_handlers()}")
+
+        handler_meta = self.registry.get_metadata(handler)
+        queue = queue_name or handler_meta.get('queue') or self.config.default_queue_name
 
         # Authorization guard
         if auth_context:
@@ -541,15 +552,6 @@ class Scheduler:
             if not valid:
                 logger.warning(f"Payload validation failed for handler '{handler}': {error}")
                 raise ValueError(f"Payload validation failed: {error}")
-
-        # Handler validation
-        if not handler.replace('_', '').replace('-', '').isalnum():
-            logger.error(f"Invalid handler name format: {handler}")
-            raise ValueError(f"Handler name contains invalid characters: {handler}")
-
-        if handler not in self.registry:
-            logger.error(f"Attempted to submit task with unregistered handler: {handler}")
-            raise ValueError(f"Handler '{handler}' not registered. Available handlers: {self.registry.list_handlers()}")
 
         # Queue validation
         if queue and not queue.replace('_', '').replace('-', '').isalnum():
@@ -620,7 +622,9 @@ class Scheduler:
             queue_name=queue,
             depends_on=depends_on,
             idempotency_key=idempotency_key,
-            metadata=metadata
+            metadata=metadata,
+            max_retries=handler_meta.get('max_retries', self.config.default_max_retries),
+            timeout=handler_meta.get('timeout', self.config.default_task_timeout)
         )
 
         return task, None

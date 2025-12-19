@@ -239,8 +239,15 @@ class MultilingualTokenizer:
         """
         try:
             if tokenizer_name == 'jieba':
-                import jieba
-                return list(jieba.cut(text))
+                try:
+                    import jieba
+                    return list(jieba.cut(text))
+                except ImportError:
+                    logger.warning(
+                        "jieba not available for Chinese tokenization, falling back to character-based. "
+                        "Install with: pip install jieba"
+                    )
+                    return list(text)
 
             elif tokenizer_name == 'fugashi':
                 try:
@@ -248,7 +255,10 @@ class MultilingualTokenizer:
                     tagger = fugashi.Tagger()
                     return [word.surface for word in tagger(text)]
                 except ImportError:
-                    logger.warning("fugashi not available, using character tokenization")
+                    logger.warning(
+                        "fugashi not available for Japanese tokenization, falling back to character-based. "
+                        "Install with: pip install fugashi unidic-lite"
+                    )
                     return list(text)
 
             elif tokenizer_name == 'konlpy':
@@ -257,7 +267,10 @@ class MultilingualTokenizer:
                     okt = Okt()
                     return okt.morphs(text)
                 except ImportError:
-                    logger.warning("konlpy not available, using space tokenization")
+                    logger.warning(
+                        "konlpy not available for Korean tokenization, falling back to space-based. "
+                        "Install with: pip install konlpy"
+                    )
                     return text.split()
 
             elif tokenizer_name == 'pythainlp':
@@ -265,15 +278,21 @@ class MultilingualTokenizer:
                     from pythainlp import word_tokenize
                     return word_tokenize(text)
                 except ImportError:
-                    logger.warning("pythainlp not available, using character tokenization")
+                    logger.warning(
+                        "pythainlp not available for Thai tokenization, falling back to character-based. "
+                        "Install with: pip install pythainlp"
+                    )
                     return list(text)
 
             else:
-                logger.warning(f"Unknown tokenizer: {tokenizer_name}")
+                logger.warning(f"Unknown tokenizer: {tokenizer_name}, falling back to space-based")
                 return text.split()
 
         except Exception as e:
-            logger.error(f"Tokenization error with {tokenizer_name}: {e}")
+            logger.error(
+                f"Tokenization error with {tokenizer_name}: {e}. "
+                f"Falling back to {'space' if ' ' in text else 'character'}-based tokenization."
+            )
             return text.split() if ' ' in text else list(text)
 
     def tokenize_sentences(self, text: str, language: Optional[str] = None) -> List[str]:

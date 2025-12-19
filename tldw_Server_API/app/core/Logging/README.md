@@ -22,7 +22,7 @@
   - Request ID middleware sets/sanitizes `X-Request-ID` and stores `request.state.request_id`: tldw_Server_API/app/core/Security/request_id_middleware.py:34.
 
 - Key Helpers (this module)
-  - `new_request_id()` → random opaque ID (hex): tldw_Server_API/app/core/Logging/log_context.py:31
+  - `new_request_id()` → random opaque ID: tldw_Server_API/app/core/Logging/log_context.py:31
   - `log_context(**fields)` → context manager that contextualizes and returns a bound logger: tldw_Server_API/app/core/Logging/log_context.py:36
   - `ensure_request_id(request)` → fetch or synthesize `request_id`: tldw_Server_API/app/core/Logging/log_context.py:50
   - `ensure_traceparent(request)` → surface `traceparent` header to `request.state.traceparent`: tldw_Server_API/app/core/Logging/log_context.py:73

@@ -30,7 +30,8 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_db_transaction,
     get_password_service_dep,
     get_session_manager_dep,
-    get_storage_service_dep
+    get_storage_service_dep,
+    require_api_key_scope,
 )
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
@@ -250,7 +251,11 @@ async def change_password(
 #
 # API Key Management (per-user)
 
-@router.get("/api-keys", response_model=list[APIKeyMetadata])
+@router.get(
+    "/api-keys",
+    response_model=list[APIKeyMetadata],
+    dependencies=[Depends(require_api_key_scope("read"))],
+)
 async def list_api_keys(
     current_user: Dict[str, Any] = Depends(get_current_active_user)
 ) -> list[APIKeyMetadata]:
@@ -261,7 +266,12 @@ async def list_api_keys(
     return [APIKeyMetadata(**row) for row in rows]
 
 
-@router.post("/api-keys", response_model=APIKeyCreateResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/api-keys",
+    response_model=APIKeyCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_api_key_scope("write"))],
+)
 async def create_api_key(
     request: APIKeyCreateRequest,
     current_user: Dict[str, Any] = Depends(get_current_active_user)
@@ -295,7 +305,12 @@ class SelfVirtualAPIKeyRequest(BaseModel):
     budget_month_usd: Optional[float] = None
 
 
-@router.post("/api-keys/virtual", response_model=APIKeyCreateResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/api-keys/virtual",
+    response_model=APIKeyCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_api_key_scope("write"))],
+)
 async def create_virtual_api_key(
     request: SelfVirtualAPIKeyRequest,
     current_user: Dict[str, Any] = Depends(get_current_active_user)
@@ -320,7 +335,11 @@ async def create_virtual_api_key(
     return APIKeyCreateResponse(**result)
 
 
-@router.post("/api-keys/{key_id}/rotate", response_model=APIKeyCreateResponse)
+@router.post(
+    "/api-keys/{key_id}/rotate",
+    response_model=APIKeyCreateResponse,
+    dependencies=[Depends(require_api_key_scope("write"))],
+)
 async def rotate_api_key(
     key_id: int,
     request: APIKeyRotateRequest,
@@ -336,7 +355,11 @@ async def rotate_api_key(
     return APIKeyCreateResponse(**result)
 
 
-@router.delete("/api-keys/{key_id}", response_model=MessageResponse)
+@router.delete(
+    "/api-keys/{key_id}",
+    response_model=MessageResponse,
+    dependencies=[Depends(require_api_key_scope("write"))],
+)
 async def revoke_api_key(
     key_id: int,
     current_user: Dict[str, Any] = Depends(get_current_active_user)

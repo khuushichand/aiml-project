@@ -10,9 +10,10 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
     verify_api_key,
     create_error_response,
     sanitize_error_message,
+    check_evaluation_rate_limit,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions, require_token_scope
 from tldw_Server_API.app.core.AuthNZ.permissions import EVALS_MANAGE, EVALS_READ
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
@@ -21,6 +22,7 @@ from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     CreateEvaluationRequest, UpdateEvaluationRequest, EvaluationResponse,
     EvaluationListResponse, RunResponse, RunListResponse,
+    DatasetOverride,
     
 )
 from pydantic import BaseModel, Field
@@ -34,6 +36,7 @@ class CreateRunSimpleRequest(BaseModel):
     """
     model_config = ConfigDict(extra='forbid')
     target_model: Optional[str] = Field(default=None, description="Model to evaluate")
+    dataset_override: Optional[DatasetOverride] = Field(default=None, description="Override dataset for this run")
     config: Dict[str, Any] = Field(default_factory=dict, description="Run configuration (free-form)")
     webhook_url: Optional[str] = Field(default=None, description="Optional webhook URL for run events")
 
@@ -72,7 +75,7 @@ async def create_evaluation(
                                 response.headers["X-Idempotent-Replay"] = "true"
                                 response.headers["Idempotency-Key"] = idempotency_key
                         except Exception as e:
-                            logger.debug(f"evaluations_crud: failed to load eval metadata for {row.get('id') if isinstance(row, dict) else 'row'}: {e}")
+                            logger.debug(f"evaluations_crud: failed to set idempotency headers for {existing_id}: {e}")
                         return EvaluationResponse(**existing)
             except Exception as e:
                 logger.debug(f"evaluations_crud: error during pagination counting: {e}")
@@ -239,27 +242,62 @@ async def delete_evaluation(
     "/{eval_id}/runs",
     response_model=RunResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(require_permissions(EVALS_MANAGE))],
+    dependencies=[
+        Depends(require_permissions(EVALS_MANAGE)),
+        Depends(check_evaluation_rate_limit),
+        Depends(require_token_scope(
+            "workflows",
+            require_if_present=True,
+            require_schedule_match=False,
+            allow_admin_bypass=True,
+            endpoint_id="evals.create_run",
+            count_as="run",
+        )),
+    ],
 )
 async def create_run(
     eval_id: str,
     request: CreateRunSimpleRequest,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_request_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    response: Response = None,
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
+        if idempotency_key:
+            try:
+                existing_id = svc.db.lookup_idempotency("run", idempotency_key, user_id)
+                if existing_id:
+                    existing = await svc.get_run(existing_id)
+                    if existing:
+                        try:
+                            if response is not None:
+                                response.headers["X-Idempotent-Replay"] = "true"
+                                response.headers["Idempotency-Key"] = idempotency_key
+                        except Exception:
+                            pass
+                        return RunResponse(**existing)
+            except Exception:
+                pass
         target_model = request.target_model
         # Allow free-form config; convert Pydantic models if provided in future
         config = model_dump_compat(request.config) if hasattr(request.config, 'model_dump') else (request.config or {})
+        dataset_override = model_dump_compat(request.dataset_override) if request.dataset_override else None
         webhook_url = request.webhook_url
         run = await svc.create_run(
             eval_id=eval_id,
             target_model=target_model,
             config=config,
+            dataset_override=dataset_override,
             webhook_url=webhook_url,
             created_by=user_id,
         )
+        try:
+            if idempotency_key and run.get("id"):
+                svc.db.record_idempotency("run", idempotency_key, run["id"], user_id)
+        except Exception:
+            pass
         return RunResponse(**run)
     except HTTPException:
         raise

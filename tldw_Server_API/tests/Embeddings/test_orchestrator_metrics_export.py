@@ -64,7 +64,7 @@ def test_sse_disconnect_increments_counter(disable_heavy_startup, redis_client, 
 
     # Run SSE endpoint to get StreamingResponse; then consume once and close
     async def _run_once_and_close():
-        resp = await orchestrator_events(current_user=admin)
+        resp = await orchestrator_events(_current_user=admin)
         agen = resp.body_iterator
         # consume one chunk then close to trigger finally{}
         try:

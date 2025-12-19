@@ -170,7 +170,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
                             fid2 = str(f.get("id")) if f.get("id") else None
                             if fid2:
                                 queue.append(fid2)
-                    if not recursive or not cursor:
+                    if not cursor:
                         break
         elif provider == "notion":
             typ = str(src.get("type"))
@@ -204,6 +204,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
     from fnmatch import fnmatch
     from tldw_Server_API.app.core.External_Sources.policy import is_file_type_allowed
     allowed_export_formats = [str(f).lower() for f in (policy.get("allowed_export_formats") or [])]
+    allowed_export_set = set(allowed_export_formats)
     allowed_file_types = [str(t).lower() for t in (policy.get("allowed_file_types") or [])]
     max_file_size_mb = int(policy.get("max_file_size_mb") or 0)
     max_bytes = max_file_size_mb * 1024 * 1024 if max_file_size_mb > 0 else None
@@ -253,7 +254,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
         if provider == "drive" and (mime or "").startswith("application/vnd.google-apps."):
             override_key = mime or ""
             ov = export_overrides.get(override_key) or export_overrides.get(override_key.split(".")[-1])
-            if ov in {"pdf", "txt", "md"}:
+            if ov in {"pdf", "txt", "md"} and ov in allowed_export_set:
                 export_mime = "application/pdf" if ov == "pdf" else "text/plain"
             else:
                 if mime == "application/vnd.google-apps.presentation":
@@ -302,6 +303,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
         # Ingest minimal record
         title = name
         url = f"{provider}://{fid}"
+        ingested = False
         try:
             mid, m_uuid, msg = mdb.add_media_with_keywords(
                 url=url,
@@ -312,10 +314,12 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
                 overwrite=False,
             )
             processed += 1
+            ingested = True
         except Exception as e:
             logger.warning(f"add_media_with_keywords failed: {e}")
-        # Record ingestion cache
-        async with pool.transaction() as db:
-            await record_ingested_item(db, source_id=source_id, provider=provider, external_id=fid, name=name, mime=mime, size=size, version=version, modified_at=modified_at, content_hash=content_hash)
+        if ingested:
+            # Record ingestion cache
+            async with pool.transaction() as db:
+                await record_ingested_item(db, source_id=source_id, provider=provider, external_id=fid, name=name, mime=mime, size=size, version=version, modified_at=modified_at, content_hash=content_hash)
     # Complete job
     jm.complete_job(jid, result={"processed": processed, "total": total}, worker_id=worker_id, lease_id=lease_id, completion_token=lease_id)

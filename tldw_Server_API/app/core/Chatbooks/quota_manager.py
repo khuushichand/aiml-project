@@ -8,13 +8,31 @@ Quota Manager for Chatbook Operations
 Manages user quotas for storage, export/import operations, and rate limits.
 """
 
-from datetime import datetime, timedelta
+import sys
+from datetime import datetime, timedelta, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
 
+# Sentinel value for unlimited quotas (avoids arithmetic overflow issues with sys.maxsize)
+UNLIMITED_QUOTA = -1
+
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+
+
+class UserTier(str, Enum):
+    """User subscription tiers."""
+    FREE = "free"
+    PREMIUM = "premium"
+    ENTERPRISE = "enterprise"
+
+
+class OperationType(str, Enum):
+    """Types of quota-tracked operations."""
+    EXPORT = "export"
+    IMPORT = "import"
 
 
 class QuotaManager:
@@ -40,6 +58,9 @@ class QuotaManager:
         'max_chatbooks': 200
     }
 
+    # Valid user tiers for validation
+    VALID_TIERS = {UserTier.FREE.value, UserTier.PREMIUM.value, UserTier.ENTERPRISE.value}
+
     def __init__(self, user_id: str, user_tier: str = 'free', db: Optional[Any] = None):
         """
         Initialize quota manager for a user.
@@ -47,28 +68,34 @@ class QuotaManager:
         Args:
             user_id: User identifier
             user_tier: User tier (free, premium, enterprise)
+            db: Optional database handle for persistent quota checks
         """
         self.user_id = user_id
-        self.user_tier = user_tier
-        self.quotas = self._get_quotas_for_tier(user_tier)
+        # Validate and normalize user_tier
+        normalized_tier = user_tier.lower() if isinstance(user_tier, str) else 'free'
+        if normalized_tier not in self.VALID_TIERS:
+            logger.warning(f"Invalid user tier '{user_tier}' for user {user_id}, defaulting to 'free'")
+            normalized_tier = UserTier.FREE.value
+        self.user_tier = normalized_tier
+        self.quotas = self._get_quotas_for_tier(normalized_tier)
         self.db = db  # Optional DB handle for persistent quota checks
 
         # Usage tracking (in production, use database)
-        self.usage_cache: Dict[str, any] = {}
+        self.usage_cache: Dict[str, Any] = {}
 
     def _get_quotas_for_tier(self, tier: str) -> Dict[str, int]:
         """Get quota limits based on user tier."""
         if tier == 'premium':
             return self.PREMIUM_QUOTAS.copy()
         elif tier == 'enterprise':
-            # Enterprise users get unlimited quotas
+            # Enterprise users get effectively unlimited quotas (using sentinel value)
             return {
-                'max_storage_mb': float('inf'),
-                'max_exports_per_day': float('inf'),
-                'max_imports_per_day': float('inf'),
+                'max_storage_mb': UNLIMITED_QUOTA,  # -1 means unlimited
+                'max_exports_per_day': UNLIMITED_QUOTA,
+                'max_imports_per_day': UNLIMITED_QUOTA,
                 'max_file_size_mb': 1000,
                 'max_concurrent_jobs': 10,
-                'max_chatbooks': float('inf')
+                'max_chatbooks': UNLIMITED_QUOTA
             }
         else:
             return self.DEFAULT_QUOTAS.copy()
@@ -83,6 +110,10 @@ class QuotaManager:
         Returns:
             Tuple of (allowed, message)
         """
+        # Unlimited quota check
+        if self.quotas['max_storage_mb'] == UNLIMITED_QUOTA:
+            return True, "Storage quota OK (unlimited)"
+
         current_usage = await self._get_current_storage_usage()
         max_bytes = self.quotas['max_storage_mb'] * 1024 * 1024
 
@@ -99,6 +130,10 @@ class QuotaManager:
         Returns:
             Tuple of (allowed, message)
         """
+        # Unlimited quota check
+        if self.quotas['max_exports_per_day'] == UNLIMITED_QUOTA:
+            return True, "Export quota OK (unlimited)"
+
         exports_today = await self._get_operations_count_today('export')
 
         if exports_today >= self.quotas['max_exports_per_day']:
@@ -113,6 +148,10 @@ class QuotaManager:
         Returns:
             Tuple of (allowed, message)
         """
+        # Unlimited quota check
+        if self.quotas['max_imports_per_day'] == UNLIMITED_QUOTA:
+            return True, "Import quota OK (unlimited)"
+
         imports_today = await self._get_operations_count_today('import')
 
         if imports_today >= self.quotas['max_imports_per_day']:
@@ -162,7 +201,7 @@ class QuotaManager:
         # In production, this would update database
         logger.info(f"Recording {operation_type} operation for user {self.user_id} ({size_bytes} bytes)")
 
-    async def get_usage_summary(self) -> Dict[str, any]:
+    async def get_usage_summary(self) -> Dict[str, Any]:
         """
         Get current usage summary for the user.
 
@@ -174,19 +213,39 @@ class QuotaManager:
         imports_today = await self._get_operations_count_today('import')
         active_jobs = await self._get_active_jobs_count()
 
+        # Calculate storage percentage safely, handling unlimited quotas
+        max_storage_mb = self.quotas['max_storage_mb']
+        if max_storage_mb == UNLIMITED_QUOTA:
+            storage_percentage = 0.0  # Unlimited means 0% used
+            storage_limit_display = "unlimited"
+        elif max_storage_mb <= 0:
+            storage_percentage = 0.0  # Guard against division by zero
+            storage_limit_display = max_storage_mb
+        else:
+            storage_percentage = (storage_used / (max_storage_mb * 1024 * 1024)) * 100
+            storage_limit_display = max_storage_mb
+
+        # Format limits for display (handle unlimited sentinel)
+        exports_limit = self.quotas['max_exports_per_day']
+        imports_limit = self.quotas['max_imports_per_day']
+        chatbooks_limit = self.quotas.get('max_chatbooks', 50)
+
         return {
             'storage': {
                 'used_mb': storage_used / (1024 * 1024),
-                'limit_mb': self.quotas['max_storage_mb'],
-                'percentage': (storage_used / (self.quotas['max_storage_mb'] * 1024 * 1024)) * 100
+                'limit_mb': storage_limit_display,
+                'percentage': storage_percentage,
+                'unlimited': max_storage_mb == UNLIMITED_QUOTA
             },
             'exports': {
                 'today': exports_today,
-                'limit': self.quotas['max_exports_per_day']
+                'limit': "unlimited" if exports_limit == UNLIMITED_QUOTA else exports_limit,
+                'unlimited': exports_limit == UNLIMITED_QUOTA
             },
             'imports': {
                 'today': imports_today,
-                'limit': self.quotas['max_imports_per_day']
+                'limit': "unlimited" if imports_limit == UNLIMITED_QUOTA else imports_limit,
+                'unlimited': imports_limit == UNLIMITED_QUOTA
             },
             'jobs': {
                 'active': active_jobs,
@@ -225,12 +284,26 @@ class QuotaManager:
             return 0
 
     async def _get_operations_count_today(self, operation_type: str) -> int:
-        """Get count of operations performed today."""
+        """Get count of operations performed today.
+
+        Args:
+            operation_type: Type of operation ('export' or 'import')
+
+        Returns:
+            Count of operations performed today
+        """
+        # Validate operation_type
+        valid_operations = {OperationType.EXPORT.value, OperationType.IMPORT.value}
+        if operation_type not in valid_operations:
+            logger.warning(f"Invalid operation_type '{operation_type}', returning 0")
+            return 0
+
         # Prefer database-backed counts when available
         try:
             if self.db is not None and hasattr(self.db, 'execute_query'):
-                start = datetime.now().date().isoformat()
-                if operation_type == 'export':
+                # Use UTC for consistent timezone-aware date filtering
+                start = datetime.now(timezone.utc).date().isoformat()
+                if operation_type == OperationType.EXPORT.value:
                     # Count exports created today
                     cursor = self.db.execute_query(
                         "SELECT COUNT(1) as c FROM export_jobs WHERE user_id = ? AND created_at >= ?",

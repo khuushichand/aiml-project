@@ -44,6 +44,7 @@ from ..schemas.chatbook_schemas import (
     ListExportJobsResponse,
     ListImportJobsResponse,
     CleanupExpiredExportsResponse,
+    CancelJobResponse,
     ChatbookErrorResponse,
     ChatbookManifestResponse,
     ChatbookVersion as SchemaChatbookVersion
@@ -53,6 +54,56 @@ router = APIRouter(prefix="/chatbooks", tags=["chatbooks"])
 
 # Use central limiter instance
 from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
+
+
+def _setup_secure_temp_directory(user_id: str) -> Path:
+    """
+    Set up a secure temporary directory for file uploads.
+
+    This function creates a per-user temporary directory with proper security
+    checks to prevent path traversal and symlink attacks.
+
+    Args:
+        user_id: The user identifier (will be hashed for directory name)
+
+    Returns:
+        Path to the secure user-specific temporary directory
+
+    Raises:
+        HTTPException: If directory setup fails or security checks fail
+    """
+    import tempfile
+    import os as _os
+
+    base_temp = Path(tempfile.gettempdir()).resolve(strict=False)
+
+    # Use SHA256 hash of user_id for directory naming (collision-resistant, always safe)
+    safe_user_id = hashlib.sha256(str(user_id).encode('utf-8')).hexdigest()
+    if not safe_user_id:
+        raise HTTPException(status_code=400, detail="Invalid user id for path")
+
+    # Establish a fixed uploads root under the system temp and ensure it's not a symlink
+    uploads_root = base_temp / "tldw_uploads"
+    uploads_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if uploads_root.is_symlink():
+        raise HTTPException(status_code=400, detail="Insecure temporary upload directory")
+    uploads_root_resolved = uploads_root.resolve(strict=True)
+
+    # Verify uploads_root is within the expected base temp directory using commonpath
+    base_temp_resolved = base_temp.resolve(strict=False)
+    if _os.path.commonpath([str(uploads_root_resolved), str(base_temp_resolved)]) != str(base_temp_resolved):
+        raise HTTPException(status_code=400, detail="Invalid temporary directory base")
+
+    # Create and validate per-user directory
+    temp_dir = uploads_root_resolved / safe_user_id
+    temp_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if temp_dir.is_symlink():
+        raise HTTPException(status_code=400, detail="Insecure user temporary directory")
+    temp_dir = temp_dir.resolve(strict=True)
+    if _os.path.commonpath([str(temp_dir), str(uploads_root_resolved)]) != str(uploads_root_resolved):
+        raise HTTPException(status_code=400, detail="Invalid temporary directory path")
+
+    return temp_dir
 
 
 def get_chatbook_service(
@@ -67,7 +118,7 @@ def get_chatbook_service(
 @router.get("/health", summary="Chatbooks service health")
 async def chatbooks_health():
     """Lightweight health endpoint for the Chatbooks subsystem."""
-    from datetime import datetime
+    from datetime import datetime, timezone
     from pathlib import Path
     import os
     import tempfile
@@ -75,7 +126,7 @@ async def chatbooks_health():
     health = {
         "service": "chatbooks",
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "components": {}
     }
 
@@ -212,8 +263,8 @@ async def create_chatbook(
                             "tags": request_data.tags,
                         },
                     )
-                except Exception:
-                    pass
+                except Exception as audit_err:
+                    logger.warning(f"Failed to log audit event for export start: {audit_err}")
 
                 return CreateChatbookResponse(
                     success=True,
@@ -223,7 +274,7 @@ async def create_chatbook(
             else:
                 # Sync mode - create a completed export job with a UUID as job_id
                 import uuid
-                from datetime import datetime, timedelta
+                from datetime import datetime, timedelta, timezone
 
                 job_id = str(uuid.uuid4())
                 file_path = Path(result)
@@ -236,7 +287,8 @@ async def create_chatbook(
 
                 # Expiry and signed download URL per configuration
                 ttl_seconds = int(os.getenv("CHATBOOKS_URL_TTL_SECONDS", "86400") or "86400")
-                expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
+                now_utc = datetime.now(timezone.utc)
+                expires_at = now_utc + timedelta(seconds=ttl_seconds)
                 download_url = service._build_download_url(job_id, expires_at)
 
                 # Persist the completed job so the download endpoint can serve it
@@ -246,9 +298,9 @@ async def create_chatbook(
                     status=ExportStatus.COMPLETED,
                     chatbook_name=request_data.name,
                     output_path=str(file_path),
-                    created_at=datetime.utcnow(),
-                    started_at=datetime.utcnow(),
-                    completed_at=datetime.utcnow(),
+                    created_at=now_utc,
+                    started_at=now_utc,
+                    completed_at=now_utc,
                     error_message=None,
                     progress_percentage=100,
                     total_items=0,
@@ -279,8 +331,8 @@ async def create_chatbook(
                         action="chatbook_export_completed_sync",
                         metadata={"filename": file_path.name if file_path else None, "file_size": file_size},
                     )
-                except Exception:
-                    pass
+                except Exception as audit_err:
+                    logger.warning(f"Failed to log audit event for export completion: {audit_err}")
 
                 return CreateChatbookResponse(
                     success=True,
@@ -332,6 +384,7 @@ async def import_chatbook(
     Returns:
         ImportChatbookResponse with job ID (async) or import results (sync)
     """
+    temp_file: Optional[Path] = None  # Initialize for proper cleanup in finally
     try:
         # Initialize quota manager (DB-backed)
         quota_manager = QuotaManager(str(user.id), getattr(user, 'tier', 'free'), db=service.db)
@@ -366,42 +419,9 @@ async def import_chatbook(
             raise HTTPException(status_code=413, detail=message)
 
         # Save uploaded file to secure temp location with sanitized name
-        import tempfile
-        base_temp = Path(tempfile.gettempdir()).resolve(strict=False)
-        # Sanitize user.id to avoid path traversal and unsafe values
-        import re
-        user_id_str = str(user.id)
-        # Use a SHA256 hash of the user ID string for directory naming (hex digest, 64 chars, always safe)
-        safe_user_id = hashlib.sha256(user_id_str.encode('utf-8')).hexdigest()
-        # (No further sanitization/extremely robust to any user input)
-        # (Length always fixed at 64 characters)
-        # (If someone tries an empty string, hexdigest of empty string is safe but optionally can check)
-        if not safe_user_id:
-            raise HTTPException(status_code=400, detail="Invalid user id for path")
+        temp_dir = _setup_secure_temp_directory(str(user.id))
 
-        # Establish a fixed uploads root under the system temp and ensure it's not a symlink
-        uploads_root = base_temp / "tldw_uploads"
-        uploads_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if uploads_root.is_symlink():
-            raise HTTPException(status_code=400, detail="Insecure temporary upload directory")
-        uploads_root_resolved = uploads_root.resolve(strict=True)
-
-        # Verify uploads_root is within the expected base temp directory using commonpath
-        base_temp_resolved = base_temp.resolve(strict=False)
-        import os as _os
-        if _os.path.commonpath([str(uploads_root_resolved), str(base_temp_resolved)]) != str(base_temp_resolved):
-            raise HTTPException(status_code=400, detail="Invalid temporary directory base")
-
-        # Create and validate per-user directory
-        temp_dir = uploads_root_resolved / safe_user_id
-        temp_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if temp_dir.is_symlink():
-            raise HTTPException(status_code=400, detail="Insecure user temporary directory")
-        temp_dir = temp_dir.resolve(strict=True)
-        if _os.path.commonpath([str(temp_dir), str(uploads_root_resolved)]) != str(uploads_root_resolved):
-            raise HTTPException(status_code=400, detail="Invalid temporary directory path")
-
-        # Build the destination file path without resolving the file itself
+        # Build the destination file path
         temp_file = temp_dir / f"import_{safe_filename}"
         if temp_file.parent != temp_dir:
             raise HTTPException(status_code=400, detail="Invalid file path")
@@ -462,8 +482,8 @@ async def import_chatbook(
                         action="chatbook_import_started",
                         metadata={"filename": file.filename},
                     )
-                except Exception:
-                    pass
+                except Exception as audit_err:
+                    logger.warning(f"Failed to log audit event for import start: {audit_err}")
                 return ImportChatbookResponse(
                     success=True,
                     message=message,
@@ -485,8 +505,8 @@ async def import_chatbook(
                         action="chatbook_import_completed_sync",
                         metadata={"filename": file.filename},
                     )
-                except Exception:
-                    pass
+                except Exception as audit_err:
+                    logger.warning(f"Failed to log audit event for import completion: {audit_err}")
                 warnings_out = result if isinstance(result, list) else None
                 return ImportChatbookResponse(
                     success=True,
@@ -505,15 +525,15 @@ async def import_chatbook(
         raise HTTPException(status_code=500, detail="An error occurred while importing the chatbook")
     finally:
         # Cleanup uploaded file if not async
-        if 'temp_file' in locals() and not import_request.async_mode and temp_file.exists():
+        if temp_file is not None and not import_request.async_mode and temp_file.exists():
             try:
                 temp_file.unlink()
             except Exception as e:
                 logger.warning(f"Cleanup of temp import file failed: path={temp_file}, user={user.id}, error={e}")
-            try:
-                increment_counter("app_warning_events_total", labels={"component": "chatbooks", "event": "import_cleanup_failed"})
-            except Exception as m_err:
-                logger.debug(f"metrics increment failed (chatbooks import_cleanup_failed): error={m_err}")
+                try:
+                    increment_counter("app_warning_events_total", labels={"component": "chatbooks", "event": "import_cleanup_failed"})
+                except Exception as m_err:
+                    logger.debug(f"metrics increment failed (chatbooks import_cleanup_failed): error={m_err}")
 
 
 @router.post("/preview", response_model=PreviewChatbookResponse)
@@ -549,48 +569,24 @@ async def preview_chatbook(
         if not valid:
             raise HTTPException(status_code=400, detail=error)
 
+        # Initialize quota manager (DB-backed) for consistent rate limiting
+        quota_manager = QuotaManager(str(user.id), getattr(user, 'tier', 'free'), db=service.db)
+
         # Check file size (limit to 100MB for preview)
         file.file.seek(0, 2)
         file_size = file.file.tell()
         file.file.seek(0)
 
+        # Check file size against user's quota
+        allowed, message = await quota_manager.check_file_size(file_size)
+        if not allowed:
+            raise HTTPException(status_code=413, detail=message)
+
         if file_size > 100 * 1024 * 1024:
-            raise HTTPException(status_code=413, detail="File too large. Maximum size is 100MB")
+            raise HTTPException(status_code=413, detail="File too large. Maximum size is 100MB for preview")
 
         # Save uploaded file to secure temp location with sanitized name
-        import tempfile
-        base_temp = Path(tempfile.gettempdir()).resolve(strict=False)
-        # Sanitize user.id to avoid path traversal and unsafe values
-        import re
-        user_id_str = str(user.id)
-        safe_user_id = re.sub(r'[^a-zA-Z0-9_-]', '_', user_id_str)
-        # Additional sanitization to prevent path traversal
-        safe_user_id = safe_user_id.replace('..', '_').replace('/', '_').replace('\\', '_')
-        # Limit length to prevent excessively long paths
-        safe_user_id = safe_user_id[:255]
-        if not safe_user_id:
-            raise HTTPException(status_code=400, detail="Invalid user id for path")
-
-        # Establish a fixed uploads root and ensure it's secure
-        uploads_root = base_temp / "tldw_uploads"
-        uploads_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if uploads_root.is_symlink():
-            raise HTTPException(status_code=400, detail="Insecure temporary upload directory")
-        uploads_root_resolved = uploads_root.resolve(strict=True)
-
-        # Verify uploads_root is within the system temp directory
-        import os as _os
-        if _os.path.commonpath([str(uploads_root_resolved), str(base_temp)]) != str(base_temp):
-            raise HTTPException(status_code=400, detail="Invalid temporary directory base")
-
-        # Create and validate per-user directory
-        temp_dir = uploads_root_resolved / safe_user_id
-        temp_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if temp_dir.is_symlink():
-            raise HTTPException(status_code=400, detail="Insecure user temporary directory")
-        temp_dir = temp_dir.resolve(strict=True)
-        if _os.path.commonpath([str(temp_dir), str(uploads_root_resolved)]) != str(uploads_root_resolved):
-            raise HTTPException(status_code=400, detail="Invalid temporary directory path")
+        temp_dir = _setup_secure_temp_directory(str(user.id))
 
         # Build the preview file path
         temp_file = temp_dir / f"preview_{safe_filename}"
@@ -674,8 +670,8 @@ async def preview_chatbook(
                     action="chatbook_preview",
                     metadata={"filename": file.filename},
                 )
-            except Exception:
-                pass
+            except Exception as audit_err:
+                logger.warning(f"Failed to log audit event for preview: {audit_err}")
             return PreviewChatbookResponse(manifest=manifest_response)
         else:
             return PreviewChatbookResponse(error=error)
@@ -690,7 +686,9 @@ async def preview_chatbook(
 
 
 @router.get("/export/jobs", response_model=ListExportJobsResponse)
+@limiter.limit("30/minute")  # Rate limit: 30 list requests per minute
 async def list_export_jobs(
+    request: Request,  # Required for rate limiting
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     service: ChatbookService = Depends(get_chatbook_service),
@@ -798,7 +796,9 @@ async def get_export_job(
 
 
 @router.get("/import/jobs", response_model=ListImportJobsResponse)
+@limiter.limit("30/minute")  # Rate limit: 30 list requests per minute
 async def list_import_jobs(
+    request: Request,  # Required for rate limiting
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     service: ChatbookService = Depends(get_chatbook_service),
@@ -847,8 +847,8 @@ async def list_import_jobs(
         return ListImportJobsResponse(jobs=job_responses, total=total)
 
     except Exception as e:
-        logger.error(f"Error listing import jobs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error listing import jobs for user {user.id}")
+        raise HTTPException(status_code=500, detail="An error occurred while retrieving import jobs")
 
 
 @router.get("/import/jobs/{job_id}", response_model=ImportJobResponse)
@@ -895,8 +895,8 @@ async def get_import_job(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting import job: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error getting import job {job_id} for user {user.id}")
+        raise HTTPException(status_code=500, detail="An error occurred while retrieving the import job")
 
 
 @router.get("/download/{job_id}")
@@ -944,8 +944,13 @@ async def download_chatbook(
         # Enforce expiration (config-gated)
         enforce_expiry = str(os.getenv("CHATBOOKS_ENFORCE_EXPIRY", "true")).lower() in {"1","true","yes"}
         if enforce_expiry and getattr(job, 'expires_at', None) is not None:
-            from datetime import datetime as _dt
-            if _dt.utcnow() > job.expires_at:
+            from datetime import datetime as _dt, timezone as _tz
+            now_utc = _dt.now(_tz.utc)
+            expires_at = job.expires_at
+            # Handle naive datetime from database by assuming UTC
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=_tz.utc)
+            if now_utc > expires_at:
                 raise HTTPException(status_code=410, detail="Download link has expired")
 
         # Validate signed URL if configured
@@ -958,7 +963,8 @@ async def download_chatbook(
                 raise HTTPException(status_code=403, detail="Missing signature")
             try:
                 exp_int = int(exp)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Invalid exp parameter in signed URL: exp={exp!r}, error={e}")
                 raise HTTPException(status_code=400, detail="Invalid exp")
             # Check exp against current time
             import time
@@ -1005,8 +1011,8 @@ async def download_chatbook(
                         "attempted_path": str(file_path)[:100]
                     }
                 )
-            except Exception:
-                pass
+            except Exception as audit_err:
+                logger.warning(f"Failed to log audit event for path traversal: {audit_err}")
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Get filename from path
@@ -1031,8 +1037,8 @@ async def download_chatbook(
                     "file_size": file_path.stat().st_size
                 }
             )
-        except Exception:
-            pass
+        except Exception as audit_err:
+            logger.warning(f"Failed to log audit event for download: {audit_err}")
 
         # Build safe Content-Disposition (ASCII fallback + RFC 5987 filename*)
         def _safe_disp_parts(name: str) -> tuple[str, Optional[str]]:
@@ -1105,21 +1111,22 @@ async def cleanup_expired_exports(
                 action="chatbook_cleanup_expired_exports",
                 metadata={"deleted_count": deleted_count},
             )
-        except Exception:
-            pass
+        except Exception as audit_err:
+            logger.warning(f"Failed to log audit event for cleanup: {audit_err}")
 
         return CleanupExpiredExportsResponse(
             deleted_count=deleted_count
         )
 
     except Exception as e:
-        logger.error(f"Error cleaning up expired exports: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error cleaning up expired exports for user {user.id}")
+        raise HTTPException(status_code=500, detail="An error occurred while cleaning up expired exports")
 
 
-@router.delete("/export/jobs/{job_id}")
+@router.delete("/export/jobs/{job_id}", response_model=CancelJobResponse)
 async def cancel_export_job(
     job_id: str,
+    request: Request,
     service: ChatbookService = Depends(get_chatbook_service),
     user: User = Depends(get_request_user),
     audit_service=Depends(get_audit_service_for_user),
@@ -1129,18 +1136,24 @@ async def cancel_export_job(
 
     Args:
         job_id: The export job ID to cancel
+        request: FastAPI request object
         service: Chatbook service instance
         user: Current authenticated user
 
     Returns:
-        Success message
+        CancelJobResponse with success status
     """
     try:
         ok = service.cancel_export_job(job_id)
         if not ok:
             raise HTTPException(status_code=400, detail="Cannot cancel completed or failed job")
         try:
-            context = AuditContext(user_id=str(user.id), endpoint="/chatbooks/export/jobs/{job_id}", method="DELETE")
+            context = AuditContext(
+                user_id=str(user.id),
+                endpoint="/chatbooks/export/jobs/{job_id}",
+                method="DELETE",
+                ip_address=request.client.host if request and hasattr(request, 'client') else None,
+            )
             await audit_service.log_event(
                 event_type=AuditEventType.DATA_DELETE,
                 context=context,
@@ -1148,20 +1161,21 @@ async def cancel_export_job(
                 resource_id=job_id,
                 action="chatbook_export_job_cancelled",
             )
-        except Exception:
-            pass
-        return {"message": f"Export job {job_id} cancelled"}
+        except Exception as audit_err:
+            logger.warning(f"Failed to log audit event for export job cancellation: {audit_err}")
+        return {"success": True, "message": f"Export job {job_id} cancelled", "job_id": job_id}
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error cancelling export job: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error cancelling export job {job_id} for user {user.id}")
+        raise HTTPException(status_code=500, detail="An error occurred while cancelling the export job")
 
 
-@router.delete("/import/jobs/{job_id}")
+@router.delete("/import/jobs/{job_id}", response_model=CancelJobResponse)
 async def cancel_import_job(
     job_id: str,
+    request: Request,
     service: ChatbookService = Depends(get_chatbook_service),
     user: User = Depends(get_request_user),
     audit_service=Depends(get_audit_service_for_user),
@@ -1171,18 +1185,24 @@ async def cancel_import_job(
 
     Args:
         job_id: The import job ID to cancel
+        request: FastAPI request object
         service: Chatbook service instance
         user: Current authenticated user
 
     Returns:
-        Success message
+        CancelJobResponse with success status
     """
     try:
         ok = service.cancel_import_job(job_id)
         if not ok:
             raise HTTPException(status_code=400, detail="Cannot cancel completed or failed job")
         try:
-            context = AuditContext(user_id=str(user.id), endpoint="/chatbooks/import/jobs/{job_id}", method="DELETE")
+            context = AuditContext(
+                user_id=str(user.id),
+                endpoint="/chatbooks/import/jobs/{job_id}",
+                method="DELETE",
+                ip_address=request.client.host if request and hasattr(request, 'client') else None,
+            )
             await audit_service.log_event(
                 event_type=AuditEventType.DATA_DELETE,
                 context=context,
@@ -1190,12 +1210,12 @@ async def cancel_import_job(
                 resource_id=job_id,
                 action="chatbook_import_job_cancelled",
             )
-        except Exception:
-            pass
-        return {"message": f"Import job {job_id} cancelled"}
+        except Exception as audit_err:
+            logger.warning(f"Failed to log audit event for import job cancellation: {audit_err}")
+        return {"success": True, "message": f"Import job {job_id} cancelled", "job_id": job_id}
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error cancelling import job: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"Error cancelling import job {job_id} for user {user.id}")
+        raise HTTPException(status_code=500, detail="An error occurred while cancelling the import job")

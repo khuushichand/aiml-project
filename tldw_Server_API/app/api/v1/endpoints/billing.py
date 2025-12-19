@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Dict, Any, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -32,6 +32,7 @@ from tldw_Server_API.app.api.v1.schemas.billing_schemas import (
     ResumeSubscriptionResponse,
     InvoiceListResponse,
     InvoiceResponse,
+    RagUsageDebugResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Billing.subscription_service import get_subscription_service
@@ -55,6 +56,33 @@ def _require_billing_enabled():
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Billing is not enabled on this server",
         )
+
+
+async def _resolve_org_id(principal: AuthPrincipal, org_id: Optional[int]) -> int:
+    """
+    Resolve org_id from parameter or user's primary organization.
+
+    Args:
+        principal: Authenticated user
+        org_id: Optional explicit org_id
+
+    Returns:
+        Resolved org_id
+
+    Raises:
+        HTTPException: If user has no organizations
+    """
+    if org_id is not None:
+        return org_id
+
+    from tldw_Server_API.app.api.v1.API_Deps.org_deps import get_user_orgs
+    user_orgs = await get_user_orgs(principal)
+    if not user_orgs:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="You are not a member of any organization",
+        )
+    return user_orgs[0]["org_id"]
 
 
 # =============================================================================
@@ -101,20 +129,14 @@ async def list_plans():
     description="Get the current subscription status for the organization.",
 )
 async def get_subscription(
-    org_id: Optional[int] = Query(None, description="Organization ID (defaults to user's primary org)"),
-    principal: AuthPrincipal = Depends(get_auth_principal),
+    org_id: Optional[int] = Depends(get_active_org_id),
 ):
     """Get the subscription status for an organization."""
-    # Resolve org_id
     if org_id is None:
-        from tldw_Server_API.app.api.v1.API_Deps.org_deps import get_user_orgs
-        user_orgs = await get_user_orgs(principal)
-        if not user_orgs:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="You are not a member of any organization",
-            )
-        org_id = user_orgs[0]["org_id"]
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="You are not a member of any organization",
+        )
 
     service = await get_subscription_service()
     sub = await service.get_subscription(org_id)
@@ -139,30 +161,27 @@ async def get_subscription(
     description="Get current usage compared to subscription limits.",
 )
 async def get_usage(
-    org_id: Optional[int] = Query(None, description="Organization ID"),
-    principal: AuthPrincipal = Depends(get_auth_principal),
+    org_id: Optional[int] = Depends(get_active_org_id),
 ):
     """Get current usage vs limits for an organization."""
-    # Resolve org_id
     if org_id is None:
-        from tldw_Server_API.app.api.v1.API_Deps.org_deps import get_user_orgs
-        user_orgs = await get_user_orgs(principal)
-        if not user_orgs:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="You are not a member of any organization",
-            )
-        org_id = user_orgs[0]["org_id"]
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="You are not a member of any organization",
+        )
 
     service = await get_subscription_service()
 
-    # TODO: Get actual usage from usage tracking service
-    # For now, return placeholder usage
+    # Get actual usage from billing enforcer
+    from tldw_Server_API.app.core.Billing.enforcement import get_billing_enforcer
+    enforcer = get_billing_enforcer()
+    usage_summary = await enforcer.get_org_usage(org_id)
+
     current_usage = {
-        "api_calls_day": 0,
-        "llm_tokens_month": 0,
-        "storage_gb": 0,
-        "team_members": 1,
+        "api_calls_day": usage_summary.api_calls_today,
+        "llm_tokens_month": usage_summary.llm_tokens_month,
+        "storage_mb": usage_summary.storage_bytes // (1024 ** 2),  # Convert bytes to MB
+        "team_members": usage_summary.team_members,
     }
 
     usage_status = await service.check_usage(org_id, current_usage=current_usage)
@@ -175,6 +194,42 @@ async def get_usage(
         limit_checks=usage_status.limit_checks,
         has_warnings=usage_status.has_warnings,
         has_exceeded=usage_status.has_exceeded,
+    )
+
+
+@router.get(
+    "/usage/rag",
+    response_model=RagUsageDebugResponse,
+    summary="Get RAG usage (debug)",
+    description="Debug endpoint: current day's RAG queries vs plan limit for the organization.",
+)
+async def get_rag_usage_debug(
+    org_id: Optional[int] = Query(None, description="Organization ID (defaults to user's primary org)"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+):
+    """Debug view of RAG usage vs daily limit for an organization."""
+    org_id = await _resolve_org_id(principal, org_id)
+
+    # Verify billing view permissions
+    from tldw_Server_API.app.api.v1.API_Deps.org_deps import _get_user_org_membership
+
+    membership = await _get_user_org_membership(principal.user_id, org_id)
+    if not membership or membership.get("role") not in ("owner", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only organization owners and admins can view RAG usage",
+        )
+
+    from tldw_Server_API.app.core.Billing.enforcement import get_billing_enforcer
+
+    enforcer = get_billing_enforcer()
+    usage_summary = await enforcer.get_org_usage(org_id)
+    limits = await enforcer.get_org_limits(org_id)
+
+    return RagUsageDebugResponse(
+        org_id=org_id,
+        rag_queries_today=usage_summary.rag_queries_today,
+        rag_queries_day_limit=limits.get("rag_queries_day"),
     )
 
 
@@ -195,17 +250,7 @@ async def create_checkout(
 ):
     """Create a Stripe checkout session for subscription upgrade."""
     _require_billing_enabled()
-
-    # Resolve org_id
-    if org_id is None:
-        from tldw_Server_API.app.api.v1.API_Deps.org_deps import get_user_orgs
-        user_orgs = await get_user_orgs(principal)
-        if not user_orgs:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="You are not a member of any organization",
-            )
-        org_id = user_orgs[0]["org_id"]
+    org_id = await _resolve_org_id(principal, org_id)
 
     # Verify user has billing permissions (owner or admin)
     from tldw_Server_API.app.api.v1.API_Deps.org_deps import _get_user_org_membership
@@ -219,23 +264,27 @@ async def create_checkout(
     service = await get_subscription_service()
 
     try:
+        logger.info(f"Creating checkout session: org_id={org_id}, plan={body.plan_name}, user_id={principal.user_id}")
         session = await service.create_checkout_session(
             org_id=org_id,
             plan_name=body.plan_name,
             billing_cycle=body.billing_cycle,
-            success_url=body.success_url,
-            cancel_url=body.cancel_url,
+            success_url=str(body.success_url),
+            cancel_url=str(body.cancel_url),
             org_email=principal.email or f"user-{principal.user_id}@example.com",
             org_name=principal.username,
         )
 
+        logger.info(f"Checkout session created: session_id={session.id}, org_id={org_id}")
         return CheckoutResponse(
             session_id=session.id,
             url=session.url,
         )
     except ValueError as e:
+        logger.warning(f"Checkout failed for org_id={org_id}: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except RuntimeError as e:
+        logger.error(f"Checkout service error for org_id={org_id}: {e}")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
 
 
@@ -252,17 +301,7 @@ async def create_portal(
 ):
     """Create a Stripe billing portal session."""
     _require_billing_enabled()
-
-    # Resolve org_id
-    if org_id is None:
-        from tldw_Server_API.app.api.v1.API_Deps.org_deps import get_user_orgs
-        user_orgs = await get_user_orgs(principal)
-        if not user_orgs:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="You are not a member of any organization",
-            )
-        org_id = user_orgs[0]["org_id"]
+    org_id = await _resolve_org_id(principal, org_id)
 
     # Verify billing permissions
     from tldw_Server_API.app.api.v1.API_Deps.org_deps import _get_user_org_membership
@@ -278,7 +317,7 @@ async def create_portal(
     try:
         session = await service.create_portal_session(
             org_id=org_id,
-            return_url=body.return_url,
+            return_url=str(body.return_url),
         )
 
         return PortalResponse(
@@ -309,14 +348,7 @@ async def cancel_subscription(
 ):
     """Cancel the organization's subscription."""
     _require_billing_enabled()
-
-    # Resolve org_id
-    if org_id is None:
-        from tldw_Server_API.app.api.v1.API_Deps.org_deps import get_user_orgs
-        user_orgs = await get_user_orgs(principal)
-        if not user_orgs:
-            raise HTTPException(status_code=404, detail="No organization found")
-        org_id = user_orgs[0]["org_id"]
+    org_id = await _resolve_org_id(principal, org_id)
 
     # Verify owner role
     from tldw_Server_API.app.api.v1.API_Deps.org_deps import _get_user_org_membership
@@ -331,6 +363,7 @@ async def cancel_subscription(
 
     try:
         ip_address = request.client.host if request.client else None
+        logger.info(f"Canceling subscription: org_id={org_id}, at_period_end={body.at_period_end}, user_id={principal.user_id}")
         result = await service.cancel_subscription(
             org_id,
             at_period_end=body.at_period_end,
@@ -338,11 +371,13 @@ async def cancel_subscription(
             ip_address=ip_address,
         )
 
+        logger.info(f"Subscription canceled: org_id={org_id}")
         return CancelSubscriptionResponse(
             canceled=True,
             current_period_end=result.get("current_period_end"),
         )
     except ValueError as e:
+        logger.warning(f"Cancel subscription failed for org_id={org_id}: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
@@ -358,14 +393,7 @@ async def resume_subscription(
 ):
     """Resume a subscription that was set to cancel at period end."""
     _require_billing_enabled()
-
-    # Resolve org_id
-    if org_id is None:
-        from tldw_Server_API.app.api.v1.API_Deps.org_deps import get_user_orgs
-        user_orgs = await get_user_orgs(principal)
-        if not user_orgs:
-            raise HTTPException(status_code=404, detail="No organization found")
-        org_id = user_orgs[0]["org_id"]
+    org_id = await _resolve_org_id(principal, org_id)
 
     # Verify owner role
     from tldw_Server_API.app.api.v1.API_Deps.org_deps import _get_user_org_membership
@@ -379,9 +407,12 @@ async def resume_subscription(
     service = await get_subscription_service()
 
     try:
+        logger.info(f"Resuming subscription: org_id={org_id}, user_id={principal.user_id}")
         await service.resume_subscription(org_id, user_id=principal.user_id)
+        logger.info(f"Subscription resumed: org_id={org_id}")
         return ResumeSubscriptionResponse(resumed=True)
     except ValueError as e:
+        logger.warning(f"Resume subscription failed for org_id={org_id}: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
@@ -402,13 +433,7 @@ async def list_invoices(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """List invoice history for an organization."""
-    # Resolve org_id
-    if org_id is None:
-        from tldw_Server_API.app.api.v1.API_Deps.org_deps import get_user_orgs
-        user_orgs = await get_user_orgs(principal)
-        if not user_orgs:
-            raise HTTPException(status_code=404, detail="No organization found")
-        org_id = user_orgs[0]["org_id"]
+    org_id = await _resolve_org_id(principal, org_id)
 
     # Verify billing view permissions
     from tldw_Server_API.app.api.v1.API_Deps.org_deps import _get_user_org_membership

@@ -6,7 +6,7 @@ import asyncio
 from typing import Dict, Any
 #
 # Third-party imports
-from loguru import logger as logging
+from loguru import logger
 #
 # Local imports
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ServerError
@@ -21,7 +21,8 @@ class BaseLLMHandler(abc.ABC):
     def __init__(self, config: BaseHandlerConfig, global_app_config: Dict[str, Any]):
         self.config = config
         self.global_app_config = global_app_config
-        self.logger = logging # Use the logger from utils_loader
+        # Use loguru logger instance for structured logging
+        self.logger = logger
 
     @abc.abstractmethod
     async def list_models(self) -> list[str]:

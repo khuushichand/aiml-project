@@ -7,6 +7,7 @@
 # Scripts taken from https://github.com/microsoft/promptflow/tree/main/examples/flows/evaluation/eval-summarization and modified.
 #
 import configparser
+import logging
 import inspect
 import json
 from loguru import logger

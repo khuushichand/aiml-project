@@ -23,6 +23,8 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
 # Custom Hypothesis Strategies
 # ========================================================================
 
+_ALLOWED_NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.- "
+
 @composite
 def valid_message_content(draw):
     """Generate valid message content."""
@@ -46,7 +48,7 @@ def valid_message(draw):
 
     # Optionally add name field
     if draw(st.booleans()):
-        name = draw(st.text(alphabet=st.characters(categories=["Lu", "Ll", "Nd"]), min_size=1, max_size=50))
+        name = draw(st.text(alphabet=list(_ALLOWED_NAME_CHARS), min_size=1, max_size=50))
         message["name"] = name
 
     return message

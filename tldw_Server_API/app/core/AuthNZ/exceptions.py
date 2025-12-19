@@ -2,7 +2,7 @@
 # Description: Custom exception classes for the user registration system
 #
 # Imports
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 #######################################################################################################################
@@ -36,7 +36,7 @@ class AccountLockedException(AuthenticationError):
         self.username = username
 
         # Calculate remaining lock time
-        remaining = (locked_until - datetime.utcnow()).total_seconds()
+        remaining = (locked_until - datetime.now(timezone.utc)).total_seconds()
         if remaining > 0:
             minutes = int(remaining / 60)
             message = f"Account locked for {minutes} more minutes"

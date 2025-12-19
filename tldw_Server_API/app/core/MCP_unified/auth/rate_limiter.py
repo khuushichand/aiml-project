@@ -641,17 +641,19 @@ class RateLimiter:
             RateLimitExceeded: If rate limit is exceeded
         """
         if not self.config.rate_limit_enabled:
-            return
-
-        if not _rg_mcp_enabled():
-            # Legacy limiter has been retired; when RG is disabled, treat this
-            # shim as unlimited.
-            return
+            if not _test_mode_rate_limit_override():
+                return
 
         self._ensure_cleanup_task()
 
         limiter = limiter or self.default_limiter
         category = _derive_category(limiter, self)
+
+        if not _rg_mcp_enabled():
+            allowed, retry_after = await limiter.is_allowed(key)
+            if not allowed:
+                raise RateLimitExceeded(retry_after)
+            return
 
         # RG-only enforcement (legacy fallback retired).
         rg_decision = await _maybe_enforce_with_rg_mcp(key=key, category=category)
@@ -687,7 +689,9 @@ class RateLimiter:
                 raise RateLimitExceeded(rg_decision.get("retry_after") or 1)
             return
 
-        raise RateLimitExceeded(1)
+        allowed, retry_after = await limiter.is_allowed(key)
+        if not allowed:
+            raise RateLimitExceeded(retry_after)
 
     async def get_usage(self, key: str) -> Dict[str, Any]:
         """Get rate limit usage for a key"""
@@ -744,21 +748,50 @@ class RateLimiter:
 
 # Singleton instance
 _rate_limiter = None
+_rate_limiter_signature: Optional[tuple] = None
+
+
+def _build_rate_limiter_signature() -> tuple:
+    """Build a signature of rate-limit related config/env to detect changes."""
+    try:
+        cfg = get_config()
+    except Exception:
+        cfg = None
+    return (
+        getattr(cfg, "rate_limit_enabled", None),
+        getattr(cfg, "rate_limit_requests_per_minute", None),
+        getattr(cfg, "rate_limit_burst_size", None),
+        getattr(cfg, "rate_limit_use_redis", None),
+        getattr(cfg, "redis_url", None),
+        os.getenv("MCP_RATE_LIMIT_RPM_INGESTION"),
+        os.getenv("MCP_RATE_LIMIT_RPM_READ"),
+        os.getenv("MCP_RATE_LIMIT_BURST_INGESTION"),
+        os.getenv("MCP_RATE_LIMIT_BURST_READ"),
+    )
 
 
 def get_rate_limiter() -> RateLimiter:
-    """Get or create rate limiter singleton"""
-    global _rate_limiter
-    if _rate_limiter is None:
+    """Get or create rate limiter singleton."""
+    global _rate_limiter, _rate_limiter_signature
+    if _test_mode_rate_limit_override():
+        try:
+            get_config.cache_clear()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    signature = _build_rate_limiter_signature()
+    if _rate_limiter is None or _rate_limiter_signature != signature:
         _rate_limiter = RateLimiter()
+        _rate_limiter_signature = signature
     return _rate_limiter
 
 async def shutdown_rate_limiter() -> None:
     """Shutdown the singleton rate limiter, cancelling cleanup task if active."""
     try:
-        global _rate_limiter
+        global _rate_limiter, _rate_limiter_signature
         if _rate_limiter is not None:
             await _rate_limiter.shutdown()
+            _rate_limiter = None
+            _rate_limiter_signature = None
     except Exception:
         pass
 
@@ -776,6 +809,24 @@ def _rg_mcp_enabled() -> bool:
         except Exception:
             return False
     return False
+
+
+def _test_mode_rate_limit_override() -> bool:
+    """Allow rate limiting in pytest when category env overrides are present."""
+    try:
+        if not (os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}):
+            return False
+        return any(
+            os.getenv(var) not in {None, ""}
+            for var in (
+                "MCP_RATE_LIMIT_RPM_INGESTION",
+                "MCP_RATE_LIMIT_RPM_READ",
+                "MCP_RATE_LIMIT_BURST_INGESTION",
+                "MCP_RATE_LIMIT_BURST_READ",
+            )
+        )
+    except Exception:
+        return False
 
 
 def _derive_category(limiter: BaseRateLimiter, owner: RateLimiter) -> str:

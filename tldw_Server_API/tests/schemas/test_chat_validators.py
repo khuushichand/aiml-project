@@ -318,8 +318,8 @@ class TestValidateModelName:
 
     def test_empty_model_name(self):
         """Test empty model name."""
-        # Empty string doesn't match the regex pattern, so it raises an error
-        with pytest.raises(ValueError, match="Model name contains invalid characters"):
+        # Empty string is explicitly rejected before pattern check
+        with pytest.raises(ValueError, match="Model name cannot be empty"):
             validate_model_name("")
 
 
@@ -328,10 +328,13 @@ class TestValidateProviderName:
 
     def test_known_providers(self):
         """Test known provider names."""
+        # Updated list to match ALLOWED_PROVIDERS in chat_validators.py
         known_providers = [
             "openai", "anthropic", "cohere", "groq",
             "openrouter", "deepseek", "mistral", "google", "qwen",
-            "llama.cpp", "kobold.cpp", "oobabooga", "ollama"
+            "llama.cpp", "kobold", "ooba", "ollama", "bedrock",
+            "huggingface", "tabbyapi", "vllm", "local-llm", "aphrodite",
+            "custom-openai-api", "custom-openai-api-2", "moonshot", "zai"
         ]
         for provider in known_providers:
             result = validate_provider_name(provider)
@@ -343,36 +346,36 @@ class TestValidateProviderName:
         assert result is None
 
     def test_unknown_provider(self):
-        """Test unknown provider with warning."""
+        """Test unknown provider raises error in strict mode."""
+        # Default is strict=True, so unknown providers raise ValueError
+        with pytest.raises(ValueError, match="Unknown provider"):
+            validate_provider_name("unknown_provider")
+
+    def test_unknown_provider_non_strict(self):
+        """Test unknown provider with warning in non-strict mode."""
         with patch('tldw_Server_API.app.api.v1.schemas.chat_validators.logger') as mock_logger:
-            result = validate_provider_name("unknown_provider")
+            result = validate_provider_name("unknown_provider", strict=False)
             assert result == "unknown_provider"
             mock_logger.warning.assert_called()
 
     def test_invalid_provider_name(self):
         """Test invalid provider name format."""
-        # Provider validator doesn't validate format, just warns for unknown providers
-        with patch('tldw_Server_API.app.api.v1.schemas.chat_validators.logger') as mock_logger:
-            result = validate_provider_name("provider@#$%")
-            assert result == "provider@#$%"
-            mock_logger.warning.assert_called()
+        # Provider validator now validates character format
+        with pytest.raises(ValueError, match="invalid characters"):
+            validate_provider_name("provider@#$%")
 
     def test_provider_name_too_long(self):
         """Test provider name that's too long."""
         long_name = "a" * 51
-        # Provider validator doesn't check length, just warns for unknown providers
-        with patch('tldw_Server_API.app.api.v1.schemas.chat_validators.logger') as mock_logger:
-            result = validate_provider_name(long_name)
-            assert result == long_name
-            mock_logger.warning.assert_called()
+        # Provider validator now checks length
+        with pytest.raises(ValueError, match="too long"):
+            validate_provider_name(long_name)
 
     def test_empty_provider_name(self):
         """Test empty provider name."""
-        # Provider validator doesn't reject empty strings, just warns
-        with patch('tldw_Server_API.app.api.v1.schemas.chat_validators.logger') as mock_logger:
-            result = validate_provider_name("")
-            assert result == ""
-            mock_logger.warning.assert_called()
+        # Empty strings after strip are converted to None
+        result = validate_provider_name("")
+        assert result is None
 
 
 class TestPatternConstants:
@@ -397,8 +400,8 @@ class TestSizeConstants:
     """Test size limit constants."""
 
     def test_max_tool_definition_size(self):
-        """Test max tool definition size constant."""
-        assert MAX_TOOL_DEFINITION_SIZE == 10000
+        """Test max tool definition size constant (reduced for security)."""
+        assert MAX_TOOL_DEFINITION_SIZE == 5000
 
     def test_max_request_size(self):
         """Test max request size constant."""

@@ -96,6 +96,39 @@ class TestDatabaseBackends:
         assert result is not None
         conn.close()
 
+    def test_sqlite_backend_pragma_returns_rows(self, sqlite_config):
+        """Ensure PRAGMA results are returned for table introspection."""
+        backend = SQLiteBackend(sqlite_config)
+        backend.create_tables(
+            "CREATE TABLE IF NOT EXISTS pragma_table (id INTEGER PRIMARY KEY, name TEXT)"
+        )
+
+        pragma_result = backend.execute("PRAGMA table_info(pragma_table)")
+        assert pragma_result.rows
+
+        info = backend.get_table_info("pragma_table")
+        columns = {col.get("name") for col in info}
+        assert "id" in columns
+        assert "name" in columns
+
+    def test_sqlite_backend_fts_rank_expression_sanitization(self, sqlite_config):
+        """Ensure unsafe FTS rank expressions are ignored and queries remain safe."""
+        backend = SQLiteBackend(sqlite_config)
+        backend.create_tables(
+            "CREATE TABLE IF NOT EXISTS docs (id INTEGER PRIMARY KEY, title TEXT, content TEXT)"
+        )
+        backend.execute("INSERT INTO docs (title, content) VALUES (?, ?)", ("hello", "world"))
+        backend.create_fts_table("docs_fts", "docs", ["title", "content"])
+
+        unsafe = "bm25(docs_fts); DROP TABLE docs; --"
+        res = backend.fts_search(FTSQuery(query="hello", table="docs_fts", rank_expression=unsafe))
+        assert res.rows
+        assert backend.table_exists("docs")
+
+        safe = "bm25(docs_fts, 1.0, 2)"
+        safe_res = backend.fts_search(FTSQuery(query="hello", table="docs_fts", rank_expression=safe))
+        assert safe_res.rows
+
     def test_backend_factory_sqlite(self, temp_db_path):
         """Test that factory can create SQLite backend."""
         config = DatabaseConfig(

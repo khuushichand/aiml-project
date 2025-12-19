@@ -325,7 +325,23 @@ async def test_moderation(payload: ModerationTestRequest) -> ModerationTestRespo
             action, redacted, sample = eval_res  # type: ignore
             category = None
         flagged = (action != 'pass')
-        return ModerationTestResponse(flagged=flagged, action=action if action else 'pass', sample=sample, redacted_text=redacted, effective=eff.to_dict(), category=category)
+        sanitized_sample = None
+        if flagged:
+            try:
+                _, sanitized_sample = svc.check_text(payload.text, eff)
+            except Exception:
+                sanitized_sample = None
+        redacted_text = None
+        if action == "redact":
+            redacted_text = svc.redact_text(payload.text, eff)
+        return ModerationTestResponse(
+            flagged=flagged,
+            action=action if action else 'pass',
+            sample=sanitized_sample,
+            redacted_text=redacted_text,
+            effective=eff.to_dict(),
+            category=category,
+        )
     else:
         flagged, sample = svc.check_text(payload.text, eff)
         if not flagged:

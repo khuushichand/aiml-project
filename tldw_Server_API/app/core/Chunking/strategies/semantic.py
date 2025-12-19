@@ -5,6 +5,7 @@ Groups text based on semantic similarity using TF-IDF vectors and cosine similar
 """
 
 from typing import List, Optional, Generator, Dict, Any
+import threading
 from loguru import logger
 import warnings
 
@@ -34,6 +35,11 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
         self._vectorizer = None
         self._sklearn_available = None
         self._nltk_available = None
+        self._tokenizer = None
+        self._tokenizer_name = "gpt2"
+        self._tokenizer_type = None
+        self._tokenizer_failed_names = set()
+        self._tokenizer_lock = threading.Lock()
 
         # Check dependencies
         self._check_dependencies()
@@ -108,6 +114,9 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
 
         # Get options
         unit = options.get('unit', 'words')
+        tokenizer_name = options.get('tokenizer_name_or_path') or options.get('tokenizer_name')
+        if isinstance(tokenizer_name, str) and tokenizer_name.strip():
+            self._tokenizer_name = tokenizer_name.strip()
         similarity_threshold = options.get('similarity_threshold', self.similarity_threshold)
         min_chunk_size = options.get('min_chunk_size', max_size // 2)
 
@@ -272,10 +281,10 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
         elif unit == 'tokens':
             # Try to use a tokenizer if available
             try:
-                from transformers import AutoTokenizer
-                # Note: from_pretrained can raise for missing local cache or offline envs.
-                # Treat any failure as a signal to fall back to approximation.
-                tokenizer = AutoTokenizer.from_pretrained('gpt2')
+                tokenizer_name = self._tokenizer_name or "gpt2"
+                tokenizer = self._get_tokenizer(tokenizer_name)
+                if tokenizer is None:
+                    raise RuntimeError("Tokenizer unavailable")
                 return len(tokenizer.encode(text))
             except Exception:
                 # Fallback to word count * 1.3 (approximate)
@@ -283,6 +292,53 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
         else:
             logger.warning(f"Unknown unit type '{unit}'. Using word count.")
             return len(text.split())
+
+    def _get_tokenizer(self, tokenizer_name: str):
+        """Load and cache a tokenizer for token unit counting.
+
+        Prefers tiktoken when available, otherwise falls back to transformers.
+        Uses local-only loading to avoid network calls in restricted environments.
+        """
+        name = str(tokenizer_name or "gpt2")
+        if name in self._tokenizer_failed_names:
+            return None
+        if self._tokenizer is not None and self._tokenizer_name == name:
+            return self._tokenizer
+        with self._tokenizer_lock:
+            if self._tokenizer is not None and self._tokenizer_name == name:
+                return self._tokenizer
+            if name in self._tokenizer_failed_names:
+                return None
+            # Reset cache if switching names
+            if self._tokenizer_name != name:
+                self._tokenizer = None
+                self._tokenizer_type = None
+            self._tokenizer_name = name
+            # Prefer tiktoken when available
+            try:
+                import tiktoken  # type: ignore
+                try:
+                    enc = tiktoken.encoding_for_model(name)
+                except Exception:
+                    enc = tiktoken.get_encoding("cl100k_base")
+                self._tokenizer = enc
+                self._tokenizer_type = "tiktoken"
+                return self._tokenizer
+            except Exception:
+                pass
+            # Fallback to transformers (local-only)
+            try:
+                from transformers import AutoTokenizer  # type: ignore
+                tok = AutoTokenizer.from_pretrained(name, local_files_only=True)
+                self._tokenizer = tok
+                self._tokenizer_type = "transformers"
+                return self._tokenizer
+            except Exception as e:
+                logger.debug(f"Tokenizer load failed for '{name}', using fallback approximation: {e}")
+                self._tokenizer_failed_names.add(name)
+                self._tokenizer = None
+                self._tokenizer_type = None
+                return None
 
     def chunk_generator(self,
                        text: str,

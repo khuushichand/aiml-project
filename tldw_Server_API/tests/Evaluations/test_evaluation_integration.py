@@ -294,6 +294,7 @@ class TestAuthentication:
         settings.AUTH_MODE = "single_user"
         settings.RATE_LIMIT_PER_MINUTE = 60
         settings.RATE_LIMIT_BURST = 10
+        settings.SINGLE_USER_ALLOWED_IPS = []
         return settings
 
     @pytest.mark.asyncio
@@ -302,6 +303,7 @@ class TestAuthentication:
         from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
         from fastapi import HTTPException
         from fastapi.security import HTTPAuthorizationCredentials
+        from starlette.requests import Request
 
         with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_settings') as mock_get_settings:
             mock_get_settings.return_value = mock_settings
@@ -309,14 +311,16 @@ class TestAuthentication:
             # Test with valid API key
             with patch.dict(os.environ, {'API_BEARER': 'test-api-key', 'SINGLE_USER_API_KEY': 'test-api-key', 'TEST_MODE': 'false'}):
                 creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="test-api-key")
-                result = await verify_api_key(creds)
+                request = Request({"type": "http", "client": ("127.0.0.1", 12345), "headers": []})
+                result = await verify_api_key(creds, request=request)
                 assert result == "test-api-key"
 
             # Test with invalid API key
             with patch.dict(os.environ, {'API_BEARER': 'correct-key', 'SINGLE_USER_API_KEY': 'correct-key', 'TEST_MODE': 'false'}):
                 creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="wrong-key")
                 with pytest.raises(HTTPException) as exc_info:
-                    await verify_api_key(creds)
+                    request = Request({"type": "http", "client": ("127.0.0.1", 12345), "headers": []})
+                    await verify_api_key(creds, request=request)
                 assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
@@ -324,25 +328,137 @@ class TestAuthentication:
         """Test multi-user JWT authentication."""
         from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
         from fastapi.security import HTTPAuthorizationCredentials
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+        from starlette.requests import Request
 
         mock_settings.AUTH_MODE = "multi_user"
 
         with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_settings') as mock_get_settings:
             mock_get_settings.return_value = mock_settings
 
-            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.JWTService') as MockJWTService:
-                mock_jwt = Mock()
-                mock_jwt.decode_access_token.return_value = {
-                    'sub': '123',
-                    'username': 'testuser',
-                    'role': 'user'
-                }
-                MockJWTService.return_value = mock_jwt
+            async def _fake_verify_jwt(_request, token: str) -> User:
+                assert token == "valid-jwt-token"
+                return User(id=123, username="testuser", is_active=True)
 
-                with patch.dict(os.environ, {'TEST_MODE': 'false'}):
-                    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="valid-jwt-token")
-                    result = await verify_api_key(creds)
-                assert result == "user_123"
+            class _JwtService:
+                def decode_access_token(self, token: str):
+                    assert token == "valid-jwt-token"
+                    return {"sub": "123"}
+
+            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_jwt_service', lambda: _JwtService()):
+                with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.verify_jwt_and_fetch_user', _fake_verify_jwt):
+                    with patch.dict(os.environ, {'TEST_MODE': 'false'}):
+                        creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="valid-jwt-token")
+                        request = Request({"type": "http", "client": ("127.0.0.1", 12345), "headers": []})
+                        result = await verify_api_key(creds, request=request)
+                    assert result == "user_123"
+
+    @pytest.mark.asyncio
+    async def test_multi_user_jwt_expired_token_maps_error(self, mock_settings, setup_auth_db):
+        """Expired JWTs should map to token_expired in evals auth."""
+        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
+        from fastapi.security import HTTPAuthorizationCredentials
+        from fastapi import HTTPException
+        from tldw_Server_API.app.core.AuthNZ.exceptions import TokenExpiredError
+        from starlette.requests import Request
+
+        mock_settings.AUTH_MODE = "multi_user"
+
+        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_settings') as mock_get_settings:
+            mock_get_settings.return_value = mock_settings
+
+            class _JwtService:
+                def decode_access_token(self, token: str):
+                    raise TokenExpiredError()
+
+            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_jwt_service', lambda: _JwtService()):
+                creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="expired-token")
+                request = Request({"type": "http", "client": ("127.0.0.1", 12345), "headers": []})
+                with pytest.raises(HTTPException) as exc_info:
+                    await verify_api_key(creds, request=request)
+
+            assert exc_info.value.status_code == 401
+            assert exc_info.value.detail["error"]["code"] == "token_expired"
+
+    @pytest.mark.asyncio
+    async def test_multi_user_jwt_invalid_token_maps_error(self, mock_settings, setup_auth_db):
+        """Invalid JWTs should map to invalid_token in evals auth."""
+        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
+        from fastapi.security import HTTPAuthorizationCredentials
+        from fastapi import HTTPException
+        from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError
+        from starlette.requests import Request
+
+        mock_settings.AUTH_MODE = "multi_user"
+
+        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_settings') as mock_get_settings:
+            mock_get_settings.return_value = mock_settings
+
+            class _JwtService:
+                def decode_access_token(self, token: str):
+                    raise InvalidTokenError("invalid")
+
+            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_jwt_service', lambda: _JwtService()):
+                creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="invalid-token")
+                request = Request({"type": "http", "client": ("127.0.0.1", 12345), "headers": []})
+                with pytest.raises(HTTPException) as exc_info:
+                    await verify_api_key(creds, request=request)
+
+            assert exc_info.value.status_code == 401
+            assert exc_info.value.detail["error"]["code"] == "invalid_token"
+
+    @pytest.mark.asyncio
+    async def test_multi_user_jwt_inactive_user_maps_error(self, mock_settings, setup_auth_db):
+        """Inactive users should map to inactive_user in evals auth."""
+        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
+        from fastapi.security import HTTPAuthorizationCredentials
+        from fastapi import HTTPException, status
+        from starlette.requests import Request
+
+        mock_settings.AUTH_MODE = "multi_user"
+
+        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_settings') as mock_get_settings:
+            mock_get_settings.return_value = mock_settings
+
+            class _JwtService:
+                def decode_access_token(self, token: str):
+                    return {"sub": "123"}
+
+            async def _inactive_user(_request, _token: str):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
+
+            with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_jwt_service', lambda: _JwtService()):
+                with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.verify_jwt_and_fetch_user', _inactive_user):
+                    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="inactive-user-token")
+                    request = Request({"type": "http", "client": ("127.0.0.1", 12345), "headers": []})
+                    with pytest.raises(HTTPException) as exc_info:
+                        await verify_api_key(creds, request=request)
+
+            assert exc_info.value.status_code == 400
+            assert exc_info.value.detail["error"]["code"] == "inactive_user"
+
+    @pytest.mark.asyncio
+    async def test_single_user_auth_respects_ip_allowlist(self, mock_settings, setup_auth_db):
+        """Single-user auth should enforce SINGLE_USER_ALLOWED_IPS."""
+        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
+        from starlette.requests import Request
+        from fastapi import HTTPException
+
+        mock_settings.AUTH_MODE = "single_user"
+        mock_settings.SINGLE_USER_API_KEY = "test-api-key-abcdefghijklmnopqrstuvwxyz"
+        mock_settings.SINGLE_USER_ALLOWED_IPS = ["203.0.113.10"]
+
+        with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_settings') as mock_get_settings:
+            mock_get_settings.return_value = mock_settings
+
+            request_denied = Request({"type": "http", "client": ("198.51.100.5", 12345), "headers": []})
+            with pytest.raises(HTTPException) as exc_info:
+                await verify_api_key(credentials=None, x_api_key="test-api-key-abcdefghijklmnopqrstuvwxyz", request=request_denied)
+            assert exc_info.value.status_code == 401
+
+            request_allowed = Request({"type": "http", "client": ("203.0.113.10", 12345), "headers": []})
+            result = await verify_api_key(credentials=None, x_api_key="test-api-key-abcdefghijklmnopqrstuvwxyz", request=request_allowed)
+            assert result == "test-api-key-abcdefghijklmnopqrstuvwxyz"
 
 
 class TestRateLimiting:

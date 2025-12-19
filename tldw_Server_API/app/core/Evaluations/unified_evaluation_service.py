@@ -267,6 +267,19 @@ class UnifiedEvaluationService:
             Created evaluation object
         """
         try:
+            # Normalize eval type for CRUD-created evals
+            eval_type_value = getattr(eval_type, "value", eval_type)
+            eval_type_value = str(eval_type_value)
+            eval_spec_payload = dict(eval_spec or {})
+            if eval_type_value in {"geval", "rag", "response_quality"}:
+                sub_type_map = {
+                    "geval": "summarization",
+                    "rag": "rag",
+                    "response_quality": "response_quality",
+                }
+                eval_spec_payload.setdefault("sub_type", sub_type_map[eval_type_value])
+                eval_type_value = "model_graded"
+
             # If inline dataset provided, create it first
             if dataset and not dataset_id:
                 dataset_id = self.db.create_dataset(
@@ -280,15 +293,15 @@ class UnifiedEvaluationService:
             eval_id = self.db.create_evaluation(
                 name=name,
                 description=description,
-                eval_type=eval_type,
-                eval_spec=eval_spec,
+                eval_type=eval_type_value,
+                eval_spec=eval_spec_payload,
                 dataset_id=dataset_id,
                 created_by=created_by,
                 metadata=metadata
             )
 
             # Unified audit
-            log_evaluation_created(user_id=created_by, eval_id=eval_id, name=name, eval_type=eval_type)
+            log_evaluation_created(user_id=created_by, eval_id=eval_id, name=name, eval_type=eval_type_value)
 
             # Get and return created evaluation
             evaluation = self.db.get_evaluation(eval_id)
@@ -430,9 +443,8 @@ class UnifiedEvaluationService:
             )
 
             # Send webhook for run started
-            if webhook_url and self.enable_webhooks:
-                from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
-                await webhook_manager.send_webhook(
+            if webhook_url and self.enable_webhooks and self.webhook_manager:
+                await self.webhook_manager.send_webhook(
                     user_id=created_by,
                     event=WebhookEvent.EVALUATION_STARTED,
                     evaluation_id=run_id,
@@ -661,7 +673,6 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import os as _os, asyncio as _asyncio
-                    from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
                     # Normalize single-user id to fixed numeric id when appropriate
                     effective_user_id = user_id
                     if user_id == "single_user":
@@ -670,8 +681,8 @@ class UnifiedEvaluationService:
                             effective_user_id = str(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
                         except Exception:
                             effective_user_id = "1"
-                    if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
-                        await webhook_manager.send_webhook(
+                    if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+                        await self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
                             event=WebhookEvent.EVALUATION_COMPLETED,
                             evaluation_id=eval_id,
@@ -681,8 +692,8 @@ class UnifiedEvaluationService:
                                 "processing_time": evaluation_time
                             }
                         )
-                    else:
-                        _asyncio.create_task(webhook_manager.send_webhook(
+                    elif self.webhook_manager:
+                        _asyncio.create_task(self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
                             event=WebhookEvent.EVALUATION_COMPLETED,
                             evaluation_id=eval_id,
@@ -766,7 +777,6 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import os as _os, asyncio as _asyncio
-                    from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
                     effective_user_id = user_id
                     if user_id == "single_user":
                         try:
@@ -774,8 +784,8 @@ class UnifiedEvaluationService:
                             effective_user_id = str(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
                         except Exception:
                             effective_user_id = "1"
-                    if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
-                        await webhook_manager.send_webhook(
+                    if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+                        await self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
                             event=WebhookEvent.EVALUATION_COMPLETED,
                             evaluation_id=eval_id,
@@ -785,8 +795,8 @@ class UnifiedEvaluationService:
                                 "processing_time": evaluation_time
                             }
                         )
-                    else:
-                        _asyncio.create_task(webhook_manager.send_webhook(
+                    elif self.webhook_manager:
+                        _asyncio.create_task(self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
                             event=WebhookEvent.EVALUATION_COMPLETED,
                             evaluation_id=eval_id,
@@ -866,7 +876,6 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import os as _os, asyncio as _asyncio
-                    from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
                     effective_user_id = user_id
                     if user_id == "single_user":
                         try:
@@ -874,8 +883,8 @@ class UnifiedEvaluationService:
                             effective_user_id = str(_app_settings.get("SINGLE_USER_FIXED_ID", "1"))
                         except Exception:
                             effective_user_id = "1"
-                    if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
-                        await webhook_manager.send_webhook(
+                    if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+                        await self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
                             event=WebhookEvent.EVALUATION_COMPLETED,
                             evaluation_id=eval_id,
@@ -885,8 +894,8 @@ class UnifiedEvaluationService:
                                 "processing_time": evaluation_time
                             }
                         )
-                    else:
-                        _asyncio.create_task(webhook_manager.send_webhook(
+                    elif self.webhook_manager:
+                        _asyncio.create_task(self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
                             event=WebhookEvent.EVALUATION_COMPLETED,
                             evaluation_id=eval_id,

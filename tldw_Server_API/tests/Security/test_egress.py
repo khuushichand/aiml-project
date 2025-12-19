@@ -36,3 +36,8 @@ class TestEgressPolicy:
         with pytest.raises(HTTPException) as exc:
             assert_url_safe(url)
         assert "private" in exc.value.detail.lower()
+
+    def test_invalid_port_is_rejected(self):
+        res = egress.evaluate_url_policy("http://example.com:bad/path")
+        assert res.allowed is False
+        assert "port" in (res.reason or "").lower()

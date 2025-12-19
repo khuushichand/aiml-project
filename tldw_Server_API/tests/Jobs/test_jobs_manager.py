@@ -1,4 +1,6 @@
+import json
 import os
+import sqlite3
 import tempfile
 from datetime import datetime, timedelta
 
@@ -35,6 +37,56 @@ def test_create_and_acquire_and_complete(jobs_db):
     assert ok2
     got = jm.get_job(int(nextj["id"]))
     assert got["status"] == "completed"
+
+
+def test_acquire_decrypts_payload(jobs_db, monkeypatch):
+    from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
+
+    monkeypatch.setenv("JOBS_ENCRYPT_SECURE", "true")
+    key = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo0NTY3ODkwMTIzNDU2Nzg5MDEy"[:44]
+    monkeypatch.setenv("WORKFLOWS_ARTIFACT_ENC_KEY", key)
+    if encrypt_json_blob({"probe": True}) is None:
+        pytest.skip("Crypto backend unavailable; skipping encryption test")
+
+    jm = JobManager(jobs_db)
+    payload = {"secret": "value", "count": 1}
+    job = jm.create_job(domain="secure", queue="default", job_type="t", payload=payload, owner_user_id="1")
+
+    conn = sqlite3.connect(jobs_db)
+    try:
+        raw = conn.execute("SELECT payload FROM jobs WHERE id = ?", (int(job["id"]),)).fetchone()[0]
+    finally:
+        conn.close()
+    raw_obj = json.loads(raw) if raw else {}
+    assert isinstance(raw_obj, dict) and ("_encrypted" in raw_obj or raw_obj.get("_enc") == "aesgcm:v1")
+
+    acq = jm.acquire_next_job(domain="secure", queue="default", lease_seconds=5, worker_id="w1")
+    assert acq is not None
+    assert acq["payload"] == payload
+
+
+def test_rotate_encryption_keys_respects_filters_sqlite(jobs_db, monkeypatch):
+    from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
+
+    monkeypatch.setenv("JOBS_ENCRYPT", "true")
+    old_key = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo0NTY3ODkwMTIzNDU2Nzg5MDEy"[:44]
+    new_key = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwQUJDREVGR0hJSktMTU5PUFFSU1RVVldY"[:44]
+    monkeypatch.setenv("WORKFLOWS_ARTIFACT_ENC_KEY", old_key)
+    if encrypt_json_blob({"probe": True}) is None:
+        pytest.skip("Crypto backend unavailable; skipping encryption test")
+
+    jm = JobManager(jobs_db)
+    jm.create_job(domain="d1", queue="default", job_type="t", payload={"x": 1}, owner_user_id="1")
+    jm.create_job(domain="d2", queue="default", job_type="t", payload={"x": 2}, owner_user_id="1")
+
+    count = jm.rotate_encryption_keys(
+        domain="d1",
+        old_key_b64=old_key,
+        new_key_b64=new_key,
+        fields=["payload"],
+        dry_run=True,
+    )
+    assert count == 1
 
 
 def test_retryable_fail_and_backoff(jobs_db):

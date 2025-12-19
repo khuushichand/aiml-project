@@ -8,6 +8,8 @@ from tldw_Server_API.app.core.Embeddings.audit_adapter import (
     emit_security_violation_async,
     emit_model_evicted_async,
     emit_memory_limit_exceeded_async,
+    log_security_violation,
+    shutdown_audit_adapter_services,
 )
 from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService, AuditEventType
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
@@ -101,3 +103,33 @@ async def test_memory_limit_exceeded_records_system_error(tmp_path):
         None,
     )
     assert match is not None, "Memory limit exceeded event not found"
+
+
+@pytest.mark.asyncio
+async def test_security_violation_threadpool_fallback(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.config import settings
+
+    monkeypatch.setitem(settings, "USER_DB_BASE_DIR", str(tmp_path))
+    user_id = 8080
+    action = "threadpool_security_violation"
+
+    await asyncio.to_thread(
+        log_security_violation,
+        user_id=str(user_id),
+        action=action,
+        metadata={"reason": "sync_call"},
+    )
+
+    db_path = DatabasePaths.get_audit_db_path(user_id)
+    svc = UnifiedAuditService(db_path=str(db_path))
+    await svc.initialize()
+    try:
+        events = await svc.query_events(user_id=str(user_id))
+        match = next(
+            (e for e in events if e.get("event_type") == AuditEventType.SECURITY_VIOLATION.value and e.get("action") == action),
+            None,
+        )
+        assert match is not None, "Threadpool security violation event not found"
+    finally:
+        await svc.stop()
+        await shutdown_audit_adapter_services()

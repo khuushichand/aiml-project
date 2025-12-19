@@ -23,6 +23,7 @@ from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ModelDow
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LlamafileConfig
 from tldw_Server_API.app.core.Utils.Utils import download_file, verify_checksum
 from tldw_Server_API.app.core.Local_LLM import http_utils
+from tldw_Server_API.app.core.Local_LLM import handler_utils
 
 
 def redact_cmd_args(*args, **kwargs):
@@ -43,11 +44,7 @@ async def request_json(*args, **kwargs):
 async def wait_for_http_ready(*args, **kwargs):
     """Proxy readiness poller preserving test expectations."""
     return await http_utils.wait_for_http_ready(*args, **kwargs)
-# from .base_handler import BaseLLMHandler
-# from .exceptions import ModelNotFoundError, ModelDownloadError, ServerError, InferenceError
-# from .utils_loader import logging, project_utils # From the loader
-# from .config_model import LlamafileConfig
-#
+
 ########################################################################################################################
 #
 # Functions:
@@ -68,82 +65,49 @@ class LlamafileHandler(BaseLLMHandler):
         self._active_servers: Dict[int, asyncio.subprocess.Process] = {}
 
         # Apply environment overrides
-        def _env_bool(name: str):
-            v = os.getenv(name)
-            if v is None:
-                return None
-            return str(v).strip().lower() in {"1", "true", "yes", "on"}
-
-        def _env_int(name: str):
-            v = os.getenv(name)
-            if v is None:
-                return None
-            try:
-                return int(v)
-            except ValueError:
-                return None
-
-        def _env_paths(name: str):
-            v = os.getenv(name)
-            if not v:
-                return None
-            parts = [p.strip() for p in v.split(",") if p.strip()]
-            return [Path(p) for p in parts]
-
-        b = _env_bool("LOCAL_LLM_ALLOW_CLI_SECRETS")
-        if b is not None:
-            self.config.allow_cli_secrets = b
-        b = _env_bool("LOCAL_LLM_PORT_AUTOSELECT")
-        if b is not None:
-            self.config.port_autoselect = b
-        i = _env_int("LOCAL_LLM_PORT_PROBE_MAX")
-        if i is not None:
-            self.config.port_probe_max = i
-        paths = _env_paths("LOCAL_LLM_ALLOWED_PATHS")
-        if paths is not None:
-            self.config.allowed_paths = paths
+        handler_utils.apply_env_overrides(self.config)
 
         self._setup_signal_handlers()  # For cleaning up on exit
+        self._cleanup_done = False  # Guard against duplicate cleanup
         self.metrics = {"starts": 0, "stops": 0, "start_errors": 0, "readiness_time_sum": 0.0, "readiness_count": 0}
+
+    def _safe_log(self, level: str, msg: str, *args):
+        """Log defensively to avoid errors when sinks are closed during atexit."""
+        handler_utils.safe_log(self.logger, level, msg, *args)
 
     def get_metrics(self) -> Dict[str, Any]:
         return dict(self.metrics)
 
     def _is_port_free(self, host: str, port: int) -> bool:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                s.bind((host, port))
-                return True
-            except OSError:
-                return False
+        return handler_utils.is_port_free(host, port)
 
     def _pick_port(self, host: str, start_port: int) -> int:
+        """Find an available port. Uses self._is_port_free for testability."""
         if not getattr(self.config, "port_autoselect", True):
             return start_port
         max_probe = int(getattr(self.config, "port_probe_max", 10) or 0)
         for i in range(max_probe + 1):
-            cand = start_port + i
-            if self._is_port_free(host, cand):
-                return cand
-        return start_port
+            candidate = start_port + i
+            if self._is_port_free(host, candidate):
+                return candidate
+        return start_port  # Fallback
 
     def _denylist_check(self, args: Dict[str, Any]):
-        if not getattr(self.config, "allow_cli_secrets", False):
-            bad = [k for k in args.keys() if k in {"hf_token", "token"}]
-            if bad:
-                raise ServerError(f"Refusing secret flags {bad}. Use env (e.g., HF_TOKEN) or enable allow_cli_secrets.")
+        try:
+            handler_utils.check_denylist(
+                args,
+                allow_secrets=getattr(self.config, "allow_cli_secrets", False),
+            )
+        except ValueError as e:
+            raise ServerError(str(e))
 
     def _is_path_allowed(self, p: Path) -> bool:
-        try: pr = p.resolve()
-        except Exception: return False
-        bases = [self.models_dir.resolve()]
-        extra = getattr(self.config, "allowed_paths", None) or []
-        try:
-            bases.extend([Path(x).resolve() for x in extra])
-        except Exception:
-            pass
-        return any(str(pr).startswith(str(base)) for base in bases)
+        """Check if path is under allowed directories."""
+        base_dirs = handler_utils.build_allowed_paths(
+            self.models_dir,
+            getattr(self.config, "allowed_paths", None),
+        )
+        return handler_utils.is_path_allowed(p, base_dirs)
 
     # --- Llamafile Executable Management ---
     async def download_latest_llamafile_executable(self, force_download: bool = False) -> Path:
@@ -419,14 +383,22 @@ class LlamafileHandler(BaseLLMHandler):
             if process.returncode is not None or not is_ready:
                 stderr_output = ""
                 if process.stderr:
-                    err_bytes = await process.stderr.read()
-                    stderr_output = err_bytes.decode(errors='ignore').strip()
+                    try:
+                        # Use timeout to prevent blocking indefinitely if server is still writing
+                        err_bytes = await asyncio.wait_for(process.stderr.read(), timeout=5.0)
+                        stderr_output = err_bytes.decode(errors='ignore').strip()
+                    except asyncio.TimeoutError:
+                        stderr_output = "(stderr read timed out after 5s)"
+                        self.logger.warning("stderr read timed out during startup failure diagnosis")
                 self.logger.error(
                     f"Llamafile server failed to start or become ready for {model_filename}. Exit code: {process.returncode}. Stderr: {stderr_output}")
                 stdout_output = ""
                 if process.stdout:
-                    out_bytes = await process.stdout.read()
-                    stdout_output = out_bytes.decode(errors='ignore').strip()
+                    try:
+                        out_bytes = await asyncio.wait_for(process.stdout.read(), timeout=5.0)
+                        stdout_output = out_bytes.decode(errors='ignore').strip()
+                    except asyncio.TimeoutError:
+                        stdout_output = "(stdout read timed out after 5s)"
                 if stdout_output: self.logger.error(f"Llamafile server stdout: {stdout_output}")
                 self.metrics["start_errors"] += 1
                 raise ServerError(f"Llamafile server failed to start. Stderr: {stderr_output}")
@@ -615,27 +587,39 @@ class LlamafileHandler(BaseLLMHandler):
                 return result
             except httpx.HTTPStatusError as e:
                 error_text = e.response.text
-                self.logger.error("Llamafile API error ({}) from {}: {}", e.response.status_code, api_url, error_text,
-                                  exc_info=True)
+                self.logger.error(
+                    f"Llamafile API error ({e.response.status_code}) from {api_url}: {error_text}",
+                    exc_info=True
+                )
                 raise InferenceError(f"Llamafile API error ({e.response.status_code}): {error_text}")
             except httpx.RequestError as e:
-                self.logger.error("Could not connect or communicate with Llamafile server at {}: {}", api_url, e,
-                                  exc_info=True)
+                self.logger.error(
+                    f"Could not connect or communicate with Llamafile server at {api_url}: {e}",
+                    exc_info=True
+                )
                 raise ServerError(f"Could not connect/communicate with Llamafile server at {api_url}: {e}")
             except Exception as e:
                 self.logger.error(f"Unexpected error during llamafile inference to {api_url}: {e}", exc_info=True)
                 raise InferenceError(f"Unexpected error during llamafile inference: {e}")
 
-    def _cleanup_all_managed_servers_sync(self):  # Renamed to indicate it's synchronous
-        """Synchronous cleanup for signal handlers or app shutdown."""
-        self.logger.info("Cleaning up all managed llamafile servers (sync)...")
+    def _cleanup_all_managed_servers_sync(self):
+        """Synchronous cleanup for signal handlers or app shutdown.
+
+        Uses _safe_log to avoid errors when logging sinks are closed during shutdown.
+        """
+        # Guard against duplicate cleanup
+        if self._cleanup_done:
+            return
+        self._cleanup_done = True
+
+        self._safe_log("info", "Cleaning up all managed llamafile servers (sync)...")
         ports_to_remove = list(self._active_servers.keys())
         for port in ports_to_remove:
             proc = self._active_servers.get(port)
             # Check if proc exists and if its returncode is None (meaning it might be running)
             if proc and proc.returncode is None:
                 pid = proc.pid
-                self.logger.info(f"Stopping server on port {port}, PID {pid}...")
+                self._safe_log("info", f"Stopping server on port {port}, PID {pid}...")
                 try:
                     if platform.system() == "Windows":
                         proc.terminate()
@@ -644,60 +628,48 @@ class LlamafileHandler(BaseLLMHandler):
                         try:
                             pgid = os.getpgid(pid)
                             os.killpg(pgid, signal.SIGTERM)
-                            self.logger.info(f"Sent SIGTERM to process group {pgid} (leader PID {pid}).")
+                            self._safe_log("debug", f"Sent SIGTERM to process group {pgid} (leader PID {pid}).")
                         except ProcessLookupError:
-                            self.logger.warning(
+                            self._safe_log("warning",
                                 f"Process {pid} (or group) not found during SIGTERM, likely already terminated.")
-                            # Fallback just in case, or if it wasn't started with setsid somehow
                             proc.terminate()
 
-                    # proc.wait() is a coroutine, cannot be called directly in sync func
-                    # For a sync cleanup, we might need to use a different approach or
-                    # acknowledge that immediate reaping might not happen here.
-                    # A simple approach for atexit: send terminate and hope for the best.
-                    # More robust would be to launch a small async task to await termination.
-                    # For now, just send terminate/kill.
+                    # Best-effort wait: try to reap using running event loop if available
                     try:
-                        # Python's subprocess module Popen has a wait() method, but asyncio.Process does not have a sync one.
-                        # We are in a sync function (_cleanup_all_managed_servers_sync)
-                        # We can't `await proc.wait()`.
-                        # The OS will eventually reap, but for cleaner shutdown logging:
-                        self.logger.debug(f"Termination signal sent to PID {pid}. OS will handle reaping.")
-                    except Exception as e_wait:  # Catch any error from trying to wait
-                        self.logger.warning(f"Error during proc.wait() for PID {pid} in sync cleanup: {e_wait}")
+                        loop = asyncio.get_running_loop()
+                        asyncio.run_coroutine_threadsafe(proc.wait(), loop)
+                    except RuntimeError:
+                        # No running event loop - best effort, OS will reap eventually
+                        pass
+                    self._safe_log("debug", f"Termination signal sent to PID {pid}. OS will handle reaping.")
 
-
-                except ProcessLookupError:  # If process died between check and action
-                    self.logger.warning(f"Process {pid} not found during termination, likely already exited.")
+                except ProcessLookupError:
+                    self._safe_log("warning", f"Process {pid} not found during termination, likely already exited.")
                 except Exception as e:
-                    self.logger.error(f"Error during cleanup of PID {pid}: {e}. Attempting kill.")
-                    if proc.returncode is None:  # Check again before kill
+                    self._safe_log("error", f"Error during cleanup of PID {pid}: {e}. Attempting kill.")
+                    if proc.returncode is None:
                         if platform.system() == "Windows":
                             if hasattr(proc, "kill"):
                                 try:
                                     proc.kill()
-                                except Exception as e_pkill:
-                                    self.logger.debug(f"proc.kill() failed for PID {pid} on Windows: {e_pkill}")
+                                except Exception:
+                                    pass
                         else:
                             try:
                                 pgid = os.getpgid(pid)
                                 os.killpg(pgid, signal.SIGKILL)
-                            except Exception as e_kill:
-                                self.logger.debug(
-                                    f"os.killpg failed for PID {pid} (pgid may be absent): error={e_kill}; "
-                                    f"falling back to proc.kill() if available"
-                                )
+                            except Exception:
                                 if hasattr(proc, "kill"):
                                     try:
-                                        proc.kill()  # fallback
-                                    except Exception as e_pkill:
-                                        self.logger.debug(f"proc.kill() fallback failed for PID {pid}: {e_pkill}")
+                                        proc.kill()
+                                    except Exception:
+                                        pass
             if port in self._active_servers:
                 del self._active_servers[port]
-        self.logger.info("Managed llamafile server synchronous cleanup attempt complete.")
+        self._safe_log("info", "Managed llamafile server synchronous cleanup complete.")
 
     def _signal_handler(self, sig, frame):
-        self.logger.info(f'Signal handler called with signal: {sig}')
+        self._safe_log("info", f'Signal handler called with signal: {sig}')
         self._cleanup_all_managed_servers_sync()
         sys.exit(0)
 

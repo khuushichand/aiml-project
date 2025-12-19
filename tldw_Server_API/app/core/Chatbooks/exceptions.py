@@ -68,6 +68,48 @@ class ValidationError(ChatbookException):
         super().__init__(message, **kwargs)
 
 
+class MediaQualityError(ValidationError):
+    """Raised when media quality value is invalid."""
+
+    def __init__(self, message: str, quality_value: Optional[str] = None, **kwargs):
+        """
+        Initialize MediaQualityError.
+
+        Args:
+            message: Error message
+            quality_value: The invalid quality value provided
+            **kwargs: Additional context
+        """
+        context = kwargs.get('context', {})
+        if quality_value:
+            context['quality_value'] = quality_value
+        context['valid_values'] = ['thumbnail', 'compressed', 'original']
+        kwargs['context'] = context
+        kwargs['error_code'] = kwargs.get('error_code', 'MEDIA_QUALITY_ERROR')
+        super().__init__(message, field='media_quality', **kwargs)
+
+
+class AuthorValidationError(ValidationError):
+    """Raised when author field validation fails."""
+
+    def __init__(self, message: str, author_value: Optional[str] = None, **kwargs):
+        """
+        Initialize AuthorValidationError.
+
+        Args:
+            message: Error message
+            author_value: The invalid author value (truncated for safety)
+            **kwargs: Additional context
+        """
+        context = kwargs.get('context', {})
+        if author_value:
+            # Truncate for safety - don't log potentially large/malicious values
+            context['author_value'] = author_value[:50] if len(author_value) > 50 else author_value
+        kwargs['context'] = context
+        kwargs['error_code'] = kwargs.get('error_code', 'AUTHOR_VALIDATION_ERROR')
+        super().__init__(message, field='author', **kwargs)
+
+
 class FileOperationError(ChatbookException):
     """Raised when file operations fail."""
 
@@ -179,12 +221,12 @@ class JobError(ChatbookException):
         super().__init__(message, **kwargs)
 
 
-class ImportError(ChatbookException):
+class ChatbookImportError(ChatbookException):
     """Raised when chatbook import fails."""
 
     def __init__(self, message: str, import_file: Optional[str] = None, item_type: Optional[str] = None, **kwargs):
         """
-        Initialize ImportError.
+        Initialize ChatbookImportError.
 
         Args:
             message: Error message
@@ -322,12 +364,12 @@ class NetworkError(RetryableError):
         super().__init__(message, **kwargs)
 
 
-class TimeoutError(ChatbookException):
+class ChatbookTimeoutError(ChatbookException):
     """Raised when operations timeout."""
 
     def __init__(self, message: str, timeout_seconds: Optional[int] = None, **kwargs):
         """
-        Initialize TimeoutError.
+        Initialize ChatbookTimeoutError.
 
         Args:
             message: Error message
@@ -339,6 +381,26 @@ class TimeoutError(ChatbookException):
             context['timeout_seconds'] = timeout_seconds
         kwargs['context'] = context
         kwargs['error_code'] = kwargs.get('error_code', 'TIMEOUT_ERROR')
+        super().__init__(message, **kwargs)
+
+
+class ConfigurationError(ChatbookException):
+    """Raised when configuration is invalid or missing."""
+
+    def __init__(self, message: str, config_key: Optional[str] = None, **kwargs):
+        """
+        Initialize ConfigurationError.
+
+        Args:
+            message: Error message
+            config_key: Configuration key that is invalid or missing
+            **kwargs: Additional context
+        """
+        context = kwargs.get('context', {})
+        if config_key:
+            context['config_key'] = config_key
+        kwargs['context'] = context
+        kwargs['error_code'] = kwargs.get('error_code', 'CONFIGURATION_ERROR')
         super().__init__(message, **kwargs)
 
 
@@ -390,3 +452,32 @@ def should_circuit_break(error_count: int, threshold: int = 5) -> bool:
         True if circuit should open
     """
     return error_count >= threshold
+
+
+# Public API
+__all__ = [
+    # Base exceptions
+    "ChatbookException",
+    "ValidationError",
+    "MediaQualityError",
+    "AuthorValidationError",
+    "FileOperationError",
+    "DatabaseError",
+    "QuotaExceededError",
+    "SecurityError",
+    "JobError",
+    # Import/Export exceptions
+    "ChatbookImportError",
+    "ChatbookTimeoutError",
+    "ExportError",
+    "ArchiveError",
+    "ConflictError",
+    "TemporaryError",
+    "RetryableError",
+    "ConfigurationError",
+    "NetworkError",
+    # Utility functions
+    "is_retryable",
+    "get_retry_delay",
+    "should_circuit_break",
+]

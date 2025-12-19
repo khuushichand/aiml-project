@@ -10,7 +10,9 @@ import asyncio
 import hashlib
 import pickle
 import json
-from typing import Dict, Optional, Any, List, Tuple
+import os
+import re
+from typing import Dict, Optional, Any, List, Tuple, Type
 from dataclasses import dataclass, field
 import threading
 import numpy as np
@@ -171,7 +173,7 @@ class SemanticCache:
             embedding: Pre-computed embedding (optional)
 
         Returns:
-            Tuple of (cache_key, similarity_score) or None
+            Tuple of (cached_query, similarity_score) or None
         """
         if embedding is None:
             embedding = await self.get_embedding(query)
@@ -193,8 +195,11 @@ class SemanticCache:
                         best_key = key
 
             if best_key:
-                logger.debug(f"Found similar query with similarity {best_similarity:.3f}")
-                return best_key, best_similarity
+                entry = self._cache.get(best_key)
+                cached_query = getattr(entry, "query", None) if entry else None
+                if cached_query:
+                    logger.debug(f"Found similar query with similarity {best_similarity:.3f}")
+                    return cached_query, best_similarity
 
         return None
 
@@ -244,7 +249,8 @@ class SemanticCache:
                 similar_result = await self.find_similar(query, embedding)
 
                 if similar_result:
-                    similar_key, similarity = similar_result
+                    cached_query, similarity = similar_result
+                    similar_key = self._generate_key(cached_query)
                     with self._lock:
                         if similar_key in self._cache:
                             entry = self._cache[similar_key]
@@ -409,10 +415,10 @@ class SemanticCache:
                     state["cache"][key] = {
                         "value": entry.value,  # Note: Complex objects may need special handling
                         "query": entry.query,
-                        "timestamp": entry.timestamp,
+                        "timestamp": entry.created_at,
                         "ttl": entry.ttl,
                         "access_count": entry.access_count,
-                        "last_access": entry.last_access
+                        "last_access": entry.last_accessed,
                     }
 
                 # Save embeddings separately as binary
@@ -445,8 +451,8 @@ class SemanticCache:
 
                 # Restore cache entries
                 for key, entry_data in state.get("cache", {}).items():
-                    created_at = entry_data.get("timestamp", time.time())
-                    last_accessed = entry_data.get("last_access", created_at)
+                    created_at = entry_data.get("created_at", entry_data.get("timestamp", time.time()))
+                    last_accessed = entry_data.get("last_accessed", entry_data.get("last_access", created_at))
                     entry = SemanticCacheEntry(
                         value=entry_data["value"],
                         created_at=created_at,
@@ -563,3 +569,80 @@ class AdaptiveCache(SemanticCache):
                 suggestions.append(pattern)
 
         return suggestions
+
+
+_SHARED_CACHE_LOCK = threading.Lock()
+_SHARED_CACHES: Dict[Tuple[Type[SemanticCache], str, float, Optional[int], Optional[int], Optional[str]], SemanticCache] = {}
+_DEFAULT_CACHE_DIR: Optional[Path] = None
+
+
+def _normalize_namespace(namespace: Optional[str]) -> str:
+    raw = str(namespace).strip() if namespace is not None else ""
+    if not raw:
+        return "default"
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", raw)
+
+
+def _resolve_default_cache_dir() -> Optional[Path]:
+    global _DEFAULT_CACHE_DIR
+    if _DEFAULT_CACHE_DIR is not None:
+        return _DEFAULT_CACHE_DIR
+    base_dir = os.getenv("RAG_SEMANTIC_CACHE_DIR") or os.getenv("RAG_CACHE_DIR")
+    if base_dir:
+        _DEFAULT_CACHE_DIR = Path(base_dir).expanduser()
+        return _DEFAULT_CACHE_DIR
+    try:
+        from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+        cfg = load_and_log_configs() or {}
+        project_root = cfg.get("PROJECT_ROOT")
+        if project_root:
+            _DEFAULT_CACHE_DIR = Path(project_root) / "Databases" / "cache"
+            return _DEFAULT_CACHE_DIR
+    except Exception:
+        return None
+    return None
+
+
+def _default_persist_path(namespace_key: str) -> Optional[str]:
+    base_dir = _resolve_default_cache_dir()
+    if not base_dir:
+        return None
+    return str((base_dir / f"semantic_cache_{namespace_key}.json").resolve())
+
+
+def get_shared_cache(
+    cache_cls: Type[SemanticCache],
+    *,
+    similarity_threshold: float,
+    ttl: Optional[int],
+    max_size: Optional[int],
+    persist_path: Optional[str] = None,
+    embedding_model: Optional[Any] = None,
+    namespace: Optional[str] = None,
+) -> SemanticCache:
+    namespace_key = _normalize_namespace(namespace)
+    persist_path = persist_path or _default_persist_path(namespace_key)
+    if persist_path:
+        try:
+            Path(persist_path).parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+    ttl_key = int(ttl) if ttl is not None else None
+    max_size_key = int(max_size) if max_size is not None else None
+    cache_key = (cache_cls, namespace_key, float(similarity_threshold), ttl_key, max_size_key, persist_path)
+    with _SHARED_CACHE_LOCK:
+        cache = _SHARED_CACHES.get(cache_key)
+        if cache is None:
+            try:
+                cache = cache_cls(
+                    max_size=max_size or 1000,
+                    similarity_threshold=similarity_threshold,
+                    ttl=ttl,
+                    persist_path=persist_path,
+                    embedding_model=embedding_model,
+                    namespace=namespace,
+                )
+            except TypeError:
+                cache = cache_cls(similarity_threshold=similarity_threshold)  # type: ignore[call-arg]
+            _SHARED_CACHES[cache_key] = cache
+    return cache

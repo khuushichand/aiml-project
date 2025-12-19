@@ -3,7 +3,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 
 class FakeAsyncRedis:
@@ -42,20 +41,12 @@ class FakeAsyncRedis:
         self.closed = True
 
 
-def _override_user(admin=False):
-    async def _f():
-        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
-        return User(id=1, username="admin" if admin else "u", email="u@x", is_active=True, is_admin=admin)
-    return _f
-
-
 @pytest.mark.unit
-def test_dlq_list_and_requeue(monkeypatch):
+def test_dlq_list_and_requeue(monkeypatch, admin_user):
     client = TestClient(app)
     client.cookies.set("csrf_token", "x")
     client.headers["X-CSRF-Token"] = "x"
     client.headers["Authorization"] = "Bearer key"
-    app.dependency_overrides[get_request_user] = _override_user(admin=True)
 
     # Patch redis client factory used by endpoints
     fake = FakeAsyncRedis()
@@ -103,5 +94,4 @@ def test_dlq_list_and_requeue(monkeypatch):
     # Verify DLQ deletion
     assert len(fake.streams.get(dlq_stream, [])) == 0
 
-    # Cleanup override
-    app.dependency_overrides.pop(get_request_user, None)
+    # Cleanup handled by admin_user fixture

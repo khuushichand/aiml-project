@@ -55,6 +55,19 @@ def summarize(
     )
 
 
+def _build_messages(
+        *,
+        system_prompt: Optional[str],
+        user_prompt: Optional[str],
+) -> List[Dict[str, str]]:
+    messages: List[Dict[str, str]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    if user_prompt:
+        messages.append({"role": "user", "content": user_prompt})
+    return messages
+
+
 #
 #######################################################################################################################
 #
@@ -294,14 +307,30 @@ def analyze_question(question: str, api_endpoint) -> Dict:
             """
 
     input_data = "Follow the above instructions."
+    messages_payload = _build_messages(
+        system_prompt=analyze_search_results_prompt_2,
+        user_prompt=input_data,
+    )
 
     sub_questions: List[str] = []
     for attempt in range(3):
         try:
             logging.info(f"Generating sub-questions (attempt {attempt + 1})")
 
-            response = chat_api_call(api_endpoint, None, input_data, sub_question_generation_prompt, temp=0.7,
-                                     system_message=None, streaming=False, minp=None, maxp=None, model=None)
+            messages_payload = _build_messages(
+                system_prompt=sub_question_generation_prompt,
+                user_prompt=input_data,
+            )
+            response = chat_api_call(
+                api_endpoint=api_endpoint,
+                messages_payload=messages_payload,
+                temp=0.7,
+                system_message=None,
+                streaming=False,
+                minp=None,
+                maxp=None,
+                model=None,
+            )
             if response:
                 try:
                     # Try to parse as JSON first
@@ -402,6 +431,10 @@ async def search_result_relevance(
                 Reasoning: [Your reasoning for the selections]
                 """
         input_data = "Evaluate the relevance of the search result."
+        messages_payload = _build_messages(
+            system_prompt=eval_prompt,
+            user_prompt=input_data,
+        )
 
         try:
             # Add delay to avoid rate limiting
@@ -415,9 +448,8 @@ async def search_result_relevance(
             # Evaluate relevance
             relevancy_result = chat_api_call(
                 api_endpoint=api_endpoint,
+                messages_payload=messages_payload,
                 api_key=None,
-                input_data=input_data,
-                prompt=eval_prompt,
                 temp=0.7,
                 system_message=None,
                 streaming=False,
@@ -832,14 +864,17 @@ def aggregate_results(
         """
 
     input_data = "Follow the above instructions."
+    messages_payload = _build_messages(
+        system_prompt=analyze_search_results_prompt_2,
+        user_prompt=input_data,
+    )
 
     try:
         logging.info("Generating the report")
         returned_response = chat_api_call(
             api_endpoint=api_endpoint,
+            messages_payload=messages_payload,
             api_key=None,
-            input_data=input_data,
-            prompt=analyze_search_results_prompt_2,
             temp=0.7,
             system_message=None,
             streaming=False,
@@ -943,9 +978,13 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             web_search_results = {"results": ddg_results}
 
         elif search_engine.lower() == "google":
-            # Convert site_blacklist list to a comma-separated string
-            if site_blacklist and isinstance(site_blacklist, list):
-                site_blacklist = ",".join(site_blacklist)
+            site_blacklist_list = site_blacklist if isinstance(site_blacklist, list) else None
+            if site_blacklist_list:
+                site_blacklist_value: Optional[str] = ",".join(site_blacklist_list)
+            elif isinstance(site_blacklist, str):
+                site_blacklist_value = site_blacklist
+            else:
+                site_blacklist_value = None
 
             # Prepare the arguments for search_web_google
             google_args = {
@@ -962,14 +1001,12 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             }
 
             # If site_blacklist has multiple domains, do not use siteSearch
-            if site_blacklist and len(site_blacklist) == 1:
-                google_args["siteSearch"] = site_blacklist[0]
+            if site_blacklist_list and len(site_blacklist_list) == 1:
+                google_args["siteSearch"] = site_blacklist_list[0]
                 google_args["siteSearchFilter"] = "e"
-            else:
-                # Do not use siteSearch for multiple domains
-                # Either skip it entirely or see Option 2 below
-                google_args.pop("siteSearch", None)
-                google_args.pop("siteSearchFilter", None)
+            elif isinstance(site_blacklist, str) and site_blacklist:
+                google_args["siteSearch"] = site_blacklist
+                google_args["siteSearchFilter"] = "e"
 
             # Add optional parameters only if they are provided
             if date_range:
@@ -980,8 +1017,8 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
                 google_args["excludeTerms"] = excludeTerms
             if filter:
                 google_args["filter"] = filter
-            if site_blacklist:
-                google_args["site_blacklist"] = site_blacklist
+            if site_blacklist_value:
+                google_args["site_blacklist"] = site_blacklist_value
             if sort_results_by:
                 google_args["sort_results_by"] = sort_results_by
 
@@ -991,7 +1028,7 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             return web_search_results_dict
 
         elif search_engine.lower() == "kagi":
-            web_search_results = search_web_kagi(search_query, content_country)
+            web_search_results = search_web_kagi(query=search_query, limit=result_count)
 
         elif search_engine.lower() == "serper":
             raise NotImplementedError("Serper search is not implemented")
@@ -1601,6 +1638,8 @@ def search_web_google(
         search_result_language: Optional[str] = None,
         safesearch: Optional[str] = None,
         site_blacklist: Optional[str] = None,
+        siteSearch: Optional[str] = None,
+        siteSearchFilter: Optional[str] = None,
         sort_results_by: Optional[str] = None
 ) -> Dict[str, Any]:
     """
@@ -1621,6 +1660,8 @@ def search_web_google(
     :param search_result_language: Language of search results
     :param safesearch: Safe search setting
     :param site_blacklist: Single Site to exclude from search
+    :param siteSearch: Google CSE siteSearch parameter
+    :param siteSearchFilter: Google CSE siteSearchFilter parameter (e=exclude, i=include)
     :param sort_results_by: Sorting criteria for results
     :return: JSON response from Google Search API
     """
@@ -1681,6 +1722,10 @@ def search_web_google(
             safesearch = loaded_config_data['search_engines']['google_safe_search']
         if safesearch:
             params["safe"] = safesearch
+        if siteSearch:
+            params["siteSearch"] = siteSearch
+        if siteSearchFilter:
+            params["siteSearchFilter"] = siteSearchFilter
         if sort_results_by:
             params["sort"] = sort_results_by
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 
 
 # =============================================================================
@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 class PlanLimitsResponse(BaseModel):
     """Plan limits details."""
-    storage_gb: Optional[int] = None
+    storage_mb: Optional[int] = None
     api_calls_day: Optional[int] = None
     llm_tokens_month: Optional[int] = None
     team_members: Optional[int] = None
@@ -77,16 +77,23 @@ class SubscriptionUsageResponse(BaseModel):
     has_exceeded: bool
 
 
+class RagUsageDebugResponse(BaseModel):
+    """Debug view of RAG query usage vs daily limit."""
+    org_id: int
+    rag_queries_today: int
+    rag_queries_day_limit: Optional[int] = None
+
+
 # =============================================================================
 # Checkout & Portal
 # =============================================================================
 
 class CheckoutRequest(BaseModel):
     """Request to create a checkout session."""
-    plan_name: str = Field(..., pattern=r"^(pro|enterprise)$")
-    billing_cycle: str = Field("monthly", pattern=r"^(monthly|yearly)$")
-    success_url: str = Field(..., min_length=1)
-    cancel_url: str = Field(..., min_length=1)
+    plan_name: str = Field(..., pattern=r"^(pro|enterprise)$", description="Plan to subscribe to (pro or enterprise)")
+    billing_cycle: str = Field("monthly", pattern=r"^(monthly|yearly)$", description="Billing frequency")
+    success_url: HttpUrl = Field(..., description="URL to redirect to after successful checkout")
+    cancel_url: HttpUrl = Field(..., description="URL to redirect to if checkout is cancelled")
 
 
 class CheckoutResponse(BaseModel):
@@ -97,7 +104,7 @@ class CheckoutResponse(BaseModel):
 
 class PortalRequest(BaseModel):
     """Request to create a billing portal session."""
-    return_url: str = Field(..., min_length=1)
+    return_url: HttpUrl = Field(..., description="URL to redirect to after leaving the portal")
 
 
 class PortalResponse(BaseModel):

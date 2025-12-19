@@ -8,7 +8,7 @@ import hmac
 import json
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any, List, TYPE_CHECKING
+from typing import Optional, Dict, Any, List, Set, Union, TYPE_CHECKING
 from enum import Enum
 #
 # 3rd-party imports
@@ -67,6 +67,77 @@ class APIKeyScope(Enum):
     WRITE = "write"
     ADMIN = "admin"
     SERVICE = "service"
+
+
+# Valid scope values for validation
+VALID_SCOPE_VALUES = frozenset({"read", "write", "admin", "service"})
+
+
+def normalize_scope(scope: Optional[Union[str, List[str]]]) -> Set[str]:
+    """
+    Normalize stored scope value to an explicit set of scope strings.
+
+    Supports both single string scopes and list scopes for backward compatibility.
+
+    Args:
+        scope: A scope string, list of scope strings, JSON array string, or None
+
+    Returns:
+        Set of normalized scope strings (lowercase, stripped)
+
+    Examples:
+        >>> normalize_scope(None)
+        {'read'}
+        >>> normalize_scope("write")
+        {'write'}
+        >>> normalize_scope(["read", "write"])
+        {'read', 'write'}
+        >>> normalize_scope('["read", "admin"]')
+        {'read', 'admin'}
+    """
+    if scope is None:
+        return {"read"}
+
+    if isinstance(scope, str):
+        scope_str = scope.strip()
+        # Handle JSON array stored as string
+        if scope_str.startswith("["):
+            try:
+                parsed = json.loads(scope_str)
+                if isinstance(parsed, list):
+                    return {s.strip().lower() for s in parsed if isinstance(s, str) and s.strip()}
+            except json.JSONDecodeError:
+                pass
+        # Single scope string
+        return {scope_str.lower()}
+
+    if isinstance(scope, (list, tuple)):
+        return {s.strip().lower() for s in scope if isinstance(s, str) and s.strip()}
+
+    return {"read"}
+
+
+def has_scope(key_scopes: Set[str], required_scope: str) -> bool:
+    """
+    Check if key scopes satisfy the required scope using explicit matching.
+
+    Admin and service scopes always satisfy any requirement (superuser bypass).
+    Otherwise, the required scope must be explicitly present in key_scopes.
+
+    Args:
+        key_scopes: Set of scope strings from the API key
+        required_scope: Single scope string to check for
+
+    Returns:
+        True if the key has the required scope or has admin/service bypass
+    """
+    # Admin and service scopes have full access
+    if "admin" in key_scopes or "service" in key_scopes:
+        return True
+
+    # Explicit scope matching
+    return required_scope.lower() in key_scopes
+
 
 #######################################################################################################################
 #
@@ -500,9 +571,12 @@ class APIKeyManager:
             if expires_at_raw:
                 expires_at = self._parse_expires_at(expires_at_raw)
                 if expires_at is None:
-                    logger.error(
-                        f"API key {key_info.get('id')} expires_at could not be parsed; denying access"
-                    )
+                    if self.settings.PII_REDACT_LOGS:
+                        logger.error("API key expires_at could not be parsed; denying access (details redacted)")
+                    else:
+                        logger.error(
+                            f"API key {key_info.get('id')} expires_at could not be parsed; denying access"
+                        )
                     return None
                 now_utc = datetime.now(timezone.utc)
                 if expires_at < now_utc:
@@ -521,31 +595,44 @@ class APIKeyManager:
                         raise TypeError("API key allowlist must be stored as JSON array")
                     allowed_ips = {str(ip).strip() for ip in allowed_ips_raw if str(ip).strip()}
                 except (TypeError, ValueError, json.JSONDecodeError) as decode_error:
-                    logger.error(
-                        f"API key {key_info.get('id')} allowlist could not be decoded; denying access: {decode_error}"
-                    )
+                    if self.settings.PII_REDACT_LOGS:
+                        logger.error("API key allowlist could not be decoded; denying access (details redacted)")
+                    else:
+                        logger.error(
+                            f"API key {key_info.get('id')} allowlist could not be decoded; denying access: {decode_error}"
+                        )
                     return None
                 if allowed_ips:
                     normalized_ip = (ip_address or "").strip()
                     if not normalized_ip:
-                        logger.warning(
-                            f"API key {key_info.get('id')} requires client IP but none was supplied; denying access"
-                        )
+                        if self.settings.PII_REDACT_LOGS:
+                            logger.warning("API key requires client IP but none was supplied; denying access (details redacted)")
+                        else:
+                            logger.warning(
+                                f"API key {key_info.get('id')} requires client IP but none was supplied; denying access"
+                            )
                         return None
                     if normalized_ip not in allowed_ips:
-                        logger.warning(
-                            f"API key {key_info.get('id')} used from unauthorized IP: {normalized_ip}"
-                        )
+                        if self.settings.PII_REDACT_LOGS:
+                            logger.warning("API key used from unauthorized IP; denying access (details redacted)")
+                        else:
+                            logger.warning(
+                                f"API key {key_info.get('id')} used from unauthorized IP: {normalized_ip}"
+                            )
                         return None
 
-            if stored_hash and stored_hash != primary_hash:
+            # Use timing-safe comparison to prevent timing attacks
+            if stored_hash and not hmac.compare_digest(stored_hash, primary_hash):
                 try:
                     await repo.update_key_hash(key_info["id"], primary_hash)
                     key_info["key_hash"] = primary_hash
                 except Exception as normalize_exc:
-                    logger.warning(
-                        f"Failed to normalize API key hash for key {key_info.get('id')}: {normalize_exc}"
-                    )
+                    if self.settings.PII_REDACT_LOGS:
+                        logger.warning("Failed to normalize API key hash (details redacted)")
+                    else:
+                        logger.warning(
+                            f"Failed to normalize API key hash for key {key_info.get('id')}: {normalize_exc}"
+                        )
             key_info.pop("key_hash", None)
 
             # Check scope
@@ -586,7 +673,11 @@ class APIKeyManager:
         expires_in_days: Optional[int] = 90
     ) -> Dict[str, Any]:
         """
-        Rotate an API key - create new one and revoke old one
+        Rotate an API key - atomically create new one and revoke old one.
+
+        This operation is atomic: either both the new key creation and old key
+        revocation succeed, or neither happens. This prevents the security issue
+        where a new key is created but the old key remains active.
 
         Args:
             key_id: ID of the key to rotate
@@ -617,34 +708,57 @@ class APIKeyManager:
                     raise TypeError("API key allowlist must be stored as JSON array")
                 allowed_ips = decoded_allowed_ips  # type: ignore[assignment]
 
-            # Create new key with same settings
-            new_key_result = await self.create_api_key(
-                user_id=user_id,
-                name=f"{old_key['name']} (rotated)" if old_key['name'] else "Rotated key",
-                description=old_key['description'],
-                scope=old_key['scope'],
-                expires_in_days=expires_in_days,
-                rate_limit=old_key['rate_limit'],
-                allowed_ips=allowed_ips,
-                metadata=self._coerce_json_field(old_key.get('metadata'))
-            )
+            # Generate new key credentials
+            full_key, key_hash = self.generate_api_key()
+            key_prefix = full_key[:10] + "..."
 
-            # Update rotation references via repository
-            await repo.mark_rotated(
+            # Calculate expiration for new key
+            expires_at = None
+            if expires_in_days is not None:
+                expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
+
+            # Prepare new key metadata
+            new_name = f"{old_key['name']} (rotated)" if old_key['name'] else "Rotated key"
+            new_metadata = self._coerce_json_field(old_key.get('metadata'))
+
+            # Atomically create new key and mark old key as rotated
+            new_key_id = await repo.rotate_key_atomic(
+                user_id=user_id,
                 old_key_id=key_id,
-                new_key_id=new_key_result["id"],
+                new_key_hash=key_hash,
+                new_key_prefix=key_prefix,
+                new_name=new_name,
+                new_description=old_key['description'],
+                new_scope=old_key['scope'],
+                new_expires_at=expires_at,
+                new_rate_limit=old_key['rate_limit'],
+                new_allowed_ips=allowed_ips,
+                new_metadata=new_metadata,
                 rotated_status=APIKeyStatus.ROTATED.value,
                 reason="Key rotation",
                 revoked_at=datetime.now(timezone.utc),
             )
 
-            # Log the rotation
+            # Log the rotation (non-critical, outside transaction)
             await self._log_action(key_id, "rotated", user_id)
-            await self._log_action(new_key_result['id'], "created_from_rotation", user_id)
+            await self._log_action(new_key_id, "created_from_rotation", user_id)
 
-            logger.info(f"Rotated API key {key_id} to {new_key_result['id']}")
+            logger.info(f"Rotated API key {key_id} to {new_key_id}")
 
-            return new_key_result
+            # Return the new key information
+            return {
+                "id": new_key_id,
+                "key": full_key,  # Only shown once
+                "key_prefix": key_prefix,
+                "name": new_name,
+                "description": old_key['description'],
+                "scope": old_key['scope'],
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "rate_limit": old_key['rate_limit'],
+                "allowed_ips": allowed_ips,
+                "metadata": new_metadata,
+                "rotated_from": key_id,
+            }
 
         except (ValueError, InvalidTokenError):
             # Preserve auth/not-found semantics; callers map to appropriate 4xx.
@@ -751,19 +865,22 @@ class APIKeyManager:
         except Exception:  # noqa: BLE001 - best-effort cleanup must not break requests
             logger.opt(exception=True).error("Failed to cleanup expired keys")
 
-    def _has_scope(self, key_scope: str, required_scope: str) -> bool:
-        """Check if key scope satisfies required scope"""
-        scope_hierarchy = {
-            "read": 0,
-            "write": 1,
-            "admin": 2,
-            "service": 3
-        }
+    def _has_scope(self, key_scope: Optional[Union[str, List[str]]], required_scope: str) -> bool:
+        """
+        Check if key scope satisfies required scope using explicit matching.
 
-        key_level = scope_hierarchy.get(key_scope, 0)
-        required_level = scope_hierarchy.get(required_scope, 0)
+        Uses the module-level has_scope() function with normalize_scope() for
+        backward compatibility with both string and list scope formats.
 
-        return key_level >= required_level
+        Args:
+            key_scope: The API key's scope (string, list, or None)
+            required_scope: The scope required for the operation
+
+        Returns:
+            True if the key has the required scope or admin/service bypass
+        """
+        key_scopes = normalize_scope(key_scope)
+        return has_scope(key_scopes, required_scope)
 
     async def _update_usage(self, key_id: int, ip_address: Optional[str] = None) -> None:
         """Update usage statistics for a key"""

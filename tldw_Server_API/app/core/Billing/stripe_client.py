@@ -6,19 +6,27 @@ Handles customer creation, checkout sessions, billing portal, and subscription m
 """
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 from loguru import logger
 
 # Stripe import is optional - will be None if not installed
 try:
     import stripe
+    import stripe.error  # Import error module for specific exception types
     STRIPE_AVAILABLE = True
 except ImportError:
     stripe = None
     STRIPE_AVAILABLE = False
+
+# Error handling strategy:
+# - Most methods catch stripe.StripeError (base class) to log and re-raise
+# - get_subscription catches stripe.error.InvalidRequestError for "not found" (returns None)
+# - construct_webhook_event catches stripe.error.SignatureVerificationError for invalid signatures
 
 
 @dataclass
@@ -112,7 +120,8 @@ class StripeClient:
         self._require_stripe()
 
         try:
-            customer = stripe.Customer.create(
+            customer = await asyncio.to_thread(
+                stripe.Customer.create,
                 email=email,
                 name=name,
                 metadata=metadata or {},
@@ -164,7 +173,7 @@ class StripeClient:
                     "trial_period_days": trial_days,
                 }
 
-            session = stripe.checkout.Session.create(**params)
+            session = await asyncio.to_thread(stripe.checkout.Session.create, **params)
             logger.info(f"Created checkout session {session.id} for customer {customer_id}")
             return CheckoutSession(id=session.id, url=session.url)
         except stripe.StripeError as e:
@@ -190,7 +199,8 @@ class StripeClient:
         self._require_stripe()
 
         try:
-            session = stripe.billing_portal.Session.create(
+            session = await asyncio.to_thread(
+                stripe.billing_portal.Session.create,
                 customer=customer_id,
                 return_url=return_url,
             )
@@ -220,12 +230,16 @@ class StripeClient:
 
         try:
             if at_period_end:
-                subscription = stripe.Subscription.modify(
+                subscription = await asyncio.to_thread(
+                    stripe.Subscription.modify,
                     subscription_id,
                     cancel_at_period_end=True,
                 )
             else:
-                subscription = stripe.Subscription.cancel(subscription_id)
+                subscription = await asyncio.to_thread(
+                    stripe.Subscription.cancel,
+                    subscription_id,
+                )
 
             logger.info(f"Cancelled subscription {subscription_id} (at_period_end={at_period_end})")
             return {
@@ -251,7 +265,8 @@ class StripeClient:
         self._require_stripe()
 
         try:
-            subscription = stripe.Subscription.modify(
+            subscription = await asyncio.to_thread(
+                stripe.Subscription.modify,
                 subscription_id,
                 cancel_at_period_end=False,
             )
@@ -278,7 +293,10 @@ class StripeClient:
         self._require_stripe()
 
         try:
-            subscription = stripe.Subscription.retrieve(subscription_id)
+            subscription = await asyncio.to_thread(
+                stripe.Subscription.retrieve,
+                subscription_id,
+            )
             return {
                 "id": subscription.id,
                 "status": subscription.status,
@@ -291,7 +309,7 @@ class StripeClient:
                         "price_id": item.price.id,
                         "product_id": item.price.product,
                     }
-                    for item in subscription.get("items", {}).get("data", [])
+                    for item in (subscription.items.data if subscription.items else [])
                 ],
             }
         except stripe.error.InvalidRequestError:
@@ -302,30 +320,39 @@ class StripeClient:
 
     def construct_webhook_event(
         self,
-        payload: bytes,
+        payload: Union[bytes, str],
         signature: str,
     ) -> Any:
         """
         Construct and verify a webhook event from Stripe.
 
         Args:
-            payload: Raw request body
+            payload: Raw request body (bytes or string)
             signature: Stripe-Signature header
 
         Returns:
             Verified Stripe event
 
         Raises:
-            ValueError: If signature verification fails
+            ValueError: If signature verification fails or payload cannot be decoded
         """
         self._require_stripe()
 
         if not self.config or not self.config.webhook_secret:
             raise RuntimeError("Stripe webhook secret not configured")
 
+        if isinstance(payload, bytes):
+            try:
+                payload_str = payload.decode("utf-8")
+            except UnicodeDecodeError as e:
+                logger.warning(f"Webhook payload decode failed: {e}")
+                raise ValueError("Invalid webhook payload")
+        else:
+            payload_str = payload
+
         try:
             return stripe.Webhook.construct_event(
-                payload,
+                payload_str,
                 signature,
                 self.config.webhook_secret,
             )
@@ -357,15 +384,19 @@ class StripeClient:
         return price_map.get((plan_name.lower(), billing_cycle.lower()))
 
 
-# Singleton instance
+# Singleton instance with thread-safe initialization
 _stripe_client: Optional[StripeClient] = None
+_stripe_client_lock = threading.Lock()
 
 
 def get_stripe_client() -> StripeClient:
-    """Get or create the Stripe client singleton."""
+    """Get or create the Stripe client singleton (thread-safe)."""
     global _stripe_client
     if _stripe_client is None:
-        _stripe_client = StripeClient()
+        with _stripe_client_lock:
+            # Double-check pattern for thread safety
+            if _stripe_client is None:
+                _stripe_client = StripeClient()
     return _stripe_client
 
 

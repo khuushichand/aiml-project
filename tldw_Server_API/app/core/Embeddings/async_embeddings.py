@@ -99,10 +99,9 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
         # Get connection pool for this provider
         pool = self.pool_manager.get_pool(self.provider_name)
         async with pool.acquire_connection() as session:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
 
             payload = {
                 "input": text,
@@ -173,10 +172,9 @@ class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
         # Get connection pool for this provider
         pool = self.pool_manager.get_pool(self.provider_name)
         async with pool.acquire_connection() as session:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
 
             payload = {
                 "inputs": text,
@@ -214,23 +212,38 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
         super().__init__("local", None)
         self.models = {}
         self.executor = ThreadPoolExecutor(max_workers=2)
+        self._model_locks: Dict[str, asyncio.Lock] = {}
+        self._model_locks_guard = asyncio.Lock()
+
+    async def _get_model_lock(self, model_name: str) -> asyncio.Lock:
+        """Return a per-model lock to prevent duplicate loads."""
+        async with self._model_locks_guard:
+            lock = self._model_locks.get(model_name)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._model_locks[model_name] = lock
+            return lock
 
     async def _load_model(self, model_name: str):
         """Load model if not already loaded"""
         if model_name not in self.models:
-            # Run model loading in thread pool to avoid blocking
-            loop = asyncio.get_running_loop()
+            lock = await self._get_model_lock(model_name)
+            async with lock:
+                if model_name in self.models:
+                    return
+                # Run model loading in thread pool to avoid blocking
+                loop = asyncio.get_running_loop()
 
-            def load():
-                from sentence_transformers import SentenceTransformer
-                return SentenceTransformer(model_name)
+                def load():
+                    from sentence_transformers import SentenceTransformer
+                    return SentenceTransformer(model_name)
 
-            self.models[model_name] = await loop.run_in_executor(
-                self.executor,
-                load
-            )
+                self.models[model_name] = await loop.run_in_executor(
+                    self.executor,
+                    load
+                )
 
-            logger.info(f"Loaded local model: {model_name}")
+                logger.info(f"Loaded local model: {model_name}")
 
     async def create_embedding(
         self,

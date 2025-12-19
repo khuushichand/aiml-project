@@ -146,6 +146,8 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
             else:
                 chunks.append(buf)
                 if len(seg) > max_chars:
+                    # Split oversized block into non-overlapping windows.
+                    # Overlap is added later via prefixing tails.
                     t = seg
                     while t:
                         part = t[:max_chars]
@@ -153,8 +155,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                         if len(t) <= max_chars:
                             t = ''
                         else:
-                            step = max(1, max_chars - max(0, overlap_chars))
-                            t = t[step:]
+                            t = t[max_chars:]
                     buf = ''
                     current_len = 0
                 else:
@@ -209,15 +210,16 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                 nonlocal buf_s, buf_e, buf_blocks
                 if buf_s is None or buf_e is None:
                     return
-                ch_text = text[buf_s:buf_e]
+                end_char = buf_e
                 try:
-                    buf_e = self._expand_end_to_grapheme_boundary(text, buf_e)
+                    end_char = self._expand_end_to_grapheme_boundary(text, end_char)
                 except Exception:
-                    pass
+                    end_char = buf_e
+                ch_text = text[buf_s:end_char]
                 md = ChunkMetadata(
                     index=len(results),
                     start_char=buf_s,
-                    end_char=buf_e,
+                    end_char=end_char,
                     word_count=len(ch_text.split()),
                     language='python',
                     method='code',
@@ -245,25 +247,25 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                         start = s_char
                         while start < e_char:
                             end = min(e_char, start + max_size)
-                            piece = text[start:end]
                             try:
-                                end = self._expand_end_to_grapheme_boundary(text, end)
+                                end_expanded = self._expand_end_to_grapheme_boundary(text, end)
                             except Exception:
-                                pass
+                                end_expanded = end
+                            piece = text[start:end_expanded]
                             md = ChunkMetadata(
                                 index=len(results),
                                 start_char=start,
-                                end_char=end,
+                                end_char=end_expanded,
                                 word_count=len(piece.split()),
                                 language='python',
                                 method='code',
                                 options={'blocks': [{'type': b.kind, 'name': b.name}], 'partial_block': True, 'mode': 'ast'}
                             )
                             results.append(ChunkResult(text=piece, metadata=md))
-                            if end >= e_char:
+                            if end_expanded >= e_char:
                                 break
-                            step = max(1, max_size - max(0, overlap))
-                            start = start + step
+                            # Continue without intra-block overlap; prefixing tails handles overlap.
+                            start = start + max_size
                 else:
                     new_len = e_char - buf_s
                     if new_len <= max_size:
@@ -278,27 +280,55 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                             start = s_char
                             while start < e_char:
                                 end = min(e_char, start + max_size)
-                                piece = text[start:end]
                                 try:
-                                    end = self._expand_end_to_grapheme_boundary(text, end)
+                                    end_expanded = self._expand_end_to_grapheme_boundary(text, end)
                                 except Exception:
-                                    pass
+                                    end_expanded = end
+                                piece = text[start:end_expanded]
                                 md = ChunkMetadata(
                                     index=len(results),
                                     start_char=start,
-                                    end_char=end,
+                                    end_char=end_expanded,
                                     word_count=len(piece.split()),
                                     language='python',
                                     method='code',
                                     options={'blocks': [{'type': b.kind, 'name': b.name}], 'partial_block': True, 'mode': 'ast'}
                                 )
                                 results.append(ChunkResult(text=piece, metadata=md))
-                                if end >= e_char:
+                                if end_expanded >= e_char:
                                     break
-                                step = max(1, max_size - max(0, overlap))
-                                start = start + step
+                                # Continue without intra-block overlap; prefixing tails handles overlap.
+                                start = start + max_size
 
             flush()
+
+            # Apply prefix-tail overlap so chunks can grow beyond max_size.
+            if overlap > 0 and results:
+                prev = results[0]
+                for cur in results[1:]:
+                    try:
+                        prev_start = int(prev.metadata.start_char)
+                        prev_end = int(prev.metadata.end_char)
+                        cur_start = int(cur.metadata.start_char)
+                        cur_end = int(cur.metadata.end_char)
+                    except Exception:
+                        prev = cur
+                        continue
+                    prev_len = max(0, prev_end - prev_start)
+                    tail_len = min(overlap, prev_len)
+                    if tail_len <= 0:
+                        prev = cur
+                        continue
+                    new_start = max(0, prev_end - tail_len)
+                    if new_start < cur_start and cur_end > new_start:
+                        cur.metadata.start_char = new_start
+                        cur.metadata.char_count = cur_end - new_start
+                        cur.metadata.overlap_with_previous = tail_len
+                        prev.metadata.overlap_with_next = tail_len
+                        cur.text = text[new_start:cur_end]
+                        cur.metadata.word_count = len(cur.text.split()) if cur.text else 0
+                    prev = cur
+
             logger.info(f"PythonASTCodeChunkingStrategy produced {len(results)} chunks with metadata")
             return results
         except Exception as e:

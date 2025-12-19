@@ -148,6 +148,32 @@ class TestPIIDetection:
         assert api_key not in stringified
         assert card not in stringified
 
+    @pytest.mark.asyncio
+    async def test_redaction_handles_dataclass_metadata_values(self, audit_service):
+        """PII redaction should work even when metadata contains dataclass values."""
+        from dataclasses import dataclass
+
+        @dataclass
+        class _Person:
+            email: str
+
+        ctx = AuditContext(user_id="dataclass_meta_user")
+        await audit_service.log_event(
+            event_type=AuditEventType.DATA_WRITE,
+            context=ctx,
+            metadata={"person": _Person(email="user@example.com")},
+        )
+        await audit_service.flush()
+
+        events = await audit_service.query_events(user_id="dataclass_meta_user")
+        assert events, "No audit events returned"
+        row = events[0]
+        assert row.get("pii_detected") in (True, 1, "1")
+
+        meta_raw = row.get("metadata")
+        meta = json.loads(meta_raw) if isinstance(meta_raw, str) else meta_raw
+        assert meta["person"]["email"] == "[EMAIL_REDACTED]"
+
 
 # ============================================================================
 # Test Risk Scoring
@@ -233,6 +259,30 @@ class TestRiskScoring:
 
         score = scorer.calculate_risk_score(event)
         assert score >= 70
+
+    def test_consecutive_failures_with_string_value(self):
+        """Risk scoring should handle string counts in metadata dicts."""
+        scorer = RiskScorer()
+        event = AuditEvent(
+            event_type=AuditEventType.AUTH_LOGIN_FAILURE,
+            result="failure",
+            metadata={"consecutive_failures": "5"},
+        )
+
+        score = scorer.calculate_risk_score(event)
+        assert score >= 70
+
+    def test_large_export_with_string_result_count(self):
+        """Risk scoring should handle string result_count values."""
+        scorer = RiskScorer()
+        event = AuditEvent(
+            event_type=AuditEventType.DATA_EXPORT,
+            timestamp=datetime(2024, 1, 2, 12, 0, 0, tzinfo=timezone.utc),
+            result_count="1500",
+        )
+
+        score = scorer.calculate_risk_score(event)
+        assert score >= 15
 
 
 # ============================================================================
@@ -351,6 +401,32 @@ class TestUnifiedAuditService:
         metadata = json.loads(event["metadata"])
         assert "user@example.com" not in str(metadata)
         assert "123-45-6789" not in str(metadata)
+
+    @pytest.mark.asyncio
+    async def test_pii_redaction_in_nested_sequences(self, audit_service):
+        """PII inside nested tuples/sets in metadata should be redacted before storage."""
+        context = AuditContext(user_id="nested_pii_user")
+        await audit_service.log_event(
+            event_type=AuditEventType.DATA_WRITE,
+            context=context,
+            metadata={
+                "emails": ("user@example.com", "other@example.com"),
+                "ssns": {"123-45-6789"},
+            },
+        )
+        await audit_service.flush()
+
+        events = await audit_service.query_events(user_id="nested_pii_user")
+        assert events
+        event = events[0]
+        assert event["pii_detected"] == 1
+
+        metadata = json.loads(event["metadata"])
+        assert "user@example.com" not in str(metadata)
+        assert "other@example.com" not in str(metadata)
+        assert "123-45-6789" not in str(metadata)
+        assert "[EMAIL_REDACTED]" in str(metadata)
+        assert "[SSN_REDACTED]" in str(metadata)
 
     @pytest.mark.asyncio
     async def test_pii_detection_in_non_metadata_fields(self, audit_service):
@@ -992,6 +1068,46 @@ class TestStreamingExport:
         assert len(content) >= 4
 
     @pytest.mark.asyncio
+    async def test_export_events_csv_streaming_empty_writes_header(self, audit_service, tmp_path):
+        csv_path = tmp_path / "audit_empty.csv"
+        count = await audit_service.export_events(
+            format="csv",
+            file_path=str(csv_path),
+        )
+        assert count == 0
+        lines = [ln for ln in csv_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        assert len(lines) == 1
+        assert lines[0].startswith("event_id,")
+
+    @pytest.mark.asyncio
+    async def test_export_events_csv_streaming_respects_max_rows(self, audit_service, tmp_path):
+        user = "csv_stream_max_rows"
+        total = 12
+        max_rows = 5
+        for i in range(total):
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_READ,
+                context=AuditContext(user_id=user),
+                resource_type="doc",
+                resource_id=f"d{i}",
+                metadata={"idx": i},
+            )
+        await audit_service.flush()
+
+        csv_path = tmp_path / "audit_stream_max.csv"
+        count = await audit_service.export_events(
+            user_id=user,
+            format="csv",
+            file_path=str(csv_path),
+            chunk_size=4,
+            max_rows=max_rows,
+        )
+        assert count == max_rows
+        lines = csv_path.read_text(encoding="utf-8").splitlines()
+        assert lines[0].startswith("event_id,")
+        assert len(lines) == max_rows + 1
+
+    @pytest.mark.asyncio
     async def test_export_events_json_streaming_to_file(self, audit_service, tmp_path):
         user = "json_stream_user"
         # Log a few events for a specific user
@@ -1174,6 +1290,51 @@ class TestStreamingExport:
         for ln in lines:
             _json.loads(ln)
 
+    @pytest.mark.asyncio
+    async def test_export_events_json_streaming_max_rows_stops_early(self, audit_service):
+        """JSON streaming generator should stop querying once max_rows is reached."""
+        user = "json_max_rows"
+        total = 60
+        for i in range(total):
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_WRITE,
+                context=AuditContext(user_id=user),
+                resource_type="item",
+                resource_id=f"j{i}",
+                metadata={"i": i},
+            )
+        await audit_service.flush()
+
+        call_count = 0
+        orig_query = audit_service.query_events
+
+        async def _counting_query(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return await orig_query(*args, **kwargs)
+
+        audit_service.query_events = _counting_query  # type: ignore[assignment]
+        try:
+            max_rows = 25
+            gen = await audit_service.export_events(
+                user_id=user,
+                format="json",
+                stream=True,
+                chunk_size=1,
+                max_rows=max_rows,
+            )
+            chunks = []
+            async for c in gen:
+                chunks.append(c)
+            content = "".join(chunks)
+            data = json.loads(content)
+            assert isinstance(data, list)
+            assert len(data) == max_rows
+            # With chunk_size=1, a correct implementation should not scan the full table.
+            assert call_count <= max_rows + 1
+        finally:
+            audit_service.query_events = orig_query  # type: ignore[assignment]
+
     async def test_audit_operation_with_start_and_completed_types(self, audit_service):
         ctx = AuditContext(user_id="ctx_op_user")
         # Use distinct start and complete event types
@@ -1199,3 +1360,152 @@ class TestStreamingExport:
         assert started["result"] == "started"
         assert completed["result"] == "success"
         assert (completed.get("duration_ms") or 0) > 0
+
+
+# ============================================================================
+# Test Fallback Queue Atomicity
+# ============================================================================
+
+class TestFallbackQueueAtomicity:
+    """Test that fallback queue replay is atomic and doesn't double-count stats."""
+
+    @pytest.mark.asyncio
+    async def test_fallback_queue_partial_replay_no_duplicate_stats(self, temp_db_path):
+        """Verify that partial replay doesn't inflate daily stats on re-replay."""
+        # Create service and add some events
+        service = UnifiedAuditService(
+            db_path=temp_db_path,
+            retention_days=7,
+            enable_pii_detection=False,
+            enable_risk_scoring=False,
+            buffer_size=100,
+            flush_interval=60.0,
+        )
+        await service.initialize()
+
+        # Create fallback queue manually with test events
+        fb_path = Path(temp_db_path).parent / "audit_fallback_queue.jsonl"
+        events_data = []
+        for i in range(10):
+            event = AuditEvent(
+                event_id=f"test-event-{i}",
+                timestamp=datetime.now(timezone.utc),
+                category=AuditEventCategory.DATA_ACCESS,
+                event_type=AuditEventType.DATA_READ,
+                severity=AuditSeverity.INFO,
+                resource_type="test",
+                resource_id=str(i),
+                result="success",
+                duration_ms=100.0,
+            )
+            events_data.append(json.dumps(event.to_dict()) + "\n")
+
+        fb_path.write_text("".join(events_data))
+
+        # Replay the fallback queue
+        replayed = await service.replay_fallback_queue()
+        assert replayed == 10
+
+        # File should be removed
+        assert not fb_path.exists()
+
+        # Query stats
+        events = await service.query_events()
+        assert len(events) == 10
+
+        await service.stop()
+
+    @pytest.mark.asyncio
+    async def test_duration_count_tracked_correctly(self, temp_db_path):
+        """Verify duration_count column is used for correct avg_duration calculation."""
+        service = UnifiedAuditService(
+            db_path=temp_db_path,
+            retention_days=7,
+            enable_pii_detection=False,
+            enable_risk_scoring=False,
+            buffer_size=100,
+            flush_interval=60.0,
+        )
+        await service.initialize()
+
+        # Log some events with duration and some without
+        ctx = AuditContext(user_id="stats_test")
+
+        # 2 events with duration (100ms, 200ms) -> avg should be 150ms
+        await service.log_event(
+            event_type=AuditEventType.DATA_READ,
+            context=ctx,
+            duration_ms=100.0,
+        )
+        await service.log_event(
+            event_type=AuditEventType.DATA_READ,
+            context=ctx,
+            duration_ms=200.0,
+        )
+        # 3 events without duration
+        for _ in range(3):
+            await service.log_event(
+                event_type=AuditEventType.DATA_READ,
+                context=ctx,
+            )
+
+        await service.flush()
+
+        # Check the daily stats table
+        async with aiosqlite.connect(temp_db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT total_events, duration_count, avg_duration_ms FROM audit_daily_stats WHERE category = ?",
+                (AuditEventCategory.DATA_ACCESS.value,)
+            )
+            row = await cursor.fetchone()
+
+        assert row is not None
+        assert row["total_events"] == 5
+        assert row["duration_count"] == 2
+        # avg_duration should be 150ms (average of 100 and 200)
+        assert abs(row["avg_duration_ms"] - 150.0) < 0.1
+
+        await service.stop()
+
+
+def test_stop_safe_when_owner_loop_closed(monkeypatch):
+    """stop() should not await tasks attached to a closed/different event loop."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("TLDW_TEST_MODE", raising=False)
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    service = UnifiedAuditService(
+        db_path=db_path,
+        retention_days=7,
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=10,
+        flush_interval=60.0,
+    )
+
+    loop1 = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop1)
+    try:
+        loop1.run_until_complete(service.initialize())
+
+        async def _cancel_background_tasks() -> None:
+            tasks = [t for t in (service._flush_task, service._cleanup_task, service._replay_task) if t]
+            for t in tasks:
+                t.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+        loop1.run_until_complete(_cancel_background_tasks())
+    finally:
+        loop1.close()
+        asyncio.set_event_loop(None)
+
+    asyncio.run(service.stop())
+    assert service._owner_loop is None
+    assert service._db_pool is None
+
+    Path(db_path).unlink(missing_ok=True)

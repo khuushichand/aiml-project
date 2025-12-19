@@ -226,6 +226,14 @@ class DatasetSample(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 
+class DatasetOverride(BaseModel):
+    """Override dataset payload for a specific run."""
+    samples: List[DatasetSample] = Field(..., min_length=1, description="Evaluation samples")
+    name: Optional[str] = Field(None, description="Optional dataset name")
+    description: Optional[str] = Field(None, description="Optional dataset description")
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+
 class EvaluationMetadata(BaseModel):
     """Evaluation metadata"""
     project: Optional[str] = Field(None, description="Project name")
@@ -283,7 +291,7 @@ class EvaluationResponse(BaseModel):
 class CreateRunRequest(BaseModel):
     """Create run request"""
     target_model: str = Field(..., description="Model to evaluate")
-    dataset_override: Optional[DatasetSample] = Field(None)
+    dataset_override: Optional[DatasetOverride] = Field(None)
     config: Optional[RunConfig] = Field(default_factory=RunConfig)
     webhook_url: Optional[HttpUrl] = Field(None)
 

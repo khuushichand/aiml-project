@@ -62,6 +62,9 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     map_sender_to_role,
     replace_placeholders,
 )
+from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
+    sanitize_sender_name,
+)
 
 # Chat helpers and utilities
 from tldw_Server_API.app.core.Chat.chat_helpers import (
@@ -84,13 +87,142 @@ from tldw_Server_API.app.core.Streaming.streams import SSEStream
 from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_provider_line, sse_done
 from tldw_Server_API.app.core.Utils.common import parse_boolean
 
+# Import shared constants
+from tldw_Server_API.app.core.Character_Chat.constants import (
+    MAX_STREAMING_CHUNKS,
+    MAX_STREAMING_BYTES,
+    MAX_TOOL_CALLS_SIZE,
+    MAX_TOOL_CALLS_COUNT,
+    THROTTLE_CACHE_MAX_KEYS,
+    THROTTLE_STALE_SECONDS,
+)
+
+
+def _validate_and_truncate_tool_calls(tool_calls: Any) -> Optional[list]:
+    """
+    Validate and truncate tool_calls to prevent unbounded storage.
+
+    Args:
+        tool_calls: Tool calls data from LLM response
+
+    Returns:
+        Validated and potentially truncated tool_calls, or None if invalid
+    """
+    if tool_calls is None:
+        return None
+
+    if not isinstance(tool_calls, list):
+        logger.warning("tool_calls is not a list, discarding")
+        return None
+
+    # Limit number of tool calls
+    if len(tool_calls) > MAX_TOOL_CALLS_COUNT:
+        logger.warning(f"Truncating tool_calls from {len(tool_calls)} to {MAX_TOOL_CALLS_COUNT}")
+        tool_calls = tool_calls[:MAX_TOOL_CALLS_COUNT]
+
+    # Check total serialized size
+    try:
+        serialized = json.dumps(tool_calls)
+        if len(serialized) > MAX_TOOL_CALLS_SIZE:
+            logger.warning(f"tool_calls exceeds size limit ({len(serialized)} > {MAX_TOOL_CALLS_SIZE}), truncating")
+            # Progressively remove tool calls until within size limit
+            while tool_calls and len(json.dumps(tool_calls)) > MAX_TOOL_CALLS_SIZE:
+                tool_calls = tool_calls[:-1]
+            if not tool_calls:
+                return None
+    except (TypeError, ValueError) as e:
+        logger.warning(f"tool_calls not JSON serializable: {e}")
+        return None
+
+    return tool_calls
 
 # Legacy local SSE helpers removed — unified streams handle normalization
+
+
+def _verify_chat_ownership(
+    conversation: Optional[Dict[str, Any]],
+    user_id: Any,
+    chat_id: str
+) -> None:
+    """Verify that the user owns the chat session.
+
+    Args:
+        conversation: The conversation dict from database (may be None)
+        user_id: The current user's ID
+        chat_id: The chat session ID (for error messages)
+
+    Raises:
+        HTTPException: 404 if conversation not found, 403 if not owner
+    """
+    if not conversation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chat session {chat_id} not found"
+        )
+
+    # Normalize both IDs to strings and strip whitespace for consistent comparison
+    # This handles cases where client_id might have different formatting
+    stored_client_id = str(conversation.get('client_id', '')).strip()
+    request_user_id = str(user_id).strip()
+
+    if stored_client_id != request_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this chat session"
+        )
+
 
 router = APIRouter()
 
 # Simple per-chat throttle used for legacy /complete endpoint in tests (TEST_MODE only)
-_complete_windows = defaultdict(lambda: deque(maxlen=100))
+# Bounded to prevent unbounded memory growth - uses constants from Character_Chat.constants
+class _BoundedThrottleCache:
+    """Bounded cache for throttle windows with automatic stale entry cleanup.
+
+    Thread-safe implementation using asyncio.Lock for concurrent access protection.
+    """
+
+    def __init__(self):
+        self._data: Dict[str, deque] = {}
+        self._last_access: Dict[str, float] = {}
+        self._lock = asyncio.Lock()
+
+    async def get(self, key: str) -> deque:
+        """Thread-safe access to throttle window for a given key."""
+        async with self._lock:
+            now = time.time()
+            # Cleanup if too many keys
+            if len(self._data) > THROTTLE_CACHE_MAX_KEYS:
+                self._cleanup(now)
+            # Create or get entry
+            if key not in self._data:
+                self._data[key] = deque(maxlen=100)
+            self._last_access[key] = now
+            return self._data[key]
+
+    def __getitem__(self, key: str) -> deque:
+        """Synchronous access (for backwards compatibility, not thread-safe)."""
+        now = time.time()
+        # Cleanup if too many keys
+        if len(self._data) > THROTTLE_CACHE_MAX_KEYS:
+            self._cleanup(now)
+        # Create or get entry
+        if key not in self._data:
+            self._data[key] = deque(maxlen=100)
+        self._last_access[key] = now
+        return self._data[key]
+
+    def _cleanup(self, now: float) -> None:
+        """Remove entries not accessed recently."""
+        stale_keys = [
+            k for k, last in self._last_access.items()
+            if (now - last) > THROTTLE_STALE_SECONDS
+        ]
+        for k in stale_keys:
+            self._data.pop(k, None)
+            self._last_access.pop(k, None)
+
+_complete_windows = _BoundedThrottleCache()
 
 # ========================================================================
 # Helper Functions
@@ -121,7 +253,7 @@ def _convert_db_message_to_response(msg_data: Dict[str, Any]) -> MessageResponse
         conversation_id=msg_data.get('conversation_id', ''),
         parent_message_id=msg_data.get('parent_message_id'),
         sender=msg_data.get('sender', ''),
-        content=msg_data.get('content', ''),
+        content=msg_data.get('content') or '',
         timestamp=msg_data.get('timestamp', datetime.now(timezone.utc)),
         ranking=msg_data.get('ranking'),
         has_image=bool(msg_data.get('image_data')),
@@ -169,15 +301,21 @@ async def create_chat_session(
         await rate_limiter.check_rate_limit(current_user.id, "chat_create")
         # Enforce per-user chat count limit (approximate by scanning conversations per character)
         try:
-            # Use DB-layer count for efficiency/accuracy
+            # Use DB-layer count for efficiency/accuracy. The helper expects
+            # the current count (before this create) and rejects when
+            # current_chat_count >= max_chats_per_user.
             user_chat_count = db.count_conversations_for_user(str(current_user.id))
             await rate_limiter.check_chat_limit(current_user.id, user_chat_count)
         except HTTPException:
             # Propagate enforcement failures
             raise
-        except Exception:
-            # Non-fatal: skip enforcement if count fails
-            logger.debug("Non-fatal: chat limit count failed; skipping cap enforcement")
+        except Exception as e:
+            # Fail closed: quota enforcement must work to prevent resource exhaustion
+            logger.error("Chat limit enforcement failed, denying request: {}", e)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Quota enforcement unavailable. Please try again later."
+            )
 
         # Verify character exists
         character = db.get_character_card_by_id(session_data.character_id)
@@ -228,9 +366,7 @@ async def create_chat_session(
         if seed_first_message:
             try:
                 raw_name = character.get('name') or 'Assistant'
-                char_name = str(raw_name).replace(' ', '_')
-                for _ch in ("<", ">", "|", "\\", "/"):
-                    char_name = char_name.replace(_ch, "")
+                char_name = sanitize_sender_name(raw_name)
                 choice_text: Optional[str] = None
                 if greeting_strategy in {"alternate_random", "alternate_index"}:
                     ag = character.get('alternate_greetings')
@@ -300,19 +436,7 @@ async def get_chat_session(
     """
     try:
         conversation = db.get_conversation_by_id(chat_id)
-
-        if not conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Chat session {chat_id} not found"
-            )
-
-        # Verify ownership
-        if conversation.get('client_id') != str(current_user.id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have access to this chat session"
-            )
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
 
         # Get message count efficiently
         try:
@@ -345,8 +469,7 @@ async def get_chat_context(
         if not conversation:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chat session {chat_id} not found")
 
-        if conversation.get('client_id') != str(current_user.id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You don't have access to this chat session")
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
 
         character = db.get_character_card_by_id(conversation['character_id']) or {}
         char_name = character.get('name', 'Unknown')
@@ -408,22 +531,20 @@ async def complete_chat_legacy(
     try:
         # Validate chat ownership
         conversation = db.get_conversation_by_id(chat_id)
-        if not conversation:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chat session {chat_id} not found")
-        if conversation.get('client_id') != str(current_user.id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You don't have access to this chat session")
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
 
         # Per-minute completion limiter (global per-user)
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_chat_completion_rate(current_user.id)
 
         # Deprecation headers for clients; also used if we reject a non-empty body
-        sunset = "Tue, 31 Dec 2025 00:00:00 GMT"
+        # Sunset date is configurable via DEPRECATION_SUNSET_DAYS env var (default 90 days)
         try:
             from datetime import datetime, timedelta, timezone as _tz
-            sunset = (datetime.now(_tz.utc) + timedelta(days=90)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+            sunset_days = int(os.getenv("DEPRECATION_SUNSET_DAYS", "90"))
+            sunset = (datetime.now(_tz.utc) + timedelta(days=sunset_days)).strftime("%a, %d %b %Y %H:%M:%S GMT")
         except Exception:
-            pass
+            sunset = "Tue, 31 Dec 2025 00:00:00 GMT"
         dep_headers = {
             "Deprecation": "true",
             "Sunset": sunset,
@@ -448,7 +569,7 @@ async def complete_chat_legacy(
         # Test-mode throttle: 5 requests per second per (user, chat)
         key = f"{current_user.id}:{chat_id}"
         now = time.time()
-        window = _complete_windows[key]
+        window = await _complete_windows.get(key)
         # Evict entries older than 1 second
         while window and (now - window[0]) > 1.0:
             window.popleft()
@@ -485,10 +606,7 @@ async def prepare_chat_completion(
 
         # Validate chat ownership
         conversation = db.get_conversation_by_id(chat_id)
-        if not conversation:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chat session {chat_id} not found")
-        if conversation.get('client_id') != str(current_user.id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You don't have access to this chat session")
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
 
         # Per-minute completion limiter (global per-user)
         rate_limiter = get_character_rate_limiter()
@@ -523,7 +641,7 @@ async def prepare_chat_completion(
         for msg in paginated:
             formatted.append({
                 "role": map_sender_to_role(msg.get('sender'), character.get('name')),
-                "content": msg.get('content', '')
+                "content": msg.get('content') or ''
             })
 
         if body.append_user_message:
@@ -580,10 +698,7 @@ async def character_chat_completion(
 
         # Validate and ownership
         conversation = db.get_conversation_by_id(chat_id)
-        if not conversation:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chat session {chat_id} not found")
-        if conversation.get('client_id') != str(current_user.id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You don't have access to this chat session")
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
 
         # Prepare rate limiter
         rate_limiter = get_character_rate_limiter()
@@ -614,7 +729,7 @@ async def character_chat_completion(
         for msg in paginated:
             formatted.append({
                 "role": map_sender_to_role(msg.get('sender'), character.get('name')),
-                "content": msg.get('content', '')
+                "content": msg.get('content') or ''
             })
 
         # Optional appended user message
@@ -673,17 +788,17 @@ async def character_chat_completion(
                 try:
                     if asyncio.iscoroutine(llm_resp):
                         llm_resp = await llm_resp  # type: ignore
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(f"Failed to await async LLM response: {e}")
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="LLM provider error"
+                    )
             except Exception as e:
                 logger.error(f"Chat provider call failed: {e}")
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Chat provider error")
 
-        # Extract assistant content
-        def _extract_text(resp: Any) -> str:
-            if resp is None:
-                return ""
-
+        # Helper: Convert a provider chunk into a single SSE-formatted line
         def _coerce_sse_line(chunk: Any) -> Optional[str]:
             """Convert a provider chunk into a single SSE-formatted line.
 
@@ -710,6 +825,11 @@ async def character_chat_completion(
                 return normalized
             except Exception:
                 return None
+
+        # Extract assistant content from LLM response
+        def _extract_text(resp: Any) -> str:
+            if resp is None:
+                return ""
             if isinstance(resp, str):
                 return resp
             if isinstance(resp, dict):
@@ -722,6 +842,9 @@ async def character_chat_completion(
                 return str(resp)
             except Exception:
                 return ""
+
+        # Initialize assistant_text to avoid potential UnboundLocalError in edge cases
+        assistant_text = ""
 
         if offline_sim:
             # Simple deterministic response for tests/offline dev
@@ -886,11 +1009,27 @@ async def character_chat_completion(
                 if hasattr(llm_resp, "__aiter__"):
                     async def _sse_async():
                         done_sent = False
+                        chunk_count = 0
+                        total_bytes = 0
                         try:
                             async for chunk in llm_resp:  # type: ignore
+                                # Safety limits to prevent DoS
+                                chunk_count += 1
+                                if chunk_count > MAX_STREAMING_CHUNKS:
+                                    logger.warning(f"Streaming chunk limit exceeded ({MAX_STREAMING_CHUNKS})")
+                                    yield f"data: {json.dumps({'error': 'Streaming limit exceeded.'})}\n\n"
+                                    break
+
                                 line = _coerce_sse_line(chunk)
                                 if not line:
                                     continue
+
+                                total_bytes += len(line.encode('utf-8'))
+                                if total_bytes > MAX_STREAMING_BYTES:
+                                    logger.warning(f"Streaming byte limit exceeded ({MAX_STREAMING_BYTES})")
+                                    yield f"data: {json.dumps({'error': 'Streaming size limit exceeded.'})}\n\n"
+                                    break
+
                                 normalized = line.strip().lower()
                                 if normalized == "data: [done]":
                                     done_sent = True
@@ -910,11 +1049,27 @@ async def character_chat_completion(
                 if hasattr(llm_resp, "__iter__") and not isinstance(llm_resp, (str, bytes, dict, list)):
                     async def _sse_gen():
                         done_sent = False
+                        chunk_count = 0
+                        total_bytes = 0
                         try:
                             for chunk in llm_resp:  # type: ignore
+                                # Safety limits to prevent DoS
+                                chunk_count += 1
+                                if chunk_count > MAX_STREAMING_CHUNKS:
+                                    logger.warning(f"Streaming chunk limit exceeded ({MAX_STREAMING_CHUNKS})")
+                                    yield f"data: {json.dumps({'error': 'Streaming limit exceeded.'})}\n\n"
+                                    break
+
                                 line = _coerce_sse_line(chunk)
                                 if not line:
                                     continue
+
+                                total_bytes += len(line.encode('utf-8'))
+                                if total_bytes > MAX_STREAMING_BYTES:
+                                    logger.warning(f"Streaming byte limit exceeded ({MAX_STREAMING_BYTES})")
+                                    yield f"data: {json.dumps({'error': 'Streaming size limit exceeded.'})}\n\n"
+                                    break
+
                                 normalized = line.strip().lower()
                                 if normalized == "data: [done]":
                                     done_sent = True
@@ -974,10 +1129,7 @@ async def character_chat_completion(
                 # Use character name as the assistant sender (sanitized) for DB storage
                 char_card = db.get_character_card_by_id(conversation.get('character_id')) or {}
                 raw_name = (char_card.get('name') or 'Assistant') if isinstance(char_card, dict) else 'Assistant'
-                # Inline sanitize to avoid import-time issues
-                assistant_sender = str(raw_name).replace(' ', '_')
-                for _ch in ("<", ">", "|", "\\", "/"):
-                    assistant_sender = assistant_sender.replace(_ch, "")
+                assistant_sender = sanitize_sender_name(raw_name)
                 db.add_message({
                     'id': assistant_msg_id,
                     'conversation_id': chat_id,
@@ -989,10 +1141,12 @@ async def character_chat_completion(
                 })
                 # Persist tool_calls into schema-level metadata for richer retrieval
                 if assistant_tool_calls:
-                    try:
-                        db.add_message_metadata(assistant_msg_id, tool_calls=assistant_tool_calls)
-                    except Exception:
-                        pass
+                    validated_tool_calls = _validate_and_truncate_tool_calls(assistant_tool_calls)
+                    if validated_tool_calls:
+                        try:
+                            db.add_message_metadata(assistant_msg_id, tool_calls=validated_tool_calls)
+                        except Exception:
+                            pass
                 # Bump conversation metadata
                 conv_for_update = db.get_conversation_by_id(chat_id)
                 if conv_for_update:
@@ -1068,11 +1222,10 @@ async def list_chat_sessions(
         # Sort by last_modified descending
         user_conversations.sort(key=lambda x: x.get('last_modified', ''), reverse=True)
 
-        # Apply pagination after filtering
-        paginated = user_conversations[offset:offset+limit]
+        # Note: pagination was already applied at DB level, no need to slice again
 
         # Add message counts using efficient counter
-        for conv in paginated:
+        for conv in user_conversations:
             try:
                 conv['message_count'] = db.count_messages_for_conversation(conv['id'])
             except Exception:
@@ -1080,7 +1233,7 @@ async def list_chat_sessions(
                 conv['message_count'] = len(messages) if messages else 0
 
         return ChatSessionListResponse(
-            chats=[_convert_db_conversation_to_response(conv) for conv in paginated],
+            chats=[_convert_db_conversation_to_response(conv) for conv in user_conversations],
             total=total_count,
             limit=limit,
             offset=offset
@@ -1122,19 +1275,7 @@ async def update_chat_session(
     try:
         # Get current conversation
         conversation = db.get_conversation_by_id(chat_id)
-
-        if not conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Chat session {chat_id} not found"
-            )
-
-        # Verify ownership
-        if conversation.get('client_id') != str(current_user.id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have access to this chat session"
-            )
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
 
         # Check version
         if conversation.get('version', 1) != expected_version:
@@ -1202,19 +1343,7 @@ async def delete_chat_session(
     try:
         # Get current conversation
         conversation = db.get_conversation_by_id(chat_id)
-
-        if not conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Chat session {chat_id} not found"
-            )
-
-        # Verify ownership
-        if conversation.get('client_id') != str(current_user.id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have access to this chat session"
-            )
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
 
         # Check version if provided
         if expected_version is not None and conversation.get('version', 1) != expected_version:
@@ -1223,21 +1352,56 @@ async def delete_chat_session(
                 detail=f"Version mismatch. Expected {expected_version}, found {conversation.get('version', 1)}"
             )
 
-        # Collect all current non-deleted messages prior to conversation soft-delete (page through to cover large chats)
-        page_size = 10000
-        existing_messages: List[Dict[str, Any]] = []
-        while True:
-            batch = db.get_messages_for_conversation(chat_id, limit=page_size, offset=0)
+        # Delete messages in batches using offset-based pagination to avoid unbounded memory
+        # Track failed message IDs to prevent infinite loops when deletions fail
+        batch_size = 100
+        max_batches = 1000  # Safety limit: max 100,000 messages per conversation
+        total_deleted = 0
+        consecutive_empty_batches = 0
+        max_empty_batches = 3  # Stop after consecutive empty batches (indicates completion)
+        failed_message_ids: set = set()  # Track messages that failed to delete
+
+        for batch_num in range(max_batches):
+            # Fetch non-deleted messages only (include_deleted=False is default)
+            batch = db.get_messages_for_conversation(chat_id, limit=batch_size, offset=0)
+
+            # Filter out messages that previously failed to delete to prevent infinite loops
+            batch = [m for m in batch if m.get("id") not in failed_message_ids]
+
             if not batch:
-                break
-            existing_messages.extend(batch)
-            # Soft-delete in batches to avoid large in-memory accumulation
+                consecutive_empty_batches += 1
+                if consecutive_empty_batches >= max_empty_batches:
+                    break
+                continue
+
+            consecutive_empty_batches = 0  # Reset counter on successful batch
+
+            # Delete messages in this batch
+            batch_deleted = 0
             for msg in batch:
+                msg_id = msg.get("id")
+                if not msg_id:
+                    continue
                 try:
-                    db.soft_delete_message(msg.get("id"), msg.get("version", 1))
+                    db.soft_delete_message(msg_id, msg.get("version", 1))
+                    batch_deleted += 1
                 except Exception:
-                    logger.warning(f"Failed to soft-delete message {msg.get('id')} during conversation delete.")
-            # After deleting current batch, loop again to fetch next set of non-deleted messages (offset stays 0)
+                    logger.warning("Failed to soft-delete message {} during conversation delete.", msg_id)
+                    failed_message_ids.add(msg_id)  # Track failed deletions
+
+            total_deleted += batch_deleted
+
+            # If we couldn't delete any messages in this batch, we might be stuck
+            if batch_deleted == 0:
+                consecutive_empty_batches += 1
+                if consecutive_empty_batches >= max_empty_batches:
+                    logger.warning(f"Stopping message deletion for {chat_id} after {total_deleted} messages - possible stuck state")
+                    break
+
+        if failed_message_ids:
+            logger.warning(f"Failed to delete {len(failed_message_ids)} messages from conversation {chat_id}: {failed_message_ids}")
+
+        logger.debug(f"Deleted {total_deleted} messages from conversation {chat_id}")
 
         # Soft delete conversation via DB abstraction (optimistic locking)
         exp_ver = expected_version if expected_version is not None else conversation.get('version', 1)
@@ -1273,6 +1437,11 @@ async def delete_chat_session(
 # Chat Export Endpoint
 # ========================================================================
 
+# Maximum messages per export page to prevent DoS
+MAX_EXPORT_PAGE_SIZE = 5000
+DEFAULT_EXPORT_PAGE_SIZE = 1000
+
+
 @router.get("/{chat_id}/export",
             summary="Export chat history", tags=["Chat Export"])
 async def export_chat_history(
@@ -1280,22 +1449,27 @@ async def export_chat_history(
     format: str = Query("json", description="Export format (json, markdown, text)"),
     include_metadata: bool = Query(True, description="Include chat metadata"),
     include_character: bool = Query(True, description="Include character info"),
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(DEFAULT_EXPORT_PAGE_SIZE, ge=1, le=MAX_EXPORT_PAGE_SIZE,
+                          description=f"Messages per page (max {MAX_EXPORT_PAGE_SIZE})"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
     """
-    Export chat history in various formats.
+    Export chat history in various formats with pagination support.
 
     Args:
         chat_id: Chat session ID to export
-        format: Export format
+        format: Export format (json, markdown, text)
         include_metadata: Whether to include metadata
         include_character: Whether to include character info
+        page: Page number (1-indexed, default 1)
+        page_size: Number of messages per page (default 1000, max 5000)
         db: Database instance
         current_user: Authenticated user
 
     Returns:
-        Chat history in requested format
+        Chat history in requested format with pagination info
 
     Raises:
         HTTPException: 404 if chat not found, 403 if unauthorized
@@ -1303,26 +1477,32 @@ async def export_chat_history(
     try:
         # Get conversation
         conversation = db.get_conversation_by_id(chat_id)
-        if not conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Chat session {chat_id} not found"
-            )
-
-        # Verify ownership
-        if conversation.get('client_id') != str(current_user.id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have access to this chat session"
-            )
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
 
         # Get character info if requested
         character = None
         if include_character:
             character = db.get_character_card_by_id(conversation['character_id'])
 
-        # Get messages
-        messages = db.get_messages_for_conversation(chat_id, limit=10000)
+        # Get total message count for pagination info
+        try:
+            total_messages = db.count_messages_for_conversation(chat_id)
+        except Exception:
+            # Fallback if count method not available
+            total_messages = None
+
+        # Calculate offset for pagination
+        offset = (page - 1) * page_size
+
+        # Get messages with pagination
+        messages = db.get_messages_for_conversation(chat_id, limit=page_size, offset=offset)
+
+        # Calculate pagination metadata
+        total_pages = None
+        has_more = False
+        if total_messages is not None:
+            total_pages = (total_messages + page_size - 1) // page_size
+            has_more = page < total_pages
 
         # Format based on requested type
         if format == "markdown":
@@ -1340,7 +1520,7 @@ async def export_chat_history(
                 if msg.get('deleted'):
                     continue
                 sender = msg.get('sender', 'unknown')
-                content = msg.get('content', '')
+                content = msg.get('content') or ''
                 timestamp = msg.get('timestamp', '')
                 lines.append(f"**{sender.title()}** ({timestamp}):")
                 lines.append(f"{content}\n")
@@ -1361,7 +1541,7 @@ async def export_chat_history(
                 if msg.get('deleted'):
                     continue
                 sender = msg.get('sender', 'unknown')
-                content = msg.get('content', '')
+                content = msg.get('content') or ''
                 lines.append(f"{sender}: {content}")
 
             return {"content": "\n".join(lines), "format": "text"}
@@ -1384,7 +1564,7 @@ async def export_chat_history(
                 item = {
                     "id": msg.get('id'),
                     "role": msg.get('sender'),
-                    "content": msg.get('content'),
+                    "content": msg.get('content') or '',
                     "timestamp": str(msg.get('timestamp', '')),
                     "has_image": bool(msg.get('image_data'))
                 }
@@ -1392,9 +1572,13 @@ async def export_chat_history(
                     md = db.get_message_metadata(msg.get('id'))
                 except Exception:
                     md = None
+                role_for_tool_calls = map_sender_to_role(
+                    msg.get('sender'),
+                    character.get('name') if character else None,
+                )
                 if md and md.get('tool_calls') is not None:
                     item["tool_calls"] = md.get('tool_calls')
-                elif msg.get('sender') == 'assistant':
+                elif role_for_tool_calls == 'assistant':
                     # Fallback: parse inline suffix [tool_calls]: <json>
                     try:
                         import re as _re, json as _json
@@ -1415,12 +1599,22 @@ async def export_chat_history(
 
             if include_metadata:
                 export_data["metadata"] = {
-                    "total_messages": len(messages),
+                    "total_messages": total_messages if total_messages is not None else len(messages),
                     "rating": conversation.get('rating'),
                     "last_modified": str(conversation.get('last_modified', ''))
                 }
                 if message_metadata_extra:
                     export_data["message_metadata_extra"] = message_metadata_extra
+
+            # Add pagination info to JSON export
+            export_data["pagination"] = {
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "total_messages": total_messages,
+                "has_more": has_more,
+                "messages_in_page": len(messages)
+            }
 
             return export_data
 
@@ -1458,10 +1652,7 @@ async def persist_streamed_assistant_message(
         body = body or CharacterChatStreamPersistRequest(assistant_content="")
 
         conversation = db.get_conversation_by_id(chat_id)
-        if not conversation:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chat session {chat_id} not found")
-        if conversation.get('client_id') != str(current_user.id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You don't have access to this chat session")
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
 
         # Enforce message cap (+1 assistant)
         try:
@@ -1477,9 +1668,7 @@ async def persist_streamed_assistant_message(
         # Resolve assistant sender as sanitized character name
         char_card = db.get_character_card_by_id(conversation.get('character_id')) or {}
         raw_name = (char_card.get('name') or 'Assistant') if isinstance(char_card, dict) else 'Assistant'
-        assistant_sender = str(raw_name).replace(' ', '_')
-        for _ch in ("<", ">", "|", "\\", "/"):
-            assistant_sender = assistant_sender.replace(_ch, "")
+        assistant_sender = sanitize_sender_name(raw_name)
         db.add_message({
             'id': assistant_msg_id,
             'conversation_id': chat_id,
@@ -1495,8 +1684,9 @@ async def persist_streamed_assistant_message(
             extra = None
             if getattr(body, 'usage', None) is not None:
                 extra = {"usage": body.usage}
-            if getattr(body, 'tool_calls', None) is not None or extra is not None:
-                db.add_message_metadata(assistant_msg_id, tool_calls=body.tool_calls, extra=extra)
+            validated_tool_calls = _validate_and_truncate_tool_calls(getattr(body, 'tool_calls', None))
+            if validated_tool_calls is not None or extra is not None:
+                db.add_message_metadata(assistant_msg_id, tool_calls=validated_tool_calls, extra=extra)
         except Exception:
             pass
 

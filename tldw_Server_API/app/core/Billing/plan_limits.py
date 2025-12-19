@@ -21,7 +21,7 @@ class PlanTier(str, Enum):
 @dataclass(frozen=True)
 class PlanLimits:
     """Limit definitions for a plan tier."""
-    storage_gb: int
+    storage_mb: int
     api_calls_day: int
     llm_tokens_month: int
     team_members: int
@@ -40,7 +40,7 @@ class PlanLimits:
 # Default limits for each tier
 DEFAULT_LIMITS: Dict[PlanTier, PlanLimits] = {
     PlanTier.FREE: PlanLimits(
-        storage_gb=1,
+        storage_mb=1024,
         api_calls_day=100,
         llm_tokens_month=300_000,
         team_members=1,
@@ -55,7 +55,7 @@ DEFAULT_LIMITS: Dict[PlanTier, PlanLimits] = {
         audit_logs=False,
     ),
     PlanTier.PRO: PlanLimits(
-        storage_gb=10,
+        storage_mb=10240,
         api_calls_day=5_000,
         llm_tokens_month=15_000_000,
         team_members=5,
@@ -70,7 +70,7 @@ DEFAULT_LIMITS: Dict[PlanTier, PlanLimits] = {
         audit_logs=True,
     ),
     PlanTier.ENTERPRISE: PlanLimits(
-        storage_gb=100,
+        storage_mb=102400,
         api_calls_day=50_000,
         llm_tokens_month=150_000_000,
         team_members=-1,  # -1 means unlimited
@@ -104,7 +104,7 @@ def get_plan_limits(plan_name: str) -> Dict[str, Any]:
         limits = DEFAULT_LIMITS[PlanTier.FREE]
 
     return {
-        "storage_gb": limits.storage_gb,
+        "storage_mb": limits.storage_mb,
         "api_calls_day": limits.api_calls_day,
         "llm_tokens_month": limits.llm_tokens_month,
         "team_members": limits.team_members,
@@ -124,7 +124,7 @@ def limits_to_json(limits: PlanLimits) -> str:
     """Convert PlanLimits to JSON string for storage."""
     import json
     return json.dumps({
-        "storage_gb": limits.storage_gb,
+        "storage_mb": limits.storage_mb,
         "api_calls_day": limits.api_calls_day,
         "llm_tokens_month": limits.llm_tokens_month,
         "team_members": limits.team_members,

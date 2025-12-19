@@ -63,3 +63,30 @@ def test_pg_max_inflight_quota(monkeypatch, jobs_pg_dsn):
     jm.create_job(domain="chatbooks", queue="default", job_type="t", payload={}, owner_user_id="2")
     acq_other = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=30, worker_id="w3", owner_user_id="2")
     assert acq_other is not None
+
+
+def test_pg_max_inflight_ignores_expired_leases(monkeypatch, jobs_pg_dsn):
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    jm = JobManager(backend="postgres", db_url=jobs_pg_dsn)
+
+    monkeypatch.setenv("JOBS_QUOTA_MAX_INFLIGHT", "1")
+
+    jm.create_job(domain="chatbooks", queue="default", job_type="t", payload={}, owner_user_id="1")
+    jm.create_job(domain="chatbooks", queue="default", job_type="t", payload={}, owner_user_id="1")
+
+    acq1 = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=30, worker_id="w", owner_user_id="1")
+    assert acq1 is not None
+
+    conn = jm._connect()
+    try:
+        with jm._pg_cursor(conn) as cur:
+            cur.execute(
+                "UPDATE jobs SET leased_until = NOW() - interval '10 seconds' WHERE id = %s",
+                (int(acq1["id"]),),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    acq2 = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=30, worker_id="w2", owner_user_id="1")
+    assert acq2 is not None

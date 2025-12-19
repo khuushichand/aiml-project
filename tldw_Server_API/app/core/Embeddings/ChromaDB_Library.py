@@ -93,6 +93,11 @@ def validate_model_id(model_id: str) -> str:
     """
     Validates model identifier to prevent injection attacks.
 
+    Note: This function allows forward slashes to support model paths like
+    "org/model" (e.g., "openai/text-embedding-3-small"). It should NOT be used
+    to validate identifiers that will be used in file path construction.
+    For path-safe identifiers, use validate_user_id() instead.
+
     Args:
         model_id: The model identifier to validate
 
@@ -227,10 +232,11 @@ class ChromaDBManager:
             if use_stub:
                 # Scope the stub client key by user and base dir to avoid cross-config leakage
                 stub_key = f"{self.user_id}::{str(user_db_base_path)}"
-                cli = _TEST_STUB_CLIENTS.get(stub_key)
-                if cli is None:
-                    cli = _InMemoryChromaClient()
-                    _TEST_STUB_CLIENTS[stub_key] = cli
+                with _TEST_STUB_CLIENTS_LOCK:
+                    cli = _TEST_STUB_CLIENTS.get(stub_key)
+                    if cli is None:
+                        cli = _InMemoryChromaClient()
+                        _TEST_STUB_CLIENTS[stub_key] = cli
                 self.client = cli
                 logger.warning(
                     f"User '{self.user_id}': Using internal in-memory Chroma client (config backend=stub)."
@@ -254,10 +260,11 @@ class ChromaDBManager:
                     )
                     if allow_stub_fallback:
                         stub_key = f"{self.user_id}::{str(user_db_base_path)}"
-                        cli = _TEST_STUB_CLIENTS.get(stub_key)
-                        if cli is None:
-                            cli = _InMemoryChromaClient()
-                            _TEST_STUB_CLIENTS[stub_key] = cli
+                        with _TEST_STUB_CLIENTS_LOCK:
+                            cli = _TEST_STUB_CLIENTS.get(stub_key)
+                            if cli is None:
+                                cli = _InMemoryChromaClient()
+                                _TEST_STUB_CLIENTS[stub_key] = cli
                         self.client = cli
                         logger.warning(
                             f"User '{self.user_id}': Falling back to in-memory Chroma stub (allow_stub_fallback=true)."
@@ -1560,7 +1567,8 @@ class ChromaDBManager:
 _default_chroma_manager = None
 _manager_lock = threading.Lock()
 _TEST_FALLBACK_DIRS: Dict[str, Path] = {}
-_TEST_STUB_CLIENTS = {}
+_TEST_STUB_CLIENTS: Dict[str, Any] = {}
+_TEST_STUB_CLIENTS_LOCK = threading.Lock()
 
 
 # --------------------

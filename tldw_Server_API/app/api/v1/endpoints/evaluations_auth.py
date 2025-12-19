@@ -14,12 +14,13 @@ from fastapi import Depends, Header, HTTPException, Request, Response, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
-from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, verify_jwt_and_fetch_user
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
 
 
 security = HTTPBearer(auto_error=False)
@@ -72,6 +73,7 @@ def create_error_response(
 async def verify_api_key(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    request: Request = None,
 ) -> str:
     """Verify API key or JWT token based on auth mode (single_user|multi_user)."""
     settings = get_settings()
@@ -102,6 +104,24 @@ async def verify_api_key(
 
     if isinstance(token, str) and token.startswith("Bearer "):
         token = token[7:]
+
+    client_ip = None
+    try:
+        if request and request.client:
+            client_ip = request.client.host
+    except Exception:
+        client_ip = None
+
+    if settings.AUTH_MODE == "single_user":
+        if not is_single_user_ip_allowed(client_ip, settings):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error": {
+                    "message": "Invalid API key or token",
+                    "type": "authentication_error",
+                    "code": "invalid_credentials",
+                }},
+            )
 
     # Test-mode convenience
     try:
@@ -138,9 +158,8 @@ async def verify_api_key(
         except Exception:
             pass
         try:
-            jwt_service = JWTService(settings)
-            payload = jwt_service.decode_access_token(token)
-            return f"user_{payload['sub']}"
+            jwt_service = get_jwt_service()
+            jwt_service.decode_access_token(token)
         except TokenExpiredError:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -159,6 +178,52 @@ async def verify_api_key(
                     "code": "invalid_token",
                 }},
             )
+        except Exception as exc:
+            logger.error(f"Unexpected error decoding JWT for evaluations auth: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error": {
+                    "message": "Invalid API key or token",
+                    "type": "authentication_error",
+                    "code": "invalid_token",
+                }},
+            )
+        try:
+            if request is None:
+                from starlette.requests import Request as _Request
+
+                request = _Request({"type": "http", "headers": []})
+            user = await verify_jwt_and_fetch_user(request, token)
+            user_id = getattr(user, "id_str", None) or str(getattr(user, "id", ""))
+            return f"user_{user_id}"
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_400_BAD_REQUEST and str(exc.detail).lower().startswith("inactive"):
+                raise HTTPException(
+                    status_code=exc.status_code,
+                    detail={"error": {
+                        "message": "Inactive user",
+                        "type": "authentication_error",
+                        "code": "inactive_user",
+                    }},
+                ) from exc
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error": {
+                    "message": "Invalid API key or token",
+                    "type": "authentication_error",
+                    "code": "invalid_credentials",
+                }},
+            ) from exc
+        except Exception as exc:
+            logger.error(f"Unexpected error verifying JWT for evaluations auth: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error": {
+                    "message": "Invalid API key or token",
+                    "type": "authentication_error",
+                    "code": "invalid_credentials",
+                }},
+            ) from exc
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

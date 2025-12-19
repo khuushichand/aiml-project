@@ -7,9 +7,10 @@ facade.
 """
 
 import base64
+import random
 import time
 from collections import Counter
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 from loguru import logger
 from PIL import Image
@@ -79,7 +80,7 @@ def _extract_message_attachments(msg_data: Dict[str, Any]) -> List[Dict[str, Any
 
 def _infer_character_sender_aliases(
     db_messages: List[Dict[str, Any]],
-    user_aliases: set[str],
+    user_aliases: Set[str],
     primary_char_name: str,
 ) -> List[str]:
     """Infer legacy character sender aliases stored on existing messages."""
@@ -145,7 +146,7 @@ def _compute_additional_char_aliases(
         sender = msg.get("sender")
         sender_sequence.append(str(sender).strip().lower() if isinstance(sender, str) else None)
 
-    def _char_neighbor_set(current_alias: str) -> set[str]:
+    def _char_neighbor_set(current_alias: str) -> Set[str]:
         neighbors = {char_name_from_card.strip().lower()}
         for other_alias in candidate_aliases:
             normalized_other = other_alias.strip().lower()
@@ -178,10 +179,13 @@ def _compute_additional_char_aliases(
                 char_context += 1
 
         if char_context > user_context and char_context > 0:
+            # Alias clusters with other character-like senders → likely a multi-user persona
             if alias_lower not in user_aliases:
                 inferred_user_aliases.append(alias_original)
                 user_aliases.add(alias_lower)
         else:
+            # Alias doesn't cluster with other candidates → default to character alias
+            # (covers legacy/renamed characters that respond to user messages)
             filtered_char_aliases.append(alias_original)
 
     return filtered_char_aliases, inferred_user_aliases
@@ -303,22 +307,26 @@ def process_db_messages_to_rich_ui_history(
             return "user"
         if next_sender_lower:
             # If the following sender is clearly a user (and not a character),
-            # then this ambiguous message is best treated as a character reply;
-            # conversely, if the next sender is clearly a character (and not a user),
-            # bias this message as a character as well to avoid misclassifying
-            # consecutive character messages as a user turn.
+            # then this ambiguous message is best treated as a character reply.
             if (
                 next_sender_lower in user_identifiers
                 and next_sender_lower not in char_identifiers
             ):
                 return "character"
+            # If the following sender is clearly a character (and not a user),
+            # then this ambiguous message should be a user message to maintain alternation.
             if (
                 next_sender_lower in char_identifiers
                 and next_sender_lower not in user_identifiers
             ):
-                return "character"
+                return "user"
         if message_index == 0 and char_first_message_normalized:
             return "character"
+        # Truly ambiguous case - log for debugging
+        logger.debug(
+            f"Ambiguous sender at message index {message_index}, defaulting to 'character'. "
+            f"user_seen={user_messages_seen}, char_seen={character_messages_seen}"
+        )
         return "character"
 
     character_messages_seen = 0
@@ -335,7 +343,6 @@ def process_db_messages_to_rich_ui_history(
 
         sender_normalized = str(sender).strip() if isinstance(sender, str) else ""
         sender_lower = sender_normalized.lower()
-        sender_lower_raw = str(sender).lower() if isinstance(sender, str) else ""
 
         is_non_character_sender = False
         if sender_lower:
@@ -385,8 +392,8 @@ def process_db_messages_to_rich_ui_history(
                 )
             continue
 
-        in_user_identifiers = sender_lower_raw in user_identifiers if sender_lower_raw else False
-        in_char_identifiers = sender_lower_raw in char_identifiers if sender_lower_raw else False
+        in_user_identifiers = sender_lower in user_identifiers if sender_lower else False
+        in_char_identifiers = sender_lower in char_identifiers if sender_lower else False
 
         next_sender_lower: Optional[str] = None
         if idx + 1 < total_messages:
@@ -505,12 +512,14 @@ def process_db_messages_to_rich_ui_history(
             continue
 
         # Unknown sender handling - preserve legacy behaviour by treating as character
-        # Redact message content in logs to avoid leaking sensitive data
+        # Redact both sender and content in logs to avoid leaking sensitive data
         try:
             _len = len(processed_content) if isinstance(processed_content, str) else 0
         except Exception:
             _len = 0
-        logger.warning("Message from unknown sender '{}' (content redacted; length={})", sender, _len)
+        # Hash sender name for traceability without exposing PII
+        sender_hash = hash(sender) & 0xFFFFFFFF  # 32-bit positive hash for log reference
+        logger.warning("Message from unknown sender (hash={:08x}, content_length={})", sender_hash, _len)
         formatted_content = f"[{sender}] {processed_content}"
         detail = {
             "id": msg_data.get("id"),
@@ -756,9 +765,8 @@ def start_new_chat_session(
         try:
             if greeting_strategy in {"alternate_random", "alternate_index"} and original_alternate_greetings:
                 if greeting_strategy == "alternate_random":
-                    import random as _rnd
                     if original_alternate_greetings:
-                        selected_alt = _rnd.choice(original_alternate_greetings)
+                        selected_alt = random.choice(original_alternate_greetings)
                 elif greeting_strategy == "alternate_index":
                     if isinstance(alternate_index, int) and alternate_index >= 0 and alternate_index < len(original_alternate_greetings):
                         selected_alt = original_alternate_greetings[alternate_index]
@@ -803,8 +811,8 @@ def start_new_chat_session(
                     initial_ui_history[0] = (None, processed)
                 else:
                     initial_ui_history = [(None, processed)]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to update initial_ui_history for conversation {conversation_id_val}: {e}")
         else:
             logger.warning(
                 "Character %s (ID: %s) has no first message to add to new conversation %s.",
@@ -1081,9 +1089,8 @@ def post_message_to_conversation(
             exc,
             exc_info=True,
         )
-        if not isinstance(exc, CharactersRAGDBError):
-            raise CharactersRAGDBError(f"Unexpected error posting message: {exc}") from exc
-        raise
+        # Always wrap unexpected exceptions to maintain consistent exception types
+        raise CharactersRAGDBError(f"Unexpected error posting message: {exc}") from exc
 
 
 def retrieve_message_details(
@@ -1148,15 +1155,15 @@ def retrieve_conversation_messages_for_ui(
             order_by_timestamp=order_upper,
         )
 
+        messages_for_processing = (
+            list(reversed(raw_db_messages)) if order_upper == "DESC" else raw_db_messages
+        )
+
         additional_aliases, extra_user_aliases = _compute_additional_char_aliases(
-            raw_db_messages,
+            messages_for_processing,
             character_name,
             user_name,
             actual_user_sender_id_in_db="User",
-        )
-
-        messages_for_processing = (
-            list(reversed(raw_db_messages)) if order_upper == "DESC" else raw_db_messages
         )
 
         # Optionally accept a pre-fetched character first_message to avoid a DB hit

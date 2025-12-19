@@ -98,6 +98,18 @@ def commands_enabled() -> bool:
     return _cfg_bool("CHAT_COMMANDS_ENABLED", "commands_enabled", False)
 
 
+def is_single_user_mode() -> bool:
+    """Return True when AuthNZ is configured in single-user mode.
+
+    This helper exists primarily as a test seam for RBAC behavior; production
+    code should prefer env/config-driven enforcement.
+    """
+    try:
+        return str(os.getenv("AUTH_MODE", "")).strip().lower() == "single_user"
+    except Exception:
+        return False
+
+
 def get_injection_mode() -> str:
     mode = _cfg_str("CHAT_COMMAND_INJECTION_MODE", "injection_mode", "system").lower().strip()
     # Supported modes:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
@@ -91,6 +92,17 @@ async def _ensure_tables(db) -> None:
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS external_oauth_state (
+                    state TEXT NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    provider TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (state, user_id)
+                )
+                """
+            )
         else:
             await db.execute(
                 """
@@ -158,6 +170,17 @@ async def _ensure_tables(db) -> None:
                     denied_notion_workspaces TEXT,
                     quotas_per_role TEXT,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS external_oauth_state (
+                    state TEXT NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    provider TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (state, user_id)
                 )
                 """,
             )
@@ -290,6 +313,81 @@ async def get_policy(db, org_id: int) -> Dict[str, Any]:
     return row
 
 
+def _oauth_state_cutoff(max_age_minutes: int) -> Tuple[datetime, str]:
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+    cutoff_str = cutoff_dt.strftime("%Y-%m-%d %H:%M:%S")
+    return cutoff_dt, cutoff_str
+
+
+async def create_oauth_state(db, user_id: int, provider: str, state: str) -> None:
+    await _ensure_tables(db)
+    is_pg = await is_postgres_backend()
+    if is_pg:
+        await db.execute(
+            """
+            INSERT INTO external_oauth_state (state, user_id, provider, created_at)
+            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+            ON CONFLICT (state, user_id) DO UPDATE SET
+                provider = EXCLUDED.provider,
+                created_at = CURRENT_TIMESTAMP
+            """,
+            state, user_id, provider,
+        )
+        return
+    await db.execute(
+        """
+        INSERT OR REPLACE INTO external_oauth_state (state, user_id, provider, created_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        """,
+        (state, user_id, provider),
+    )
+    await getattr(db, "commit", lambda: None)()
+
+
+async def consume_oauth_state(
+    db,
+    *,
+    user_id: int,
+    provider: str,
+    state: str,
+    max_age_minutes: int = 10,
+) -> bool:
+    await _ensure_tables(db)
+    is_pg = await is_postgres_backend()
+    cutoff_dt, cutoff_str = _oauth_state_cutoff(max_age_minutes)
+    if is_pg:
+        row = await db.fetchrow(
+            """
+            SELECT state FROM external_oauth_state
+            WHERE state = $1 AND user_id = $2 AND provider = $3 AND created_at >= $4
+            """,
+            state, user_id, provider, cutoff_dt,
+        )
+        if not row:
+            return False
+        await db.execute(
+            "DELETE FROM external_oauth_state WHERE state = $1 AND user_id = $2",
+            state, user_id,
+        )
+        return True
+    cur = await db.execute(
+        """
+        SELECT state FROM external_oauth_state
+        WHERE state = ? AND user_id = ? AND provider = ? AND created_at >= ?
+        """,
+        (state, user_id, provider, cutoff_str),
+    )
+    row = await cur.fetchone()
+    if not row:
+        return False
+    await db.execute(
+        "DELETE FROM external_oauth_state WHERE state = ? AND user_id = ?",
+        (state, user_id),
+    )
+    await getattr(db, "commit", lambda: None)()
+    return True
+
+
 async def create_account(db, user_id: int, provider: str, display_name: str, email: Optional[str], tokens: Dict[str, Any]) -> Dict[str, Any]:
     await _ensure_tables(db)
     is_pg = await is_postgres_backend()
@@ -389,6 +487,43 @@ async def get_account_email(db, user_id: int, account_id: int) -> Optional[str]:
     return None if not row else (row.get("email") or None)
 
 
+async def get_account_for_user(db, user_id: int, account_id: int) -> Optional[Dict[str, Any]]:
+    await _ensure_tables(db)
+    is_pg = await is_postgres_backend()
+    if is_pg:
+        row = await db.fetchrow(
+            """
+            SELECT id, user_id, provider, display_name, email, created_at
+            FROM external_accounts
+            WHERE id = $1 AND user_id = $2
+            """,
+            account_id, user_id,
+        )
+        return dict(row) if row else None
+    cur = await db.execute(
+        """
+        SELECT id, user_id, provider, display_name, email, created_at
+        FROM external_accounts
+        WHERE id = ? AND user_id = ?
+        """,
+        (account_id, user_id),
+    )
+    r = await cur.fetchone()
+    if not r:
+        return None
+    try:
+        return {
+            "id": r[0],
+            "user_id": r[1],
+            "provider": r[2],
+            "display_name": r[3],
+            "email": r[4],
+            "created_at": r[5],
+        }
+    except Exception:
+        return dict(r)
+
+
 async def update_account_tokens(db, user_id: int, account_id: int, new_tokens: Dict[str, Any]) -> bool:
     """Persist refreshed tokens for an account. Uses envelope encryption when configured.
 
@@ -397,12 +532,19 @@ async def update_account_tokens(db, user_id: int, account_id: int, new_tokens: D
     await _ensure_tables(db)
     is_pg = await is_postgres_backend()
     import json as _json
+    existing_refresh: Optional[str] = None
+    if not new_tokens.get("refresh_token"):
+        existing = await _get_account_with_tokens(db, user_id, account_id)
+        if not existing:
+            return False
+        existing_refresh = (existing.get("tokens") or {}).get("refresh_token")
+    refresh_token_value = new_tokens.get("refresh_token") or existing_refresh
     # Build storage values similar to create_account
     try:
         from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
         env = encrypt_json_blob({
             "access_token": new_tokens.get("access_token"),
-            "refresh_token": new_tokens.get("refresh_token"),
+            "refresh_token": refresh_token_value,
             "token_type": new_tokens.get("token_type"),
             "expires_in": new_tokens.get("expires_in"),
             "expires_at": new_tokens.get("expires_at"),
@@ -413,7 +555,7 @@ async def update_account_tokens(db, user_id: int, account_id: int, new_tokens: D
         scopes_store = new_tokens.get("scope") or None
     except Exception:
         access_token_store = str(new_tokens.get("access_token") or "")
-        refresh_token_store = new_tokens.get("refresh_token")
+        refresh_token_store = refresh_token_value
         scopes_store = new_tokens.get("scope") or None
 
     if is_pg:

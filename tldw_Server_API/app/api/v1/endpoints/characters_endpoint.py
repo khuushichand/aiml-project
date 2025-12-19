@@ -6,12 +6,105 @@ import base64
 import json
 import pathlib
 from datetime import datetime
-from typing import List, Union, Any, Dict, Optional
+from typing import List, Union, Any, Dict, Optional, Tuple
 #
 # Third-party Libraries
 from fastapi import HTTPException, Depends, Query, UploadFile, File, APIRouter, Path as FastAPIPath, Body
 from loguru import logger
 from starlette import status
+
+# Constants for file upload validation
+MAX_CHARACTER_FILE_SIZE = 10 * 1024 * 1024  # 10MB max file size
+ALLOWED_EXTENSIONS = frozenset({".png", ".webp", ".json", ".yaml", ".yml", ".txt", ".md"})
+
+# Magic bytes for MIME type detection (more reliable than extension)
+_MAGIC_BYTES: Dict[bytes, str] = {
+    b'\x89PNG\r\n\x1a\n': 'image/png',  # PNG signature
+    b'RIFF': 'image/webp',  # WebP starts with RIFF (need to check 'WEBP' at offset 8)
+}
+
+
+def _detect_mime_type(data: bytes) -> Optional[str]:
+    """
+    Detect MIME type from file magic bytes.
+
+    Returns the detected MIME type or None if unknown.
+    This is more reliable than extension-based detection for security.
+    """
+    if len(data) < 12:
+        return None
+
+    # Check PNG
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        return 'image/png'
+
+    # Check WebP (RIFF....WEBP)
+    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return 'image/webp'
+
+    # Check JPEG (various signatures)
+    if data[:2] == b'\xff\xd8':
+        return 'image/jpeg'
+
+    # Check for JSON (starts with { or [, possibly with BOM or whitespace)
+    stripped = data.lstrip(b'\xef\xbb\xbf \t\n\r')  # Strip BOM and whitespace
+    if stripped and stripped[0:1] in (b'{', b'['):
+        return 'application/json'
+
+    # Check for YAML/Markdown (text files - check for printable ASCII)
+    try:
+        # Check first 100 bytes for text-like content
+        sample = data[:100].decode('utf-8', errors='strict')
+        # If it decodes as valid UTF-8 and contains printable chars, likely text
+        if sample.isprintable() or '\n' in sample or '\r' in sample:
+            return 'text/plain'
+    except (UnicodeDecodeError, AttributeError):
+        pass
+
+    return None
+
+
+def _validate_file_type(data: bytes, filename: Optional[str]) -> Tuple[bool, str, Optional[str]]:
+    """
+    Validate file type via both magic bytes and extension.
+
+    Returns:
+        Tuple of (is_valid, error_message, detected_type)
+    """
+    ext = None
+    if filename:
+        ext = pathlib.Path(filename).suffix.lower()
+
+    # Check extension first
+    if ext and ext not in ALLOWED_EXTENSIONS:
+        return False, f"File extension '{ext}' not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}", None
+
+    # Detect MIME type from content
+    detected_mime = _detect_mime_type(data)
+
+    # For image files, validate magic bytes match extension claim
+    if ext in ('.png', '.webp', '.jpeg', '.jpg'):
+        expected_mimes = {
+            '.png': 'image/png',
+            '.webp': 'image/webp',
+            '.jpeg': 'image/jpeg',
+            '.jpg': 'image/jpeg',
+        }
+        expected = expected_mimes.get(ext)
+        if expected and detected_mime and detected_mime != expected:
+            return False, f"File content doesn't match extension. Extension: {ext}, detected: {detected_mime}", None
+
+    # Determine file type for processing
+    if detected_mime in ('image/png', 'image/webp', 'image/jpeg'):
+        return True, "", "image"
+    elif detected_mime in ('application/json', 'text/plain') or ext in ('.json', '.yaml', '.yml', '.txt', '.md'):
+        return True, "", "json"
+
+    # If we have a valid extension and it's text-based, allow it
+    if ext in ALLOWED_EXTENSIONS:
+        return True, "", "json" if ext in ('.json', '.yaml', '.yml') else "text"
+
+    return False, "Could not determine file type", None
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
@@ -89,6 +182,15 @@ async def import_character_endpoint(
     For JSON data, you can upload a .json file or a text file containing JSON.
     """
     try:
+        # Pre-size check using content-length header (if available)
+        # This prevents loading very large files into memory
+        if character_file.size is not None and character_file.size > MAX_CHARACTER_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File too large. Maximum allowed size is {MAX_CHARACTER_FILE_SIZE // (1024 * 1024)}MB"
+            )
+
+        # Read file with size limit
         file_content_bytes = await character_file.read()
         if not file_content_bytes:
             raise HTTPException(
@@ -96,28 +198,37 @@ async def import_character_endpoint(
                 detail="Uploaded file is empty"
             )
 
+        # Post-read size check (in case content-length was not accurate)
+        if len(file_content_bytes) > MAX_CHARACTER_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File too large. Maximum allowed size is {MAX_CHARACTER_FILE_SIZE // (1024 * 1024)}MB"
+            )
+
+        # Validate file type via magic bytes and extension
+        is_valid, error_msg, detected_type = _validate_file_type(
+            file_content_bytes, character_file.filename
+        )
+        if not is_valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_msg
+            )
+
         # Check rate limits
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_rate_limit(current_user.id, "character_import")
         rate_limiter.check_import_size(len(file_content_bytes))
 
-        # Check character count limit
+        # Check character count limit. The helper expects the current count
+        # (before this import) and rejects when current_count >= max_characters.
         existing_chars = db.list_character_cards(limit=10000)
         await rate_limiter.check_character_limit(current_user.id, len(existing_chars))
 
         logger.info(f"API: Importing character from file: {character_file.filename}")
 
-        # import_and_save_character_from_file handles all file types including JSON
-        inferred_type = None
-        try:
-            fname = character_file.filename or ""
-            lower = fname.lower()
-            if lower.endswith((".png", ".webp")):
-                inferred_type = "image"
-            elif lower.endswith((".json", ".yaml", ".yml", ".txt", ".md")):
-                inferred_type = "json"
-        except Exception:
-            inferred_type = None
+        # Use the detected type from validation, with fallback to extension-based inference
+        inferred_type = detected_type
 
         success, message, char_id = import_and_save_character_from_file(
             db, file_content=file_content_bytes, file_type=inferred_type
@@ -226,7 +337,8 @@ async def create_new_character_endpoint(
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_rate_limit(current_user.id, "character_create")
 
-        # Check character count limit
+        # Check character count limit. The helper expects the current count
+        # (before this create) and rejects when current_count >= max_characters.
         existing_chars = db.list_character_cards(limit=10000)
         await rate_limiter.check_character_limit(current_user.id, len(existing_chars))
 

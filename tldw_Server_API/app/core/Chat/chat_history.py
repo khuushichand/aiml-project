@@ -218,6 +218,16 @@ def save_chat_history_to_db_wrapper(
                 logging.warning("Chatbot history is empty; nothing to save. Returning current conversation ID.")
                 return current_conversation_id, "No chat history to save."
 
+            # For existing conversations, fetch version BEFORE the transaction to avoid
+            # double-read with stale version issues (Issue #11)
+            conv_version_for_update: Optional[int] = None
+            conv_title_for_update: Optional[str] = None
+            if not is_new_conversation:
+                pre_fetch_conv = db.get_conversation_by_id(current_conversation_id)
+                if pre_fetch_conv:
+                    conv_version_for_update = pre_fetch_conv.get("version")
+                    conv_title_for_update = pre_fetch_conv.get("title")
+
             with db.transaction():
                 message_save_count = 0
                 for index, message_obj in enumerate(chatbot_history):
@@ -235,12 +245,12 @@ def save_chat_history_to_db_wrapper(
                         text_content_parts.append(content_data)
                     elif isinstance(content_data, list):
                         for part in content_data:
-                            part_type = part.get("type")
+                            part_type = part.get("type") if isinstance(part, dict) else None
                             if part_type == "text":
                                 text_content_parts.append(part.get("text", ""))
                             elif part_type == "image_url":
                                 image_url_dict = part.get("image_url", {})
-                                url_str = image_url_dict.get("url", "")
+                                url_str = image_url_dict.get("url", "") if isinstance(image_url_dict, dict) else ""
                                 if url_str.startswith("data:") and ";base64," in url_str:
                                     try:
                                         header, b64_data = url_str.split(";base64,", 1)
@@ -266,7 +276,7 @@ def save_chat_history_to_db_wrapper(
                                 elif url_str:
                                     logging.debug("Storing non-data image URL as text: %s", url_str)
                                     text_content_parts.append(f"<Image URL: {url_str}>")
-                    else:
+                    elif content_data is not None:
                         logging.warning("Unsupported message content type at index %s: %s", index, type(content_data))
                         text_content_parts.append(f"<Unsupported content type: {type(content_data)}>")
 
@@ -294,19 +304,48 @@ def save_chat_history_to_db_wrapper(
                     "Successfully saved %s messages to conversation %s.", message_save_count, current_conversation_id
                 )
 
-                if not is_new_conversation:
-                    conv_details_for_update = db.get_conversation_by_id(current_conversation_id)
-                    if conv_details_for_update:
-                        db.update_conversation(
-                            current_conversation_id,
-                            {"title": conv_details_for_update.get("title")},
-                            conv_details_for_update["version"],
-                        )
-                    else:
-                        logging.error(
-                            "Conversation %s disappeared before final metadata update during resave.",
-                            current_conversation_id,
-                        )
+                # Update conversation metadata with retry logic for version conflicts
+                # This handles TOCTOU race conditions where another process may have
+                # updated the conversation between our version fetch and update
+                if not is_new_conversation and conv_version_for_update is not None:
+                    max_retries = 3
+                    for retry_attempt in range(max_retries):
+                        try:
+                            if retry_attempt > 0:
+                                # Re-fetch conversation to get fresh version
+                                fresh_conv = db.get_conversation_by_id(current_conversation_id)
+                                if fresh_conv:
+                                    conv_version_for_update = fresh_conv.get("version")
+                                    conv_title_for_update = fresh_conv.get("title")
+                                else:
+                                    logging.warning(
+                                        "Conversation %s disappeared during retry. Messages saved, metadata update skipped.",
+                                        current_conversation_id,
+                                    )
+                                    break
+                            db.update_conversation(
+                                current_conversation_id,
+                                {"title": conv_title_for_update},
+                                conv_version_for_update,
+                            )
+                            break  # Success
+                        except ConflictError:
+                            if retry_attempt < max_retries - 1:
+                                logging.debug(
+                                    "Version conflict on conversation %s (attempt %d/%d), retrying...",
+                                    current_conversation_id,
+                                    retry_attempt + 1,
+                                    max_retries,
+                                )
+                            else:
+                                # Final attempt failed, log warning but continue
+                                # Messages were saved successfully
+                                logging.warning(
+                                    "Version conflict updating conversation %s metadata after %d retries. "
+                                    "Messages were saved successfully.",
+                                    current_conversation_id,
+                                    max_retries,
+                                )
 
         except (InputError, ConflictError, CharactersRAGDBError) as exc:
             logging.error("Error saving messages to conversation %s: %s", current_conversation_id, exc, exc_info=True)

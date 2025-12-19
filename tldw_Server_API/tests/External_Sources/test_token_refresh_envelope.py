@@ -38,19 +38,20 @@ async def test_update_account_tokens_encrypted_env(monkeypatch, tmp_path):
         # get_account_tokens returns decrypted tokens
         toks = await svc.get_account_tokens(db, 1, account_id)
         assert toks.get("access_token") == "at1"
-        assert toks.get("refresh_token") in ("rt1", None)  # envelope may hide stored refresh
+        assert toks.get("refresh_token") == "rt1"
 
         # Update tokens (simulate refresh)
-        ok = await svc.update_account_tokens(db, 1, account_id, {"access_token": "at2", "refresh_token": "rt2", "scope": "drive.readonly"})
+        ok = await svc.update_account_tokens(db, 1, account_id, {"access_token": "at2", "scope": "drive.readonly"})
         assert ok is True
         # New envelope persisted
         cur2 = await db.execute("SELECT access_token, refresh_token FROM external_accounts WHERE id = ?", (account_id,))
         row2 = await cur2.fetchone()
         env2 = json.loads(row2[0])
         assert env2.get("_enc") == "aesgcm:v1"
-        # Decoded tokens reflect update
+        # Decoded tokens reflect update and preserve refresh token
         toks2 = await svc.get_account_tokens(db, 1, account_id)
         assert toks2.get("access_token") == "at2"
+        assert toks2.get("refresh_token") == "rt1"
 
 
 @pytest.mark.asyncio

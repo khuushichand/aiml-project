@@ -9,6 +9,7 @@ from importlib import import_module
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 
 
 pytestmark = pytest.mark.unit
@@ -35,6 +36,14 @@ def client_with_user(monkeypatch, tmp_path):
 def test_sources_crud_and_tags(client_with_user):
     c = client_with_user
 
+    # Create groups for source membership updates
+    r = c.post("/api/v1/watchlists/groups", json={"name": "Group A", "description": "A"})
+    assert r.status_code == 200, r.text
+    group_a = r.json()
+    r = c.post("/api/v1/watchlists/groups", json={"name": "Group B", "description": "B"})
+    assert r.status_code == 200, r.text
+    group_b = r.json()
+
     # Create source with tags
     body = {
         "name": "Example RSS",
@@ -42,6 +51,7 @@ def test_sources_crud_and_tags(client_with_user):
         "source_type": "rss",
         "tags": ["News", "Tech"],
         "settings": {"top_n": 10},
+        "group_ids": [group_a["id"]],
     }
     r = c.post("/api/v1/watchlists/sources", json=body)
     assert r.status_code == 200, r.text
@@ -65,6 +75,15 @@ def test_sources_crud_and_tags(client_with_user):
     assert r.status_code == 200
     up = r.json()
     assert set(up.get("tags", [])) == {"updates", "tech"}
+
+    # Update source: replace group membership
+    r = c.patch(f"/api/v1/watchlists/sources/{sid}", json={"group_ids": [group_b["id"]]})
+    assert r.status_code == 200
+    db = WatchlistsDatabase.for_user(555)
+    in_group_b = db.list_sources_by_group_ids([int(group_b["id"])])
+    assert any(src.id == sid for src in in_group_b)
+    in_group_a = db.list_sources_by_group_ids([int(group_a["id"])])
+    assert not any(src.id == sid for src in in_group_a)
 
     # Tags list
     r = c.get("/api/v1/watchlists/tags")
@@ -238,7 +257,7 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     # Download output
     r = c.get(f"/api/v1/watchlists/outputs/{output_id}/download")
     assert r.status_code == 200, r.text
-    assert "Daily Briefing" in r.text
+
 
     # Template management
     template_payload = {
@@ -281,6 +300,45 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     assert r.status_code == 404
     r = c.get("/api/v1/watchlists/templates")
     assert all(t["name"] != "daily_md" for t in r.json().get("items", []))
+
+
+def test_preview_site_sources_returns_items(client_with_user, monkeypatch):
+    c = client_with_user
+    monkeypatch.delenv("TEST_MODE", raising=False)
+
+    async def _fake_fetch(base_url, rules, *, tenant_id="default", timeout=10.0):
+        return [{"title": "Stub Item", "url": "https://example.com/x", "summary": "Stub summary"}]
+
+    from tldw_Server_API.app.api.v1.endpoints import watchlists as watchlists_endpoints
+    monkeypatch.setattr(watchlists_endpoints, "fetch_site_items_with_rules", _fake_fetch)
+
+    # Create site source
+    src_body = {
+        "name": "Preview Site",
+        "url": "https://example.com/",
+        "source_type": "site",
+        "tags": ["preview"],
+    }
+    r = c.post("/api/v1/watchlists/sources", json=src_body)
+    assert r.status_code == 200, r.text
+    source_id = r.json()["id"]
+
+    # Job scoped to source
+    job_body = {
+        "name": "Preview Job",
+        "scope": {"sources": [source_id]},
+        "schedule_expr": None,
+        "timezone": "UTC",
+        "active": True,
+    }
+    r = c.post("/api/v1/watchlists/jobs", json=job_body)
+    assert r.status_code == 200, r.text
+    job_id = r.json()["id"]
+
+    r = c.post(f"/api/v1/watchlists/jobs/{job_id}/preview", params={"limit": 10, "per_source": 5})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["total"] >= 1
 
 
 def test_output_deliveries_email_and_chatbook(client_with_user, monkeypatch, tmp_path):

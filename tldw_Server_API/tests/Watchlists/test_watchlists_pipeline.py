@@ -89,6 +89,39 @@ async def test_pipeline_happy_path_test_mode():
 
 
 @pytest.mark.asyncio
+async def test_pipeline_sets_next_run_for_utc_offset_timezone():
+    user_id = 779
+    db = WatchlistsDatabase.for_user(user_id)
+
+    rss = db.create_source(
+        name="Feed",
+        url="https://example.com/feed.xml",
+        source_type="rss",
+        active=True,
+        settings_json=json.dumps({"limit": 1}),
+        tags=["news"],
+        group_ids=[],
+    )
+
+    job = db.create_job(
+        name="Scheduled Job",
+        description=None,
+        scope_json=json.dumps({"sources": [rss.id]}),
+        schedule_expr="0 8 * * *",
+        schedule_timezone="UTC+8",
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=None,
+    )
+
+    await run_watchlist_job(user_id, job.id)
+    updated = db.get_job(job.id)
+    assert updated.next_run_at is not None
+
+
+@pytest.mark.asyncio
 async def test_scope_resolution_groups_and_tags():
     user_id = 778
     db = WatchlistsDatabase.for_user(user_id)

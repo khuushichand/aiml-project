@@ -9,10 +9,19 @@ import secrets
 import base64
 import os
 import stat
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List, Tuple
 import asyncio
 from pathlib import Path
+from contextlib import contextmanager
+
+# File locking support (Unix/Windows)
+try:
+    import fcntl
+    _HAS_FCNTL = True
+except ImportError:
+    _HAS_FCNTL = False
+    fcntl = None  # type: ignore
 #
 # 3rd-party imports
 from redis import asyncio as redis_async
@@ -354,15 +363,44 @@ class SessionManager:
                             )
             else:
                 # Normal path: use persisted key if found; otherwise, generate and persist
-                persisted_key = self._load_persisted_session_key()
-                if persisted_key:
-                    _append(persisted_key)
+                # Use file lock to prevent race conditions during concurrent initialization
+                key_path = self._persisted_key_path or self._resolve_persisted_key_path()
+                if key_path:
+                    try:
+                        with self._key_file_lock(key_path):
+                            # Re-check after acquiring lock (another process may have created it)
+                            persisted_key = self._load_persisted_session_key()
+                            if persisted_key:
+                                _append(persisted_key)
+                            else:
+                                generated = Fernet.generate_key()
+                                if self._persist_session_key(generated):
+                                    _append(generated)
+                                else:
+                                    logger.warning("Failed to persist session encryption key; falling back to derived secrets.")
+                    except RuntimeError as lock_err:
+                        # Lock acquisition failed - fall back to unlocked behavior with warning
+                        logger.warning(f"Could not acquire key file lock: {lock_err}; proceeding without lock")
+                        persisted_key = self._load_persisted_session_key()
+                        if persisted_key:
+                            _append(persisted_key)
+                        else:
+                            generated = Fernet.generate_key()
+                            if self._persist_session_key(generated):
+                                _append(generated)
+                            else:
+                                logger.warning("Failed to persist session encryption key; falling back to derived secrets.")
                 else:
-                    generated = Fernet.generate_key()
-                    if self._persist_session_key(generated):
-                        _append(generated)
+                    # No key path available - use unlocked behavior
+                    persisted_key = self._load_persisted_session_key()
+                    if persisted_key:
+                        _append(persisted_key)
                     else:
-                        logger.warning("Failed to persist session encryption key; falling back to derived secrets.")
+                        generated = Fernet.generate_key()
+                        if self._persist_session_key(generated):
+                            _append(generated)
+                        else:
+                            logger.warning("Failed to persist session encryption key; falling back to derived secrets.")
 
         # Always include derived secrets for backward compatibility / fallback (includes secondary secrets)
         for derived in self._derive_secret_key_candidates():
@@ -395,10 +433,11 @@ class SessionManager:
         _add_secret(getattr(self.settings, "API_KEY_PEPPER", None))
         _add_secret(getattr(self.settings, "JWT_SECRET_KEY", None))
         _add_secret(getattr(self.settings, "JWT_PRIVATE_KEY", None))
-        _add_secret(getattr(self.settings, "JWT_PUBLIC_KEY", None))
+        # NOTE: JWT_PUBLIC_KEY is intentionally excluded - public keys are not secrets
+        # and should never be used as cryptographic key material for encryption
         _add_secret(getattr(self.settings, "JWT_SECONDARY_SECRET", None))
         _add_secret(getattr(self.settings, "JWT_SECONDARY_PRIVATE_KEY", None))
-        _add_secret(getattr(self.settings, "JWT_SECONDARY_PUBLIC_KEY", None))
+        # NOTE: JWT_SECONDARY_PUBLIC_KEY is also excluded for the same reason
 
         derived_keys: List[bytes] = []
         seen: set[bytes] = set()
@@ -407,17 +446,106 @@ class SessionManager:
             if not secret:
                 continue
             raw = secret if isinstance(secret, bytes) else str(secret).encode("utf-8")
+            # NOTE: Static salt is used for backward compatibility with existing sessions.
+            # This is acceptable because:
+            # 1. Input (raw) is already high-entropy secret material (JWT keys, API keys)
+            # 2. PBKDF2 with 600k iterations provides sufficient key stretching
+            # For new deployments, prefer setting SESSION_ENCRYPTION_KEY directly
+            # with a cryptographically random 32-byte key.
             kdf = PBKDF2HMAC(
                 algorithm=hashes.SHA256(),
                 length=32,
                 salt=b"session_encryption_salt_v1",
-                iterations=100000,
+                iterations=600000,  # OWASP 2023 recommendation for PBKDF2-HMAC-SHA256
             )
             key_material = base64.urlsafe_b64encode(kdf.derive(raw))
             if key_material not in seen:
                 seen.add(key_material)
                 derived_keys.append(key_material)
         return derived_keys
+
+    @contextmanager
+    def _key_file_lock(self, path: Path, timeout: float = 5.0):
+        """Context manager for file locking during key operations.
+
+        Uses fcntl.flock on Unix systems for proper file locking.
+        Falls back to a simple lock file on systems without fcntl.
+
+        Args:
+            path: Path to the key file (lock file will be path.lock)
+            timeout: Maximum time to wait for lock in seconds
+
+        Raises:
+            RuntimeError: If lock cannot be acquired within timeout
+        """
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        lock_fd = None
+
+        try:
+            # Ensure parent directory exists
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+            if _HAS_FCNTL:
+                # Unix: Use proper file locking
+                lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+                start_time = time.time()
+                while True:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except (IOError, OSError):
+                        if time.time() - start_time > timeout:
+                            raise RuntimeError(
+                                f"Failed to acquire lock on {lock_path} within {timeout}s"
+                            )
+                        time.sleep(0.1)
+            else:
+                # Windows/other: Use exclusive file creation as a lock
+                start_time = time.time()
+                while True:
+                    try:
+                        lock_fd = os.open(
+                            str(lock_path),
+                            os.O_CREAT | os.O_EXCL | os.O_RDWR,
+                            0o600
+                        )
+                        break
+                    except FileExistsError:
+                        # Check if lock is stale (older than timeout * 2)
+                        try:
+                            lock_stat = os.stat(lock_path)
+                            if time.time() - lock_stat.st_mtime > timeout * 2:
+                                os.unlink(lock_path)
+                                continue
+                        except (OSError, FileNotFoundError):
+                            pass
+
+                        if time.time() - start_time > timeout:
+                            raise RuntimeError(
+                                f"Failed to acquire lock on {lock_path} within {timeout}s"
+                            )
+                        time.sleep(0.1)
+
+            yield  # Lock acquired, execute protected code
+
+        finally:
+            # Release lock
+            if lock_fd is not None:
+                if _HAS_FCNTL:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    except Exception:
+                        pass
+                try:
+                    os.close(lock_fd)
+                except Exception:
+                    pass
+            # Clean up lock file (best effort)
+            if not _HAS_FCNTL:
+                try:
+                    lock_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     def _persist_session_key(self, key: bytes) -> bool:
         """Persist generated session key to disk for reuse across restarts."""
@@ -450,29 +578,54 @@ class SessionManager:
             flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
             if hasattr(os, "O_NOFOLLOW"):
                 flags |= os.O_NOFOLLOW
+
+            # SECURITY: Set restrictive umask before file creation to prevent TOCTOU race
+            # This ensures the file is created with restricted permissions even if
+            # another process tries to modify it between creation and chmod
+            old_umask = None
+            if hasattr(os, "umask"):
+                old_umask = os.umask(0o077)  # Only owner can read/write/execute
+
             # Write the key with 0o600 permissions so only the owner can read it
             try:
                 fd = os.open(str(path), flags, 0o600)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                        handle.write(key.decode("utf-8"))
+                except Exception:
+                    try:
+                        os.close(fd)
+                    except Exception:
+                        pass
+                    raise
             except OSError as exc:
                 raise RuntimeError(f"Failed to open session encryption key file {path}: {exc}") from exc
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    handle.write(key.decode("utf-8"))
-            except Exception:
-                os.close(fd)
-                raise
+            finally:
+                # Restore umask after file operations complete
+                if old_umask is not None:
+                    os.umask(old_umask)
 
             try:
                 os.chmod(path, 0o600)
-            except Exception:
-                # Best-effort chmod; on some filesystems (e.g., Windows) this may be a no-op
-                pass
+            except Exception as chmod_exc:
+                # Log warning instead of silently ignoring - this could be a security issue
+                logger.warning(f"Failed to set permissions on session key file {path}: {chmod_exc}")
+
             try:
                 st = os.stat(path, follow_symlinks=False)
                 if not stat.S_ISREG(st.st_mode):
                     raise RuntimeError(f"Session encryption key {path} is not a regular file")
                 if hasattr(os, "getuid") and st.st_uid != os.getuid():
                     raise RuntimeError(f"Session encryption key {path} is not owned by the current user")
+                # Also check group ownership for extra security
+                if hasattr(os, "getgid") and hasattr(os, "getuid"):
+                    # Verify file mode is restrictive (no group/other access)
+                    mode = stat.S_IMODE(st.st_mode)
+                    if mode & (stat.S_IRWXG | stat.S_IRWXO):
+                        logger.warning(
+                            f"Session encryption key {path} has permissive mode {oct(mode)}. "
+                            "Expected 0o600 (owner read/write only)."
+                        )
             except Exception as exc:
                 try:
                     path.unlink(missing_ok=True)
@@ -713,7 +866,11 @@ class SessionManager:
         return base64.urlsafe_b64encode(encrypted).decode('utf-8')
 
     def decrypt_token(self, encrypted_token: str) -> str:
-        """Decrypt a stored token"""
+        """Decrypt a stored token.
+
+        Tries all key candidates in order for key rotation support.
+        Logs metrics for monitoring key rotation health.
+        """
         if not self.cipher_suite or not self._fernet_candidates:
             self._init_encryption()
 
@@ -721,19 +878,33 @@ class SessionManager:
             encrypted_bytes = base64.urlsafe_b64decode(encrypted_token.encode('utf-8'))
         except Exception as e:
             logger.error(f"Failed to decode stored session token: {e}")
+            log_counter("session_token_decode_error")
             raise InvalidSessionError("Failed to decrypt session token") from e
 
         last_error: Optional[Exception] = None
+        num_candidates = len(self._fernet_candidates or [])
+        errors_by_candidate: List[str] = []
+
         for idx, cipher in enumerate(self._fernet_candidates or []):
             try:
                 decrypted = cipher.decrypt(encrypted_bytes)
+                # Track which candidate succeeded for key rotation monitoring
+                if idx > 0:
+                    log_counter("session_decrypt_secondary_key_used")
+                    logger.info(f"Session token decrypted with secondary key candidate {idx}")
                 return decrypted.decode('utf-8')
             except Exception as exc:
                 last_error = exc
+                errors_by_candidate.append(f"candidate[{idx}]: {type(exc).__name__}")
                 logger.debug(f"Session token decryption failed with candidate {idx}: {exc}")
                 continue
 
-        logger.error(f"Failed to decrypt token after examining {len(self._fernet_candidates or [])} key candidates: {last_error}")
+        # All candidates failed - log detailed error for debugging
+        log_counter("session_decrypt_all_candidates_failed")
+        logger.warning(
+            f"Failed to decrypt token after examining {num_candidates} key candidates. "
+            f"Errors: {', '.join(errors_by_candidate)}"
+        )
         raise InvalidSessionError("Failed to decrypt session token") from last_error
 
     @staticmethod
@@ -743,11 +914,14 @@ class SessionManager:
             return None, None
         try:
             claims = jose_jwt.get_unverified_claims(token)
+            if claims is None:
+                return None, None
             jti = claims.get("jti")
             exp = claims.get("exp")
             expires_at = None
             if isinstance(exp, (int, float)):
-                expires_at = datetime.utcfromtimestamp(exp)
+                # Use timezone-aware datetime to avoid naive datetime issues
+                expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
             return jti, expires_at
         except Exception:
             return None, None
@@ -787,10 +961,10 @@ class SessionManager:
         # Encrypt tokens for secure storage
         encrypted_access = self.encrypt_token(access_token)
         encrypted_refresh = self.encrypt_token(refresh_token)
-        expires_at = datetime.utcnow() + timedelta(
+        expires_at = datetime.now(timezone.utc) + timedelta(
             minutes=self.settings.ACCESS_TOKEN_EXPIRE_MINUTES
         )
-        refresh_expires_at = datetime.utcnow() + timedelta(
+        refresh_expires_at = datetime.now(timezone.utc) + timedelta(
             days=self.settings.REFRESH_TOKEN_EXPIRE_DAYS
         )
 
@@ -938,7 +1112,8 @@ class SessionManager:
                     logger.warning(f"Session {session_data['id']} was revoked")
                 raise SessionRevokedException()
 
-            if matched_hash and matched_hash != token_hash_primary:
+            # Use timing-safe comparison to prevent timing attacks
+            if matched_hash and not hmac.compare_digest(matched_hash, token_hash_primary):
                 try:
                     await repo.normalize_session_token_hash(
                         session_id=session_data["id"],
@@ -957,14 +1132,23 @@ class SessionManager:
 
             # Outside of DB operations - refresh cache with validation status
             expires_at = session_data.get('expires_at')
+            expires_at_dt: Optional[datetime] = None
             if isinstance(expires_at, str):
                 expires_at_dt = datetime.fromisoformat(expires_at)
-            else:
+                # Ensure timezone-aware datetime
+                if expires_at_dt.tzinfo is None:
+                    expires_at_dt = expires_at_dt.replace(tzinfo=timezone.utc)
+            elif isinstance(expires_at, datetime):
                 expires_at_dt = expires_at
+                if expires_at_dt.tzinfo is None:
+                    expires_at_dt = expires_at_dt.replace(tzinfo=timezone.utc)
 
+            # Always clear old cache if normalization was required (cache consistency)
+            if self.redis_client and cache_normalize_required:
+                await self._clear_session_cache(session_data['id'])
+
+            # Update cache with new validation status
             if self.redis_client and expires_at_dt:
-                if cache_normalize_required:
-                    await self._clear_session_cache(session_data['id'])
                 await self._cache_session(
                     token_hash_primary,
                     session_data['user_id'],
@@ -1080,13 +1264,13 @@ class SessionManager:
         encrypted_access_token = self.encrypt_token(new_access_token)
         access_jti, access_exp = self._extract_token_metadata(new_access_token)
         refresh_jti, refresh_exp = self._extract_token_metadata(new_refresh_token) if new_refresh_token else (None, None)
-        expires_at = access_exp or (datetime.utcnow() + timedelta(
+        expires_at = access_exp or (datetime.now(timezone.utc) + timedelta(
             minutes=self.settings.ACCESS_TOKEN_EXPIRE_MINUTES
         ))
         refresh_expires_at = None
         if new_refresh_token:
             refresh_expires_at = refresh_exp or (
-                datetime.utcnow() + timedelta(days=self.settings.REFRESH_TOKEN_EXPIRE_DAYS)
+                datetime.now(timezone.utc) + timedelta(days=self.settings.REFRESH_TOKEN_EXPIRE_DAYS)
             )
 
         try:
@@ -1189,7 +1373,7 @@ class SessionManager:
                 except ValueError:
                     expires_at_dt = None
             if not expires_at_dt:
-                expires_at_dt = datetime.utcnow() + timedelta(
+                expires_at_dt = datetime.now(timezone.utc) + timedelta(
                     minutes=self.settings.ACCESS_TOKEN_EXPIRE_MINUTES
                 )
 
@@ -1345,8 +1529,12 @@ class SessionManager:
                 "revoked": bool(revoked),
             }
 
-            # Calculate TTL
-            ttl = int((expires_at - datetime.utcnow()).total_seconds())
+            # Calculate TTL - ensure expires_at is timezone-aware for comparison
+            if expires_at.tzinfo is None:
+                expires_at_aware = expires_at.replace(tzinfo=timezone.utc)
+            else:
+                expires_at_aware = expires_at
+            ttl = int((expires_at_aware - datetime.now(timezone.utc)).total_seconds())
             if ttl > 0:
                 # Cache session data
                 await self.redis_client.setex(
@@ -1372,7 +1560,10 @@ class SessionManager:
             if cached:
                 data = json.loads(cached)
                 expires = datetime.fromisoformat(data['expires_at'])
-                if expires > datetime.utcnow():
+                # Ensure timezone-aware comparison
+                if expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=timezone.utc)
+                if expires > datetime.now(timezone.utc):
                     data.setdefault("user_active", True)
                     data.setdefault("revoked", False)
                     return data

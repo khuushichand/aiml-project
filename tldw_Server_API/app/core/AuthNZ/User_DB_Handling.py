@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError, Field
 # Local Imports
 # New unified settings
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
 # New JWT service
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
@@ -578,6 +579,25 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
             if test_key:
                 allowed_keys.add(test_key)
             if api_key in allowed_keys:
+                client_ip = None
+                try:
+                    client = getattr(request, "client", None)
+                    if client is not None:
+                        client_ip = getattr(client, "host", None)
+                except Exception:
+                    client_ip = None
+                if not is_single_user_ip_allowed(client_ip, settings):
+                    if settings.PII_REDACT_LOGS:
+                        logger.warning("Single-user API key rejected due to client IP allowlist (details redacted)")
+                    else:
+                        logger.warning(
+                            "Single-user API key rejected due to client IP allowlist (ip={})",
+                            client_ip,
+                        )
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid or missing API Key",
+                    )
                 user = get_single_user_instance()
                 # Ensure admin-style claims are present
                 if not user.roles:
@@ -713,6 +733,8 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
         try:
             request.state.user_id = user_id
             request.state.api_key_id = key_info.get("id")
+            # Store scope for require_api_key_scope() dependency enforcement
+            request.state._api_key_scope = key_info.get("scope", "read")
             # Attach org/team context if present (virtual keys)
             try:
                 if key_info.get("org_id") is not None:
@@ -920,8 +942,15 @@ async def get_request_user(
         if extracted:
             api_key = extracted
 
-    # Prefer Bearer JWT when present; otherwise fall back to API key.
+    # Prefer Bearer JWT when present; in single-user mode treat Bearer as API key.
     if token:
+        try:
+            settings = get_settings()
+        except Exception:
+            settings = None
+        if settings is not None and getattr(settings, "AUTH_MODE", None) == "single_user":
+            logger.debug("get_request_user: Treating Bearer token as API key in single-user mode.")
+            return await authenticate_api_key_user(request, token)
         logger.debug("get_request_user: Attempting JWT-based authentication.")
         user = await verify_jwt_and_fetch_user(request, token)
         # verify_jwt_and_fetch_user already sets request.state.auth; cache user for fast-path reuse.

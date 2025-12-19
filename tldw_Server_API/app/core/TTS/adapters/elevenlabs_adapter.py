@@ -294,7 +294,7 @@ class ElevenLabsAdapter(TTSAdapter):
 
         # Validate request using new validation system
         try:
-            validate_tts_request(request, provider=self.provider_name.lower())
+            validate_tts_request(request, provider=self.provider_key)
         except Exception as e:
             logger.error(f"{self.provider_name} request validation failed: {e}")
             raise
@@ -613,6 +613,8 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
     - Exposes convenience attributes/methods expected by the new tests
     - Performs lightweight validation raising exceptions on invalid input
     """
+
+    PROVIDER_KEY = "elevenlabs"
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         cfg = config.copy() if isinstance(config, dict) else {}

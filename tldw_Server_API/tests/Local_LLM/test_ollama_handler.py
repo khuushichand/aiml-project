@@ -3,7 +3,7 @@ import pytest
 
 from tldw_Server_API.app.core.Local_LLM.Ollama_Handler import OllamaHandler
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import OllamaConfig
-from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import InferenceError
+from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import InferenceError, ServerError
 
 
 @pytest.mark.asyncio
@@ -59,3 +59,40 @@ async def test_ollama_inference_start_then_retry(monkeypatch):
 
     result = await handler.inference(model_name="m", prompt="hi")
     assert result["response"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_ollama_serve_model_not_ready(monkeypatch):
+    cfg = OllamaConfig()
+    handler = OllamaHandler(cfg, global_app_config={})
+
+    monkeypatch.setattr(handler, "is_ollama_installed", lambda: asyncio.sleep(0, result=True))
+
+    import tldw_Server_API.app.core.Local_LLM.Ollama_Handler as ol_mod
+    monkeypatch.setattr(ol_mod.psutil, "net_connections", lambda: [])
+
+    class DummyStderr:
+        async def read(self):
+            return b""
+
+    class DummyProc:
+        def __init__(self):
+            self.pid = 123
+            self.returncode = None
+            self.stderr = DummyStderr()
+        async def wait(self):
+            self.returncode = 0
+            return 0
+        def terminate(self):
+            self.returncode = 0
+        def kill(self):
+            self.returncode = -9
+
+    async def fake_cpe(*args, **kwargs):
+        return DummyProc()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_cpe)
+    monkeypatch.setattr(ol_mod, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=False))
+
+    with pytest.raises(ServerError):
+        await handler.serve_model("m", port=11435)

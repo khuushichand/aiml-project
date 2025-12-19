@@ -533,6 +533,10 @@ async def ensure_tool_catalogs_tables_pg(pool: Optional[DatabasePool] = None) ->
         db_pool = pool or await get_db_pool()
         if getattr(db_pool, "pool", None) is None:
             return False  # not postgres
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except Exception as exc:
+            logger.debug(f"PG ensure authnz core tables before tool catalogs failed: {exc}")
         for sql, params in _CREATE_TOOL_CATALOGS:
             try:
                 await db_pool.execute(sql, *params)

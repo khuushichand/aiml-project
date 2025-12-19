@@ -21,6 +21,8 @@ Usage:
 """
 #
 # Imports
+import logging
+import threading
 from typing import List, Tuple, Dict, Any, Optional, Union
 from pathlib import Path
 
@@ -47,6 +49,12 @@ from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
 #
 # Functions:
 
+# Thread lock for global state management
+_init_lock = threading.Lock()
+
+# Maximum iterations for duplicate name generation loops to prevent infinite loops
+MAX_DUPLICATE_NAME_ITERATIONS = 10000
+
 _db_instance: Optional[PromptsDatabase] = None
 _db_path_global: Optional[Union[str, Path]] = None
 _client_id_global: Optional[str] = None
@@ -70,30 +78,32 @@ def initialize_interop(db_path: Union[str, Path], client_id: str) -> None:
         DatabaseError, SchemaError: If PromptsDatabase initialization fails.
     """
     global _db_instance, _db_path_global, _client_id_global
-    if _db_instance is not None:
-        logger.warning(
-            f"Prompts interop library already initialized with DB: '{_db_path_global}'. "
-            f"Re-initializing with DB: '{db_path}', Client ID: '{client_id}'."
-        )
-        # PromptsDatabase manages thread-local connections; explicit close of old global instance
-        # might be complex if other threads are still using it.
-        # The PromptsDatabase instance itself doesn't hold a global connection to close here.
 
-    if not db_path: # Pathlib('') is False-y, so this covers empty strings too
-        raise ValueError("db_path is required for initialization.")
-    if not client_id:
-        raise ValueError("client_id is required for initialization.")
+    with _init_lock:
+        if _db_instance is not None:
+            logger.warning(
+                f"Prompts interop library already initialized with DB: '{_db_path_global}'. "
+                f"Re-initializing with DB: '{db_path}', Client ID: '{client_id}'."
+            )
+            # PromptsDatabase manages thread-local connections; explicit close of old global instance
+            # might be complex if other threads are still using it.
+            # The PromptsDatabase instance itself doesn't hold a global connection to close here.
 
-    logger.info(f"Initializing Prompts Interop Library. DB Path: {db_path}, Client ID: {client_id}")
-    try:
-        _db_instance = PromptsDatabase(db_path=db_path, client_id=client_id)
-        _db_path_global = db_path
-        _client_id_global = client_id
-        logger.info("Prompts Interop Library initialized successfully.")
-    except (DatabaseError, SchemaError, ValueError) as e:
-        logger.critical(f"Failed to initialize PromptsDatabase for interop: {e}", exc_info=True)
-        _db_instance = None # Ensure it's None if init fails
-        raise
+        if not db_path: # Pathlib('') is False-y, so this covers empty strings too
+            raise ValueError("db_path is required for initialization.")
+        if not client_id:
+            raise ValueError("client_id is required for initialization.")
+
+        logger.info(f"Initializing Prompts Interop Library. DB Path: {db_path}, Client ID: {client_id}")
+        try:
+            _db_instance = PromptsDatabase(db_path=db_path, client_id=client_id)
+            _db_path_global = db_path
+            _client_id_global = client_id
+            logger.info("Prompts Interop Library initialized successfully.")
+        except (DatabaseError, SchemaError, ValueError) as e:
+            logger.critical(f"Failed to initialize PromptsDatabase for interop: {e}", exc_info=True)
+            _db_instance = None # Ensure it's None if init fails
+            raise
 
 def get_db_instance() -> PromptsDatabase:
     """
@@ -330,7 +340,7 @@ class PromptsInteropService:
 
     # CRUD
     def create_prompt(self, name: str, content: Optional[str] = None, author: Optional[str] = None,
-                      keywords: Optional[list] = None, **kwargs) -> int:
+                      keywords: Optional[List[str]] = None, **kwargs) -> int:
         if not name or not isinstance(name, str) or not name.strip():
             raise ValueError("name must be a non-empty string")
         db = self._ensure_db()
@@ -347,19 +357,26 @@ class PromptsInteropService:
             else:
                 existing = self.list_prompts() or []
                 used_names = {str(it.get('name')) for it in existing if isinstance(it.get('name'), str)}
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to fetch existing prompt names, using empty set: {e}")
             used_names = set()
 
         base_name = name
         candidate = base_name
         if candidate in used_names:
             # Generate a unique duplicate name
-            n = 0
-            while True:
-                n += 1
+            for n in range(1, MAX_DUPLICATE_NAME_ITERATIONS + 1):
                 candidate = f"duplicate {n} - {base_name}"
                 if candidate not in used_names:
+                    # Log warning if many iterations were needed (potential performance issue)
+                    if n > 100:
+                        logger.warning(
+                            f"Generating unique prompt name required {n} iterations for '{base_name}'. "
+                            f"Consider cleanup of duplicate prompts."
+                        )
                     break
+            else:
+                raise InputError(f"Could not generate unique name for '{base_name}' after {MAX_DUPLICATE_NAME_ITERATIONS} attempts")
         # First, try strict insert without overwrite
         try:
             pid, _uuid, _msg = db.add_prompt(
@@ -374,12 +391,18 @@ class PromptsInteropService:
             # If soft-deleted existed and DB returned existing ID with message, treat as collision and retry with unique name
             if pid is not None and _msg and isinstance(_msg, str) and 'soft-deleted' in _msg.lower():
                 used_names.add(candidate)
-                n = 0
-                while True:
-                    n += 1
+                for n in range(1, MAX_DUPLICATE_NAME_ITERATIONS + 1):
                     candidate = f"duplicate {n} - {base_name}"
                     if candidate not in used_names:
+                        # Log warning if many iterations were needed (potential performance issue)
+                        if n > 100:
+                            logger.warning(
+                                f"Generating unique prompt name (soft-delete retry) required {n} iterations for '{base_name}'. "
+                                f"Consider cleanup of duplicate prompts."
+                            )
                         break
+                else:
+                    raise InputError(f"Could not generate unique name for '{base_name}' after {MAX_DUPLICATE_NAME_ITERATIONS} attempts")
                 pid, _uuid, _msg = db.add_prompt(
                     name=candidate,
                     author=author,
@@ -389,14 +412,15 @@ class PromptsInteropService:
                     keywords=keywords or [],
                     overwrite=False,
                 )
-        except Exception:
+        except Exception as e:
             # As a fallback, try with a unique name
-            n = 0
-            while True:
-                n += 1
+            logger.warning(f"Initial prompt creation failed, attempting fallback: {e}")
+            for n in range(1, MAX_DUPLICATE_NAME_ITERATIONS + 1):
                 candidate = f"duplicate {n} - {base_name}"
                 if candidate not in used_names:
                     break
+            else:
+                raise InputError(f"Could not generate unique name for '{base_name}' after {MAX_DUPLICATE_NAME_ITERATIONS} attempts")
             pid, _uuid, _msg = db.add_prompt(
                 name=candidate,
                 author=author,
@@ -413,8 +437,8 @@ class PromptsInteropService:
                 self._name_overrides[int(pid)] = base_name
                 if keywords is not None:
                     self._orig_keywords[int(pid)] = list(keywords)
-            except Exception:
-                pass
+            except (ValueError, TypeError) as e:
+                logger.debug(f"Failed to store name/keyword override for prompt {pid}: {e}")
         return int(pid) if pid is not None else 0
 
     def get_prompt(self, prompt_id: Optional[int] = None, **kwargs):
@@ -442,8 +466,8 @@ class PromptsInteropService:
             pid_int = int(prompt_id) if prompt_id is not None else int(data.get("id"))
             if pid_int in self._name_overrides:
                 data["name"] = self._name_overrides[pid_int]
-        except Exception:
-            pass
+        except (ValueError, TypeError):
+            pass  # Expected for invalid IDs
         return data
 
     def list_prompts(self):
@@ -612,7 +636,8 @@ class PromptsInteropService:
                 try:
                     db.delete_prompt(pid)
                     deleted += 1
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Failed to delete prompt {pid}: {e}")
                     failed += 1
             else:
                 if db.soft_delete_prompt(pid):
@@ -627,11 +652,12 @@ class PromptsInteropService:
         updated = 0
         failed = 0
         if hasattr(db, "update_prompt_keywords"):
-            for _ in prompt_ids:
+            for pid in prompt_ids:
                 try:
                     db.update_prompt_keywords(**kwargs)
                     updated += 1
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Failed to update keywords for prompt {pid}: {e}")
                     failed += 1
         else:
             updated = len(prompt_ids)
@@ -648,14 +674,15 @@ class PromptsInteropService:
                 for it in self.list_prompts() or []:
                     try:
                         indexed[int(it.get('id'))] = it
-                    except Exception:
-                        pass
-            except Exception:
+                    except (ValueError, TypeError):
+                        pass  # Skip items with invalid IDs
+            except Exception as e:
+                logger.debug(f"Failed to build prompt index for export: {e}")
                 indexed = {}
             for pid in prompt_ids:
                 try:
                     pid_int = int(pid)
-                except Exception:
+                except (ValueError, TypeError):
                     continue
                 p = self.get_prompt(pid_int)
                 if not p:
@@ -717,7 +744,8 @@ class PromptsInteropService:
             else:
                 existing_items = self.list_prompts() or []
                 used_names = {str(it.get('name')) for it in existing_items if isinstance(it.get('name'), str)}
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to fetch existing prompt names for import, using empty set: {e}")
             used_names = set()
 
         name_counts: Dict[str, int] = {}
@@ -735,11 +763,13 @@ class PromptsInteropService:
                 # If the base name already exists (in DB or previous imports), generate a unique duplicate name
                 if candidate in used_names:
                     count = name_counts.get(base_name, 0)
-                    while True:
+                    for _ in range(MAX_DUPLICATE_NAME_ITERATIONS):
                         count += 1
                         candidate = f"duplicate {count} - {base_name}"
                         if candidate not in used_names:
                             break
+                    else:
+                        raise InputError(f"Could not generate unique name for '{base_name}' after {MAX_DUPLICATE_NAME_ITERATIONS} attempts")
                     name_counts[base_name] = count
                 else:
                     # Reserve the base name if first occurrence
@@ -757,11 +787,12 @@ class PromptsInteropService:
                 # Ensure reads present the original exported name (not the unique storage variant)
                 try:
                     self._name_overrides[int(pid)] = base_name
-                except Exception:
-                    pass
+                except (ValueError, TypeError):
+                    pass  # Expected for invalid IDs
                 new_ids.append(pid)
                 imported += 1
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to import prompt '{p.get('name', '<unknown>')}': {e}")
                 failed += 1
                 if skip_duplicates:
                     skipped += 1
@@ -795,8 +826,8 @@ class PromptsInteropService:
                     self._db_instance.close()
                 else:
                     self._db_instance.close_connection()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Error closing database connection: {e}")
 
     # Stats/Analytics
     def get_statistics(self) -> Dict[str, Any]:
@@ -829,7 +860,7 @@ class PromptsInteropService:
         }
 
     # Collections (in-memory minimal implementation for tests)
-    def create_collection(self, name: str, description: Optional[str] = None, prompt_ids: Optional[list] = None) -> int:
+    def create_collection(self, name: str, description: Optional[str] = None, prompt_ids: Optional[List[int]] = None) -> int:
         # Delegate to DB if supported (unit tests may patch these)
         if self._db_instance and hasattr(self._db_instance, "create_collection"):
             return self._db_instance.create_collection(name=name, description=description, prompt_ids=prompt_ids or [])

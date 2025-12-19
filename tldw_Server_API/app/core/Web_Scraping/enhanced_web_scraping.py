@@ -186,9 +186,11 @@ class RateLimiter:
 
             # Check minute limit
             minute_ago = now - 60
-            recent_minute = sum(1 for t in self._request_times if t > minute_ago)
+            recent_times = [t for t in self._request_times if t > minute_ago]
+            recent_minute = len(recent_times)
             if recent_minute >= self.max_rpm:
-                wait_time = 60 - (now - minute_ago)
+                oldest_recent = min(recent_times) if recent_times else now
+                wait_time = 60 - (now - oldest_recent)
                 if wait_time > 0:
                     logger.info(f"Rate limit: waiting {wait_time:.1f}s for minute limit")
                     await asyncio.sleep(wait_time)
@@ -610,8 +612,17 @@ class ScrapingJobQueue:
                 continue
             except Exception as e:
                 logger.error(f"{worker_id} error: {e}")
-                if job and job.job_id in self._job_futures:
-                    self._job_futures[job.job_id].set_exception(e)
+                if job:
+                    async with self._lock:
+                        job.completed_at = datetime.now()
+                        job.status = JobStatus.FAILED
+                        job.error = str(e)
+                        if job.job_id in self._active_jobs:
+                            del self._active_jobs[job.job_id]
+                        self._completed_jobs[job.job_id] = job
+                        future = self._job_futures.pop(job.job_id, None)
+                    if future and not future.done():
+                        future.set_exception(e)
 
         logger.info(f"{worker_id} stopped")
 
@@ -686,6 +697,63 @@ class EnhancedWebScraper:
 
         # Progress tracking
         self._progress: Dict[str, Any] = defaultdict(dict)
+
+    @staticmethod
+    def _normalize_cookie_map(
+        custom_cookies: Optional[List[Dict[str, Any]]]
+    ) -> Dict[str, str]:
+        cookies_map: Dict[str, str] = {}
+        if not custom_cookies:
+            return cookies_map
+        for cookie in custom_cookies:
+            if not isinstance(cookie, dict):
+                continue
+            if "name" in cookie and "value" in cookie:
+                cookies_map[str(cookie["name"])] = str(cookie["value"])
+            else:
+                for key, value in cookie.items():
+                    cookies_map[str(key)] = str(value)
+        return cookies_map
+
+    @staticmethod
+    def _normalize_playwright_cookies(
+        url: str,
+        custom_cookies: Optional[List[Dict[str, Any]]],
+    ) -> List[Dict[str, Any]]:
+        cookies_list: List[Dict[str, Any]] = []
+        if not custom_cookies:
+            return cookies_list
+        parsed = urlparse(url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else url
+        for cookie in custom_cookies:
+            if not isinstance(cookie, dict):
+                continue
+            if "name" in cookie and "value" in cookie:
+                cookies_list.append(
+                    {
+                        "name": str(cookie["name"]),
+                        "value": str(cookie["value"]),
+                        "url": base_url,
+                    }
+                )
+            else:
+                for key, value in cookie.items():
+                    cookies_list.append(
+                        {
+                            "name": str(key),
+                            "value": str(value),
+                            "url": base_url,
+                        }
+                    )
+        return cookies_list
+
+    def _set_progress(self, task_id: Optional[str], **updates: Any) -> None:
+        if not task_id:
+            return
+        entry = dict(self._progress.get(task_id, {}))
+        entry.update(updates)
+        entry["updated_at"] = datetime.now().isoformat()
+        self._progress[task_id] = entry
 
     async def start(self):
         """Start the scraper"""
@@ -803,9 +871,9 @@ class EnhancedWebScraper:
             custom_headers=custom_headers,
         )
 
-        if custom_cookies:
-            for cookie in custom_cookies:
-                session.cookie_jar.update_cookies(cookie)
+        cookie_map = self._normalize_cookie_map(custom_cookies)
+        if cookie_map:
+            session.cookie_jar.update_cookies(cookie_map, response_url=url)
 
         async with session.get(url) as response:
             html = await response.text()
@@ -878,8 +946,9 @@ class EnhancedWebScraper:
         if headers_copy:
             await context.set_extra_http_headers(headers_copy)
 
-        if custom_cookies:
-            await context.add_cookies(custom_cookies)
+        pw_cookies = self._normalize_playwright_cookies(url, custom_cookies)
+        if pw_cookies:
+            await context.add_cookies(pw_cookies)
 
         page = await context.new_page()
 
@@ -958,9 +1027,9 @@ class EnhancedWebScraper:
             custom_headers=custom_headers,
         )
 
-        if custom_cookies:
-            for cookie in custom_cookies:
-                session.cookie_jar.update_cookies(cookie)
+        cookie_map = self._normalize_cookie_map(custom_cookies)
+        if cookie_map:
+            session.cookie_jar.update_cookies(cookie_map, response_url=url)
 
         async with session.get(url) as response:
             html = await response.text()
@@ -968,7 +1037,9 @@ class EnhancedWebScraper:
 
             # Extract title
             title_tag = soup.find('title')
-            title = title_tag.string.strip() if title_tag else "Untitled"
+            title = title_tag.get_text(strip=True) if title_tag else "Untitled"
+            if not title:
+                title = "Untitled"
 
             # Extract content
             # Remove script and style elements
@@ -1088,6 +1159,7 @@ class EnhancedWebScraper:
         custom_cookies: Optional[List[Dict[str, Any]]] = None,
         user_agent: Optional[str] = None,
         custom_headers: Optional[Dict[str, str]] = None,
+        task_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Scrape all URLs from a sitemap"""
         # Egress guard for sitemap endpoint
@@ -1100,15 +1172,23 @@ class EnhancedWebScraper:
         except Exception as _e:
             logger.error(f"Egress policy evaluation failed: {_e}")
             return []
+        if task_id and task_id not in self._progress:
+            self._progress[task_id] = {
+                "status": "in_progress",
+                "total_urls": 0,
+                "processed_urls": 0,
+                "current_url": sitemap_url,
+                "started_at": datetime.now().isoformat(),
+            }
         session = await self.cookie_manager.get_session(
             sitemap_url,
             user_agent=user_agent,
             custom_headers=custom_headers,
         )
 
-        if custom_cookies:
-            for cookie in custom_cookies:
-                session.cookie_jar.update_cookies(cookie)
+        cookie_map = self._normalize_cookie_map(custom_cookies)
+        if cookie_map:
+            session.cookie_jar.update_cookies(cookie_map, response_url=sitemap_url)
 
         async with session.get(sitemap_url) as response:
             content = await response.text()
@@ -1126,14 +1206,22 @@ class EnhancedWebScraper:
                 break
 
         logger.info(f"Found {len(urls)} URLs in sitemap")
+        self._set_progress(task_id, total_urls=len(urls))
 
         # Scrape all URLs
-        return await self.scrape_multiple(
+        results = await self.scrape_multiple(
             urls,
             custom_cookies=custom_cookies,
             user_agent=user_agent,
             custom_headers=custom_headers,
         )
+        self._set_progress(
+            task_id,
+            processed_urls=len(results),
+            status="completed",
+            completed_at=datetime.now().isoformat(),
+        )
+        return results
 
     async def recursive_scrape(
         self,
@@ -1144,6 +1232,7 @@ class EnhancedWebScraper:
         custom_cookies: Optional[List[Dict[str, Any]]] = None,
         user_agent: Optional[str] = None,
         custom_headers: Optional[Dict[str, str]] = None,
+        task_id: Optional[str] = None,
         *,
         include_external_override: Optional[bool] = None,
         score_threshold_override: Optional[float] = None,
@@ -1160,6 +1249,14 @@ class EnhancedWebScraper:
         except Exception as _e:
             logger.error(f"Egress policy evaluation failed: {_e}")
             return []
+        if task_id and task_id not in self._progress:
+            self._progress[task_id] = {
+                "status": "in_progress",
+                "total_pages": max_pages,
+                "pages_scraped": 0,
+                "current_url": base_url,
+                "started_at": datetime.now().isoformat(),
+            }
         visited: Set[str] = set()
         base_norm = normalize_for_crawl(base_url, base_url)
         # Build filter chain based on config (include_external, allow/deny, patterns, content types)
@@ -1459,6 +1556,14 @@ class EnhancedWebScraper:
                                     log_gauge("webscraping.crawl.queue_size", float(len(pq)))
                                 except Exception:
                                     pass
+                self._set_progress(
+                    task_id,
+                    pages_scraped=len(results),
+                    total_pages=max_pages,
+                    current_url=(batch_urls[-1] if batch_urls else None),
+                    queue_size=len(pq),
+                    visited=len(visited),
+                )
         else:
             # FIFO/BFS strategy
             from collections import deque as _deque
@@ -1601,7 +1706,20 @@ class EnhancedWebScraper:
                                     log_gauge("webscraping.crawl.queue_size", float(len(q)))
                                 except Exception:
                                     pass
+                self._set_progress(
+                    task_id,
+                    pages_scraped=len(results),
+                    total_pages=max_pages,
+                    current_url=(batch_urls[-1] if batch_urls else None),
+                    queue_size=len(q),
+                    visited=len(visited),
+                )
 
+        self._set_progress(
+            task_id,
+            status="completed",
+            completed_at=datetime.now().isoformat(),
+        )
         return results
 
     async def _extract_links(self, base_url: str, content: str) -> List[str]:

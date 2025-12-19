@@ -3,7 +3,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 
 class _FakeAsyncRedis:
@@ -51,20 +50,12 @@ class _FakeAsyncRedis:
         return True
 
 
-def _override_user(admin=False):
-    async def _f():
-        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
-        return User(id=1, username="admin" if admin else "u", email="u@x", is_active=True, is_admin=admin)
-    return _f
-
-
 @pytest.mark.unit
-def test_dlq_quarantine_blocks_requeue_then_approve(monkeypatch):
+def test_dlq_quarantine_blocks_requeue_then_approve(monkeypatch, admin_user):
     client = TestClient(app)
     client.cookies.set("csrf_token", "x")
     client.headers["X-CSRF-Token"] = "x"
     client.headers["Authorization"] = "Bearer key"
-    app.dependency_overrides[get_request_user] = _override_user(admin=True)
 
     import redis.asyncio as aioredis
     fake = _FakeAsyncRedis()
@@ -119,4 +110,4 @@ def test_dlq_quarantine_blocks_requeue_then_approve(monkeypatch):
     live = fake.streams.get("embeddings:embedding", [])
     assert len(live) == 1
 
-    app.dependency_overrides.pop(get_request_user, None)
+    # Cleanup handled by admin_user fixture

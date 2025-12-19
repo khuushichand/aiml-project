@@ -162,4 +162,108 @@ async def test_authnz_orgs_teams_repo_membership_postgres(test_db_pool):
         with_total=True,
     )
     assert any(o["id"] == org_id for o in orgs_for_owner)
-    assert total_for_owner >= 1
+    assert total_for_owner == 1
+
+
+@pytest.mark.asyncio
+async def test_authnz_orgs_teams_repo_list_organizations_for_user_variants_postgres(test_db_pool):
+    """AuthnzOrgsTeamsRepo.list_organizations_for_user should support totals, pagination and empty memberships."""
+    pool = test_db_pool
+    now = datetime.utcnow().replace(microsecond=0)
+
+    # Create 3 users: org owner, multi-org member, and a user with no memberships.
+    async with pool.acquire() as conn:
+        for username, email in (
+            ("owner_list_pg", "owner_list_pg@example.com"),
+            ("member_list_pg", "member_list_pg@example.com"),
+            ("no_orgs_pg", "no_orgs_pg@example.com"),
+        ):
+            await conn.execute(
+                """
+                INSERT INTO users (uuid, username, email, password_hash, role,
+                                   is_active, is_verified, storage_quota_mb, storage_used_mb, created_at)
+                VALUES ($1, $2, $3, $4, $5, TRUE, TRUE, 5120, 0.0, $6)
+                """,
+                str(uuid.uuid4()),
+                username,
+                email,
+                "x",
+                "user",
+                now,
+            )
+
+    owner_id = await pool.fetchval(
+        "SELECT id FROM users WHERE username = $1", "owner_list_pg"
+    )
+    member_id = await pool.fetchval(
+        "SELECT id FROM users WHERE username = $1", "member_list_pg"
+    )
+    no_orgs_user_id = await pool.fetchval(
+        "SELECT id FROM users WHERE username = $1", "no_orgs_pg"
+    )
+
+    repo = AuthnzOrgsTeamsRepo(pool)
+
+    # Create 3 orgs and enroll the owner in all, member in 2.
+    org_ids: list[int] = []
+    for name in ("PG Org One", "PG Org Two", "PG Org Three"):
+        org = await repo.create_organization(name=name, owner_user_id=owner_id)
+        org_ids.append(org["id"])
+        await repo.add_org_member(org_id=org["id"], user_id=owner_id, role="owner")
+
+    await repo.add_org_member(org_id=org_ids[0], user_id=member_id, role="member")
+    await repo.add_org_member(org_id=org_ids[1], user_id=member_id, role="member")
+
+    # Pagination: first page + second page should cover all orgs exactly once.
+    page_1, total_1 = await repo.list_organizations_for_user(
+        owner_id,
+        limit=2,
+        offset=0,
+        with_total=True,
+    )
+    assert total_1 == 3
+    assert len(page_1) == 2
+
+    page_2, total_2 = await repo.list_organizations_for_user(
+        owner_id,
+        limit=2,
+        offset=2,
+        with_total=True,
+    )
+    assert total_2 == 3
+    assert len(page_2) == 1
+
+    page_1_ids = {o["id"] for o in page_1}
+    page_2_ids = {o["id"] for o in page_2}
+    assert page_1_ids.isdisjoint(page_2_ids)
+    assert page_1_ids | page_2_ids == set(org_ids)
+
+    # with_total=False path should return a zero total and still return rows.
+    rows_no_total, total_no_total = await repo.list_organizations_for_user(
+        owner_id,
+        limit=10,
+        offset=0,
+        with_total=False,
+    )
+    assert total_no_total == 0
+    assert {o["id"] for o in rows_no_total} == set(org_ids)
+
+    # Users with multiple org memberships.
+    member_orgs, member_total = await repo.list_organizations_for_user(
+        member_id,
+        limit=10,
+        offset=0,
+        with_total=True,
+    )
+    assert member_total == 2
+    assert {o["id"] for o in member_orgs} == {org_ids[0], org_ids[1]}
+
+    # Users with no org memberships.
+    empty_orgs, empty_total = await repo.list_organizations_for_user(
+        no_orgs_user_id,
+        limit=10,
+        offset=0,
+        with_total=True,
+    )
+    assert empty_orgs == []
+    assert empty_total == 0

@@ -1,8 +1,11 @@
 import pytest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from tldw_Server_API.app.main import app
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
 
 class _QStub:
@@ -17,9 +20,40 @@ class _QStub:
             return list(self._items)
         return list(self._items)[-int(limit):]
 
+async def _principal_override(request: Request):  # type: ignore[override]
+    principal = AuthPrincipal(
+        kind="user",
+        user_id=1,
+        api_key_id=None,
+        subject="admin",
+        token_type="access",
+        jti=None,
+        roles=["admin"],
+        permissions=["system.logs"],
+        is_admin=True,
+        org_ids=[],
+        team_ids=[],
+    )
+    request.state.auth = AuthContext(
+        principal=principal,
+        ip=None,
+        user_agent=None,
+        request_id=None,
+    )
+    return principal
+
+
+@pytest.fixture
+def auth_override():
+    app.dependency_overrides[get_auth_principal] = _principal_override
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_auth_principal, None)
+
 
 @pytest.mark.unit
-def test_queue_activity_endpoint_enabled_default_limit():
+def test_queue_activity_endpoint_enabled_default_limit(auth_override):
     with TestClient(app) as client:
         with patch("tldw_Server_API.app.api.v1.endpoints.chat.get_request_queue", return_value=_QStub()):
             resp = client.get("/api/v1/chat/queue/activity")
@@ -31,7 +65,7 @@ def test_queue_activity_endpoint_enabled_default_limit():
 
 
 @pytest.mark.unit
-def test_queue_activity_endpoint_enabled_custom_limit():
+def test_queue_activity_endpoint_enabled_custom_limit(auth_override):
     with TestClient(app) as client:
         with patch("tldw_Server_API.app.api.v1.endpoints.chat.get_request_queue", return_value=_QStub()):
             resp = client.get("/api/v1/chat/queue/activity?limit=2")
@@ -43,7 +77,7 @@ def test_queue_activity_endpoint_enabled_custom_limit():
 
 
 @pytest.mark.unit
-def test_queue_activity_endpoint_disabled():
+def test_queue_activity_endpoint_disabled(auth_override):
     with TestClient(app) as client:
         with patch("tldw_Server_API.app.api.v1.endpoints.chat.get_request_queue", return_value=None):
             resp = client.get("/api/v1/chat/queue/activity?limit=5")
@@ -53,7 +87,7 @@ def test_queue_activity_endpoint_disabled():
 
 
 @pytest.mark.unit
-def test_queue_activity_endpoint_limit_too_large():
+def test_queue_activity_endpoint_limit_too_large(auth_override):
     with TestClient(app) as client:
         with patch("tldw_Server_API.app.api.v1.endpoints.chat.get_request_queue", return_value=_QStub()):
             resp = client.get("/api/v1/chat/queue/activity?limit=1001")
@@ -62,7 +96,7 @@ def test_queue_activity_endpoint_limit_too_large():
 
 
 @pytest.mark.unit
-def test_queue_activity_endpoint_limit_too_small():
+def test_queue_activity_endpoint_limit_too_small(auth_override):
     with TestClient(app) as client:
         with patch("tldw_Server_API.app.api.v1.endpoints.chat.get_request_queue", return_value=_QStub()):
             resp = client.get("/api/v1/chat/queue/activity?limit=0")

@@ -152,6 +152,28 @@ def test_get_openai_embeddings_uses_timeout_and_closes(monkeypatch):
     assert result == [0.1, 0.2]
 
 
+def test_get_openai_embeddings_includes_dimensions(monkeypatch):
+    session = _mock_session_with_response([{"embedding": [0.1, 0.2]}])
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries",
+        lambda **kwargs: session,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs",
+        lambda: {
+            "openai_api": {
+                "api_key": "test-key",
+            }
+        },
+    )
+
+    get_openai_embeddings("hello", "text-embedding-3-small", dimensions=128)
+
+    payload = session.post.call_args[1]["json"]
+    assert payload.get("dimensions") == 128
+
+
 def test_get_openai_embeddings_batch_uses_timeout_and_closes(monkeypatch):
     session = _mock_session_with_response(
         [
@@ -182,6 +204,33 @@ def test_get_openai_embeddings_batch_uses_timeout_and_closes(monkeypatch):
     assert session.post.call_args[1]["timeout"] == 30
     session.close.assert_called_once()
     assert result == [[0.1, 0.2], [0.3, 0.4]]
+
+
+def test_get_openai_embeddings_batch_includes_dimensions(monkeypatch):
+    session = _mock_session_with_response(
+        [
+            {"embedding": [0.1, 0.2]},
+            {"embedding": [0.3, 0.4]},
+        ]
+    )
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries",
+        lambda **kwargs: session,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs",
+        lambda: {
+            "openai_api": {
+                "api_key": "test-key",
+            }
+        },
+    )
+
+    get_openai_embeddings_batch(["a", "b"], "text-embedding-3-small", dimensions=256)
+
+    payload = session.post.call_args[1]["json"]
+    assert payload.get("dimensions") == 256
 
 
 def test_get_openai_embeddings_respects_api_base(monkeypatch):

@@ -196,3 +196,88 @@ async def test_privilege_service_honors_authnz_role_mappings(tmp_path, monkeypat
 
     await reset_db_pool()
     reset_settings()
+
+
+@pytest.mark.asyncio
+async def test_privilege_service_org_filter_uses_org_members(tmp_path, monkeypatch):
+    db_path = tmp_path / "authnz-org.db"
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-org-filter-123456")
+    monkeypatch.setenv("TEST_MODE", "true")
+
+    reset_settings()
+    await reset_db_pool()
+    ensure_authnz_tables(Path(db_path))
+
+    pool = await get_db_pool()
+    async with pool.transaction() as conn:
+        for username, email, primary_role in [
+            ("org-user-1", "org1@example.com", "viewer"),
+            ("org-user-2", "org2@example.com", "viewer"),
+            ("org-user-3", "org3@example.com", "viewer"),
+        ]:
+            await conn.execute(
+                """
+                INSERT INTO users (username, email, password_hash, is_active, role)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (username, email, "hashed", 1, primary_role),
+            )
+
+    user1_id = await _fetch_id(pool, "SELECT id FROM users WHERE username = ?", "org-user-1")
+    user2_id = await _fetch_id(pool, "SELECT id FROM users WHERE username = ?", "org-user-2")
+    user3_id = await _fetch_id(pool, "SELECT id FROM users WHERE username = ?", "org-user-3")
+
+    async with pool.transaction() as conn:
+        await conn.execute(
+            "INSERT INTO organizations (name, slug, owner_user_id) VALUES (?, ?, ?)",
+            ("Org One", "org-one", user1_id),
+        )
+        await conn.execute(
+            "INSERT INTO organizations (name, slug, owner_user_id) VALUES (?, ?, ?)",
+            ("Org Two", "org-two", user3_id),
+        )
+
+    org1_id = await _fetch_id(pool, "SELECT id FROM organizations WHERE slug = ?", "org-one")
+    org2_id = await _fetch_id(pool, "SELECT id FROM organizations WHERE slug = ?", "org-two")
+
+    async with pool.transaction() as conn:
+        for user_id in [user1_id, user2_id]:
+            await conn.execute(
+                """
+                INSERT OR IGNORE INTO org_members (org_id, user_id, role, status)
+                VALUES (?, ?, ?, ?)
+                """,
+                (org1_id, user_id, "member", "active"),
+            )
+        await conn.execute(
+            """
+            INSERT OR IGNORE INTO org_members (org_id, user_id, role, status)
+            VALUES (?, ?, ?, ?)
+            """,
+            (org2_id, user3_id, "member", "active"),
+        )
+
+    service = PrivilegeMapService()
+
+    summary_org1, org1_users = await service.build_snapshot_summary(
+        target_scope="org",
+        org_id=str(org1_id),
+        team_id=None,
+        user_ids=None,
+    )
+    assert summary_org1["users"] == 2
+    assert len(org1_users) == 2
+
+    summary_org_none, org_none_users = await service.build_snapshot_summary(
+        target_scope="org",
+        org_id="9999",
+        team_id=None,
+        user_ids=None,
+    )
+    assert summary_org_none["users"] == 0
+    assert len(org_none_users) == 0
+
+    await reset_db_pool()
+    reset_settings()

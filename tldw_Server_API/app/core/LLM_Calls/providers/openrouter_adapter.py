@@ -136,8 +136,9 @@ class OpenRouterAdapter(ChatProvider):
                 payload[key] = val
         tool_choice = request.get("tool_choice")
         tools = request.get("tools")
-        # If tool_choice is explicitly 'none', omit tools entirely to avoid provider-side validation quirks
-        if tool_choice is not None:
+        if tool_choice == "none":
+            payload["tool_choice"] = "none"
+        elif tool_choice is not None and tools:
             payload["tool_choice"] = tool_choice
         if tools is not None and tool_choice != "none":
             payload["tools"] = tools

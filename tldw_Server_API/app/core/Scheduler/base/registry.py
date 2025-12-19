@@ -237,13 +237,20 @@ class TaskRegistry:
         # Prepare arguments based on handler signature
         sig = metadata['signature']
 
-        if not sig.parameters:
-            # No parameters - call without arguments
-            return handler()
-        else:
+        if metadata.get('is_async'):
+            if not sig.parameters:
+                # No parameters - call without arguments
+                return handler()
             # Pass payload as first argument
             # More sophisticated argument mapping could be added here
             return handler(payload)
+
+        # Sync handler: run in executor so callers can await reliably
+        import asyncio
+        loop = asyncio.get_running_loop()
+        if not sig.parameters:
+            return loop.run_in_executor(None, handler)
+        return loop.run_in_executor(None, handler, payload)
 
     def clear(self) -> None:
         """Clear all registered handlers (useful for testing)"""

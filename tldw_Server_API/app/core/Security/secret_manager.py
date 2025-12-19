@@ -12,7 +12,7 @@ import os
 import base64
 import secrets
 from typing import Dict, Any, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -229,14 +229,12 @@ class SecretManager:
                 required=required if required is not None else False,
                 default_value=default
             )
-
-        # Override required flag if specified
-        if required is not None:
-            config.required = required
-
-        # Override default if specified
-        if default is not None:
-            config.default_value = default
+        elif required is not None or default is not None:
+            config = replace(
+                config,
+                required=required if required is not None else config.required,
+                default_value=default if default is not None else config.default_value,
+            )
 
         # Try to retrieve secret from various sources
         secret_value = None

@@ -75,6 +75,47 @@ def test_batch_cancel_updates_counters_and_gauges(monkeypatch, tmp_path):
         conn.close()
 
 
+def test_complete_queued_updates_counters(monkeypatch, tmp_path):
+    _env(monkeypatch, tmp_path)
+    jm = JobManager()
+    domain = "chatbooks"; queue = "default"; jt = "export"
+
+    ready = jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
+    scheduled = jm.create_job(
+        domain=domain,
+        queue=queue,
+        job_type=jt,
+        payload={},
+        owner_user_id="1",
+        available_at=datetime.utcnow() + timedelta(seconds=60),
+    )
+
+    conn = jm._connect()
+    try:
+        row = conn.execute(
+            "SELECT ready_count, scheduled_count, processing_count FROM job_counters WHERE domain=? AND queue=? AND job_type=?",
+            (domain, queue, jt),
+        ).fetchone()
+        assert row is not None
+        assert int(row[0]) == 1 and int(row[1]) == 1 and int(row[2]) == 0
+    finally:
+        conn.close()
+
+    assert jm.complete_job(int(ready["id"]), result={}, enforce=False)
+    assert jm.complete_job(int(scheduled["id"]), result={}, enforce=False)
+
+    conn = jm._connect()
+    try:
+        row = conn.execute(
+            "SELECT ready_count, scheduled_count, processing_count FROM job_counters WHERE domain=? AND queue=? AND job_type=?",
+            (domain, queue, jt),
+        ).fetchone()
+        assert row is not None
+        assert int(row[0]) == 0 and int(row[1]) == 0 and int(row[2]) == 0
+    finally:
+        conn.close()
+
+
 def test_batch_reschedule_moves_ready_to_scheduled(monkeypatch, tmp_path):
     _env(monkeypatch, tmp_path)
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings

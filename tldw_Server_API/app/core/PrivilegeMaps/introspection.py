@@ -193,6 +193,10 @@ def serialize_route_registry(registry: Dict[str, List[RouteMetadata]]) -> Dict[s
     for scope_id in sorted(registry.keys()):
         entries = []
         for meta in sorted(registry[scope_id], key=lambda item: (item.path, tuple(item.methods_or_any))):
+            dependencies = sorted(
+                meta.dependencies,
+                key=lambda dep: (dep.id, dep.module or "", dep.type),
+            )
             entries.append(
                 {
                     "path": meta.path,
@@ -201,9 +205,9 @@ def serialize_route_registry(registry: Dict[str, List[RouteMetadata]]) -> Dict[s
                     "tags": list(meta.tags),
                     "endpoint": meta.endpoint,
                     "dependencies": [
-                        {"id": dep.id, "type": dep.type, "module": dep.module} for dep in meta.dependencies
+                        {"id": dep.id, "type": dep.type, "module": dep.module} for dep in dependencies
                     ],
-                    "rate_limit_resources": list(meta.rate_limit_resources),
+                    "rate_limit_resources": sorted(meta.rate_limit_resources),
                     "summary": meta.summary,
                     "description": meta.description,
                 }

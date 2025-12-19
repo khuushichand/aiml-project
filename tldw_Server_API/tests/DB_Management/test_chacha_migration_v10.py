@@ -115,7 +115,7 @@ def test_sqlite_migration_v9_to_v10_backfills_and_indexes(tmp_path):
     db_path = tmp_path / "chacha_v9.db"
     _bootstrap_v9_sqlite_db(str(db_path))
 
-    # Trigger migration to v10
+    # Trigger migration to current schema version
     db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
     db.close_connection()
 
@@ -123,7 +123,7 @@ def test_sqlite_migration_v9_to_v10_backfills_and_indexes(tmp_path):
         version = conn.execute(
             "SELECT version FROM db_schema_version WHERE schema_name = ?", ("rag_char_chat_schema",)
         ).fetchone()[0]
-        assert version == 10
+        assert version == CharactersRAGDB._CURRENT_SCHEMA_VERSION
 
         # Conversations should have state backfilled and new columns/indexes
         conv_cols = [row[1] for row in conn.execute("PRAGMA table_info('conversations')").fetchall()]

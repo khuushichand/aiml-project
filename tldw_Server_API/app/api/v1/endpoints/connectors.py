@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Callable
+import os
+import secrets
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.status import HTTP_403_FORBIDDEN, HTTP_500_INTERNAL_SERVER_ERROR
 from loguru import logger
@@ -45,12 +47,27 @@ from tldw_Server_API.app.core.External_Sources.connectors_service import (
     create_import_job,
     get_account_tokens,
     get_account_email,
+    get_account_for_user,
     count_connectors_jobs_today,
+    create_oauth_state,
+    consume_oauth_state,
 )
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
+
+
+def _resolve_redirect_base(request: Optional[Request], conn) -> str:
+    base = os.getenv("CONNECTOR_REDIRECT_BASE_URL")
+    if base:
+        return base.rstrip("/")
+    if request is not None:
+        try:
+            return str(request.base_url).rstrip("/")
+        except Exception:
+            pass
+    return (getattr(conn, "redirect_base", "") or "").rstrip("/")
 
 
 def get_connectors_job_counter() -> Callable[[int], int]:
@@ -67,8 +84,20 @@ async def list_providers() -> List[ConnectorProvider]:
 
 
 @router.post("/providers/{provider}/authorize", response_model=AuthorizeURLResponse)
-async def start_authorize(provider: str, state: Optional[str] = None, scopes: Optional[str] = None) -> AuthorizeURLResponse:
+async def start_authorize(
+    provider: str,
+    state: Optional[str] = None,
+    scopes: Optional[str] = None,
+    request: Request = None,
+    db=Depends(get_db_transaction),
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+) -> AuthorizeURLResponse:
     conn = get_connector_by_name(provider)
+    redirect_base = _resolve_redirect_base(request, conn)
+    if redirect_base:
+        conn.redirect_base = redirect_base
+    state = state or secrets.token_urlsafe(32)
+    await create_oauth_state(db, int(current_user.get("id")), provider, state)
     scopes_list = [s for s in (scopes or "").split(",") if s]
     url = conn.authorize_url(state=state, scopes=scopes_list or None, redirect_path=f"/api/v1/connectors/providers/{provider}/callback")
     return AuthorizeURLResponse(auth_url=url, state=state)
@@ -79,12 +108,26 @@ async def oauth_callback(
     provider: str,
     code: str,
     state: Optional[str] = None,
+    request: Request = None,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
     org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
 ) -> ConnectorAccount:
     conn = get_connector_by_name(provider)
     pol = org_policy
+    user_id = int(current_user.get("id"))
+    if not state:
+        raise HTTPException(status_code=400, detail="Missing OAuth state")
+    ttl_minutes = int(os.getenv("CONNECTOR_OAUTH_STATE_TTL_MINUTES", "10") or 10)
+    ok_state = await consume_oauth_state(
+        db,
+        user_id=user_id,
+        provider=provider,
+        state=state,
+        max_age_minutes=ttl_minutes,
+    )
+    if not ok_state:
+        raise HTTPException(status_code=403, detail="Invalid or expired OAuth state")
 
     # Enforce org-level account linking role based on org policy; single-user
     # callers pass via their role/admin claims rather than global mode checks.
@@ -104,8 +147,7 @@ async def oauth_callback(
         ) from e
 
     # Exchange code with redirect derived from env base + this path
-    import os as _os
-    base = _os.getenv("CONNECTOR_REDIRECT_BASE_URL")
+    base = _resolve_redirect_base(request, conn)
     redirect_uri = f"{base.rstrip('/')}/api/v1/connectors/providers/{provider}/callback" if base else ""
     tokens = await conn.exchange_code(code, redirect_uri)
     # Optional email/workspace fetch for policy enforcement
@@ -146,7 +188,7 @@ async def oauth_callback(
 
     acct = await create_account(
         db,
-        user_id=int(current_user.get("id")),
+        user_id=user_id,
         provider=provider,
         display_name=str(tokens.get("display_name") or tokens.get("workspace_name") or f"{provider.title()} Account"),
         email=acct_email or tokens.get("email"),
@@ -219,6 +261,13 @@ async def add_source(
     type_ = str(payload.type)
     path = payload.path
     options = payload.options or {}
+
+    acct = await get_account_for_user(db, int(current_user.get("id")), account_id)
+    if not acct:
+        raise HTTPException(status_code=404, detail="Account not found")
+    acct_provider = str(acct.get("provider") or "").lower()
+    if acct_provider and acct_provider != provider.lower():
+        raise HTTPException(status_code=400, detail="Account provider mismatch")
 
     # Enforce org policy on provider/path for all modes; single-user callers
     # rely on their admin/role claims rather than mode flags.

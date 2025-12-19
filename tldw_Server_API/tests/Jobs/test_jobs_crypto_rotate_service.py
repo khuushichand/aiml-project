@@ -47,6 +47,37 @@ async def test_jobs_crypto_rotate_worker_invokes_rotate(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_jobs_crypto_rotate_worker_repeats_on_timeout(monkeypatch, tmp_path):
+    monkeypatch.setenv("JOBS_DB_PATH", os.path.join(str(tmp_path), "jobs.db"))
+    monkeypatch.setenv("JOBS_CRYPTO_ROTATE_INTERVAL_SEC", "0.05")
+    monkeypatch.setenv("JOBS_CRYPTO_ROTATE_BATCH", "10")
+    monkeypatch.setenv("JOBS_CRYPTO_ROTATE_FIELDS", "payload")
+    monkeypatch.setenv("JOBS_CRYPTO_ROTATE_OLD_KEY", "QUJDREVGR0hJSktMTU5PUFFSU1RVVldY")
+    monkeypatch.setenv("JOBS_CRYPTO_ROTATE_NEW_KEY", "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwQUJD")
+
+    calls = {"n": 0}
+    from tldw_Server_API.app.core.Jobs import manager as mgr_mod
+
+    def fake_rotate(self, **kwargs):
+        calls["n"] += 1
+        return 1
+
+    monkeypatch.setattr(mgr_mod.JobManager, "rotate_encryption_keys", fake_rotate, raising=False)
+
+    stop = asyncio.Event()
+    t = asyncio.create_task(run_jobs_crypto_rotate(stop))
+    await asyncio.sleep(0.25)
+    stop.set()
+    try:
+        await asyncio.wait_for(t, timeout=2.0)
+    except asyncio.TimeoutError:
+        t.cancel()
+        raise
+
+    assert calls["n"] >= 2, "rotate_encryption_keys should run on multiple intervals"
+
+
+@pytest.mark.asyncio
 async def test_jobs_crypto_rotate_worker_noop_when_keys_missing(monkeypatch, tmp_path):
     # No keys provided → worker should not invoke rotate_encryption_keys
     monkeypatch.chdir(tmp_path)

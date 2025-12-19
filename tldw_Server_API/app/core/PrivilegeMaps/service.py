@@ -131,6 +131,10 @@ class PrivilegeMapService:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
 
+    @staticmethod
+    def _normalize_role_name(role: Optional[str]) -> str:
+        return (role or "user").strip().lower()
+
     def _coerce_summary_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if not payload:
             return payload
@@ -442,7 +446,10 @@ class PrivilegeMapService:
         mapping: Dict[str, Dict[str, ScopeEntry]] = defaultdict(dict)
         for scope in self.catalog.scopes:
             for role in scope.default_roles or []:
-                mapping[role][scope.id] = scope
+                normalized_role = role.strip().lower()
+                if not normalized_role:
+                    continue
+                mapping[normalized_role][scope.id] = scope
 
         # Admin roles automatically get access to all scopes
         for admin_role in ("admin", "owner", "platform_admin"):
@@ -577,6 +584,25 @@ class PrivilegeMapService:
             logger.debug("Unable to load team memberships: %s", exc)
             return []
 
+    async def _fetch_org_memberships(self) -> List[Dict[str, Any]]:
+        try:
+            pool: DatabasePool = await get_db_pool()
+            rows = await pool.fetchall(
+                """
+                SELECT om.org_id, om.user_id, om.role AS membership_role
+                FROM org_members om
+                """
+            )
+            memberships: List[Dict[str, Any]] = []
+            for row in rows:
+                record = self._row_to_dict(row)
+                if record:
+                    memberships.append(record)
+            return memberships
+        except Exception as exc:
+            logger.debug("Unable to load org memberships: %s", exc)
+            return []
+
     async def _filter_users_for_team(
         self,
         users: List[Dict[str, Any]],
@@ -599,14 +625,14 @@ class PrivilegeMapService:
         *,
         org_id: str,
     ) -> List[Dict[str, Any]]:
-        memberships = await self._fetch_team_memberships()
+        memberships = await self._fetch_org_memberships()
         user_ids = {
             str(m["user_id"])
             for m in memberships
             if str(m.get("org_id")) == str(org_id)
         }
         if not user_ids:
-            return users
+            return []
         return [user for user in users if str(user["id"]) in user_ids]
 
     async def _hydrate_roles_and_permissions(
@@ -721,7 +747,8 @@ class PrivilegeMapService:
         roles: Sequence[str],
         permissions: Sequence[str],
     ) -> Set[str]:
-        role_set = {role.lower() for role in roles if role}
+        normalized_roles = [role.lower() for role in roles if role]
+        role_set = set(normalized_roles)
         perm_set = {perm.lower() for perm in permissions if perm}
 
         if role_set & self._admin_roles:
@@ -730,7 +757,7 @@ class PrivilegeMapService:
         allowed: Set[str] = set()
         for scope in self.catalog.scopes:
             granted = False
-            for role in roles:
+            for role in normalized_roles:
                 for mapped_scope in self._role_scope_map.get(role, []):
                     if mapped_scope.id == scope.id:
                         granted = True
@@ -761,10 +788,11 @@ class PrivilegeMapService:
         buckets: Dict[str, Dict[str, Any]] = {}
         for user in users:
             role = user.get("primary_role") or "user"
+            role_key = self._normalize_role_name(role)
             scopes = set(user.get("allowed_scopes", set()))
             bucket = buckets.setdefault(
-                role,
-                {"key": role, "users": 0, "scopes": set(), "endpoints": set()},
+                role_key,
+                {"key": role_key, "users": 0, "scopes": set(), "endpoints": set()},
             )
             bucket["users"] += 1
             bucket["scopes"].update(scopes)
@@ -912,9 +940,10 @@ class PrivilegeMapService:
         items: List[Dict[str, Any]] = []
         resource_filter_lower = resource_filter.lower() if resource_filter else None
         dependency_filter_lower = dependency_filter.lower() if dependency_filter else None
+        normalized_role_filter = self._normalize_role_name(role_filter) if role_filter else None
         for user in users:
             role = user.get("primary_role") or "user"
-            if role_filter and role != role_filter:
+            if normalized_role_filter and self._normalize_role_name(role) != normalized_role_filter:
                 continue
             allowed_scopes = user.get("allowed_scopes", set())
             feature_flags = user.get("feature_flags", set())
