@@ -607,6 +607,54 @@ class AuthnzOrgsTeamsRepo:
     # Team membership helpers
     # -------------------------------------------------------------------------
 
+    async def get_team_member(self, team_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific team membership.
+
+        Returns membership dict with team_id, user_id, role, status, added_at.
+        Returns None if user is not a member.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres(conn):
+                    row = await conn.fetchrow(
+                        """
+                        SELECT team_id, user_id, role, status, added_at
+                        FROM team_members
+                        WHERE team_id = $1 AND user_id = $2
+                        """,
+                        team_id,
+                        user_id,
+                    )
+                    if not row:
+                        return None
+                    d = dict(row)
+                    from datetime import datetime
+                    if isinstance(d.get("added_at"), datetime):
+                        d["added_at"] = d["added_at"].isoformat()
+                    return d
+                cur = await conn.execute(
+                    """
+                    SELECT team_id, user_id, role, status, added_at
+                    FROM team_members
+                    WHERE team_id = ? AND user_id = ?
+                    """,
+                    (team_id, user_id),
+                )
+                row = await cur.fetchone()
+                if not row:
+                    return None
+                return {
+                    "team_id": row[0],
+                    "user_id": row[1],
+                    "role": row[2],
+                    "status": row[3],
+                    "added_at": row[4],
+                }
+        except Exception as exc:
+            logger.error(f"AuthnzOrgsTeamsRepo.get_team_member failed: {exc}")
+            raise
+
     async def add_team_member(
         self,
         *,

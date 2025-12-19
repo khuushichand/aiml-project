@@ -59,15 +59,26 @@ router = APIRouter(prefix="/connectors", tags=["connectors"])
 
 
 def _resolve_redirect_base(request: Optional[Request], conn) -> str:
+    """Resolve connector redirect base, allowing request to be optional for tests."""
     base = os.getenv("CONNECTOR_REDIRECT_BASE_URL")
     if base:
         return base.rstrip("/")
     if request is not None:
         try:
             return str(request.base_url).rstrip("/")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to resolve base_url from request: {e}")
     return (getattr(conn, "redirect_base", "") or "").rstrip("/")
+
+
+def _get_user_id(current_user: Dict[str, Any]) -> int:
+    user_id = current_user.get("id")
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="User ID not found in token")
+    try:
+        return int(user_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid user ID in token") from exc
 
 
 def get_connectors_job_counter() -> Callable[[int], int]:
@@ -88,7 +99,7 @@ async def start_authorize(
     provider: str,
     state: Optional[str] = None,
     scopes: Optional[str] = None,
-    request: Request = None,
+    request: Optional[Request] = None,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ) -> AuthorizeURLResponse:
@@ -97,7 +108,8 @@ async def start_authorize(
     if redirect_base:
         conn.redirect_base = redirect_base
     state = state or secrets.token_urlsafe(32)
-    await create_oauth_state(db, int(current_user.get("id")), provider, state)
+    user_id = _get_user_id(current_user)
+    await create_oauth_state(db, user_id, provider, state)
     scopes_list = [s for s in (scopes or "").split(",") if s]
     url = conn.authorize_url(state=state, scopes=scopes_list or None, redirect_path=f"/api/v1/connectors/providers/{provider}/callback")
     return AuthorizeURLResponse(auth_url=url, state=state)
@@ -108,14 +120,14 @@ async def oauth_callback(
     provider: str,
     code: str,
     state: Optional[str] = None,
-    request: Request = None,
+    request: Optional[Request] = None,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
     org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
 ) -> ConnectorAccount:
     conn = get_connector_by_name(provider)
     pol = org_policy
-    user_id = int(current_user.get("id"))
+    user_id = _get_user_id(current_user)
     if not state:
         raise HTTPException(status_code=400, detail="Missing OAuth state")
     ttl_minutes = int(os.getenv("CONNECTOR_OAUTH_STATE_TTL_MINUTES", "10") or 10)
@@ -205,7 +217,8 @@ async def oauth_callback(
 async def get_accounts(
     db=Depends(get_db_transaction), current_user: Dict[str, Any] = Depends(get_current_active_user)
 ) -> List[ConnectorAccount]:
-    rows = await list_accounts(db, int(current_user.get("id")))
+    user_id = _get_user_id(current_user)
+    rows = await list_accounts(db, user_id)
     return [ConnectorAccount(id=int(r["id"]), provider=r["provider"], display_name=r.get("display_name") or "", email=r.get("email"), created_at=str(r.get("created_at")), connected=True) for r in rows]
 
 
@@ -213,7 +226,8 @@ async def get_accounts(
 async def remove_account(
     account_id: int, db=Depends(get_db_transaction), current_user: Dict[str, Any] = Depends(get_current_active_user)
 ) -> Dict[str, Any]:
-    await delete_account(db, int(current_user.get("id")), account_id)
+    user_id = _get_user_id(current_user)
+    await delete_account(db, user_id, account_id)
     return {"ok": True}
 
 
@@ -227,10 +241,11 @@ async def browse_provider_sources(
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
-    tokens = await get_account_tokens(db, int(current_user.get("id")), account_id)
+    user_id = _get_user_id(current_user)
+    tokens = await get_account_tokens(db, user_id, account_id)
     if not tokens:
         raise HTTPException(status_code=404, detail="Account not found")
-    email = await get_account_email(db, int(current_user.get("id")), account_id)
+    email = await get_account_email(db, user_id, account_id)
     conn = get_connector_by_name(provider)
     # For Drive, parent_remote_id None implies root
     try:
@@ -262,7 +277,8 @@ async def add_source(
     path = payload.path
     options = payload.options or {}
 
-    acct = await get_account_for_user(db, int(current_user.get("id")), account_id)
+    user_id = _get_user_id(current_user)
+    acct = await get_account_for_user(db, user_id, account_id)
     if not acct:
         raise HTTPException(status_code=404, detail="Account not found")
     acct_provider = str(acct.get("provider") or "").lower()
@@ -309,7 +325,8 @@ async def add_source(
 async def get_sources(
     db=Depends(get_db_transaction), current_user: Dict[str, Any] = Depends(get_current_active_user)
 ) -> List[ConnectorSource]:
-    rows = await list_sources(db, int(current_user.get("id")))
+    user_id = _get_user_id(current_user)
+    rows = await list_sources(db, user_id)
     out: List[ConnectorSource] = []
     for r in rows:
         out.append(
@@ -337,7 +354,8 @@ async def patch_source(
 ) -> ConnectorSource:
     enabled = payload.enabled
     options = payload.options
-    row = await update_source(db, int(current_user.get("id")), source_id, enabled=enabled, options=options)
+    user_id = _get_user_id(current_user)
+    row = await update_source(db, user_id, source_id, enabled=enabled, options=options)
     if not row:
         raise HTTPException(status_code=404, detail="Source not found")
     return ConnectorSource(
@@ -358,21 +376,22 @@ async def import_source(
     source_id: int,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
-    request: Request = None,
+    request: Optional[Request] = None,
     org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
     count_jobs_fn: Callable[[int], int] = Depends(get_connectors_job_counter),
 ) -> ImportJob:
     # Enforce per-role daily quota from org policy for all modes; single-user
     # admin callers naturally bypass via their configured role/quotas.
+    user_id = _get_user_id(current_user)
     role = str(current_user.get("role", "member")).lower()
     qpr = org_policy.get("quotas_per_role") or {}
     limits = qpr.get(role) or {}
     max_jobs = int(limits.get("max_jobs_per_day") or 0)
     if max_jobs > 0:
         try:
-            today_count = count_jobs_fn(int(current_user.get("id")))
+            today_count = count_jobs_fn(user_id)
         except Exception as exc:
-            logger.exception(f"Quota check failed for user_id={current_user.get('id')}: {exc}")
+            logger.exception(f"Quota check failed for user_id={user_id}: {exc}")
             raise HTTPException(
                 status_code=HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Daily import quota check failed",
@@ -382,7 +401,7 @@ async def import_source(
     # Correlate request → job
     rid = ensure_request_id(request) if request is not None else None
     tp = ensure_traceparent(request) if request is not None else ""
-    job = await create_import_job(int(current_user.get("id")), source_id, request_id=rid)
+    job = await create_import_job(user_id, source_id, request_id=rid)
     # Structured log for queued import
     get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="connectors", traceparent=tp).info(
         "Queued connectors import job: job_id=%s source_id=%s", job.get("id"), source_id

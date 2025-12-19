@@ -17,8 +17,9 @@ from loguru import logger
 # Maximum length for regex patterns to prevent complexity attacks
 MAX_REGEX_PATTERN_LENGTH = 500
 
-# Patterns that are known to cause ReDoS (catastrophic backtracking)
-# These are simplified checks - a full ReDoS detector would be more complex
+# Patterns that are known to cause ReDoS (catastrophic backtracking).
+# This is a heuristic blocklist using substring checks; obfuscated variants may bypass it.
+# Apply runtime safeguards when executing regexes.
 DANGEROUS_REGEX_PATTERNS = [
     r'(.+)+',      # Nested quantifiers
     r'(.*)*',      # Nested quantifiers
@@ -31,7 +32,7 @@ DANGEROUS_REGEX_PATTERNS = [
 
 
 def validate_regex_pattern_safety(pattern: str) -> str:
-    """Validate a regex pattern for safety against ReDoS attacks.
+    """Validate a regex pattern for basic ReDoS safety checks.
 
     Args:
         pattern: The regex pattern to validate
@@ -41,6 +42,10 @@ def validate_regex_pattern_safety(pattern: str) -> str:
 
     Raises:
         ValueError: If the pattern is too long, invalid, or potentially dangerous
+
+    Note:
+        This is a heuristic, blocklist-based check and may miss obfuscated patterns.
+        Apply runtime safeguards (e.g., timeouts or sandboxed execution) when evaluating regexes.
     """
     if len(pattern) > MAX_REGEX_PATTERN_LENGTH:
         raise ValueError(f"Regex pattern too long (max {MAX_REGEX_PATTERN_LENGTH} chars)")
@@ -55,8 +60,8 @@ def validate_regex_pattern_safety(pattern: str) -> str:
     for dangerous in DANGEROUS_REGEX_PATTERNS:
         if dangerous in pattern:
             raise ValueError(
-                f"Potentially dangerous regex pattern detected (nested quantifiers). "
-                f"Pattern may cause catastrophic backtracking."
+                "Potentially dangerous regex pattern detected (nested quantifiers). "
+                "Pattern may cause catastrophic backtracking."
             )
 
     # Check for excessive quantifier nesting (heuristic)

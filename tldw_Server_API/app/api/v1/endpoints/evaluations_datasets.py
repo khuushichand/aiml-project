@@ -75,11 +75,11 @@ async def create_dataset(
                             if response is not None:
                                 response.headers["X-Idempotent-Replay"] = "true"
                                 response.headers["Idempotency-Key"] = idempotency_key
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Failed to set idempotency headers: {e}")
                         return DatasetResponse(**_normalize_dataset_payload(existing))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Idempotency lookup failed, proceeding with creation: {e}")
         dataset_id = await svc.create_dataset(
             name=dataset_request.name,
             samples=[model_dump_compat(s) for s in dataset_request.samples],
@@ -92,8 +92,8 @@ async def create_dataset(
         try:
             if idempotency_key:
                 svc.db.record_idempotency("dataset", idempotency_key, dataset_id, user_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to record idempotency key for dataset {dataset_id}: {e}")
         return DatasetResponse(**normalized)
     except Exception as e:
         logger.exception(f"Failed to create dataset: {e}")

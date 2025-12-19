@@ -191,8 +191,8 @@ def _notes_csv_response(notes_data: List[Dict[str, Any]], include_keywords: bool
             row.append(",".join([str(k.get("keyword")) for k in kws if isinstance(k, dict) and k.get("keyword") is not None]))
         writer.writerow(row)
     output.seek(0)
-    from datetime import datetime as _dt
-    headers_map = {"Content-Disposition": f"attachment; filename=notes_export_{_dt.utcnow().strftime('%Y%m%dT%H%M%SZ')}.csv"}
+    from datetime import datetime as _dt, timezone
+    headers_map = {"Content-Disposition": f"attachment; filename=notes_export_{_dt.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.csv"}
     return StreamingResponse(output, media_type="text/csv; charset=utf-8", headers=headers_map)
 
 
@@ -212,6 +212,16 @@ def _attach_keywords_bulk(db: CharactersRAGDB, notes_data: List[Dict[str, Any]])
             if nid:
                 nd["keywords"] = kw_map.get(nid, [])
     return notes_data
+
+
+# --- Keyword attach helper ----------------------------------------------------
+def _attach_keywords_inline(db: CharactersRAGDB, note_dict: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        if note_dict and note_dict.get('id'):
+            note_dict['keywords'] = db.get_keywords_for_note(note_id=note_dict['id'])
+    except Exception as e:
+        logger.warning(f"Failed to attach keywords to note {note_dict.get('id')}: {e}")
+    return note_dict
 
 
 # --- Helper for Exception Handling (largely the same) ---
@@ -439,7 +449,6 @@ async def create_note(
     tags=["notes"]
 )
 async def list_notes(
-        request: Request,
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         limit: int = Query(100, ge=1, le=1000, description="Number of notes to return"),
         offset: int = Query(0, ge=0, description="Offset for pagination"),
@@ -677,8 +686,8 @@ async def export_notes_post(
                 if include_keywords:
                     nd["keywords"] = []
                 results.append(nd)
-            except Exception:
-                # Skip bad ids
+            except Exception as fetch_err:
+                logger.debug(f"Skipping note ID '{nid}' during export: {fetch_err}")
                 continue
 
         if include_keywords and results:
@@ -733,7 +742,8 @@ async def export_notes_post_csv(
                 if include_keywords:
                     nd["keywords"] = []
                 results.append(nd)
-            except Exception:
+            except Exception as fetch_err:
+                logger.debug(f"Skipping note ID '{nid}' during CSV export: {fetch_err}")
                 continue
 
         if include_keywords and results:
@@ -773,7 +783,6 @@ async def get_note(
         note_data = db.get_note_by_id(note_id=note_id)
     except Exception as e:  # Catch DB errors from get_note_by_id
         handle_db_errors(e, "note")  # This will reraise appropriately
-        return  # Should not be reached if handle_db_errors raises
 
     if not note_data:
         logger.warning(f"Note ID '{note_id}' not found for user (DB client_id: {db.client_id}).")
@@ -1504,11 +1513,3 @@ async def get_notes_for_keyword_endpoint(
 #
 # --- End of Notes and Keywords Endpoints ---
 ########################################################################################################################
-# Utility to attach keywords to a note dict
-def _attach_keywords_inline(db: CharactersRAGDB, note_dict: Dict[str, Any]) -> Dict[str, Any]:
-    try:
-        if note_dict and note_dict.get('id'):
-            note_dict['keywords'] = db.get_keywords_for_note(note_id=note_dict['id'])
-    except Exception as e:
-        logger.warning(f"Failed to attach keywords to note {note_dict.get('id')}: {e}")
-    return note_dict

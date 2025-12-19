@@ -412,8 +412,9 @@ class TestAuthentication:
         """Inactive users should map to inactive_user in evals auth."""
         from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import verify_api_key
         from fastapi.security import HTTPAuthorizationCredentials
-        from fastapi import HTTPException, status
+        from fastapi import HTTPException
         from starlette.requests import Request
+        from tldw_Server_API.app.core.exceptions import InactiveUserError
 
         mock_settings.AUTH_MODE = "multi_user"
 
@@ -425,7 +426,7 @@ class TestAuthentication:
                     return {"sub": "123"}
 
             async def _inactive_user(_request, _token: str):
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
+                raise InactiveUserError("Inactive user")
 
             with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.get_jwt_service', lambda: _JwtService()):
                 with patch('tldw_Server_API.app.api.v1.endpoints.evaluations_auth.verify_jwt_and_fetch_user', _inactive_user):

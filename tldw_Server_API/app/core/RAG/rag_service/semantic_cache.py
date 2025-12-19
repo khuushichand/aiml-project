@@ -610,6 +610,36 @@ def _default_persist_path(namespace_key: str) -> Optional[str]:
     return str((base_dir / f"semantic_cache_{namespace_key}.json").resolve())
 
 
+def _sanitize_persist_path(persist_path: Optional[str], namespace_key: str) -> Optional[str]:
+    """Normalize persist_path and ensure it stays under the cache base directory."""
+    if not persist_path:
+        return None
+    base_dir = _resolve_default_cache_dir()
+    if not base_dir:
+        return persist_path
+    try:
+        base_dir_resolved = base_dir.expanduser().resolve(strict=False)
+    except Exception:
+        return persist_path
+    candidate_path = Path(persist_path).expanduser()
+    try:
+        if candidate_path.is_absolute():
+            resolved_path = candidate_path.resolve(strict=False)
+        else:
+            resolved_path = (base_dir_resolved / candidate_path).resolve(strict=False)
+    except Exception:
+        logger.warning("Failed to resolve semantic cache persist_path; using default cache path.")
+        return _default_persist_path(namespace_key)
+    if not resolved_path.is_relative_to(base_dir_resolved):
+        fallback = _default_persist_path(namespace_key)
+        if fallback:
+            logger.warning("Rejected semantic cache persist_path outside base dir; using default cache path.")
+            return fallback
+        logger.warning("Rejected semantic cache persist_path outside base dir; persistence disabled.")
+        return None
+    return str(resolved_path)
+
+
 def get_shared_cache(
     cache_cls: Type[SemanticCache],
     *,
@@ -622,6 +652,7 @@ def get_shared_cache(
 ) -> SemanticCache:
     namespace_key = _normalize_namespace(namespace)
     persist_path = persist_path or _default_persist_path(namespace_key)
+    persist_path = _sanitize_persist_path(persist_path, namespace_key)
     if persist_path:
         try:
             Path(persist_path).parent.mkdir(parents=True, exist_ok=True)

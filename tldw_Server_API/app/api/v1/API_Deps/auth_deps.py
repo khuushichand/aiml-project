@@ -46,6 +46,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     authenticate_api_key_user,
     verify_jwt_and_fetch_user,
 )
+from tldw_Server_API.app.core.exceptions import InactiveUserError
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
     get_auth_principal as _resolve_auth_principal,
@@ -661,6 +662,11 @@ async def get_current_user(
         # Delegate JWT validation and user enrichment to the shared helper so
         # roles/permissions/admin flags stay aligned with AuthPrincipal/User flows.
         user_obj = await verify_jwt_and_fetch_user(request, token)
+    except InactiveUserError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Inactive user",
+        ) from exc
     except HTTPException as exc:
         if exc.status_code == status.HTTP_401_UNAUTHORIZED:
             # Normalize 401 semantics for callers: detail must contain

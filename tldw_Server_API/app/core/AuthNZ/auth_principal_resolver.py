@@ -23,6 +23,7 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import (
 )
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.exceptions import InactiveUserError
 
 
 def is_single_user_mode() -> bool:
@@ -206,6 +207,11 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
     if token:
         try:
             user = await User_DB_Handling.verify_jwt_and_fetch_user(request, token)
+        except InactiveUserError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Inactive user",
+            ) from exc
         except HTTPException:
             # Propagate explicit HTTP errors (401/400/etc.) unchanged
             raise

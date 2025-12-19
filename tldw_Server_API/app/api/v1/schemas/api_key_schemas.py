@@ -2,7 +2,10 @@
 
 from datetime import datetime
 from typing import Optional, List, Any, Dict, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+VALID_SCOPES = {"read", "write", "admin", "service"}
 
 
 class APIKeyCreateRequest(BaseModel):
@@ -13,6 +16,21 @@ class APIKeyCreateRequest(BaseModel):
         description="Permission scope(s): 'read', 'write', 'admin', 'service' or a list of these"
     )
     expires_in_days: Optional[int] = Field(365, ge=1, description="Days until expiration (None = never)")
+
+    @field_validator("scope")
+    @classmethod
+    def validate_scope(cls, v: Union[str, List[str]]) -> Union[str, List[str]]:
+        scopes = [v] if isinstance(v, str) else v
+        if not isinstance(scopes, list):
+            raise TypeError("scope must be a string or list of strings")
+        for scope in scopes:
+            if not isinstance(scope, str):
+                raise TypeError("scope entries must be strings")
+        invalid = set(scopes) - VALID_SCOPES
+        if invalid:
+            invalid_list = ", ".join(sorted(invalid))
+            raise ValueError(f"Invalid scope(s): {invalid_list}")
+        return v
 
 
 class APIKeyRotateRequest(BaseModel):

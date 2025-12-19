@@ -22,14 +22,14 @@ See also
 - Prompt Studio Evaluations API: /api/v1/prompt-studio/evaluations
 """
 
-from typing import List, Optional, Dict, Any
+from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Request, Header
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
 
 # Local imports
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import (
-    StandardResponse, ListResponse, ListQueryParams
+    StandardResponse, ListResponse
 )
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_project import (
     ProjectCreate, ProjectUpdate, ProjectResponse, ProjectListItem
@@ -175,7 +175,7 @@ async def create_project(
                     existing = db.get_project(existing_id)
                     if existing:
                         return StandardResponse(success=True, data=ProjectResponse(**existing))
-            except Exception as e:
+            except DatabaseError as e:
                 logger.warning(f"Idempotency lookup failed for key {idempotency_key}: {e}")
 
         # Create project
@@ -195,10 +195,7 @@ async def create_project(
 
         # Record idempotency mapping
         if idempotency_key and project.get("id"):
-            try:
-                db.record_idempotency("project", idempotency_key, int(project["id"]), user_id_str)
-            except Exception as e:
-                logger.warning(f"Failed to record idempotency key {idempotency_key} for project {project.get('id')}: {e}")
+            db.record_idempotency("project", idempotency_key, int(project["id"]), user_id_str)
 
         return StandardResponse(
             success=True,

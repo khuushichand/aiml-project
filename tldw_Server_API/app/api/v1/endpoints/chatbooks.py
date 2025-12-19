@@ -846,9 +846,12 @@ async def list_import_jobs(
 
         return ListImportJobsResponse(jobs=job_responses, total=total)
 
-    except Exception as e:
+    except Exception:
         logger.exception(f"Error listing import jobs for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while retrieving import jobs")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while retrieving import jobs",
+        ) from None
 
 
 @router.get("/import/jobs/{job_id}", response_model=ImportJobResponse)
@@ -1118,9 +1121,12 @@ async def cleanup_expired_exports(
             deleted_count=deleted_count
         )
 
-    except Exception as e:
+    except Exception:
         logger.exception(f"Error cleaning up expired exports for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while cleaning up expired exports")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while cleaning up expired exports",
+        ) from None
 
 
 @router.delete("/export/jobs/{job_id}", response_model=CancelJobResponse)
@@ -1163,13 +1169,20 @@ async def cancel_export_job(
             )
         except Exception as audit_err:
             logger.warning(f"Failed to log audit event for export job cancellation: {audit_err}")
-        return {"success": True, "message": f"Export job {job_id} cancelled", "job_id": job_id}
+        return CancelJobResponse(
+            success=True,
+            message=f"Export job {job_id} cancelled",
+            job_id=job_id,
+        )
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception(f"Error cancelling export job {job_id} for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while cancelling the export job")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while cancelling the export job",
+        ) from None
 
 
 @router.delete("/import/jobs/{job_id}", response_model=CancelJobResponse)
@@ -1212,10 +1225,17 @@ async def cancel_import_job(
             )
         except Exception as audit_err:
             logger.warning(f"Failed to log audit event for import job cancellation: {audit_err}")
-        return {"success": True, "message": f"Import job {job_id} cancelled", "job_id": job_id}
+        return CancelJobResponse(
+            success=True,
+            message=f"Import job {job_id} cancelled",
+            job_id=job_id,
+        )
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception(f"Error cancelling import job {job_id} for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while cancelling the import job")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while cancelling the import job",
+        ) from None

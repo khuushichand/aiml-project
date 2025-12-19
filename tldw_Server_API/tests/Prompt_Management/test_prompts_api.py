@@ -22,7 +22,7 @@ from tldw_Server_API.app.api.v1.API_Deps.Prompts_DB_Deps import (
     close_all_cached_prompts_db_instances,
     get_prompts_db_for_user
 )
-from tldw_Server_API.app.api.v1.endpoints.prompts import verify_token
+from tldw_Server_API.app.api.v1.endpoints.prompts import verify_prompts_auth
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
@@ -61,14 +61,14 @@ def get_sample_prompt_payload(name_suffix: str = "") -> Dict[str, Any]:
 def get_sample_keyword_payload(text_suffix: str = "") -> Dict[str, str]:
     return {"keyword_text": f"api_keyword_{text_suffix}".strip()}
 
-# Fixture for a specific API token value for direct testing of verify_token
+# Fixture for a specific API token value for direct testing of verify_prompts_auth
 @pytest.fixture(scope="session")
 def actual_test_api_key() -> str:
     return "this_is_the_actual_single_user_key_for_testing"
 
-# Standalone tests for verify_token (if they are in test_prompts_api.py)
+# Standalone tests for verify_prompts_auth (if they are in test_prompts_api.py)
 @pytest.mark.asyncio
-async def test_verify_token_success_single_user_mode(monkeypatch, actual_test_api_key: str):
+async def test_verify_prompts_auth_success_single_user_mode(monkeypatch, actual_test_api_key: str):
     # Simulate single-user mode and set the expected API key
     original_single_user_mode = settings.get("SINGLE_USER_MODE")
     original_api_key = settings.get("SINGLE_USER_API_KEY")
@@ -76,7 +76,7 @@ async def test_verify_token_success_single_user_mode(monkeypatch, actual_test_ap
     monkeypatch.setitem(settings, "SINGLE_USER_MODE", True)
     monkeypatch.setitem(settings, "SINGLE_USER_API_KEY", actual_test_api_key)
     try:
-        assert await verify_token(request=None, Token=actual_test_api_key) is True
+        assert await verify_prompts_auth(request=None, Token=actual_test_api_key) is True
     finally:
         # Restore original settings
         monkeypatch.setitem(settings, "SINGLE_USER_MODE", original_single_user_mode)
@@ -87,15 +87,15 @@ async def test_verify_token_success_single_user_mode(monkeypatch, actual_test_ap
 
 
 @pytest.mark.asyncio
-async def test_verify_token_missing_token_header_direct(): # Renamed for clarity
+async def test_verify_prompts_auth_missing_token_header_direct(): # Renamed for clarity
     with pytest.raises(HTTPException) as excinfo:
-        await verify_token(request=None, Token=None) # FastAPI would pass None if Header is missing
+        await verify_prompts_auth(request=None, Token=None) # FastAPI would pass None if Header is missing
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert "Missing authentication token" in excinfo.value.detail
 
 
 @pytest.mark.asyncio
-async def test_verify_token_invalid_token_single_user_mode(monkeypatch, actual_test_api_key: str):
+async def test_verify_prompts_auth_invalid_token_single_user_mode(monkeypatch, actual_test_api_key: str):
     original_single_user_mode = settings.get("SINGLE_USER_MODE")
     original_api_key = settings.get("SINGLE_USER_API_KEY")
 
@@ -103,7 +103,7 @@ async def test_verify_token_invalid_token_single_user_mode(monkeypatch, actual_t
     monkeypatch.setitem(settings, "SINGLE_USER_API_KEY", actual_test_api_key)
     try:
         with pytest.raises(HTTPException) as excinfo:
-            await verify_token(request=None, Token="completely-wrong-token")
+            await verify_prompts_auth(request=None, Token="completely-wrong-token")
         assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
         assert "Invalid authentication token" in excinfo.value.detail
     finally:
@@ -114,7 +114,7 @@ async def test_verify_token_invalid_token_single_user_mode(monkeypatch, actual_t
             monkeypatch.delitem(settings, "SINGLE_USER_API_KEY", raising=False)
 
 @pytest.mark.asyncio
-async def test_verify_token_server_misconfigured_key_missing_single_user(monkeypatch):
+async def test_verify_prompts_auth_server_misconfigured_key_missing_single_user(monkeypatch):
     original_single_user_mode = settings.get("SINGLE_USER_MODE")
     original_api_key = settings.get("SINGLE_USER_API_KEY")
 
@@ -122,7 +122,7 @@ async def test_verify_token_server_misconfigured_key_missing_single_user(monkeyp
     monkeypatch.setitem(settings, "SINGLE_USER_API_KEY", None) # Simulate API key not set
     try:
         with pytest.raises(HTTPException) as excinfo:
-            await verify_token(request=None, Token="any-token-will-do-for-this-check")
+            await verify_prompts_auth(request=None, Token="any-token-will-do-for-this-check")
         assert excinfo.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
         assert "Server authentication misconfigured (API key missing)" in excinfo.value.detail
     finally:
@@ -144,7 +144,7 @@ def test_api_token(actual_test_api_key: str): # Depends on the actual_test_api_k
         # Using actual_test_api_key makes it consistent.
         return actual_test_api_key
     # For multi-user mode, this is a placeholder, as real JWTs are complex.
-    # The verify_token override in the `client` fixture handles this for endpoint tests.
+    # The verify_prompts_auth override in the `client` fixture handles this for endpoint tests.
     return "fixed_test_api_token_for_pytest_jwt_placeholder"
 
 #######################################################################################################################
@@ -163,7 +163,7 @@ def test_user_instance() -> User:
 
 @pytest.fixture(scope="session")
 def actual_api_token_value() -> str:
-    """Returns the API token value that verify_token would expect."""
+    """Returns the API token value that verify_prompts_auth would expect."""
     # This should align with what settings.API_BEARER would be in a real scenario.
     # For testing, we can use a fixed value and monkeypatch settings.API_BEARER.
     return FIXED_TEST_API_TOKEN
@@ -204,7 +204,7 @@ def client(test_user: User, test_api_token: str, tmp_path: Path, monkeypatch):
     # mock_get_prompts_db_path_for_user takes user_id: int,
     # settings["USER_DB_BASE_DIR"] is patched with setitem,
     # PromptsDBDepsModule.MAIN_USER_DATA_BASE_DIR is patched,
-    # verify_token is overridden to return True for client tests,
+    # verify_prompts_auth is overridden to return True for client tests,
     # client.headers is set to {"Token": test_api_token} )
     def mock_get_prompts_db_path_for_user(user_id: int, db_version: str = "v2") -> Path:
         user_db_dir = tmp_path / str(user_id) / "prompts_user_dbs"
@@ -224,12 +224,12 @@ def client(test_user: User, test_api_token: str, tmp_path: Path, monkeypatch):
     def override_get_request_user():
         return test_user
 
-    async def override_verify_token_dependency_for_client_tests():
+    async def override_verify_prompts_auth_dependency_for_client_tests():
         return True
 
     original_overrides = fastapi_app.dependency_overrides.copy()
     fastapi_app.dependency_overrides[get_request_user] = override_get_request_user
-    fastapi_app.dependency_overrides[verify_token] = override_verify_token_dependency_for_client_tests
+    fastapi_app.dependency_overrides[verify_prompts_auth] = override_verify_prompts_auth_dependency_for_client_tests
 
     test_client_instance = TestClient(fastapi_app)
     test_client_instance.headers = {"Token": test_api_token}
@@ -270,12 +270,12 @@ def client_with_auth(tmp_path: Path, monkeypatch, test_user_instance: User, actu
 
     original_api_key = settings.get("SINGLE_USER_API_KEY")
     monkeypatch.setitem(settings, "SINGLE_USER_API_KEY", actual_api_token_value)
-    # Ensure single user mode is True for these tests if verify_token relies on it
+    # Ensure single user mode is True for these tests if verify_prompts_auth relies on it
     original_single_user_mode = settings.get("SINGLE_USER_MODE")
     monkeypatch.setitem(settings, "SINGLE_USER_MODE", True)
 
 
-    # No override for verify_token, so the actual dependency will be called
+    # No override for verify_prompts_auth, so the actual dependency will be called
     with TestClient(fastapi_app) as c:
         yield c
 
@@ -296,7 +296,7 @@ def client_with_auth(tmp_path: Path, monkeypatch, test_user_instance: User, actu
 @pytest.fixture
 def auth_headers(actual_api_token_value: str) -> Dict[str, str]:
     """Provides authentication headers for tests where auth is NOT bypassed."""
-    # The `verify_token` dependency is `Token: str = Header(None)`
+    # The `verify_prompts_auth` dependency is `Token: str = Header(None)`
     # In single-user mode, it directly compares the token.
     return {"Token": actual_api_token_value}
 
@@ -328,29 +328,29 @@ Dict[str, Any]:
 
 
 #######################################################################################################################
-# Unit Tests (for helpers like verify_token)
+# Unit Tests (for helpers like verify_prompts_auth)
 #######################################################################################################################
 
 @pytest.mark.asyncio
-async def test_verify_token_missing_token(monkeypatch, actual_api_token_value: str):
+async def test_verify_prompts_auth_missing_token(monkeypatch, actual_api_token_value: str):
     monkeypatch.setitem(settings, "SINGLE_USER_API_KEY", actual_api_token_value)
     with pytest.raises(HTTPException) as exc_info:
-        await verify_token(request=None, Token=None)
+        await verify_prompts_auth(request=None, Token=None)
     assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert "Missing authentication token" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
-async def test_verify_token_invalid_token(monkeypatch, actual_api_token_value: str):
+async def test_verify_prompts_auth_invalid_token(monkeypatch, actual_api_token_value: str):
     monkeypatch.setitem(settings, "SINGLE_USER_API_KEY", actual_api_token_value)
     with pytest.raises(HTTPException) as exc_info:
-        await verify_token(request=None, Token="Bearer invalid")
+        await verify_prompts_auth(request=None, Token="Bearer invalid")
     assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert "Invalid authentication token" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
-async def test_verify_token_server_misconfigured(monkeypatch):
+async def test_verify_prompts_auth_server_misconfigured(monkeypatch):
     # Simulate SINGLE_USER_API_KEY not being set correctly
     original_single_user_mode = settings.get("SINGLE_USER_MODE")
     original_api_key = settings.get("SINGLE_USER_API_KEY")
@@ -360,7 +360,7 @@ async def test_verify_token_server_misconfigured(monkeypatch):
 
     try:
         with pytest.raises(HTTPException) as exc_info:
-            await verify_token(request=None, Token="anytoken")
+            await verify_prompts_auth(request=None, Token="anytoken")
         assert exc_info.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
         assert "Server authentication misconfigured (API key missing)." in exc_info.value.detail
     finally:

@@ -10,7 +10,7 @@ import hashlib
 from typing import Optional, Dict, Any, List
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks, Request
+from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks, Request, Response
 from loguru import logger
 from fastapi.responses import StreamingResponse
 import asyncio
@@ -21,6 +21,7 @@ import types
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
@@ -28,6 +29,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
     require_permissions,
     require_token_scope,
+    get_auth_principal,
 )
 from tldw_Server_API.app.api.v1.API_Deps.billing_deps import require_within_limit
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_READ
@@ -1137,14 +1139,15 @@ async def rag_implicit_feedback(
     dependencies=[
         Depends(check_rate_limit),
         Depends(require_permissions(MEDIA_READ)),
-        Depends(require_within_limit(LimitCategory.RAG_QUERIES_DAY, 1)),
     ]
 )
 async def unified_batch_endpoint(
     request_raw: Request,
+    response: Response,
     request: UnifiedBatchRequest,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     media_db: MediaDatabase = Depends(get_media_db_for_user),
     chacha_db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
@@ -1154,7 +1157,30 @@ async def unified_batch_endpoint(
     Processes multiple queries concurrently with the same parameters.
     """
     try:
-        logger.info(f"Batch RAG search: {len(request.queries)} queries, user={current_user.username if current_user else 'anonymous'}")
+        requested_units = len(request.queries or [])
+        limit_checker = require_within_limit(LimitCategory.RAG_QUERIES_DAY, requested_units)
+        org_header = request_raw.headers.get("X-TLDW-Org-Id")
+        org_query = request_raw.query_params.get("org_id")
+        try:
+            org_header_id = int(org_header) if org_header is not None else None
+        except (TypeError, ValueError):
+            org_header_id = None
+        try:
+            org_query_id = int(org_query) if org_query is not None else None
+        except (TypeError, ValueError):
+            org_query_id = None
+
+        await limit_checker(
+            response=response,
+            principal=principal,
+            x_tldw_org_id=org_header_id,
+            org_id=org_query_id,
+        )
+
+        logger.info(
+            f"Batch RAG search: {requested_units} queries, "
+            f"user={current_user.username if current_user else 'anonymous'}"
+        )
 
         start_time = time.time()
 
@@ -1190,13 +1216,13 @@ async def unified_batch_endpoint(
 
         # Each query in the batch counts as one RAG query unit.
         try:
-            await _log_rag_queries_for_org(request_raw, current_user, units=len(request.queries or []))
+            await _log_rag_queries_for_org(request_raw, current_user, units=requested_units)
         except Exception:
             pass
 
         return UnifiedBatchResponse(
             results=responses,
-            total_queries=len(request.queries),
+            total_queries=requested_units,
             successful=successful,
             failed=failed,
             total_time=total_time
@@ -1477,26 +1503,41 @@ async def unified_search_stream_endpoint(
                 pass
 
             # Minimal context for generation
-            generation_config = {"streaming": True}
             try:
                 from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
                 cfg = load_and_log_configs() or {}
             except Exception:
                 cfg = {}
-            try:
-                provider = (cfg.get("RAG_DEFAULT_LLM_PROVIDER") or "openai").strip()
-            except Exception:
-                provider = "openai"
-            try:
-                model = (request.generation_model or cfg.get("RAG_DEFAULT_LLM_MODEL") or "gpt-4o-mini").strip()
-            except Exception:
-                model = request.generation_model or "gpt-4o-mini"
-            generation_config["provider"] = provider
-            generation_config["model"] = model
-            try:
-                generation_config["max_tokens"] = int(request.max_generation_tokens)
-            except Exception:
-                generation_config["max_tokens"] = 500
+
+            provider_value = cfg.get("RAG_DEFAULT_LLM_PROVIDER")
+            provider = (
+                provider_value.strip()
+                if isinstance(provider_value, str) and provider_value.strip()
+                else "openai"
+            )
+
+            model_value = request.generation_model if isinstance(request.generation_model, str) else None
+            if not model_value:
+                model_value = cfg.get("RAG_DEFAULT_LLM_MODEL")
+            model = (
+                model_value.strip()
+                if isinstance(model_value, str) and model_value.strip()
+                else "gpt-4o-mini"
+            )
+
+            max_tokens = 500
+            if request.max_generation_tokens is not None:
+                try:
+                    max_tokens = int(request.max_generation_tokens)
+                except (TypeError, ValueError):
+                    max_tokens = 500
+
+            generation_config = {
+                "streaming": True,
+                "provider": provider,
+                "model": model,
+                "max_tokens": max_tokens,
+            }
             if request.generation_prompt:
                 generation_config["prompt_template"] = request.generation_prompt
 

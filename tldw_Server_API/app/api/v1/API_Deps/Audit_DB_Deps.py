@@ -48,7 +48,7 @@ def _settings_int(
         if isinstance(raw, bool):
             raise TypeError("bool is not a valid int setting")
         value = int(str(raw).strip())
-    except Exception:
+    except (TypeError, ValueError):
         logger.warning(f"Invalid {key}={raw!r}; using default {default}")
         value = default
     if min_value is not None:
@@ -71,7 +71,7 @@ def _settings_float(
         if isinstance(raw, bool):
             raise TypeError("bool is not a valid float setting")
         value = float(str(raw).strip())
-    except Exception:
+    except (TypeError, ValueError):
         logger.warning(f"Invalid {key}={raw!r}; using default {default}")
         value = default
     if min_value is not None:
@@ -413,10 +413,10 @@ async def get_or_create_audit_service_for_user_id(user_id: int) -> UnifiedAuditS
 
         try:
             await asyncio.wait_for(wait_event.wait(), timeout=remaining)
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as exc:
             msg = f"Timeout waiting for audit service initialization for user {user_id}"
             logger.warning(msg)
-            raise RuntimeError(msg)
+            raise RuntimeError(msg) from exc
 
         # Check cache again after waiting
         with state.cache_lock:
@@ -489,9 +489,15 @@ async def get_audit_service_for_user(
     try:
         return await get_or_create_audit_service_for_user_id(user_id)
     except Exception as e:
+        logger.error(
+            "Failed to initialize audit service for user {}: {}",
+            user_id,
+            e,
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Could not initialize audit service: {str(e)}",
+            detail="Could not initialize audit service.",
         ) from e
 
 # --- Cleanup Functions ---

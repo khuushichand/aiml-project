@@ -51,17 +51,6 @@ from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import (
 )
 
 
-# Image magic byte signatures for MIME type detection
-_IMAGE_SIGNATURES = {
-    b'\x89PNG\r\n\x1a\n': 'image/png',
-    b'\xff\xd8\xff': 'image/jpeg',
-    b'GIF87a': 'image/gif',
-    b'GIF89a': 'image/gif',
-    b'RIFF': 'image/webp',  # WebP starts with RIFF, need to check WEBP at offset 8
-    b'BM': 'image/bmp',
-}
-
-
 def _detect_image_mime_type(data: bytes) -> Optional[str]:
     """
     Detect image MIME type from magic bytes.
@@ -293,7 +282,7 @@ async def send_message(
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Failed to decode image data. Please provide valid base64-encoded image."
-                )
+                ) from e
 
         # Add to database
         created_id = db.add_message(msg_data)

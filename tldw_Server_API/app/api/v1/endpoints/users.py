@@ -33,6 +33,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_storage_service_dep,
     require_api_key_scope,
 )
+from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
@@ -272,18 +273,20 @@ async def list_api_keys(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_api_key_scope("write"))],
 )
+@limiter.limit("10/minute")
 async def create_api_key(
-    request: APIKeyCreateRequest,
+    payload: APIKeyCreateRequest,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_active_user)
 ) -> APIKeyCreateResponse:
     """Create a new API key for the current user and return the key once."""
     api_mgr = await get_api_key_manager()
     result = await api_mgr.create_api_key(
         user_id=int(current_user["id"]),
-        name=request.name,
-        description=request.description,
-        scope=request.scope,
-        expires_in_days=request.expires_in_days,
+        name=payload.name,
+        description=payload.description,
+        scope=payload.scope,
+        expires_in_days=payload.expires_in_days,
     )
     return APIKeyCreateResponse(**result)
 
@@ -311,26 +314,28 @@ class SelfVirtualAPIKeyRequest(BaseModel):
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_api_key_scope("write"))],
 )
+@limiter.limit("10/minute")
 async def create_virtual_api_key(
-    request: SelfVirtualAPIKeyRequest,
+    payload: SelfVirtualAPIKeyRequest,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_active_user)
 ) -> APIKeyCreateResponse:
     """Create a constrained (virtual/burnable) API key for the current user."""
     api_mgr = await get_api_key_manager()
     result = await api_mgr.create_virtual_key(
         user_id=int(current_user["id"]),
-        name=request.name,
-        description=request.description,
-        expires_in_days=request.expires_in_days,
-        allowed_endpoints=request.allowed_endpoints,
-        budget_day_tokens=request.budget_day_tokens,
-        budget_month_tokens=request.budget_month_tokens,
-        budget_day_usd=request.budget_day_usd,
-        budget_month_usd=request.budget_month_usd,
-        allowed_methods=request.allowed_methods,
-        allowed_paths=request.allowed_paths,
-        max_calls=request.max_calls,
-        max_runs=request.max_runs,
+        name=payload.name,
+        description=payload.description,
+        expires_in_days=payload.expires_in_days,
+        allowed_endpoints=payload.allowed_endpoints,
+        budget_day_tokens=payload.budget_day_tokens,
+        budget_month_tokens=payload.budget_month_tokens,
+        budget_day_usd=payload.budget_day_usd,
+        budget_month_usd=payload.budget_month_usd,
+        allowed_methods=payload.allowed_methods,
+        allowed_paths=payload.allowed_paths,
+        max_calls=payload.max_calls,
+        max_runs=payload.max_runs,
     )
     return APIKeyCreateResponse(**result)
 
@@ -340,9 +345,11 @@ async def create_virtual_api_key(
     response_model=APIKeyCreateResponse,
     dependencies=[Depends(require_api_key_scope("write"))],
 )
+@limiter.limit("10/minute")
 async def rotate_api_key(
     key_id: int,
-    request: APIKeyRotateRequest,
+    payload: APIKeyRotateRequest,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_active_user)
 ) -> APIKeyCreateResponse:
     """Rotate an API key (revoke old; create new) and return the new key once."""
@@ -350,7 +357,7 @@ async def rotate_api_key(
     result = await api_mgr.rotate_api_key(
         key_id=key_id,
         user_id=int(current_user["id"]),
-        expires_in_days=request.expires_in_days,
+        expires_in_days=payload.expires_in_days,
     )
     return APIKeyCreateResponse(**result)
 
@@ -360,8 +367,10 @@ async def rotate_api_key(
     response_model=MessageResponse,
     dependencies=[Depends(require_api_key_scope("write"))],
 )
+@limiter.limit("10/minute")
 async def revoke_api_key(
     key_id: int,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_active_user)
 ) -> MessageResponse:
     """Revoke an API key for the current user."""

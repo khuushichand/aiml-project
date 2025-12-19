@@ -65,6 +65,10 @@ class ResourceNotFoundError(Exception):
         self.detail = detail
 
 
+class InactiveUserError(Exception):
+    """Raised when an authenticated user account is inactive."""
+
+
 async def video_processing_exception_handler(request: Request, exc: VideoProcessingError):
     return JSONResponse(
         status_code=500,

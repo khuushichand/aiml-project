@@ -330,6 +330,10 @@ async def test_moderation(payload: ModerationTestRequest) -> ModerationTestRespo
             try:
                 _, sanitized_sample = svc.check_text(payload.text, eff)
             except Exception:
+                logger.exception(
+                    "moderation.test: failed to sanitize sample",
+                    extra={"user_id": payload.user_id, "phase": payload.phase},
+                )
                 sanitized_sample = None
         redacted_text = None
         if action == "redact":

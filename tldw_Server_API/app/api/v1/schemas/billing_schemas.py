@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, computed_field
 
 
 # =============================================================================
@@ -152,6 +152,7 @@ class InvoiceResponse(BaseModel):
     invoice_pdf_url: Optional[str] = None
     created_at: Optional[str] = None
 
+    @computed_field
     @property
     def amount_display(self) -> str:
         """Format amount for display."""

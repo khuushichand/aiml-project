@@ -40,15 +40,25 @@ router = APIRouter()
 
 
 def _resolve_document_generator_service():
-    """Allow tests to patch DocumentGeneratorService via chat router."""
+    """
+    Resolve DocumentGeneratorService class, allowing test-time patching.
+
+    Tests can override DocumentGeneratorService by setting it as an attribute
+    on the chat router module. In production, this falls back to the standard
+    import from document_generator.
+
+    Returns:
+        Type[DocumentGeneratorService]: The service class to instantiate.
+    """
     try:
         from tldw_Server_API.app.api.v1.endpoints import chat as chat_router
 
         service_cls = getattr(chat_router, "DocumentGeneratorService", None)
         if service_cls is not None:
+            logger.debug("Using patched DocumentGeneratorService from chat router")
             return service_cls
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Could not load patched DocumentGeneratorService", exc_info=True)
 
     from tldw_Server_API.app.core.Chat.document_generator import DocumentGeneratorService
 

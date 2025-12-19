@@ -4,6 +4,7 @@
 # Imports
 import json
 import os
+import re
 from typing import Optional, Dict, Any, Literal, Union, List
 
 from dotenv import load_dotenv
@@ -222,10 +223,10 @@ def _calculate_json_depth(obj: Any, current_depth: int = 0) -> int:
 def _validate_json_schema_structure(schema: Dict[str, Any], path: str = "root") -> None:
     """
     Basic validation that the schema follows JSON Schema conventions.
-    Raises ValueError if issues are found.
+    Raises ValueError for invalid schema values and TypeError for type mismatches.
     """
     if not isinstance(schema, dict):
-        raise ValueError(f"JSON Schema at '{path}' must be an object, got {type(schema).__name__}")
+        raise TypeError(f"JSON Schema at '{path}' must be an object, got {type(schema).__name__}")
 
     # Validate type field if present
     schema_type = schema.get("type")
@@ -239,16 +240,16 @@ def _validate_json_schema_structure(schema: Dict[str, Any], path: str = "root") 
                 if t not in valid_types:
                     raise ValueError(f"Invalid JSON Schema type '{t}' in type array at '{path}'")
         else:
-            raise ValueError(f"JSON Schema 'type' must be string or array at '{path}'")
+            raise TypeError(f"JSON Schema 'type' must be string or array at '{path}'")
 
     # Validate properties if present
     properties = schema.get("properties")
     if properties is not None:
         if not isinstance(properties, dict):
-            raise ValueError(f"JSON Schema 'properties' must be an object at '{path}'")
+            raise TypeError(f"JSON Schema 'properties' must be an object at '{path}'")
         for prop_name, prop_schema in properties.items():
             if not isinstance(prop_name, str):
-                raise ValueError(f"Property name must be string at '{path}'")
+                raise TypeError(f"Property name must be string at '{path}'")
             if isinstance(prop_schema, dict):
                 _validate_json_schema_structure(prop_schema, f"{path}.properties.{prop_name}")
 
@@ -261,10 +262,10 @@ def _validate_json_schema_structure(schema: Dict[str, Any], path: str = "root") 
     required = schema.get("required")
     if required is not None:
         if not isinstance(required, list):
-            raise ValueError(f"JSON Schema 'required' must be an array at '{path}'")
+            raise TypeError(f"JSON Schema 'required' must be an array at '{path}'")
         for req in required:
             if not isinstance(req, str):
-                raise ValueError(f"JSON Schema 'required' items must be strings at '{path}'")
+                raise TypeError(f"JSON Schema 'required' items must be strings at '{path}'")
 
 
 class FunctionDefinition(BaseModel):
@@ -300,7 +301,7 @@ class FunctionDefinition(BaseModel):
         except (TypeError, ValueError) as e:
             if "maximum size" in str(e):
                 raise
-            raise ValueError(f"Function parameters must be JSON serializable: {e}")
+            raise ValueError(f"Function parameters must be JSON serializable: {e}") from e
 
         # Check nesting depth to prevent stack overflow / DoS
         depth = _calculate_json_depth(v)
@@ -410,7 +411,6 @@ class BaseMessage(BaseModel):
         if v is None:
             return v
         # Allow alphanumeric, underscore, hyphen, period, space
-        import re
         if not re.match(r'^[a-zA-Z0-9_\-. ]+$', v):
             raise ValueError("Name contains invalid characters (allowed: alphanumeric, underscore, hyphen, period, space)")
         return v
@@ -479,7 +479,7 @@ class FunctionCall(BaseModel):
             try:
                 json.loads(v)
             except json.JSONDecodeError as e:
-                raise ValueError(f"Function arguments must be valid JSON: {e}")
+                raise ValueError(f"Function arguments must be valid JSON: {e}") from e
 
         return v
 
@@ -521,7 +521,7 @@ class ToolCallFunctionPayload(BaseModel):
             try:
                 json.loads(v)
             except json.JSONDecodeError as e:
-                raise ValueError(f"Function arguments must be valid JSON: {e}")
+                raise ValueError(f"Function arguments must be valid JSON: {e}") from e
         return v
 
     @field_validator("parameters")
@@ -546,7 +546,6 @@ class ChatCompletionMessageToolCallParam(BaseModel):
     @field_validator("id")
     @classmethod
     def validate_id_format(cls, v: str) -> str:
-        import re
         if not re.match(r'^[a-zA-Z0-9_\-]+$', v):
             raise ValueError("Tool call ID contains invalid characters (allowed: alphanumeric, underscore, hyphen)")
         return v
@@ -606,7 +605,6 @@ class ChatCompletionToolMessageParam(BaseMessage):
     @field_validator("tool_call_id")
     @classmethod
     def validate_tool_call_id_format(cls, v: str) -> str:
-        import re
         if not re.match(r'^[a-zA-Z0-9_\-]+$', v):
             raise ValueError("Tool call ID contains invalid characters (allowed: alphanumeric, underscore, hyphen)")
         return v

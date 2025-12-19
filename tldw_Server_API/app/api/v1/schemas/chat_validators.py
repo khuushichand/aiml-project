@@ -2,6 +2,7 @@
 # Description: Advanced validators for chat request schemas
 #
 # Imports
+import configparser
 import re
 import uuid
 from typing import Any, Optional
@@ -51,7 +52,16 @@ def _get_max_request_size() -> int:
             raw = cfg.get('Chat-Module', 'max_request_size_chars', fallback=None)
             if raw is not None:
                 return max(1, int(raw))
-    except Exception as cfg_err:
+    except (
+        AttributeError,
+        FileNotFoundError,
+        ImportError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        configparser.Error,
+    ) as cfg_err:
         logger.debug(f"Failed to load max_request_size from config: {cfg_err}")
     return 1_000_000
 
@@ -72,6 +82,7 @@ def validate_conversation_id(conversation_id: Optional[str]) -> Optional[str]:
         Validated conversation ID or None
 
     Raises:
+        TypeError: If conversation_id is not a string
         ValueError: If format is invalid
     """
     if conversation_id is None:
@@ -79,7 +90,7 @@ def validate_conversation_id(conversation_id: Optional[str]) -> Optional[str]:
 
     # Type guard
     if not isinstance(conversation_id, str):
-        raise ValueError(f"Conversation ID must be a string, got {type(conversation_id)}")
+        raise TypeError(f"Conversation ID must be a string, got {type(conversation_id).__name__}")
 
     # Check if it's a valid UUID
     try:
@@ -111,6 +122,7 @@ def validate_character_id(character_id: Optional[str]) -> Optional[str]:
         Validated character ID or None
 
     Raises:
+        TypeError: If character_id is not a string
         ValueError: If format is invalid
     """
     if character_id is None:
@@ -118,7 +130,7 @@ def validate_character_id(character_id: Optional[str]) -> Optional[str]:
 
     # Type guard
     if not isinstance(character_id, str):
-        raise ValueError(f"Character ID must be a string, got {type(character_id)}")
+        raise TypeError(f"Character ID must be a string, got {type(character_id).__name__}")
 
     if not CHARACTER_ID_PATTERN.match(character_id):
         # Safe truncation with type guard already applied above
@@ -183,7 +195,6 @@ def validate_tool_definitions(tools: Optional[list]) -> Optional[list]:
             )
 
         # Check size
-        import json
         tool_json = json.dumps(tool)
         if len(tool_json) > MAX_TOOL_DEFINITION_SIZE:
             raise ValueError(
@@ -272,7 +283,7 @@ def _sanitize_value_for_size(value: Any) -> Any:
         if isinstance(value, dict):
             return {k: _sanitize_value_for_size(v) for k, v in value.items()}
         return value
-    except Exception:
+    except (RecursionError, TypeError):
         return value
 
 
@@ -312,10 +323,10 @@ def validate_request_size(request_data: Any) -> bool:
 
     except json.JSONDecodeError as e:
         logger.error(f"JSON error validating request size: {e}")
-        raise ValueError(f"Invalid JSON in request: {str(e)}")
-    except Exception as e:
+        raise ValueError(f"Invalid JSON in request: {str(e)}") from e
+    except (AttributeError, OverflowError, RecursionError, TypeError, ValueError) as e:
         logger.error(f"Error validating request size: {e}")
-        raise ValueError(f"Failed to validate request size: {str(e)}")
+        raise ValueError(f"Failed to validate request size: {str(e)}") from e
 
 
 def validate_stop_sequences(stop: Optional[Any]) -> Optional[Any]:
@@ -374,13 +385,14 @@ def validate_model_name(model: Optional[str]) -> Optional[str]:
         Validated model name or None
 
     Raises:
+        TypeError: If model name is not a string
         ValueError: If model name is invalid
     """
     if model is None:
         return None
 
     if not isinstance(model, str):
-        raise ValueError(f"Model name must be a string, got {type(model)}")
+        raise TypeError(f"Model name must be a string, got {type(model).__name__}")
 
     # Check for empty string
     if not model or not model.strip():
@@ -400,8 +412,7 @@ def validate_model_name(model: Optional[str]) -> Optional[str]:
     # Basic sanity check for model name - allows alphanumeric, underscore, hyphen, period, slash, space
     # Removed colon from allowed characters for security
     if not re.match(r'^[a-zA-Z0-9_\-./ ]+$', model):
-        # Safe truncation with type guard
-        display_model = model[:50] if isinstance(model, str) else str(model)[:50]
+        display_model = model[:50]
         raise ValueError(f"Model name contains invalid characters: {display_model}")
 
     # Reject names that start or end with slash (potential path issues)
@@ -456,13 +467,14 @@ def validate_provider_name(provider: Optional[str], strict: bool = True) -> Opti
         Validated provider name or None
 
     Raises:
+        TypeError: If provider name is not a string
         ValueError: If provider name is invalid or unknown (when strict=True)
     """
     if provider is None:
         return None
 
     if not isinstance(provider, str):
-        raise ValueError(f"Provider name must be a string, got {type(provider)}")
+        raise TypeError(f"Provider name must be a string, got {type(provider).__name__}")
 
     # Length check
     if len(provider) > MAX_PROVIDER_NAME_LENGTH:
@@ -476,7 +488,7 @@ def validate_provider_name(provider: Optional[str], strict: bool = True) -> Opti
         return None
 
     # Character validation - only alphanumeric, hyphen, period, underscore
-    if not re.match(r'^[a-zA-Z0-9_.\-]+$', provider):
+    if not re.match(r'^[a-z0-9_.\-]+$', provider):
         raise ValueError("Provider name contains invalid characters (allowed: alphanumeric, underscore, hyphen, period)")
 
     if provider not in ALLOWED_PROVIDERS:

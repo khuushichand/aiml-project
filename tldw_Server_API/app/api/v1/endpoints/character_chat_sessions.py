@@ -200,18 +200,6 @@ class _BoundedThrottleCache:
             self._last_access[key] = now
             return self._data[key]
 
-    def __getitem__(self, key: str) -> deque:
-        """Synchronous access (for backwards compatibility, not thread-safe)."""
-        now = time.time()
-        # Cleanup if too many keys
-        if len(self._data) > THROTTLE_CACHE_MAX_KEYS:
-            self._cleanup(now)
-        # Create or get entry
-        if key not in self._data:
-            self._data[key] = deque(maxlen=100)
-        self._last_access[key] = now
-        return self._data[key]
-
     def _cleanup(self, now: float) -> None:
         """Remove entries not accessed recently."""
         stale_keys = [
@@ -315,7 +303,7 @@ async def create_chat_session(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Quota enforcement unavailable. Please try again later."
-            )
+            ) from e
 
         # Verify character exists
         character = db.get_character_card_by_id(session_data.character_id)
@@ -793,10 +781,10 @@ async def character_chat_completion(
                     raise HTTPException(
                         status_code=status.HTTP_502_BAD_GATEWAY,
                         detail="LLM provider error"
-                    )
+                    ) from e
             except Exception as e:
                 logger.error(f"Chat provider call failed: {e}")
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Chat provider error")
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Chat provider error") from e
 
         # Helper: Convert a provider chunk into a single SSE-formatted line
         def _coerce_sse_line(chunk: Any) -> Optional[str]:
@@ -1361,7 +1349,7 @@ async def delete_chat_session(
         max_empty_batches = 3  # Stop after consecutive empty batches (indicates completion)
         failed_message_ids: set = set()  # Track messages that failed to delete
 
-        for batch_num in range(max_batches):
+        for _batch_num in range(max_batches):
             # Fetch non-deleted messages only (include_deleted=False is default)
             batch = db.get_messages_for_conversation(chat_id, limit=batch_size, offset=0)
 

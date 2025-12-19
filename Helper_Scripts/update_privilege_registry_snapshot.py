@@ -9,12 +9,25 @@ import json
 import os
 from pathlib import Path
 
+from loguru import logger
+
 
 def _apply_test_env_defaults() -> None:
-    """Align environment with pytest defaults so snapshots match CI expectations."""
+    """Align environment with pytest defaults so snapshots match CI expectations.
+
+    Sets environment flags to mirror test configuration and route scoping:
+    - MINIMAL_TEST_APP: enable minimal app configuration for tests
+    - TEST_MODE: activate test mode behaviors
+    - OTEL_SDK_DISABLED: disable OpenTelemetry instrumentation
+    - ROUTES_DISABLE: ensure "research" and "evaluations" are disabled and
+      remove "notes" if present (parsed from comma/space-delimited values)
+    - ROUTES_ENABLE: ensure "workflows" and "scheduler" are enabled (parsed
+      from comma/space-delimited values)
+    """
     os.environ["MINIMAL_TEST_APP"] = "1"
     os.environ["TEST_MODE"] = "1"
     os.environ["OTEL_SDK_DISABLED"] = "true"
+    logger.debug("Set test environment flags: MINIMAL_TEST_APP, TEST_MODE, OTEL_SDK_DISABLED")
     existing_disable = os.getenv("ROUTES_DISABLE", "")
     disable_parts = [p for p in existing_disable.replace(" ", ",").split(",") if p]
     disable_lower = {p.lower() for p in disable_parts}
@@ -24,6 +37,7 @@ def _apply_test_env_defaults() -> None:
             disable_lower.add(key)
     disable_parts = [p for p in disable_parts if p.lower() != "notes"]
     os.environ["ROUTES_DISABLE"] = ",".join(dict.fromkeys(disable_parts))
+    logger.debug("Set ROUTES_DISABLE={}", os.environ["ROUTES_DISABLE"])
     existing_enable = os.getenv("ROUTES_ENABLE", "")
     parts = [p for p in existing_enable.replace(" ", ",").split(",") if p]
     lower_parts = {p.lower() for p in parts}
@@ -32,6 +46,7 @@ def _apply_test_env_defaults() -> None:
             parts.append(key)
             lower_parts.add(key)
     os.environ["ROUTES_ENABLE"] = ",".join(dict.fromkeys(parts))
+    logger.debug("Set ROUTES_ENABLE={}", os.environ["ROUTES_ENABLE"])
 
 
 def main() -> None:
@@ -50,7 +65,7 @@ def main() -> None:
     snapshot_path = Path("tldw_Server_API/tests/fixtures/privilege_route_registry_snapshot.json")
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.write_text(json.dumps(serialized, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(f"Updated snapshot written to {snapshot_path}")
+    logger.info("Updated snapshot written to {}", snapshot_path)
 
 
 if __name__ == "__main__":

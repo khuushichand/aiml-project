@@ -1332,7 +1332,7 @@ async def create_chat_completion(
             validate_request_size(request_json)
         except ValueError as e:
             logger.warning(f"Input validation error: {e}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
         # Apply rate limiting after slash command mutation so estimates are accurate.
         #

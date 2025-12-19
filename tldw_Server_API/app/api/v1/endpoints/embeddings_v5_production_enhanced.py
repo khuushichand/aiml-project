@@ -1429,7 +1429,7 @@ def guess_provider_for_model(model: str, explicit_provider: Optional[str] = None
 
 def build_provider_config(
     provider: EmbeddingProvider,
-    model: str,
+    model: Optional[str],
     api_key: Optional[str] = None,
     api_url: Optional[str] = None,
     dimensions: Optional[int] = None
@@ -1437,12 +1437,22 @@ def build_provider_config(
     """Build provider-specific configuration"""
 
     if provider == EmbeddingProvider.OPENAI:
-        return {
+        if dimensions is not None:
+            if dimensions <= 0:
+                raise ValueError(f"dimensions must be positive, got {dimensions}")
+            max_dims = {"text-embedding-3-small": 1536, "text-embedding-3-large": 3072}
+            model_key = (model or "").split(":", 1)[-1]
+            max_dim = max_dims.get(model_key)
+            if max_dim is not None and dimensions > max_dim:
+                raise ValueError(f"dimensions {dimensions} exceeds maximum {max_dim} for model {model_key}")
+        config = {
             "provider": "openai",
             "model_name_or_path": model,
             "api_key": api_key or settings.get("OPENAI_API_KEY"),
-            "dimensions": dimensions,
         }
+        if dimensions is not None:
+            config["dimensions"] = dimensions
+        return config
     elif provider == EmbeddingProvider.HUGGINGFACE:
         return {
             "provider": "huggingface",
@@ -1692,13 +1702,19 @@ async def create_embeddings_batch_async(
                 detail=f"Unknown provider: {provider}"
             )
 
-        config = build_provider_config(
-            provider_enum,
-            model_id,
-            api_key,
-            api_url,
-            dimensions
-        )
+        try:
+            config = build_provider_config(
+                provider_enum,
+                model_id,
+                api_key,
+                api_url,
+                dimensions
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
 
         # Process in batches with circuit breaker (or synthesize in test mode for OpenAI)
         all_new_embeddings = []
@@ -1731,9 +1747,13 @@ async def create_embeddings_batch_async(
                         dimensions=dimensions,
                     )
                     if not isinstance(batch_embeddings, list) or len(batch_embeddings) != len(batch_texts):
+                        batch_count = len(batch_embeddings) if isinstance(batch_embeddings, list) else "invalid"
                         raise HTTPException(
                             status_code=status.HTTP_502_BAD_GATEWAY,
-                            detail="Embedding provider returned unexpected number of embeddings",
+                            detail=(
+                                f"Embedding provider returned {batch_count} embeddings, "
+                                f"expected {len(batch_texts)} for batch"
+                            ),
                         )
                     all_new_embeddings.extend(batch_embeddings)
                 except HTTPException:
@@ -1752,7 +1772,10 @@ async def create_embeddings_batch_async(
         if len(all_new_embeddings) != len(uncached_texts):
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Embedding provider returned unexpected number of embeddings",
+                detail=(
+                    f"Embedding provider returned {len(all_new_embeddings)} total embeddings, "
+                    f"expected {len(uncached_texts)}"
+                ),
             )
 
         # Update results and cache

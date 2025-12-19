@@ -126,7 +126,7 @@ class CharacterBase(BaseModel):
                             f"item at index {i} is {type(item).__name__}"
                         )
         elif info.field_name == "extensions":
-            if not isinstance(value, dict) and value is not None:
+            if not isinstance(value, dict):
                 raise ValueError(
                     f"Field 'extensions' must be a dictionary, got {type(value).__name__}"
                 )

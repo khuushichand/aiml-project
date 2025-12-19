@@ -18,7 +18,7 @@ from tldw_Server_API.app.api.v1.API_Deps.Prompts_DB_Deps import (
     _get_prompts_db_path_for_user,
     close_all_cached_prompts_db_instances
 )
-from tldw_Server_API.app.api.v1.endpoints.prompts import verify_token
+from tldw_Server_API.app.api.v1.endpoints.prompts import verify_prompts_auth
 from tldw_Server_API.app.core.DB_Management.Prompts_DB import PromptsDatabase
 from tldw_Server_API.app.core.config import settings
 # Prompt Studio DB
@@ -35,7 +35,7 @@ def test_user():
 
 @pytest.fixture(scope="session")
 def test_api_token():
-    # This should match what your verify_token expects if not mocked away completely
+    # This should match what your verify_prompts_auth expects if not mocked away completely
     return "fixed_test_api_token_for_pytest"
 
 
@@ -45,7 +45,7 @@ def client(test_user, test_api_token):
     def override_get_request_user():
         return test_user
 
-    async def override_verify_token():  # Make it async if original is
+    async def override_verify_prompts_auth():  # Make it async if original is
         return True  # Bypass token check for tests
 
     fml = ("Fuck_temp_test_user_dbs_prompts_api")
@@ -78,7 +78,7 @@ def client(test_user, test_api_token):
 
     setup_test_db_environment()
     fastapi_app.dependency_overrides[get_request_user] = override_get_request_user
-    fastapi_app.dependency_overrides[verify_token] = override_verify_token
+    fastapi_app.dependency_overrides[verify_prompts_auth] = override_verify_prompts_auth
 
     with TestClient(fastapi_app) as c:
         yield c

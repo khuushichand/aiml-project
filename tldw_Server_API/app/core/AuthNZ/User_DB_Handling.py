@@ -24,6 +24,7 @@ from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
+from tldw_Server_API.app.core.exceptions import InactiveUserError
 # Utils
 from loguru import logger
 # API Dependencies
@@ -473,7 +474,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             logger.warning("Authentication attempt by inactive user (details redacted)")
         else:
             logger.warning(f"Authentication attempt by inactive user: {user.username} (ID: {user.id})")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
+        raise InactiveUserError("Inactive user")
 
     # Attach user id for downstream context (usage logging, RBAC rate limits)
     try:
@@ -952,7 +953,13 @@ async def get_request_user(
             logger.debug("get_request_user: Treating Bearer token as API key in single-user mode.")
             return await authenticate_api_key_user(request, token)
         logger.debug("get_request_user: Attempting JWT-based authentication.")
-        user = await verify_jwt_and_fetch_user(request, token)
+        try:
+            user = await verify_jwt_and_fetch_user(request, token)
+        except InactiveUserError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Inactive user",
+            ) from exc
         # verify_jwt_and_fetch_user already sets request.state.auth; cache user for fast-path reuse.
         try:
             request.state._auth_user = user

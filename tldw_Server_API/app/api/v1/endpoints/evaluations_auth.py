@@ -21,6 +21,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, verify_jwt_and_fetch_user
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.exceptions import InactiveUserError
 
 
 security = HTTPBearer(auto_error=False)
@@ -73,7 +74,8 @@ def create_error_response(
 async def verify_api_key(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
-    request: Request = None,
+    *,
+    request: Request,
 ) -> str:
     """Verify API key or JWT token based on auth mode (single_user|multi_user)."""
     settings = get_settings()
@@ -117,9 +119,9 @@ async def verify_api_key(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error": {
-                    "message": "Invalid API key or token",
+                    "message": "Access denied from this network",
                     "type": "authentication_error",
-                    "code": "invalid_credentials",
+                    "code": "ip_not_allowed",
                 }},
             )
 
@@ -187,25 +189,21 @@ async def verify_api_key(
                     "type": "authentication_error",
                     "code": "invalid_token",
                 }},
-            )
+            ) from exc
         try:
-            if request is None:
-                from starlette.requests import Request as _Request
-
-                request = _Request({"type": "http", "headers": []})
             user = await verify_jwt_and_fetch_user(request, token)
             user_id = getattr(user, "id_str", None) or str(getattr(user, "id", ""))
             return f"user_{user_id}"
+        except InactiveUserError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": {
+                    "message": "Inactive user",
+                    "type": "authentication_error",
+                    "code": "inactive_user",
+                }},
+            ) from exc
         except HTTPException as exc:
-            if exc.status_code == status.HTTP_400_BAD_REQUEST and str(exc.detail).lower().startswith("inactive"):
-                raise HTTPException(
-                    status_code=exc.status_code,
-                    detail={"error": {
-                        "message": "Inactive user",
-                        "type": "authentication_error",
-                        "code": "inactive_user",
-                    }},
-                ) from exc
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error": {

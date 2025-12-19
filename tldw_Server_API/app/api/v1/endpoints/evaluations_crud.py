@@ -78,7 +78,7 @@ async def create_evaluation(
                             logger.debug(f"evaluations_crud: failed to set idempotency headers for {existing_id}: {e}")
                         return EvaluationResponse(**existing)
             except Exception as e:
-                logger.debug(f"evaluations_crud: error during pagination counting: {e}")
+                logger.debug(f"evaluations_crud: idempotency lookup failed for key {idempotency_key}: {e}")
         evaluation = await svc.create_evaluation(
             name=eval_request.name,
             description=eval_request.description,
@@ -93,7 +93,9 @@ async def create_evaluation(
             if idempotency_key and evaluation.get("id"):
                 svc.db.record_idempotency("evaluation", idempotency_key, evaluation["id"], user_id)
         except Exception as e:
-            logger.debug(f"evaluations_crud: failed to compute totals: {e}")
+            logger.debug(
+                f"evaluations_crud: failed to record idempotency for evaluation {evaluation.get('id')}: {e}"
+            )
         return EvaluationResponse(**evaluation)
     except Exception as e:
         logger.error(f"Failed to create evaluation: {e}")
@@ -275,11 +277,13 @@ async def create_run(
                             if response is not None:
                                 response.headers["X-Idempotent-Replay"] = "true"
                                 response.headers["Idempotency-Key"] = idempotency_key
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(
+                                f"evaluations_crud: failed to set idempotency headers for {existing_id}: {e}"
+                            )
                         return RunResponse(**existing)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"evaluations_crud: idempotency lookup failed for key {idempotency_key}: {e}")
         target_model = request.target_model
         # Allow free-form config; convert Pydantic models if provided in future
         config = model_dump_compat(request.config) if hasattr(request.config, 'model_dump') else (request.config or {})
@@ -296,8 +300,8 @@ async def create_run(
         try:
             if idempotency_key and run.get("id"):
                 svc.db.record_idempotency("run", idempotency_key, run["id"], user_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"evaluations_crud: failed to record idempotency for run {run.get('id')}: {e}")
         return RunResponse(**run)
     except HTTPException:
         raise

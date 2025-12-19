@@ -680,6 +680,7 @@ Content-Type: application/json
 ```
 
 **Scope Options:**
+
 | Scope | Description |
 |-------|-------------|
 | `personal` | Only user's personal content |
@@ -959,6 +960,10 @@ async def main():
     if preview['is_valid']:
         result = await client.redeem_invite("ABC123XYZ")
         print(f"Joined org {result['org_name']}!")
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
 ```
 
 ---

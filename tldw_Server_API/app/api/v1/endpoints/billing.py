@@ -49,7 +49,10 @@ router = APIRouter(
 )
 
 
-def _require_billing_enabled():
+async def _require_billing_enabled(
+    principal: Optional[AuthPrincipal] = None,
+    org_id: Optional[int] = None,
+):
     """Raise error if billing is not enabled."""
     if not is_billing_enabled():
         raise HTTPException(
@@ -71,6 +74,10 @@ async def _resolve_org_id(principal: AuthPrincipal, org_id: Optional[int]) -> in
 
     Raises:
         HTTPException: If user has no organizations
+
+    Notes:
+        When org_id is omitted, the first organization in the user's membership list is used.
+        Multi-org users should pass org_id explicitly to avoid ambiguity.
     """
     if org_id is not None:
         return org_id
@@ -126,7 +133,10 @@ async def list_plans():
     "/subscription",
     response_model=OrgSubscriptionResponse,
     summary="Get subscription status",
-    description="Get the current subscription status for the organization.",
+    description=(
+        "Get the current subscription status for the organization. "
+        "Uses X-TLDW-Org-Id when provided; otherwise defaults to the first organization in your membership list."
+    ),
 )
 async def get_subscription(
     org_id: Optional[int] = Depends(get_active_org_id),
@@ -158,7 +168,10 @@ async def get_subscription(
     "/usage",
     response_model=SubscriptionUsageResponse,
     summary="Get usage vs limits",
-    description="Get current usage compared to subscription limits.",
+    description=(
+        "Get current usage compared to subscription limits. "
+        "Uses X-TLDW-Org-Id when provided; otherwise defaults to the first organization in your membership list."
+    ),
 )
 async def get_usage(
     org_id: Optional[int] = Depends(get_active_org_id),
@@ -180,7 +193,7 @@ async def get_usage(
     current_usage = {
         "api_calls_day": usage_summary.api_calls_today,
         "llm_tokens_month": usage_summary.llm_tokens_month,
-        "storage_mb": usage_summary.storage_bytes // (1024 ** 2),  # Convert bytes to MB
+        "storage_mb": round(usage_summary.storage_bytes / (1024 ** 2), 2),  # Convert bytes to MB
         "team_members": usage_summary.team_members,
     }
 
@@ -204,7 +217,10 @@ async def get_usage(
     description="Debug endpoint: current day's RAG queries vs plan limit for the organization.",
 )
 async def get_rag_usage_debug(
-    org_id: Optional[int] = Query(None, description="Organization ID (defaults to user's primary org)"),
+    org_id: Optional[int] = Query(
+        None,
+        description="Organization ID (defaults to the first organization in your membership list)",
+    ),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """Debug view of RAG usage vs daily limit for an organization."""
@@ -245,11 +261,14 @@ async def get_rag_usage_debug(
 )
 async def create_checkout(
     body: CheckoutRequest,
-    org_id: Optional[int] = Query(None, description="Organization ID"),
+    org_id: Optional[int] = Query(
+        None,
+        description="Organization ID (defaults to the first organization in your membership list)",
+    ),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """Create a Stripe checkout session for subscription upgrade."""
-    _require_billing_enabled()
+    await _require_billing_enabled()
     org_id = await _resolve_org_id(principal, org_id)
 
     # Verify user has billing permissions (owner or admin)
@@ -282,10 +301,10 @@ async def create_checkout(
         )
     except ValueError as e:
         logger.warning(f"Checkout failed for org_id={org_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except RuntimeError as e:
         logger.error(f"Checkout service error for org_id={org_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)) from e
 
 
 @router.post(
@@ -296,11 +315,14 @@ async def create_checkout(
 )
 async def create_portal(
     body: PortalRequest,
-    org_id: Optional[int] = Query(None, description="Organization ID"),
+    org_id: Optional[int] = Query(
+        None,
+        description="Organization ID (defaults to the first organization in your membership list)",
+    ),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """Create a Stripe billing portal session."""
-    _require_billing_enabled()
+    await _require_billing_enabled()
     org_id = await _resolve_org_id(principal, org_id)
 
     # Verify billing permissions
@@ -325,9 +347,9 @@ async def create_portal(
             url=session.url,
         )
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)) from e
 
 
 # =============================================================================
@@ -343,11 +365,14 @@ async def create_portal(
 async def cancel_subscription(
     body: CancelSubscriptionRequest,
     request: Request,
-    org_id: Optional[int] = Query(None, description="Organization ID"),
+    org_id: Optional[int] = Query(
+        None,
+        description="Organization ID (defaults to the first organization in your membership list)",
+    ),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """Cancel the organization's subscription."""
-    _require_billing_enabled()
+    await _require_billing_enabled()
     org_id = await _resolve_org_id(principal, org_id)
 
     # Verify owner role
@@ -378,7 +403,7 @@ async def cancel_subscription(
         )
     except ValueError as e:
         logger.warning(f"Cancel subscription failed for org_id={org_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
 
 @router.post(
@@ -388,11 +413,14 @@ async def cancel_subscription(
     description="Resume a subscription that was set to cancel.",
 )
 async def resume_subscription(
-    org_id: Optional[int] = Query(None, description="Organization ID"),
+    org_id: Optional[int] = Query(
+        None,
+        description="Organization ID (defaults to the first organization in your membership list)",
+    ),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """Resume a subscription that was set to cancel at period end."""
-    _require_billing_enabled()
+    await _require_billing_enabled()
     org_id = await _resolve_org_id(principal, org_id)
 
     # Verify owner role
@@ -413,7 +441,7 @@ async def resume_subscription(
         return ResumeSubscriptionResponse(resumed=True)
     except ValueError as e:
         logger.warning(f"Resume subscription failed for org_id={org_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
 
 # =============================================================================
@@ -427,13 +455,17 @@ async def resume_subscription(
     description="List payment/invoice history for the organization.",
 )
 async def list_invoices(
-    org_id: Optional[int] = Query(None, description="Organization ID"),
+    org_id: Optional[int] = Query(
+        None,
+        description="Organization ID (defaults to the first organization in your membership list)",
+    ),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """List invoice history for an organization."""
     org_id = await _resolve_org_id(principal, org_id)
+    await _require_billing_enabled(principal, org_id)
 
     # Verify billing view permissions
     from tldw_Server_API.app.api.v1.API_Deps.org_deps import _get_user_org_membership

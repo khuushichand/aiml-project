@@ -3,26 +3,18 @@
 #
 # Imports
 import base64
-import json
 import pathlib
 from datetime import datetime
-from typing import List, Union, Any, Dict, Optional, Tuple
+from typing import List, Any, Dict, Optional, Tuple
 #
 # Third-party Libraries
-from fastapi import HTTPException, Depends, Query, UploadFile, File, APIRouter, Path as FastAPIPath, Body
+from fastapi import HTTPException, Depends, Query, UploadFile, File, APIRouter, Path as FastAPIPath
 from loguru import logger
 from starlette import status
 
 # Constants for file upload validation
 MAX_CHARACTER_FILE_SIZE = 10 * 1024 * 1024  # 10MB max file size
-ALLOWED_EXTENSIONS = frozenset({".png", ".webp", ".json", ".yaml", ".yml", ".txt", ".md"})
-
-# Magic bytes for MIME type detection (more reliable than extension)
-_MAGIC_BYTES: Dict[bytes, str] = {
-    b'\x89PNG\r\n\x1a\n': 'image/png',  # PNG signature
-    b'RIFF': 'image/webp',  # WebP starts with RIFF (need to check 'WEBP' at offset 8)
-}
-
+ALLOWED_EXTENSIONS = frozenset({".png", ".webp", ".jpeg", ".jpg", ".json", ".yaml", ".yml", ".txt", ".md"})
 
 def _detect_mime_type(data: bytes) -> Optional[str]:
     """
@@ -160,6 +152,42 @@ def _convert_db_char_to_response_model(char_dict_from_db: Dict[str, Any]) -> Cha
     return CharacterResponse.model_validate(response_data)
 
 
+def _build_conflict_import_response(
+    error: ConflictError,
+    db: CharactersRAGDB,
+) -> Optional[CharacterImportResponse]:
+    existing_id: Optional[int] = None
+    try:
+        entity_id = getattr(error, "entity_id", None)
+        if isinstance(entity_id, int):
+            existing_id = entity_id
+        elif isinstance(entity_id, str) and entity_id.strip():
+            existing_char_obj = db.get_character_card_by_name(entity_id)
+            if existing_char_obj:
+                try:
+                    existing_id = int(existing_char_obj.get("id"))
+                except (TypeError, ValueError) as exc:
+                    logger.debug(f"Invalid conflict character id from name lookup: {exc}")
+    except Exception as exc:
+        logger.debug(f"Failed to resolve conflict character id: {exc}")
+        return None
+    if not existing_id:
+        return None
+    existing_char_db = db.get_character_card_by_id(existing_id)
+    if not existing_char_db:
+        return None
+    existing_name = existing_char_db.get("name", "Unknown")
+    return CharacterImportResponse(
+        id=existing_id,
+        name=existing_name,
+        message=(
+            f"Character '{existing_name}' already exists (ID: {existing_id}). "
+            "Details provided."
+        ),
+        character=_convert_db_char_to_response_model(existing_char_db),
+    )
+
+
 # --- API Endpoints ---
 
 @router.post("/import", response_model=CharacterImportResponse,
@@ -227,7 +255,7 @@ async def import_character_endpoint(
 
         logger.info(f"API: Importing character from file: {character_file.filename}")
 
-        # Use the detected type from validation, with fallback to extension-based inference
+        # Use the detected type from validation
         inferred_type = detected_type
 
         success, message, char_id = import_and_save_character_from_file(
@@ -265,20 +293,9 @@ async def import_character_endpoint(
         # Try to retrieve the conflicting character if the error message provides enough info or if the lib returned an ID
         # This part needs careful alignment with how `import_and_save_character_from_file` signals "already exists"
         # If it returns the existing ID, then the initial `char_id` would be that.
-        existing_char_id_from_conflict = None
-        if hasattr(e, 'entity_id') and isinstance(e.entity_id, int):  # If ConflictError has the ID
-            existing_char_id_from_conflict = e.entity_id
-        elif isinstance(e.entity_id, str):  # If entity_id is the name
-            existing_char_obj = db.get_character_card_by_name(e.entity_id)
-            if existing_char_obj: existing_char_id_from_conflict = existing_char_obj['id']
-
-        if existing_char_id_from_conflict:
-            existing_char_db = db.get_character_card_by_id(existing_char_id_from_conflict)
-            if existing_char_db:
-                return CharacterImportResponse(
-                    message=f"Character '{existing_char_db['name']}' already exists (ID: {existing_char_id_from_conflict}). Details provided.",
-                    character=_convert_db_char_to_response_model(existing_char_db)
-                )  # Consider HTTP 200 OK for this case
+        conflict_response = _build_conflict_import_response(e, db)
+        if conflict_response:
+            return conflict_response  # Consider HTTP 200 OK for this case
 
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 

@@ -828,7 +828,10 @@ async def update_source(
         try:
             db.set_source_groups(source_id, group_ids)
         except Exception:
-            pass
+            logger.exception(
+                "watchlists.update_source: failed to set source groups "
+                f"(source_id={source_id}, group_ids={group_ids})"
+            )
     return Source(
         id=row.id,
         name=row.name,
@@ -1353,7 +1356,8 @@ async def preview_job(
                     except Exception:
                         cfg = {}
                     per_items = await fetch_site_items_with_rules(str(src.url), rules=cfg.get("scrape_rules") or {})
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"preview_job: fetch failed for source {src.id}: {exc}")
             per_items = []
 
         if per_items and len(per_items) > per_source:

@@ -7,15 +7,15 @@ Provides role-based access control for self-service org management.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
-from fastapi import Depends, Header, HTTPException, Query, Request, status
+from fastapi import Depends, Header, HTTPException, Query, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 
 
 @dataclass
@@ -67,11 +67,7 @@ async def _get_user_team_membership(
     """Get a user's membership in a team."""
     db_pool = await get_db_pool()
     repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
-    members = await repo.list_team_members(team_id)
-    for member in members:
-        if member.get("user_id") == user_id:
-            return member
-    return None
+    return await repo.get_team_member(team_id, user_id)
 
 
 def require_org_role(*allowed_roles: str):
@@ -93,7 +89,6 @@ def require_org_role(*allowed_roles: str):
             ...
     """
     async def _checker(
-        request: Request,
         org_id: int,
         principal: AuthPrincipal = Depends(get_auth_principal),
     ) -> OrgContext:
@@ -169,7 +164,6 @@ def require_team_role(*allowed_roles: str):
         Dependency function returning TeamContext.
     """
     async def _checker(
-        request: Request,
         org_id: int,
         team_id: int,
         principal: AuthPrincipal = Depends(get_auth_principal),
@@ -256,7 +250,6 @@ async def get_user_orgs(
 
 
 async def get_active_org_id(
-    request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
     x_tldw_org_id: Optional[int] = Header(None, alias="X-TLDW-Org-Id"),
     org_id: Optional[int] = Query(None, description="Organization ID (optional)"),

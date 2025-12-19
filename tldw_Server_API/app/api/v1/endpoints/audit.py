@@ -59,12 +59,13 @@ def _parse_dt(val: Optional[str], *, field_name: str) -> Optional[datetime]:
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
+    except (ValueError, AttributeError) as e:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid {field_name}; expected ISO8601 timestamp (e.g. 2025-01-01T00:00:00Z)",
-        )
+        ) from e
+    else:
+        return dt
 
 
 def _map_event_types(values: Optional[List[str]] | Optional[str]) -> Optional[List[AuditEventType]]:
