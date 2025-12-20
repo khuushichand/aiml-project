@@ -1,5 +1,6 @@
 import builtins
 import tempfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -119,6 +120,56 @@ def test_safe_read_file_handles_empty_decodes(monkeypatch):
 
     assert isinstance(result, str)
     assert "Unable to decode" in result
+
+
+def test_download_file_checksum_mismatch_cleans_up(monkeypatch, tmp_path):
+    dest = tmp_path / "file.bin"
+
+    def fake_download(*, url, dest, resume=False, retry=None, **_kwargs):
+        Path(dest).write_bytes(b"bad-content")
+        return Path(dest)
+
+    monkeypatch.setattr(Utils, "download", fake_download)
+
+    with pytest.raises(ValueError):
+        Utils.download_file(
+            "https://example.com/file.bin",
+            str(dest),
+            expected_checksum="0" * 64,
+        )
+
+    assert not dest.exists()
+
+
+def test_zip_validator_rejects_windows_traversal(tmp_path):
+    zip_path = tmp_path / "bad.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("..\\evil.txt", "bad")
+
+    is_valid, error, _ = Utils.ZipValidator.validate_zip_file(str(zip_path))
+
+    assert is_valid is False
+    assert "Invalid file paths detected" in error
+
+
+def test_sanitize_filename_fallback_for_empty_input():
+    sanitized = Utils.sanitize_filename('<>:"/\\|?*')
+
+    assert sanitized == "untitled"
+
+
+def test_format_metadata_as_text_accepts_duration_string():
+    metadata = {"duration": "01:02:03"}
+
+    text = Utils.format_metadata_as_text(metadata)
+
+    assert "Duration: 01:02:03" in text
+
+
+def test_extract_media_id_strips_trailing_punctuation():
+    msg = "Success. Media ID: abc123."
+
+    assert Utils.extract_media_id_from_result_string(msg) == "abc123"
 
 
 def test_decide_cpugpu_defaults_on_eof(monkeypatch):

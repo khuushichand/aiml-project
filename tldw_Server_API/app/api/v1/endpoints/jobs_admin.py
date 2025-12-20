@@ -855,8 +855,7 @@ async def stream_job_events(
                         except Exception:
                             attrs_obj = {}
                         # Preserve SSE id line for clients using Last-Event-ID
-                        await stream.send_raw_sse_line(f"id: {eid}")
-                        await stream.send_event("job", {"event": et, "attrs": attrs_obj})
+                        await stream.send_event("job", {"event": et, "attrs": attrs_obj}, event_id=str(eid))
                         try:
                             _reg.set_gauge(
                                 "jobs_events_last_ts_seconds",

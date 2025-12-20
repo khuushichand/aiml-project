@@ -66,6 +66,21 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             except Exception:
                 logger.debug("PyThaiNLP not available; using regex fallback for Thai")
 
+    def set_language(self, language: str) -> None:
+        if language == self.language:
+            return
+        self.language = language
+        self.pythainlp_available = False
+        self._th_sent_tokenize = None
+        if self.language == 'th':
+            try:
+                from pythainlp.tokenize import sent_tokenize as _th_sent_tokenize  # type: ignore
+                self._th_sent_tokenize = _th_sent_tokenize
+                self.pythainlp_available = True
+                logger.debug("PyThaiNLP available for Thai sentence segmentation")
+            except Exception:
+                logger.debug("PyThaiNLP not available; using regex fallback for Thai")
+
     def chunk(self,
               text: str,
               max_size: int,
@@ -144,8 +159,9 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                     idx = text.find(s, pos)
                     if idx == -1:
                         idx = pos
-                    spans.append((s, idx, idx + len(s)))
-                    pos = idx + len(s)
+                    end = min(idx + len(s), len(text))  # Bounds check
+                    spans.append((s, idx, end))
+                    pos = end
                 if spans:
                     return spans
             except Exception:
@@ -163,8 +179,9 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                     idx = text.find(s, pos)
                     if idx == -1:
                         idx = pos
-                    spans.append((s, idx, idx + len(s)))
-                    pos = idx + len(s)
+                    end = min(idx + len(s), len(text))  # Bounds check
+                    spans.append((s, idx, end))
+                    pos = end
                 return spans
             except Exception:
                 pass
@@ -188,7 +205,7 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
                 if cur_txt:
                     sent = cur_txt + part
                     start = cur_start
-                    end = pos + len(part)
+                    end = min(pos + len(part), len(text))  # Bounds check
                     spans.append((sent.strip(), start, end))
                     cur_txt = ""
                     cur_start = end
@@ -196,7 +213,9 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
             else:
                 if not cur_txt:
                     # Trim leading whitespace for the new sentence and adjust start
-                    lstripped = part.lstrip(" \t\r\f\v")
+                    # Use Unicode-aware whitespace stripping for proper offset calculation
+                    import unicodedata
+                    lstripped = part.lstrip()  # Unicode-aware whitespace strip
                     ltrim = len(part) - len(lstripped)
                     cur_start = pos + ltrim
                     cur_txt += lstripped
@@ -206,8 +225,11 @@ class SentenceChunkingStrategy(BaseChunkingStrategy):
         if cur_txt.strip():
             stripped = cur_txt.strip()
             # Adjust start to match stripped content if leading whitespace remained
-            adjust = len(cur_txt) - len(cur_txt.lstrip(" \t\r\f\v"))
-            spans.append((stripped, cur_start + adjust, cur_start + adjust + len(stripped)))
+            # Use Unicode-aware whitespace stripping for proper offset calculation
+            adjust = len(cur_txt) - len(cur_txt.lstrip())
+            start = cur_start + adjust
+            end = min(start + len(stripped), len(text))  # Bounds check
+            spans.append((stripped, start, end))
         return spans
 
     def _split_with_pysbd(self, text: str) -> List[str]:

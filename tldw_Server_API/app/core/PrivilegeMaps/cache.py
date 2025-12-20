@@ -79,13 +79,19 @@ class DistributedPrivilegeCache:
             return None
         try:
             parsed = json.loads(payload)
-            decoded = parsed.get("payload", parsed)
-            redis_ttl = parsed.get("ttl")
+            if isinstance(parsed, dict):
+                decoded = parsed.get("payload", parsed)
+                redis_ttl = parsed.get("ttl")
+            else:
+                decoded = parsed
+                redis_ttl = None
             if redis_ttl is not None:
                 try:
                     self._redis_ttl = int(redis_ttl)
                 except Exception:
-                    pass
+                    self._redis_ttl = None
+            else:
+                self._redis_ttl = None
         except Exception as exc:
             logger.debug("Privilege cache redis payload decode failed: %s", exc)
             self._record_miss(layer="backend")

@@ -182,7 +182,8 @@ class SandboxService:
 
             async def _alog() -> None:
                 svc = UnifiedAuditService(db_path=str(db_path) if db_path else None)
-                await svc.initialize()
+                # One-off audit emission: avoid spawning background tasks.
+                await svc.initialize(start_background_tasks=False)
                 try:
                     ctx = AuditContext(
                         user_id=(str(user_id) if user_id is not None else None),

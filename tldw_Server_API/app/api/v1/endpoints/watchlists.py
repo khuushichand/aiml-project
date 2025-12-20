@@ -694,20 +694,29 @@ async def import_sources_opml(
             items.append(SourcesImportItem(url="", name=e.name, status="error", error="missing_url"))
             errors += 1
             continue
+        url_str = e.url
+        if _is_youtube_url(url_str) and not _is_youtube_feed_url(url_str):
+            normalized = _normalize_youtube_feed_url(url_str)
+            if normalized:
+                url_str = normalized
+            else:
+                items.append(SourcesImportItem(url=e.url, name=e.name, status="error", error="invalid_youtube_rss_url"))
+                errors += 1
+                continue
         try:
             row = db.create_source(
                 name=e.name or e.url,
-                url=e.url,
+                url=url_str,
                 source_type="rss",
                 active=bool(active),
                 settings_json=None,
                 tags=default_tags,
                 group_ids=([group_id] if group_id else []),
             )
-            items.append(SourcesImportItem(url=e.url, name=row.name, id=row.id, status="created"))
+            items.append(SourcesImportItem(url=url_str, name=row.name, id=row.id, status="created"))
             created += 1
         except Exception as exc:
-            items.append(SourcesImportItem(url=e.url, name=e.name, status="skipped", error=str(exc)))
+            items.append(SourcesImportItem(url=url_str, name=e.name, status="skipped", error=str(exc)))
             skipped += 1
     # Best-effort rate-limit header
     if not _limits_disabled_now():
@@ -798,6 +807,7 @@ async def update_source(
         else:
             _validate_youtube_feed_or_raise(target_url, target_type)
     patch = payload.model_dump(exclude_unset=True)
+    group_ids = patch.pop("group_ids", None)
     if "settings" in patch:
         patch["settings_json"] = json.dumps(patch.pop("settings")) if patch.get("settings") is not None else None
     # Coerce pydantic types to primitives for DB layer
@@ -814,6 +824,14 @@ async def update_source(
             row.tags = tags  # type: ignore[attr-defined]
         except Exception:
             pass
+    if group_ids is not None:
+        try:
+            db.set_source_groups(source_id, group_ids)
+        except Exception:
+            logger.exception(
+                "watchlists.update_source: failed to set source groups "
+                f"(source_id={source_id}, group_ids={group_ids})"
+            )
     return Source(
         id=row.id,
         name=row.name,
@@ -975,7 +993,7 @@ async def bulk_create_sources(
         try:
             row = db.create_source(
                 name=s.name,
-                url=url_str if ('url_str' in locals()) else str(s.url),
+                url=url_str,
                 source_type=str(s.source_type),
                 active=s.active,
                 settings_json=(json.dumps(s.settings) if s.settings else None),
@@ -1337,9 +1355,13 @@ async def preview_job(
                         cfg = json.loads(src.settings_json or "{}") if getattr(src, "settings_json", None) else {}
                     except Exception:
                         cfg = {}
-                    per_items = await fetch_site_items_with_rules(str(src.url), rules=cfg.get("scrape_rules") or {}, limit=per_source)
-        except Exception:
+                    per_items = await fetch_site_items_with_rules(str(src.url), rules=cfg.get("scrape_rules") or {})
+        except Exception as exc:
+            logger.debug(f"preview_job: fetch failed for source {src.id}: {exc}")
             per_items = []
+
+        if per_items and len(per_items) > per_source:
+            per_items = per_items[:per_source]
 
         taken = 0
         for it in per_items:

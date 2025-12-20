@@ -239,7 +239,8 @@ def measure_latency(
                     name=histogram_name,
                     type=MetricType.HISTOGRAM,
                     description=f"Latency for {func.__module__}.{func.__name__}",
-                    unit="s"
+                    unit="s",
+                    buckets=buckets
                 ))
         except Exception:
             pass
@@ -439,6 +440,16 @@ def monitor_resource(
                         name=count_metric,
                         type=MetricType.GAUGE,
                         description=f"Active count for resource {resource_name}",
+                        labels=["resource"],
+                    )
+                )
+            if track_usage and usage_metric not in registry.metrics:
+                registry.register_metric(
+                    MetricDefinition(
+                        name=usage_metric,
+                        type=MetricType.HISTOGRAM,
+                        description=f"Usage duration for resource {resource_name}",
+                        unit="s",
                         labels=["resource"],
                     )
                 )

@@ -54,6 +54,10 @@ def platform_check():
 # Check for NVIDIA GPU and CUDA availability
 def cuda_check():
     global processing_choice
+    if "CUDA_VISIBLE_DEVICES" in os.environ:
+        logging.info(f"CUDA_VISIBLE_DEVICES is set: {os.environ['CUDA_VISIBLE_DEVICES']}")
+    else:
+        logging.info("CUDA_VISIBLE_DEVICES not set.")
     try:
         # Run nvidia-smi to capture its output
         nvidia_smi_output = subprocess.check_output("nvidia-smi", shell=True).decode()
@@ -79,12 +83,6 @@ def cuda_check():
         logging.error(f"An error occurred during CUDA detection: {str(e)}")
         processing_choice = "cpu"
         return False
-
-    # Optionally, check for the CUDA_VISIBLE_DEVICES env variable as an additional check
-    if "CUDA_VISIBLE_DEVICES" in os.environ:
-        logging.info(f"CUDA_VISIBLE_DEVICES is set: {os.environ['CUDA_VISIBLE_DEVICES']}")
-    else:
-        logging.info("CUDA_VISIBLE_DEVICES not set.")
 
 
 # Ask user if they would like to use either their GPU or their CPU for transcription

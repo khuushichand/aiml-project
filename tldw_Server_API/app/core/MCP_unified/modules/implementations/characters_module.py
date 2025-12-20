@@ -99,16 +99,46 @@ class CharactersModule(BaseModule):
         offset: int = int(args.get("offset", 0))
         snippet_len: int = int(args.get("snippet_length", 300))
         db = self._open_db(context)
-        rows = db.search_character_cards(query, limit=limit + offset)
-        rows = rows[offset: offset + limit]
-        out = []
-        for r in rows:
-            desc = r.get("description") or r.get("system_prompt") or ""
-            out.append({
+        try:
+            rows = db.search_character_cards(query, limit=limit + offset)
+            rows = rows[offset: offset + limit]
+            out = []
+            for r in rows:
+                desc = r.get("description") or r.get("system_prompt") or ""
+                out.append({
+                    "id": r.get("id"),
+                    "source": "characters",
+                    "title": r.get("name"),
+                    "snippet": " ".join(desc.split())[:snippet_len],
+                    "uri": f"characters://{r.get('id')}",
+                    "score": 1.0,
+                    "score_type": "fts",
+                    "created_at": r.get("created_at"),
+                    "last_modified": r.get("last_modified"),
+                    "version": r.get("version"),
+                    "tags": None,
+                    "loc": None,
+                })
+            return {"results": out, "has_more": False, "next_offset": None, "total_estimated": len(out) + offset}
+        finally:
+            try:
+                db.close_all_connections()
+            except Exception as exc:
+                logger.debug("Failed to close ChaChaNotes DB connections after characters search: {}", exc)
+
+    async def _get(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+        character_id: int = int(args.get("character_id"))
+        db = self._open_db(context)
+        try:
+            r = db.get_character_card_by_id(character_id)
+            if not r:
+                raise ValueError(f"Character not found: {character_id}")
+            desc = r.get("description") or ""
+            meta = {
                 "id": r.get("id"),
                 "source": "characters",
                 "title": r.get("name"),
-                "snippet": " ".join(desc.split())[:snippet_len],
+                "snippet": " ".join(desc.split())[:300],
                 "uri": f"characters://{r.get('id')}",
                 "score": 1.0,
                 "score_type": "fts",
@@ -117,33 +147,15 @@ class CharactersModule(BaseModule):
                 "version": r.get("version"),
                 "tags": None,
                 "loc": None,
-            })
-        return {"results": out, "has_more": False, "next_offset": None, "total_estimated": len(out) + offset}
-
-    async def _get(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
-        character_id: int = int(args.get("character_id"))
-        db = self._open_db(context)
-        r = db.get_character_card_by_id(character_id)
-        if not r:
-            raise ValueError(f"Character not found: {character_id}")
-        desc = r.get("description") or ""
-        meta = {
-            "id": r.get("id"),
-            "source": "characters",
-            "title": r.get("name"),
-            "snippet": " ".join(desc.split())[:300],
-            "uri": f"characters://{r.get('id')}",
-            "score": 1.0,
-            "score_type": "fts",
-            "created_at": r.get("created_at"),
-            "last_modified": r.get("last_modified"),
-            "version": r.get("version"),
-            "tags": None,
-            "loc": None,
-        }
-        # content as a dict with important fields
-        content = {
-            k: r.get(k)
-            for k in ("name", "description", "personality", "scenario", "system_prompt")
-        }
-        return {"meta": meta, "content": content, "attachments": None}
+            }
+            # content as a dict with important fields
+            content = {
+                k: r.get(k)
+                for k in ("name", "description", "personality", "scenario", "system_prompt")
+            }
+            return {"meta": meta, "content": content, "attachments": None}
+        finally:
+            try:
+                db.close_all_connections()
+            except Exception as exc:
+                logger.debug("Failed to close ChaChaNotes DB connections after characters get: {}", exc)

@@ -169,7 +169,8 @@ class WebScrapingService:
                     url_input, effective_max_pages, summarize_checkbox,
                     custom_prompt, api_name, api_key, keywords,
                     system_prompt, temperature, job_priority,
-                    custom_cookies, user_agent, custom_headers
+                    custom_cookies, user_agent, custom_headers,
+                    task_id=task_id,
                 )
 
             elif scrape_method == "URL Level":
@@ -183,6 +184,7 @@ class WebScrapingService:
                     include_external=eff_include_external,
                     score_threshold=eff_score_threshold,
                     crawl_strategy=eff_strategy,
+                    task_id=task_id,
                 )
 
             elif scrape_method == "Recursive Scraping":
@@ -194,6 +196,7 @@ class WebScrapingService:
                     include_external=eff_include_external,
                     score_threshold=eff_score_threshold,
                     crawl_strategy=eff_strategy,
+                    task_id=task_id,
                 )
 
             else:
@@ -214,9 +217,12 @@ class WebScrapingService:
 
             # Process results based on mode
             if mode == "ephemeral":
-                return await self._store_ephemeral(result, task_id, user_id)
+                stored = await self._store_ephemeral(result, task_id, user_id)
             else:
-                return await self._store_persistent(result, keywords, user_id)
+                stored = await self._store_persistent(result, keywords, user_id)
+                if isinstance(stored, dict):
+                    stored["task_id"] = task_id
+            return stored
 
         except Exception as e:
             logger.error(f"Web scraping task failed: {e}")
@@ -288,7 +294,9 @@ class WebScrapingService:
         temperature: float, priority: JobPriority,
         custom_cookies: Optional[List[Dict[str, Any]]],
         user_agent: Optional[str],
-        custom_headers: Optional[Dict[str, str]]
+        custom_headers: Optional[Dict[str, str]],
+        *,
+        task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Scrape from sitemap with filtering"""
         # Check if scraper is available
@@ -303,7 +311,8 @@ class WebScrapingService:
             max_urls=max_pages,
             custom_cookies=custom_cookies,
             user_agent=user_agent,
-            custom_headers=custom_headers
+            custom_headers=custom_headers,
+            task_id=task_id,
         )
 
         # Add summarization if requested
@@ -338,6 +347,7 @@ class WebScrapingService:
         include_external: Optional[bool] = None,
         score_threshold: Optional[float] = None,
         crawl_strategy: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Scrape by URL level"""
         # Define URL level filter
@@ -358,6 +368,7 @@ class WebScrapingService:
             include_external_override=include_external,
             score_threshold_override=score_threshold,
             crawl_strategy=crawl_strategy,
+            task_id=task_id,
         )
 
         # Add summarization if requested
@@ -392,10 +403,12 @@ class WebScrapingService:
         include_external: Optional[bool] = None,
         score_threshold: Optional[float] = None,
         crawl_strategy: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Recursive scraping with progress tracking"""
         # Create progress file for resumability
         progress_file = Path(f"./scrape_progress_{uuid.uuid4().hex[:8]}.json")
+        progress_key = task_id or "recursive_scrape"
 
         try:
             # Perform recursive scrape
@@ -410,6 +423,7 @@ class WebScrapingService:
                 include_external_override=include_external,
                 score_threshold_override=score_threshold,
                 crawl_strategy=crawl_strategy,
+                task_id=task_id,
             )
 
             # Add summarization if requested
@@ -424,7 +438,7 @@ class WebScrapingService:
                         result['summary'] = summary
 
             # Save final progress
-            await self.scraper.save_progress('recursive_scrape', progress_file)
+            await self.scraper.save_progress(progress_key, progress_file)
 
             return {
                 "method": "Recursive Scraping",
@@ -437,7 +451,7 @@ class WebScrapingService:
 
         except Exception as e:
             # Save progress on error for resumability
-            await self.scraper.save_progress('recursive_scrape', progress_file)
+            await self.scraper.save_progress(progress_key, progress_file)
             raise
 
     async def _summarize_content(

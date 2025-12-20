@@ -1337,9 +1337,7 @@ def summarize_with_huggingface(api_key, input_data, custom_prompt_arg, temp=None
         # Final check to ensure we have a valid API key
         if not huggingface_api_key or not huggingface_api_key.strip():
             logging.error("HuggingFace: No valid API key available")
-            # You might want to raise an exception here or handle this case as appropriate for your application
-            # FIXME
-            # For example: raise ValueError("No valid Anthropic API key available")
+            raise ValueError("HuggingFace: API key is required for summarization")
 
         logging.debug("HuggingFace: Using configured API key")
 

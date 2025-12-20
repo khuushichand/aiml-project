@@ -453,7 +453,12 @@ class SQLiteBackend(QueueBackend):
         Avoids N+1 query pattern.
         """
         # Step 1: Get all queued tasks in a single query
-        query = "SELECT id, depends_on FROM tasks WHERE status = 'queued'"
+        query = (
+            "SELECT id, depends_on FROM tasks "
+            "WHERE status = 'queued' "
+            "AND (scheduled_at IS NULL OR scheduled_at <= datetime('now')) "
+            "AND (expires_at IS NULL OR expires_at > datetime('now'))"
+        )
         params = []
         if queue_name:
             query += " AND queue_name = ?"

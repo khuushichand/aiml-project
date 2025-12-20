@@ -10,7 +10,7 @@ from html import unescape
 import random
 import re
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TypedDict
 from urllib.parse import urlparse, urlencode, unquote
 #
 # 3rd-Party Imports
@@ -103,6 +103,46 @@ class _SimpleCircuitBreaker:
             self.fail_count = 0
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+#
+#
+def summarize(
+    input_data: str,
+    custom_prompt_arg: Optional[str] = None,
+    api_name: Optional[str] = None,
+    api_key: Optional[str] = None,
+    temp: float = 0.7,
+    system_message: Optional[str] = None,
+    streaming: bool = False,
+    **extra_kwargs: Any,
+) -> str:
+    """
+    Backwards-compatible summarization helper to keep monkeypatch-based tests working.
+
+    All parameters map directly onto :func:`analyze`.
+    """
+    return analyze(
+        input_data=input_data,
+        custom_prompt_arg=custom_prompt_arg,
+        api_name=api_name,
+        api_key=api_key,
+        temp=temp,
+        system_message=system_message,
+        streaming=streaming,
+        **extra_kwargs,
+    )
+
+
+def _build_messages(
+    *,
+    system_prompt: Optional[str],
+    user_prompt: Optional[str],
+) -> List[Dict[str, str]]:
+    messages: List[Dict[str, str]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    if user_prompt:
+        messages.append({"role": "user", "content": user_prompt})
+    return messages
 #
 #######################################################################################################################
 #
@@ -349,7 +389,20 @@ def analyze_question(question: str, api_endpoint) -> Dict:
         try:
             logging.info(f"Generating sub-questions (attempt {attempt + 1})")
 
-            response = chat_api_call(api_endpoint, None, input_data, sub_question_generation_prompt, temp=0.7, system_message=None, streaming=False, minp=None, maxp=None, model=None)
+            messages_payload = _build_messages(
+                system_prompt=sub_question_generation_prompt,
+                user_prompt=input_data,
+            )
+            response = chat_api_call(
+                api_endpoint=api_endpoint,
+                messages_payload=messages_payload,
+                temp=0.7,
+                system_message=None,
+                streaming=False,
+                minp=None,
+                maxp=None,
+                model=None,
+            )
             if response:
                 try:
                     # Try to parse as JSON first
@@ -460,6 +513,10 @@ async def search_result_relevance(
                 Reasoning: [Your reasoning for the selections]
                 """
         input_data = "Evaluate the relevance of the search result."
+        messages_payload = _build_messages(
+            system_prompt=eval_prompt,
+            user_prompt=input_data,
+        )
 
         try:
             # Optional jitter
@@ -475,9 +532,8 @@ async def search_result_relevance(
                 return await asyncio.to_thread(
                     lambda: chat_api_call(
                         api_endpoint=api_endpoint,
+                        messages_payload=messages_payload,
                         api_key=None,
-                        input_data=input_data,
-                        prompt=eval_prompt,
                         temp=0.7,
                         system_message=None,
                         streaming=False,
@@ -532,7 +588,7 @@ async def search_result_relevance(
                         logging.info(f"Summarizing relevant result: ID={result_id}")
                         async def _summ_call():
                             return await asyncio.to_thread(
-                                lambda: analyze(
+                                lambda: summarize(
                                     input_data=scraped_content['content'],
                                     custom_prompt_arg=summary_prompt,
                                     api_name=api_endpoint,
@@ -600,12 +656,20 @@ def review_and_select_results(web_search_results_dict: Dict, selector: Optional[
 
 ######################### Result Aggregation & Combination #########################
 #
+class FinalAnswerDict(TypedDict):
+    """Structured payload returned by the aggregation phase."""
+    text: str
+    evidence: List[Dict[str, Any]]
+    confidence: float
+    chunks: List[Dict[str, Any]]
+
+
 def aggregate_results(
     relevant_results: Dict[str, Dict],
     question: str,
     sub_questions: List[str],
-    api_endpoint: str
-) -> Dict:
+    api_endpoint: Optional[str],
+) -> FinalAnswerDict:
     """
     Combines and summarizes relevant results into a final answer.
 
@@ -623,25 +687,161 @@ def aggregate_results(
     """
     logging.info("Aggregating and summarizing relevant results")
     if not relevant_results:
-        return {
+        no_results: FinalAnswerDict = {
             "text": "No relevant results found. Unable to provide an answer.",
             "evidence": [],
             "confidence": 0.0,
             "chunks": [],
         }
+        return no_results
 
-    # FIXME - Add summarization loop
     logging.info("Summarizing relevant results")
-    # ADD Code here to summarize the relevant results
 
+    def _build_chunk_infos(
+        items: List[tuple[str, Dict[str, Any]]],
+        max_chars: int = 6000,
+    ) -> List[Dict[str, Any]]:
+        chunk_infos: List[Dict[str, Any]] = []
+        current_entries: List[tuple[str, str]] = []
+        current_length = 0
 
-    # FIXME - Validate and test thoroughly, also structured generation
-    # Concatenate relevant contents for final analysis
-    concatenated_texts = "\n\n".join(
-        f"ID: {rid}\nContent: {res['content']}\nReasoning: {res['reasoning']}"
-        for rid, res in relevant_results.items()
-    )
+        def flush_entries() -> None:
+            nonlocal current_entries, current_length
+            if not current_entries:
+                return
+            text = "\n\n".join(entry for _, entry in current_entries)
+            chunk_infos.append({
+                "index": len(chunk_infos) + 1,
+                "result_ids": [rid for rid, _ in current_entries],
+                "text": text,
+                "truncated": False,
+            })
+            current_entries = []
+            current_length = 0
 
+        for rid, res in items:
+            entry = f"ID: {rid}\nContent: {res.get('content', '')}\nReasoning: {res.get('reasoning', '')}"
+            entry_length = len(entry)
+            if entry_length >= max_chars:
+                flush_entries()
+                chunk_infos.append({
+                    "index": len(chunk_infos) + 1,
+                    "result_ids": [rid],
+                    "text": entry[:max_chars],
+                    "truncated": True,
+                })
+                continue
+
+            if current_length + entry_length > max_chars and current_entries:
+                flush_entries()
+
+            current_entries.append((rid, entry))
+            current_length += entry_length
+
+        flush_entries()
+        return chunk_infos
+
+    def _estimate_confidence(
+        relevant_count: int,
+        chunk_count: int,
+        failed_chunks: int,
+        has_llm: bool,
+    ) -> float:
+        if relevant_count <= 0:
+            return 0.0
+        coverage = min(relevant_count, 10) / 10.0
+        chunk_success = 1.0 if chunk_count == 0 else (chunk_count - failed_chunks) / chunk_count
+        base = 0.35 + 0.45 * coverage
+        modifier = 0.6 + 0.4 * chunk_success
+        llm_bonus = 0.1 if has_llm and failed_chunks == 0 else (0.05 if has_llm else 0.0)
+        confidence = base * modifier + llm_bonus
+        return max(0.1, min(0.99, round(confidence, 3)))
+
+    result_items = list(relevant_results.items())
+    chunk_infos = _build_chunk_infos(result_items)
+    chunk_assignments: Dict[str, int] = {}
+    for info in chunk_infos:
+        for rid in info["result_ids"]:
+            chunk_assignments[rid] = info["index"]
+
+    chunk_metadata: List[Dict[str, Any]] = []
+    evidence_payload: List[Dict[str, Any]] = []
+
+    for rid, res in relevant_results.items():
+        evidence_payload.append({
+            "id": rid,
+            "content": res.get("content"),
+            "original_content": res.get("original_content"),
+            "reasoning": res.get("reasoning"),
+            "chunk_index": chunk_assignments.get(rid),
+        })
+
+    if not api_endpoint:
+        logging.warning("No final answer LLM configured; returning evidence summaries only.")
+        for info in chunk_infos:
+            preview = info["text"][:1500]
+            chunk_metadata.append({
+                "chunk_index": info["index"],
+                "result_ids": info["result_ids"],
+                "summary": preview,
+                "generated": False,
+                "source_characters": len(info["text"]),
+                "truncated_source": info["truncated"],
+            })
+        combined_text = "\n\n".join(entry.get("content", "") or "" for entry in relevant_results.values())
+        fallback_answer: FinalAnswerDict = {
+            "text": combined_text or "Unable to generate a final answer without an LLM.",
+            "evidence": evidence_payload,
+            "confidence": _estimate_confidence(len(evidence_payload), len(chunk_infos), 0, has_llm=False),
+            "chunks": chunk_metadata,
+        }
+        return fallback_answer
+
+    summarized_chunks: List[str] = []
+    failed_chunks = 0
+
+    for info in chunk_infos:
+        chunk_prompt = f"""
+            Summarize the following set of relevant search snippets into a concise digest that preserves
+            high-signal facts for answering the question: "{question}".
+
+            Requirements:
+            1. Keep the summary under 1500 characters.
+            2. Focus on verifiable facts and key statistics.
+            3. Mention the reasoning tags when helpful.
+
+            <chunk id="{info['index']}">
+            {info['text']}
+            </chunk>
+            """
+        try:
+            chunk_summary = summarize(
+                input_data=info["text"],
+                custom_prompt_arg=chunk_prompt,
+                api_name=api_endpoint,
+                api_key=None,
+                temp=0.3,
+                system_message=None,
+                streaming=False,
+            )
+            generated = True
+        except Exception as chunk_error:
+            failed_chunks += 1
+            logging.warning(f"Chunk summarization failed for chunk {info['index']}: {chunk_error}")
+            chunk_summary = info["text"][:1500]
+            generated = False
+
+        chunk_metadata.append({
+            "chunk_index": info["index"],
+            "result_ids": info["result_ids"],
+            "summary": chunk_summary,
+            "generated": generated,
+            "source_characters": len(info["text"]),
+            "truncated_source": info["truncated"],
+        })
+        summarized_chunks.append(f"Chunk {info['index']} Summary:\n{chunk_summary}")
+
+    context_payload = "\n\n".join(summarized_chunks)
     current_date = time.strftime("%Y-%m-%d")
 
     # Aggregation Prompt #1
@@ -673,7 +873,7 @@ def aggregate_results(
         3. **Conclusion**: Climate change poses significant challenges to global agriculture [1, 2, 3].
 
         <context>
-        {concatenated_texts}
+        {context_payload}
         </context>
         ---------------------
 
@@ -684,7 +884,7 @@ def aggregate_results(
         """
 
     # Aggregation Prompt #2
-    analyze_search_results_prompt_2 = rf"""INITIAL_QUERY: Here are some sources {concatenated_texts}. Read these carefully, as you will be asked a Query about them.
+    analyze_search_results_prompt_2 = f"""INITIAL_QUERY: Here are some sources {context_payload}. Read these carefully, as you will be asked a Query about them.
         # General Instructions
 
         Write an accurate, detailed, and comprehensive response to the user's query located at INITIAL_QUERY. Additional context is provided as "USER_INPUT" after specific questions. Your answer should be informed by the provided "Search results". Your answer must be precise, of high-quality, and written by an expert using an unbiased and journalistic tone. Your answer must be written in the same language as the query, even if language preference is different.
@@ -746,11 +946,11 @@ def aggregate_results(
         ## Science and Math
 
         If the user query is about some simple calculation, only answer with the final result. Follow these rules for writing formulas:
-        - Always use \( and\) for inline formulas and\[ and\] for blocks, for example \(x^4 = x - 3\)
-        - To cite a formula add citations to the end, for example \[\sin(x)\] [1][2] or \(x^2-2\) [4].
+        - Always use \\( and\\) for inline formulas and\\[ and\\] for blocks, for example\\(x^4 = x - 3 \\)
+        - To cite a formula add citations to the end, for example\\[ \\sin(x) \\] [1][2] or \\(x^2-2\\) [4].
         - Never use $ or $$ to render LaTeX, even if it is present in the user query.
         - Never use unicode to render math expressions, ALWAYS use LaTeX.
-        - Never use the \label instruction for LaTeX.
+        - Never use the \\label instruction for LaTeX.
 
         ## URL Lookup
 
@@ -768,14 +968,17 @@ def aggregate_results(
         """
 
     input_data = "Follow the above instructions."
+    messages_payload = _build_messages(
+        system_prompt=analyze_search_results_prompt_2,
+        user_prompt=input_data,
+    )
 
     try:
         logging.info("Generating the report")
         returned_response = chat_api_call(
             api_endpoint=api_endpoint,
+            messages_payload=messages_payload,
             api_key=None,
-            input_data=input_data,
-            prompt=analyze_search_results_prompt_2,
             temp=0.7,
             system_message=None,
             streaming=False,
@@ -785,25 +988,36 @@ def aggregate_results(
             topk=None,
             topp=None,
         )
-        logging.debug(f"Returned response from LLM: {returned_response}")
+        logging.debug("Returned response from LLM for aggregation: %s", returned_response)
         if returned_response:
-            # You could do further parsing or confidence estimation here
-            return {
+            success_answer: FinalAnswerDict = {
                 "text": returned_response,
-                "evidence": list(relevant_results.values()),
-                "confidence": 0.9,  # Placeholder or computed as needed
-                "chunks": [],
+                "evidence": evidence_payload,
+                "confidence": _estimate_confidence(
+                    len(evidence_payload),
+                    len(chunk_infos),
+                    failed_chunks,
+                    has_llm=True,
+                ),
+                "chunks": chunk_metadata,
             }
+            return success_answer
     except Exception as e:
         logging.error(f"Error aggregating results: {e}")
 
     logging.error("Could not create the report due to an error.")
-    return {
+    failure_answer: FinalAnswerDict = {
         "text": "Could not create the report due to an error.",
-        "evidence": list(relevant_results.values()),
-        "confidence": 0.0,
-        "chunks": [],
+        "evidence": evidence_payload,
+        "confidence": _estimate_confidence(
+            len(evidence_payload),
+            len(chunk_infos),
+            failed_chunks=len(chunk_infos),
+            has_llm=False,
+        ),
+        "chunks": chunk_metadata,
     }
+    return failure_answer
 
 #
 # End of Orchestration functions
@@ -835,6 +1049,7 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
                 result_count=result_count,
                 safesearch=safesearch or "moderate",
                 date_range=date_range,
+                site_blacklist=site_blacklist,
             )
 
         elif search_engine.lower() == "duckduckgo":
@@ -853,9 +1068,14 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             web_search_results = {"results": ddg_results}
 
         elif search_engine.lower() == "google":
-            # Convert site_blacklist list to a comma-separated string
-            if site_blacklist and isinstance(site_blacklist, list):
-                site_blacklist = ",".join(site_blacklist)
+            site_blacklist_list = site_blacklist if isinstance(site_blacklist, list) else None
+            site_blacklist_value: Optional[str]
+            if site_blacklist_list:
+                site_blacklist_value = ",".join(site_blacklist_list)
+            elif isinstance(site_blacklist, str):
+                site_blacklist_value = site_blacklist
+            else:
+                site_blacklist_value = None
 
             # Prepare the arguments for search_web_google
             google_args = {
@@ -872,14 +1092,12 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             }
 
             # If site_blacklist has multiple domains, do not use siteSearch
-            if site_blacklist and len(site_blacklist) == 1:
-                google_args["siteSearch"] = site_blacklist[0]
+            if site_blacklist_list and len(site_blacklist_list) == 1:
+                google_args["siteSearch"] = site_blacklist_list[0]
                 google_args["siteSearchFilter"] = "e"
-            else:
-                # Do not use siteSearch for multiple domains
-                # Either skip it entirely or see Option 2 below
-                google_args.pop("siteSearch", None)
-                google_args.pop("siteSearchFilter", None)
+            elif isinstance(site_blacklist, str) and site_blacklist:
+                google_args["siteSearch"] = site_blacklist
+                google_args["siteSearchFilter"] = "e"
 
             # Add optional parameters only if they are provided
             if date_range:
@@ -890,8 +1108,8 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
                 google_args["excludeTerms"] = excludeTerms
             if filter:
                 google_args["filter"] = filter
-            if site_blacklist:
-                google_args["site_blacklist"] = site_blacklist
+            if site_blacklist_value:
+                google_args["site_blacklist"] = site_blacklist_value
             if sort_results_by:
                 google_args["sort_results_by"] = sort_results_by
 
@@ -908,7 +1126,11 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
             web_search_results = search_web_serper()
 
         elif search_engine.lower() == "tavily":
-            web_search_results = search_web_tavily(search_query, result_count, site_blacklist)
+            web_search_results = search_web_tavily(
+                search_query=search_query,
+                result_count=result_count,
+                site_blacklist=site_blacklist,
+            )
 
         elif search_engine.lower() == "searx":
             web_search_results = search_web_searx(search_query, language='auto', time_range='', safesearch=0, pageno=1, categories='general')
@@ -1196,38 +1418,62 @@ def parse_bing_results(raw_results: Dict, output_dict: Dict) -> None:
 #
 # https://brave.com/search/api/
 # https://github.com/run-llama/llama_index/blob/main/llama-index-integrations/tools/llama-index-tools-brave-search/README.md
-def search_web_brave(search_term, country, search_lang, ui_lang, result_count, safesearch="moderate",
-                     brave_api_key=None, result_filter=None, search_type="ai", date_range=None):
+def search_web_brave(
+    search_term,
+    country,
+    search_lang,
+    ui_lang,
+    result_count,
+    safesearch="moderate",
+    brave_api_key=None,
+    result_filter=None,
+    search_type="ai",
+    date_range=None,
+    site_blacklist: Optional[List[str]] = None,
+):
     search_url = "https://api.search.brave.com/res/v1/web/search"
-    if not brave_api_key and search_type == "web":
-        # load key from config file
-        brave_api_key = get_loaded_config()['search_engines']['brave_search_api_key']
-        if not brave_api_key:
-            raise ValueError("Please provide a valid Brave Search API subscription key")
+    if search_type not in {"ai", "web"}:
+        raise ValueError("Invalid search type. Please choose 'ai' or 'web'.")
+
+    search_cfg = get_loaded_config().get("search_engines", {})
+    if not brave_api_key:
+        key_name = "brave_search_ai_api_key" if search_type == "ai" else "brave_search_api_key"
+        brave_api_key = search_cfg.get(key_name)
+    if not brave_api_key:
+        raise ValueError("Please provide a valid Brave Search API subscription key")
+
     # Respect provided country; fallback to config default
     if not country:
-        country = get_loaded_config()['search_engines']['search_engine_country_code_brave']
+        country = search_cfg.get("search_engine_country_code_brave", "US")
     if not search_lang:
         search_lang = "en"
     if not ui_lang:
         ui_lang = "en"
     if not result_count:
-        result_count = 10
-    # if not date_range:
-    #     date_range = "month"
+        result_count = search_cfg.get("search_result_max_per_query", 10)
     if not result_filter:
         result_filter = "webpages"
-    if search_type == "ai":
-        brave_api_key = get_loaded_config()['search_engines']['brave_search_ai_api_key']
-    else:
-        raise ValueError("Invalid search type. Please choose 'ai' or 'web'.")
-
+    safesearch = (safesearch or "moderate").capitalize()
 
     headers = {"Accept": "application/json", "Accept-Encoding": "gzip", "X-Subscription-Token": brave_api_key}
 
     # https://api.search.brave.com/app/documentation/web-search/query#WebSearchAPIQueryParameters
-    params = {"q": search_term, "textDecorations": True, "textFormat": "HTML", "count": result_count,
-              "freshness": date_range, "promote": "webpages", "safeSearch": "Moderate"}
+    params = {
+        "q": search_term,
+        "count": result_count,
+        "freshness": date_range,
+        "promote": result_filter,
+        "safeSearch": safesearch,
+        "source": search_type,
+        "country": country,
+        "search_lang": search_lang,
+        "ui_lang": ui_lang,
+    }
+
+    if site_blacklist:
+        params["exclude_sites"] = ",".join(site_blacklist)
+
+    filtered_params = {key: value for key, value in params.items() if value is not None}
 
     # Enforce SSRF/egress policy
     try:
@@ -1238,10 +1484,9 @@ def search_web_brave(search_term, country, search_lang, ui_lang, result_count, s
     except Exception as _e:
         raise ValueError(f"Egress policy evaluation failed: {_e}")
 
-    from tldw_Server_API.app.core.http_client import fetch_json
     # Response: https://api.search.brave.com/app/documentation/web-search/responses#WebSearchApiResponse
-    brave_search_results = fetch_json(method="GET", url=search_url, headers=headers, params=params, timeout=10.0)
-    return brave_search_results
+    response = brave_http_get(search_url, headers=headers, params=filtered_params)
+    return response.json()
 
 
 def test_search_brave():
@@ -1554,6 +1799,8 @@ def search_web_google(
     search_result_language: Optional[str] = None,
     safesearch: Optional[str] = None,
     site_blacklist: Optional[str] = None,
+    siteSearch: Optional[str] = None,
+    siteSearchFilter: Optional[str] = None,
     sort_results_by: Optional[str] = None
 ) -> Dict[str, Any]:
     """
@@ -1574,6 +1821,8 @@ def search_web_google(
     :param search_result_language: Language of search results
     :param safesearch: Safe search setting
     :param site_blacklist: Single Site to exclude from search
+    :param siteSearch: Google CSE siteSearch parameter
+    :param siteSearchFilter: Google CSE siteSearchFilter parameter (e=exclude, i=include)
     :param sort_results_by: Sorting criteria for results
     :return: JSON response from Google Search API
     """
@@ -1634,6 +1883,10 @@ def search_web_google(
             safesearch = get_loaded_config()['search_engines']['google_safe_search']
         if safesearch:
             params["safe"] = safesearch
+        if siteSearch:
+            params["siteSearch"] = siteSearch
+        if siteSearchFilter:
+            params["siteSearchFilter"] = siteSearchFilter
         if sort_results_by:
             params["sort"] = sort_results_by
 
@@ -1989,13 +2242,22 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
             search_data = parse_html_search_results_generic(soup)
 
         # Process results
+        if isinstance(search_data, dict):
+            results_iter = search_data.get("results", [])
+        elif isinstance(search_data, list):
+            results_iter = search_data
+        else:
+            results_iter = []
+
         data = []
-        for result in search_data:
+        for result in results_iter:
+            if not isinstance(result, dict):
+                continue
             data.append({
                 'title': result.get('title'),
-                'link': result.get('url'),
-                'snippet': result.get('content'),
-                'publishedDate': result.get('publishedDate')
+                'link': result.get('url') or result.get('link'),
+                'snippet': result.get('content') or result.get('snippet'),
+                'publishedDate': result.get('publishedDate') or result.get('published'),
             })
 
         if not data:

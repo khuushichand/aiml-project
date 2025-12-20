@@ -47,6 +47,109 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
+# Import shared constants and helpers
+from tldw_Server_API.app.core.Character_Chat.constants import (
+    MAX_REGEX_LENGTH,
+    MAX_REGEX_COMPILE_TIME_MS,
+    MAX_ENTRY_CACHE_SIZE,
+    MAX_BOOK_CACHE_SIZE,
+    MAX_RECURSIVE_DEPTH,
+    safe_parse_json_list,
+    safe_parse_json_dict,
+)
+
+# Import shared regex safety utilities
+from tldw_Server_API.app.core.Character_Chat.regex_safety import (
+    validate_regex_safety as _validate_regex_safety,
+    safe_compile_regex,
+)
+
+
+# Whitelisted field names for dynamic UPDATE statements (SQL injection prevention)
+_WORLD_BOOK_UPDATE_FIELDS = frozenset({
+    "name", "description", "scan_depth", "token_budget", "recursive_scanning",
+    "enabled", "last_modified", "version"
+})
+_WORLD_BOOK_ENTRY_UPDATE_FIELDS = frozenset({
+    "keywords", "content", "priority", "enabled", "case_sensitive",
+    "regex_match", "whole_word_match", "metadata", "last_modified"
+})
+
+
+def _build_safe_update_clause(
+    updates: list[str],
+    allowed_fields: frozenset[str]
+) -> str:
+    """
+    Build a safe UPDATE SET clause from a list of 'field = ?' strings.
+
+    Validates each field name against an allowed whitelist to prevent SQL injection.
+
+    Args:
+        updates: List of strings like 'field = ?'
+        allowed_fields: Frozenset of allowed field names
+
+    Returns:
+        Joined SET clause string
+
+    Raises:
+        ValueError: If any field is not in the whitelist
+    """
+    for update_str in updates:
+        # Extract field name from 'field = ?' or 'field = field + 1' patterns
+        field_name = update_str.split('=')[0].strip()
+        if field_name not in allowed_fields:
+            raise ValueError(f"Invalid field name in UPDATE: {field_name}")
+    return ', '.join(updates)
+
+
+def _escape_like_pattern(query: str) -> str:
+    """
+    Escape SQL LIKE wildcards to prevent pattern injection.
+
+    Args:
+        query: The search query to escape
+
+    Returns:
+        Escaped query safe for use in LIKE patterns
+    """
+    # Escape backslash first, then the SQL LIKE special characters
+    return query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+
+
+class BoundedDict(dict):
+    """
+    A dictionary with a maximum size limit (LRU-style eviction).
+
+    When the limit is reached, the oldest entry (first inserted) is removed
+    before adding the new entry. Uses insertion order (Python 3.7+).
+
+    Note: This class is NOT thread-safe by design. It is intended for use
+    in request-scoped service instances where each request gets its own
+    instance. In Python's async model with a single-threaded event loop,
+    there is no concurrent access within a single request.
+
+    If thread safety is needed in the future, consider using
+    functools.lru_cache or a dedicated thread-safe cache library.
+    """
+
+    def __init__(self, max_size: int = 1000, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._max_size = max_size
+
+    def __setitem__(self, key, value):
+        # If key already exists, just update it
+        if key in self:
+            super().__setitem__(key, value)
+            return
+
+        # If at capacity, remove the oldest entry
+        if len(self) >= self._max_size:
+            oldest = next(iter(self))
+            del self[oldest]
+
+        super().__setitem__(key, value)
+
 
 def _is_unique_violation(error: Exception) -> bool:
     """Best-effort detection of unique constraint/duplicate key violations across backends."""
@@ -65,8 +168,8 @@ class WorldBookEntry:
     def __init__(
         self,
         entry_id: Optional[int] = None,
-        world_book_id: int = None,
-        keywords: List[str] = None,
+        world_book_id: Optional[int] = None,
+        keywords: Optional[List[str]] = None,
         content: str = "",
         priority: int = 0,
         enabled: bool = True,
@@ -105,20 +208,35 @@ class WorldBookEntry:
         self._patterns = self._compile_patterns()
 
     def _compile_patterns(self) -> List[re.Pattern]:
-        """Compile keyword patterns for matching."""
+        """
+        Compile keyword patterns for matching.
+
+        For regex patterns, validates against potential ReDoS vulnerabilities
+        before compilation. Dangerous patterns are rejected with a warning.
+        """
         patterns = []
 
         for keyword in self.keywords:
             if self.regex_match:
+                # Validate regex safety before compiling (ReDoS prevention)
+                is_safe, reason = _validate_regex_safety(keyword)
+                if not is_safe:
+                    logger.warning(
+                        "Rejected potentially unsafe regex pattern '{}': {}",
+                        keyword[:50] + "..." if len(keyword) > 50 else keyword,
+                        reason
+                    )
+                    continue
+
                 # Use keyword as regex directly
                 try:
                     flags = 0 if self.case_sensitive else re.IGNORECASE
                     pattern = re.compile(keyword, flags)
                     patterns.append(pattern)
                 except re.error as e:
-                    logger.warning(f"Invalid regex pattern '{keyword}': {e}")
+                    logger.warning("Invalid regex pattern '{}': {}", keyword, e)
             else:
-                # Build pattern for literal matching
+                # Build pattern for literal matching (always safe)
                 escaped = re.escape(keyword)
                 if self.whole_word_match:
                     pattern_str = r'\b' + escaped + r'\b'
@@ -204,18 +322,9 @@ class WorldBookEntry:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'WorldBookEntry':
         """Create WorldBookEntry instance from database dictionary."""
-        keywords = data.get('keywords')
-        if isinstance(keywords, str):
-            try:
-                keywords = json.loads(keywords)
-            except Exception:
-                keywords = []
-        metadata = data.get('metadata')
-        if isinstance(metadata, str):
-            try:
-                metadata = json.loads(metadata)
-            except Exception:
-                metadata = {}
+        # Use safe_parse helpers to validate JSON structure
+        keywords = safe_parse_json_list(data.get('keywords'), 'keywords')
+        metadata = safe_parse_json_dict(data.get('metadata'), 'metadata')
         return cls(
             entry_id=data.get('id'),
             world_book_id=data.get('world_book_id'),
@@ -290,11 +399,13 @@ class WorldBookService:
         self.db = db
         self._init_tables()
 
-        # Request-scoped cache
-        self._entry_cache: Optional[Dict[int, List[WorldBookEntry]]] = {}
-        self._book_cache: Optional[Dict[int, Dict[str, Any]]] = {}
-        self._activation_counts: Dict[int, int] = {}
-        self._last_activated_at: Dict[int, datetime] = {}
+        # Request-scoped cache with bounded size to prevent memory leaks
+        # These caches use BoundedDict to limit memory usage if the service
+        # instance is accidentally reused across requests
+        self._entry_cache: Dict[int, List[WorldBookEntry]] = BoundedDict(MAX_ENTRY_CACHE_SIZE)
+        self._book_cache: Dict[int, Dict[str, Any]] = BoundedDict(MAX_BOOK_CACHE_SIZE)
+        self._activation_counts: Dict[int, int] = BoundedDict(MAX_BOOK_CACHE_SIZE)
+        self._last_activated_at: Dict[int, datetime] = BoundedDict(MAX_BOOK_CACHE_SIZE)
 
     def _init_tables(self):
         """Initialize world book tables in the user's database if they don't exist."""
@@ -623,8 +734,9 @@ class WorldBookService:
             params.extend([world_book_id, False])
 
             with self.db.get_connection() as conn:
+                set_clause = _build_safe_update_clause(updates, _WORLD_BOOK_UPDATE_FIELDS)
                 cursor = conn.execute(
-                    f"UPDATE world_books SET {', '.join(updates)} WHERE id = ? AND deleted = ?",
+                    f"UPDATE world_books SET {set_clause} WHERE id = ? AND deleted = ?",
                     tuple(params)
                 )
                 conn.commit()
@@ -733,9 +845,13 @@ class WorldBookService:
             md['recursive_scanning'] = kwargs['recursive_scanning']
             metadata = md
 
-        # Validate regex patterns if regex_match is True
+        # Validate regex patterns if regex_match is True (including ReDoS prevention)
         if regex_match:
             for keyword in keywords:
+                # Validate regex safety (ReDoS prevention)
+                is_safe, reason = _validate_regex_safety(keyword)
+                if not is_safe:
+                    raise InputError(f"Unsafe regex pattern '{keyword}': {reason}")
                 try:
                     re.compile(keyword)
                 except re.error as e:
@@ -907,6 +1023,10 @@ class WorldBookService:
                     raise InputError("Entry must have at least one keyword")
                 if regex_match:
                     for keyword in keywords:
+                        # Validate regex safety (ReDoS prevention)
+                        is_safe, reason = _validate_regex_safety(keyword)
+                        if not is_safe:
+                            raise InputError(f"Unsafe regex pattern '{keyword}': {reason}")
                         try:
                             re.compile(keyword)
                         except re.error as e:
@@ -915,8 +1035,7 @@ class WorldBookService:
                 params.append(json.dumps(keywords))
 
             if content is not None:
-                if not content:
-                    raise InputError("Entry content cannot be empty")
+                # Empty content is allowed (consistent with add_entry behavior)
                 updates.append("content = ?")
                 params.append(content)
 
@@ -956,8 +1075,9 @@ class WorldBookService:
             params.append(entry_id)
 
             with self.db.get_connection() as conn:
+                set_clause = _build_safe_update_clause(updates, _WORLD_BOOK_ENTRY_UPDATE_FIELDS)
                 cursor = conn.execute(
-                    f"UPDATE world_book_entries SET {', '.join(updates)} WHERE id = ?",
+                    f"UPDATE world_book_entries SET {set_clause} WHERE id = ?",
                     tuple(params)
                 )
                 conn.commit()
@@ -1168,6 +1288,10 @@ class WorldBookService:
         if 'max_tokens' in kwargs and kwargs.get('max_tokens') is not None:
             token_budget = int(kwargs['max_tokens'])
         recursive_depth = int(kwargs.get('recursive_depth', 0) or 0)
+        # Clamp recursive depth to prevent infinite loops
+        if recursive_depth > MAX_RECURSIVE_DEPTH:
+            logger.warning(f"Recursive depth {recursive_depth} exceeds max {MAX_RECURSIVE_DEPTH}, clamping")
+            recursive_depth = MAX_RECURSIVE_DEPTH
         if recursive_depth > 0:
             recursive_scanning = True
 
@@ -1458,17 +1582,11 @@ class WorldBookService:
                     total_keywords = 0
                     recursive_entries = 0
                     for r in cursor.fetchall():
-                        # keywords
-                        try:
-                            kws = json.loads(r['keywords']) if isinstance(r['keywords'], str) else (r['keywords'] or [])
-                        except Exception:
-                            kws = []
+                        # keywords - use safe parsing with structure validation
+                        kws = safe_parse_json_list(r['keywords'], 'keywords')
                         total_keywords += len(kws)
-                        # metadata
-                        try:
-                            md = json.loads(r['metadata']) if isinstance(r['metadata'], str) else (r['metadata'] or {})
-                        except Exception:
-                            md = {}
+                        # metadata - use safe parsing with structure validation
+                        md = safe_parse_json_dict(r['metadata'], 'metadata')
                         if md.get('recursive_scanning'):
                             recursive_entries += 1
                     return {
@@ -1553,27 +1671,29 @@ class WorldBookService:
                     q.append("AND e.world_book_id = ?")
                     params.append(world_book_id)
                 if query:
-                    q.append("AND (e.keywords LIKE ? OR e.content LIKE ?)")
-                    params.extend([f"%{query}%", f"%{query}%"])
+                    # Escape SQL LIKE wildcards to prevent pattern injection
+                    escaped_query = _escape_like_pattern(query)
+                    q.append("AND (e.keywords LIKE ? ESCAPE '\\' OR e.content LIKE ? ESCAPE '\\')")
+                    params.extend([f"%{escaped_query}%", f"%{escaped_query}%"])
                 q.append("ORDER BY w.name, e.priority DESC")
                 cursor = conn.execute(" ".join(q), tuple(params))
                 results: List[Dict[str, Any]] = []
                 for row in cursor.fetchall():
                     rd = dict(row)
-                    try:
-                        if isinstance(rd.get('keywords'), str):
-                            try:
-                                rd['keywords'] = json.loads(rd['keywords'])
-                            except Exception:
-                                rd['keywords'] = [s.strip() for s in rd['keywords'].split(',') if s.strip()]
-                        else:
-                            rd['keywords'] = rd.get('keywords') or []
-                    except Exception:
-                        rd['keywords'] = []
-                    try:
-                        md = json.loads(rd.get('metadata', '{}')) if isinstance(rd.get('metadata'), str) else (rd.get('metadata') or {})
-                    except Exception:
-                        md = {}
+                    # Parse keywords - try JSON first, fall back to comma-separated
+                    kw_raw = rd.get('keywords')
+                    if isinstance(kw_raw, str):
+                        try:
+                            rd['keywords'] = json.loads(kw_raw)
+                            if not isinstance(rd['keywords'], list):
+                                rd['keywords'] = []
+                        except Exception:
+                            # Fallback: comma-separated string
+                            rd['keywords'] = [s.strip() for s in kw_raw.split(',') if s.strip()]
+                    else:
+                        rd['keywords'] = kw_raw if isinstance(kw_raw, list) else []
+                    # Parse metadata with validation
+                    md = safe_parse_json_dict(rd.get('metadata'), 'metadata')
                     rd['recursive_scanning'] = bool(md.get('recursive_scanning', False))
                     results.append(rd)
                 return results
@@ -1619,7 +1739,7 @@ class WorldBookService:
             if not updates:
                 return 0
 
-            updates.append("updated_at = CURRENT_TIMESTAMP")
+            updates.append("last_modified = CURRENT_TIMESTAMP")
 
             with self.db.get_connection() as conn:
                 # Build the IN clause for entry IDs
@@ -1627,10 +1747,11 @@ class WorldBookService:
                 params.extend(entry_ids)
                 params.append(world_book_id)
 
+                set_clause = _build_safe_update_clause(updates, _WORLD_BOOK_ENTRY_UPDATE_FIELDS)
                 cursor = conn.execute(
                     f"""
                     UPDATE world_book_entries
-                    SET {', '.join(updates)}
+                    SET {set_clause}
                     WHERE id IN ({placeholders})
                     AND world_book_id = ?
                     """,

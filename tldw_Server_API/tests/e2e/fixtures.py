@@ -562,6 +562,22 @@ class APIClient:
             payload["success"] = (response.status_code == 200) and (not bool(payload.get("errors")))
         return payload
 
+    def rag_simple_search_endpoint(self, query: str, sources: List[str] = None, top_k: int = 10) -> Dict[str, Any]:
+        """Call the /rag/simple GET endpoint directly."""
+        params: Dict[str, Any] = {"query": query, "top_k": top_k}
+        if sources:
+            params["sources"] = sources
+
+        def _search():
+            response = self.client.get(
+                f"{API_PREFIX}/rag/simple",
+                params=params,
+            )
+            response.raise_for_status()
+            return response.json()
+
+        return self._handle_rate_limit(_search)
+
     def rag_advanced_search(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Perform advanced RAG search via the unified endpoint.
 

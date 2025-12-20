@@ -392,6 +392,63 @@ _CREATE_API_KEYS_TABLES = [
     ("CREATE INDEX IF NOT EXISTS idx_api_key_audit_log_created_at ON api_key_audit_log(created_at)", ()),
 ]
 
+_CREATE_USER_PROVIDER_SECRETS = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS user_provider_secrets (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            provider TEXT NOT NULL,
+            encrypted_blob TEXT NOT NULL,
+            key_hint TEXT,
+            metadata TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            last_used_at TIMESTAMP WITH TIME ZONE,
+            CONSTRAINT uq_user_provider_secrets UNIQUE (user_id, provider)
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS encrypted_blob TEXT", ()),
+    ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS key_hint TEXT", ()),
+    ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS metadata TEXT", ()),
+    ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMP WITH TIME ZONE", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_user_provider_secrets_user_id ON user_provider_secrets(user_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_user_provider_secrets_provider ON user_provider_secrets(provider)", ()),
+]
+
+_CREATE_ORG_PROVIDER_SECRETS = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS org_provider_secrets (
+            id SERIAL PRIMARY KEY,
+            scope_type TEXT NOT NULL,
+            scope_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            encrypted_blob TEXT NOT NULL,
+            key_hint TEXT,
+            metadata TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            last_used_at TIMESTAMP WITH TIME ZONE,
+            CONSTRAINT uq_org_provider_secrets UNIQUE (scope_type, scope_id, provider)
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS encrypted_blob TEXT", ()),
+    ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS key_hint TEXT", ()),
+    ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS metadata TEXT", ()),
+    ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMP WITH TIME ZONE", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_scope ON org_provider_secrets(scope_type, scope_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_provider ON org_provider_secrets(provider)", ()),
+]
+
 
 _CREATE_USAGE_TABLES = [
     # usage_log + usage_daily
@@ -533,6 +590,10 @@ async def ensure_tool_catalogs_tables_pg(pool: Optional[DatabasePool] = None) ->
         db_pool = pool or await get_db_pool()
         if getattr(db_pool, "pool", None) is None:
             return False  # not postgres
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except Exception as exc:
+            logger.debug(f"PG ensure authnz core tables before tool catalogs failed: {exc}")
         for sql, params in _CREATE_TOOL_CATALOGS:
             try:
                 await db_pool.execute(sql, *params)
@@ -657,6 +718,57 @@ async def ensure_api_keys_tables_pg(pool: Optional[DatabasePool] = None) -> bool
         logger.warning(f"Failed to ensure PostgreSQL api_keys tables: {exc}")
         return False
 
+
+async def ensure_user_provider_secrets_pg(pool: Optional[DatabasePool] = None) -> bool:
+    """Ensure user_provider_secrets table exists for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+
+        # Ensure users table exists before adding the FK-backed BYOK table.
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except Exception as exc:
+            logger.debug(f"ensure_user_provider_secrets_pg: core table ensure skipped/failed: {exc}")
+
+        for sql, params in _CREATE_USER_PROVIDER_SECRETS:
+            try:
+                await db_pool.execute(sql, *params)
+            except Exception as exc:
+                logger.debug(f"PG ensure user_provider_secrets DDL failed: {exc}")
+
+        logger.info("Ensured PostgreSQL user_provider_secrets table (idempotent)")
+        return True
+    except Exception as exc:
+        logger.warning(f"Failed to ensure PostgreSQL user_provider_secrets table: {exc}")
+        return False
+
+
+async def ensure_org_provider_secrets_pg(pool: Optional[DatabasePool] = None) -> bool:
+    """Ensure org_provider_secrets table exists for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+
+        # Ensure core tables exist first (org/team scaffolding)
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except Exception as exc:
+            logger.debug(f"ensure_org_provider_secrets_pg: core table ensure skipped/failed: {exc}")
+
+        for sql, params in _CREATE_ORG_PROVIDER_SECRETS:
+            try:
+                await db_pool.execute(sql, *params)
+            except Exception as exc:
+                logger.debug(f"PG ensure org_provider_secrets DDL failed: {exc}")
+
+        logger.info("Ensured PostgreSQL org_provider_secrets table (idempotent)")
+        return True
+    except Exception as exc:
+        logger.warning(f"Failed to ensure PostgreSQL org_provider_secrets table: {exc}")
+        return False
 
 async def ensure_usage_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
     """Ensure usage and LLM usage tables exist for PostgreSQL backends.

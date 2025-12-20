@@ -1,10 +1,9 @@
-# Ollamafile_Handler.py
-# Description:
+# Ollama_Handler.py
+# Description: Handler for Ollama LLM backend.
 #
 # Imports
 import platform
 import subprocess
-import psutil
 import os
 import signal
 import shutil
@@ -13,6 +12,13 @@ from typing import List, Optional, Dict, Any
 # Third-party Imports
 import asyncio
 import httpx
+
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    psutil = None  # type: ignore
+    PSUTIL_AVAILABLE = False
 
 from tldw_Server_API.app.core.Local_LLM.LLM_Base_Handler import BaseLLMHandler
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import (
@@ -44,13 +50,6 @@ async def wait_for_http_ready(base_url: str, timeout_total: float = 30.0, interv
     )
 
 
-#
-# Local Imports
-
-# from .base_handler import BaseLLMHandler # Use if BaseLLMHandler is in a separate file
-# from .exceptions import ModelNotFoundError, ModelDownloadError, ServerError # Use if exceptions are separate
-# from .utils_loader import logging, project_utils # From the loader
-#
 #######################################################################################################################
 #
 # Functions:
@@ -148,30 +147,39 @@ class OllamaHandler(BaseLLMHandler):
         ollama_env["OLLAMA_HOST"] = f"{host}:{port}"
 
         # Check if ollama serve is already running with the specified host/port
-        # This is a bit tricky as `ollama serve` might be managed by systemd or run manually.
-        # For simplicity, we'll check if the port is in use.
-        # A more robust check would involve inspecting running 'ollama serve' processes.
-        try:
-            port_in_use = await asyncio.to_thread(psutil.net_connections)
-            for conn in port_in_use:
-                if conn.status == psutil.CONN_LISTEN and conn.laddr.port == int(port):
-                    # Potentially check if the process is an ollama process
-                    try:
-                        proc = psutil.Process(conn.pid)
-                        if "ollama" in proc.name().lower():
-                            self.logger.warning(
-                                f"Ollama server seems to be already running on port {port} (PID: {conn.pid}).")
-                            return {"status": "already_running", "pid": conn.pid, "host": host, "port": port}
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        pass  # Process might have ended or we don't have permission
-                    self.logger.warning(f"Port {port} is already in use. Assuming Ollama server or other service.")
-                    # Not raising an error, as it might be an externally managed Ollama server
-                    return {"status": "port_in_use",
-                            "pid": conn.pid if 'conn' in locals() and hasattr(conn, 'pid') else None, "host": host,
-                            "port": port}
-
-        except Exception as e:
-            self.logger.warning(f"Could not check port status: {e}")
+        # Use retry loop to handle race conditions in port detection
+        if not PSUTIL_AVAILABLE:
+            self.logger.warning("psutil not available; skipping port check before starting server")
+        else:
+            max_port_check_retries = getattr(self.config, "port_check_retries", 3)
+            for attempt in range(max_port_check_retries):
+                try:
+                    port_in_use = await asyncio.to_thread(psutil.net_connections)
+                    for conn in port_in_use:
+                        if conn.status == psutil.CONN_LISTEN and conn.laddr.port == int(port):
+                            # Port is in use - check if it's ollama or another process
+                            try:
+                                proc = psutil.Process(conn.pid)
+                                if "ollama" in proc.name().lower():
+                                    self.logger.warning(
+                                        f"Ollama server seems to be already running on port {port} (PID: {conn.pid}).")
+                                    return {"status": "already_running", "pid": conn.pid, "host": host, "port": port}
+                                else:
+                                    # Non-ollama process is using the port
+                                    self.logger.warning(f"Port {port} is already in use by another process ({proc.name()}).")
+                                    return {"status": "port_in_use", "pid": conn.pid, "host": host, "port": port}
+                            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                # Couldn't get process info, but port is still in use
+                                self.logger.warning(f"Port {port} is already in use (couldn't identify process).")
+                                return {"status": "port_in_use",
+                                        "pid": conn.pid if hasattr(conn, 'pid') else None, "host": host,
+                                        "port": port}
+                    # Port appears free, break out of retry loop
+                    break
+                except Exception as e:
+                    self.logger.warning(f"Could not check port status (attempt {attempt + 1}): {e}")
+                    if attempt < max_port_check_retries - 1:
+                        await asyncio.sleep(0.5 * (attempt + 1))  # Backoff
 
         self.logger.info(f"Starting Ollama server on {host}:{port}. Models will be loaded on demand.")
         try:
@@ -194,6 +202,25 @@ class OllamaHandler(BaseLLMHandler):
                 stderr_output = (await process.stderr.read()).decode() if process.stderr else "Unknown error"
                 self.logger.error(f"Failed to start Ollama server: {stderr_output}")
                 raise ServerError(f"Failed to start Ollama server: {stderr_output}")
+
+            if not ready:
+                stderr_output = ""
+                if process.returncode is not None and process.stderr:
+                    stderr_output = (await process.stderr.read()).decode() or "Unknown error"
+                self.logger.error(
+                    f"Ollama server did not become ready on {host}:{port}. {stderr_output}".strip()
+                )
+                if process.returncode is None:
+                    try:
+                        process.terminate()
+                        await asyncio.wait_for(process.wait(), timeout=5)
+                    except Exception:
+                        try:
+                            process.kill()
+                            await process.wait()
+                        except Exception:
+                            pass
+                raise ServerError("Ollama server did not become ready in time.")
 
             # Try to find the PID if it daemonized
             # This is OS-dependent and fragile.
@@ -233,6 +260,8 @@ class OllamaHandler(BaseLLMHandler):
                 self.logger.error(f"Error stopping Ollama server PID {pid}: {e}")
                 return f"Error stopping Ollama server PID {pid}: {e}"
         elif port:
+            if not PSUTIL_AVAILABLE:
+                return "Cannot stop by port: psutil not available. Please provide PID instead."
             self.logger.info(f"Attempting to stop Ollama server listening on port {port}")
             found_pid = None
             try:
@@ -267,7 +296,9 @@ class OllamaHandler(BaseLLMHandler):
                 return f"Error sending general stop signal to Ollama: {e}"
 
     def _terminate_process(self, pid: int):
-        """Helper to terminate a process by PID."""
+        """Helper to terminate a process by PID. Requires psutil."""
+        if not PSUTIL_AVAILABLE:
+            raise ServerError("psutil not available; cannot terminate process by PID")
         try:
             proc = psutil.Process(pid)
             proc.terminate()  # Send SIGTERM
@@ -296,11 +327,24 @@ class OllamaHandler(BaseLLMHandler):
         port = port or self.config.default_port
         api_url = f"http://{host}:{port}/api/generate"
 
+        # Pull model if not available, with configurable retry logic
         if not await self.is_model_available(model_name):
-            try:
-                await self.pull_model(model_name)
-            except ModelDownloadError:
-                raise InferenceError(f"Model {model_name} not found and could not be pulled.")
+            max_pull_retries = getattr(self.config, "max_pull_retries", 2)
+            last_error = None
+            for attempt in range(max_pull_retries):
+                try:
+                    self.logger.info(f"Model {model_name} not available locally. Pulling (attempt {attempt + 1}/{max_pull_retries})...")
+                    await self.pull_model(model_name)
+                    last_error = None
+                    break
+                except ModelDownloadError as e:
+                    last_error = e
+                    if attempt < max_pull_retries - 1:
+                        backoff_time = 1.0 * (attempt + 1)
+                        self.logger.warning(f"Pull attempt {attempt + 1} failed: {e}. Retrying in {backoff_time}s...")
+                        await asyncio.sleep(backoff_time)
+            if last_error:
+                raise InferenceError(f"Model {model_name} not found and could not be pulled after {max_pull_retries} attempts: {last_error}")
 
         payload = {
             "model": model_name,
@@ -318,10 +362,9 @@ class OllamaHandler(BaseLLMHandler):
                 result = await request_json(client, "POST", api_url, json=payload)
                 self.logger.debug(f"Ollama inference successful for {model_name}.")
                 return result
-            except httpx.HTTPStatusError as e:  # type: ignore[name-defined]
-                # httpx may not be imported here; guard via attribute check
-                status = getattr(e.response, "status_code", None)
-                text = getattr(e.response, "text", "")
+            except httpx.HTTPStatusError as e:
+                status = e.response.status_code
+                text = e.response.text
                 self.logger.error(f"Ollama API error ({status}): {text}")
                 # Attempt model pull on 404 or message indicating not found
                 if status == 404 or (isinstance(text, str) and "model not found" in text.lower()):

@@ -26,6 +26,7 @@ def flashcards_db(tmp_path):
 
 @pytest.fixture
 def client_with_flashcards_db(flashcards_db: CharactersRAGDB):
+    TestConfig.setup_test_environment()
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
     def override_get_db():
         logger.info("[TEST] override get_chacha_db_for_user -> flashcards_db")
@@ -54,6 +55,7 @@ def client_with_flashcards_db(flashcards_db: CharactersRAGDB):
     with TestClient(fastapi_app, headers=default_headers) as c:
         yield c
     fastapi_app.dependency_overrides.clear()
+    TestConfig.reset_settings()
 
 
 def test_export_apkg_basic_integration(client_with_flashcards_db: TestClient):
@@ -124,8 +126,8 @@ def test_export_apkg_basic_integration(client_with_flashcards_db: TestClient):
                 cards = conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0]
                 # 3 notes: basic, reverse, cloze
                 assert notes == 3
-                # Cards: basic=1, reverse adds 1, cloze with c1,c2 adds 2 => total 4
-                assert cards == 4
+                # Cards: basic=1, basic_reverse=2, cloze with c1,c2 adds 2 => total 5
+                assert cards == 5
             finally:
                 conn.close()
     finally:
@@ -168,6 +170,44 @@ def test_export_apkg_include_reverse_flag_generates_reverse(client_with_flashcar
                 assert all(c[0] == nid for c in cards)
                 ords = sorted(c[1] for c in cards)
                 assert ords == [0, 1]
+            finally:
+                conn.close()
+    finally:
+        zf.close()
+
+
+def test_export_apkg_basic_reverse_without_include_reverse(client_with_flashcards_db: TestClient):
+    # Create deck and a basic_reverse card (no include_reverse flag)
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DeckBasicRev"}, headers=AUTH_HEADERS)
+    deck_id = r.json()["id"]
+    r = client_with_flashcards_db.post("/api/v1/flashcards", json={
+        "deck_id": deck_id,
+        "front": "Front BR",
+        "back": "Back BR",
+        "model_type": "basic_reverse"
+    }, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"format": "apkg"}, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    zf = zipfile.ZipFile(io.BytesIO(r.content))
+    try:
+        with zf.open('collection.anki2') as f:
+            data = f.read()
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, 'col.anki2')
+            with open(p, 'wb') as fh:
+                fh.write(data)
+            conn = sqlite3.connect(p)
+            try:
+                notes = conn.execute("SELECT id FROM notes").fetchall()
+                assert len(notes) == 1
+                nid = notes[0][0]
+                cards = conn.execute("SELECT nid, ord FROM cards").fetchall()
+                assert len(cards) == 2
+                assert all(c[0] == nid for c in cards)
+                assert sorted(c[1] for c in cards) == [0, 1]
             finally:
                 conn.close()
     finally:
@@ -240,6 +280,93 @@ def test_set_tags_and_linkage(client_with_flashcards_db: TestClient):
     items = data.get("items", [])
     kw_texts = {kw.get("keyword") for kw in items}
     assert {"alpha", "beta"}.issubset(kw_texts)
+
+
+def test_patch_partial_update_keeps_required_fields(client_with_flashcards_db: TestClient):
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "PatchDeck"}, headers=AUTH_HEADERS)
+    deck_id = r.json()["id"]
+    r = client_with_flashcards_db.post("/api/v1/flashcards", json={
+        "deck_id": deck_id,
+        "front": "Qpatch",
+        "back": "Apatch",
+        "notes": "N1",
+    }, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    uuid = r.json()["uuid"]
+
+    r = client_with_flashcards_db.patch(f"/api/v1/flashcards/{uuid}", json={"notes": "N2"}, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    updated = r.json()
+    assert updated["front"] == "Qpatch"
+    assert updated["back"] == "Apatch"
+    assert updated["notes"] == "N2"
+
+
+def test_patch_tags_conflict_does_not_update(client_with_flashcards_db: TestClient):
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "PatchTags"}, headers=AUTH_HEADERS)
+    deck_id = r.json()["id"]
+    r = client_with_flashcards_db.post("/api/v1/flashcards", json={
+        "deck_id": deck_id,
+        "front": "Qtag",
+        "back": "Atag",
+    }, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    card = r.json()
+    uuid = card["uuid"]
+    version = card["version"]
+
+    r = client_with_flashcards_db.patch(
+        f"/api/v1/flashcards/{uuid}",
+        json={"tags": ["alpha"], "expected_version": version + 1},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 409
+
+    r = client_with_flashcards_db.get(f"/api/v1/flashcards/{uuid}/tags", headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    assert r.json().get("count") == 0
+
+    r = client_with_flashcards_db.get(f"/api/v1/flashcards/id/{uuid}", headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    assert r.json().get("tags_json") in (None, "[]")
+
+
+def test_patch_deck_id_rejects_invalid_or_deleted(
+    client_with_flashcards_db: TestClient,
+    flashcards_db: CharactersRAGDB,
+):
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DeckValid"}, headers=AUTH_HEADERS)
+    deck_id = r.json()["id"]
+    r = client_with_flashcards_db.post("/api/v1/flashcards", json={
+        "deck_id": deck_id,
+        "front": "Qdeck",
+        "back": "Adeck",
+    }, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    uuid = r.json()["uuid"]
+
+    r = client_with_flashcards_db.patch(
+        f"/api/v1/flashcards/{uuid}",
+        json={"deck_id": 999999},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 400
+    det = r.json().get("detail") or {}
+    assert det.get("error") == "Deck not found"
+
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DeckDeleted"}, headers=AUTH_HEADERS)
+    del_id = r.json()["id"]
+    with flashcards_db.transaction() as conn:
+        conn.execute("UPDATE decks SET deleted = 1 WHERE id = ?", (del_id,))
+
+    r = client_with_flashcards_db.patch(
+        f"/api/v1/flashcards/{uuid}",
+        json={"deck_id": del_id},
+        headers=AUTH_HEADERS,
+    )
+    assert r.status_code == 400
+    det = r.json().get("detail") or {}
+    assert det.get("error") == "Deck not found"
 
 
 def test_export_apkg_include_reverse_no_duplication_for_basic_reverse(client_with_flashcards_db: TestClient):

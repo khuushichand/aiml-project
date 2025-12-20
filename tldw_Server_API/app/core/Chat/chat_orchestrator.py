@@ -8,7 +8,9 @@ interactions with various LLM providers.
 #
 # Imports
 from loguru import logger as logging
+import atexit
 import os
+import threading
 import time
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -47,6 +49,109 @@ from tldw_Server_API.app.core.config import load_and_log_configs
 #
 # Type variables
 _T = TypeVar("_T")
+#
+####################################################################################################
+#
+# Module-level ThreadPoolExecutor for sync-to-async bridging
+# Reusing a single executor avoids resource exhaustion under load
+#
+_SYNC_EXECUTOR: Optional[ThreadPoolExecutor] = None
+_SYNC_EXECUTOR_LOCK = threading.Lock()
+
+
+def _get_sync_executor() -> ThreadPoolExecutor:
+    """Get or create the module-level ThreadPoolExecutor for sync coroutine execution.
+
+    Uses double-checked locking for thread-safe lazy initialization.
+    The executor is shared across all calls to avoid creating a new executor
+    per-call, which would cause resource exhaustion under load.
+    """
+    global _SYNC_EXECUTOR
+    if _SYNC_EXECUTOR is None:
+        with _SYNC_EXECUTOR_LOCK:
+            if _SYNC_EXECUTOR is None:
+                _SYNC_EXECUTOR = ThreadPoolExecutor(
+                    max_workers=4,
+                    thread_name_prefix="chat_sync_coro"
+                )
+    return _SYNC_EXECUTOR
+
+
+def _shutdown_sync_executor() -> None:
+    """Shutdown the module-level executor on interpreter exit.
+
+    Uses wait=True with cancel_futures=True to ensure clean shutdown.
+    This allows in-flight tasks to complete while preventing new submissions.
+    """
+    global _SYNC_EXECUTOR
+    if _SYNC_EXECUTOR is not None:
+        try:
+            # cancel_futures=True (Python 3.9+) ensures pending futures are cancelled
+            # wait=True ensures we wait for running tasks to complete
+            _SYNC_EXECUTOR.shutdown(wait=True, cancel_futures=True)
+        except TypeError:
+            # Python < 3.9 doesn't support cancel_futures
+            _SYNC_EXECUTOR.shutdown(wait=True)
+        except Exception:  # noqa: BLE001 - shutdown must not raise during exit
+            pass
+
+
+# Register cleanup on interpreter shutdown
+atexit.register(_shutdown_sync_executor)
+
+#
+####################################################################################################
+#
+# Error Message Sanitization
+#
+
+def _sanitize_error_for_client(error_text: str, max_length: int = 100) -> str:
+    """
+    Sanitize error messages before sending to clients to prevent information leakage.
+
+    This removes potentially sensitive information like:
+    - API keys or tokens
+    - Internal URLs
+    - Stack traces
+    - Detailed error responses from upstream providers
+
+    Args:
+        error_text: Raw error text
+        max_length: Maximum length of sanitized message
+
+    Returns:
+        Sanitized error message safe for client consumption
+    """
+    if not error_text:
+        return "Unknown error"
+
+    # Convert to string if needed
+    error_str = str(error_text)
+
+    # Remove potential sensitive patterns
+    import re
+
+    # Remove anything that looks like an API key or token
+    error_str = re.sub(r'(api[_-]?key|token|secret|password|auth)["\']?\s*[:=]\s*["\']?[^\s"\']+', '[REDACTED]', error_str, flags=re.IGNORECASE)
+
+    # Remove URLs with potential sensitive query params
+    error_str = re.sub(r'https?://[^\s]+', '[URL]', error_str)
+
+    # Remove file paths
+    error_str = re.sub(r'(/[^\s:]+)+', '[PATH]', error_str)
+
+    # Remove stack trace patterns
+    error_str = re.sub(r'File "[^"]+", line \d+', '', error_str)
+    error_str = re.sub(r'Traceback \(most recent call last\):', '', error_str)
+
+    # Truncate and clean up
+    error_str = ' '.join(error_str.split())  # Normalize whitespace
+    if len(error_str) > max_length:
+        error_str = error_str[:max_length] + "..."
+
+    return error_str or "An error occurred"
+
+
 #
 ####################################################################################################
 #
@@ -238,8 +343,8 @@ def chat_api_call(
                 _key_val[:4],
                 _key_val[-4:]
             )
-    except Exception:
-        pass
+    except Exception as key_log_err:
+        logging.debug(f"Could not log masked API key: {key_log_err}")
 
     try:
         logging.debug(f"Calling handler {handler.__name__} with kwargs: { {k: (type(v) if k != params_map.get('api_key') else 'key_hidden') for k,v in call_kwargs.items()} }")
@@ -263,46 +368,51 @@ def chat_api_call(
         error_text = getattr(e.response, 'text', str(e))
         log_message_base = f"{endpoint_lower} API call failed with status {status_code}"
 
-        # Log safely first
+        # Log detailed error for debugging (internal only)
         try:
             logging.error("%s. Details: %s", log_message_base, error_text[:500], exc_info=False)
         except Exception as log_e:
             logging.error(f"Error during logging HTTPError details: {log_e}")
 
-        detail_message = f"API call to {endpoint_lower} failed with status {status_code}. Response: {error_text[:200]}"
+        # Sanitize error text for client-facing messages to prevent information leakage
+        sanitized_error = _sanitize_error_for_client(error_text)
+
         if status_code == 401:
             raise ChatAuthenticationError(provider=endpoint_lower,
-                                          message=f"Authentication failed for {endpoint_lower}. Check API key. Detail: {error_text[:200]}")
+                                          message=f"Authentication failed. Please check your API key.")
         elif status_code == 429:
             raise ChatRateLimitError(provider=endpoint_lower,
-                                     message=f"Rate limit exceeded for {endpoint_lower}. Detail: {error_text[:200]}")
+                                     message=f"Rate limit exceeded. Please try again later.")
         elif 400 <= status_code < 500:
             raise ChatBadRequestError(provider=endpoint_lower,
-                                      message=f"Bad request to {endpoint_lower} (Status {status_code}). Detail: {error_text[:200]}")
+                                      message=f"Invalid request (Status {status_code}). {sanitized_error}")
         elif 500 <= status_code < 600:
             raise ChatProviderError(provider=endpoint_lower,
-                                    message=f"Error from {endpoint_lower} server (Status {status_code}). Detail: {error_text[:200]}",
+                                    message=f"Provider error (Status {status_code}). Please try again.",
                                     status_code=status_code)
         else:
             raise ChatAPIError(provider=endpoint_lower,
-                               message=f"Unexpected HTTP status {status_code} from {endpoint_lower}. Detail: {error_text[:200]}",
+                               message=f"Unexpected error (Status {status_code}). {sanitized_error}",
                                status_code=status_code)
     except requests.exceptions.RequestException as e:
         logging.error(f"Network error connecting to {endpoint_lower}: {e}", exc_info=False)
-        raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504)
+        raise ChatProviderError(provider=endpoint_lower, message="Network error. Please check your connection.", status_code=504)
     except httpx.RequestError as e:
         logging.error(f"Network error (httpx) connecting to {endpoint_lower}: {e}", exc_info=False)
-        raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504)
+        raise ChatProviderError(provider=endpoint_lower, message="Network error. Please check your connection.", status_code=504)
     except (ChatAuthenticationError, ChatRateLimitError, ChatBadRequestError, ChatConfigurationError, ChatProviderError,
             ChatAPIError) as e_chat_direct:
         # This catches cases where the handler itself has already processed an error
         # (e.g. non-HTTP error, or it decided to raise a specific Chat*Error type)
         # and raises one of our custom exceptions.
         # Escape curly braces in the error message to avoid loguru formatting issues
-        escaped_message = e_chat_direct.message.replace("{", "{{").replace("}", "}}")
+        error_message = getattr(e_chat_direct, 'message', str(e_chat_direct))
+        escaped_message = str(error_message).replace("{", "{{").replace("}", "}}")
+        # Safely access status_code with fallback
+        status_code = getattr(e_chat_direct, 'status_code', 500)
         logging.error(
             f"Handler for {endpoint_lower} directly raised: {type(e_chat_direct).__name__} - {escaped_message}",
-            exc_info=True if e_chat_direct.status_code >= 500 else False)
+            exc_info=True if status_code >= 500 else False)
         raise e_chat_direct  # Re-raise the specific error
     except (ValueError, TypeError, KeyError) as e:
         logging.error(f"Value/Type/Key error during chat API call setup for {endpoint_lower}: {e}", exc_info=True)
@@ -311,6 +421,9 @@ def chat_api_call(
             raise ChatConfigurationError(provider=endpoint_lower, message=f"Unsupported API endpoint: {endpoint_lower}")
         else:
             raise ChatBadRequestError(provider=endpoint_lower, message=f"{error_type} for {endpoint_lower}: {e}")
+    except (KeyboardInterrupt, SystemExit):
+        # Don't catch system-level signals - let them propagate
+        raise
     except Exception as e:
         logging.exception(
             f"Unexpected internal error in chat_api_call for {endpoint_lower}: {e}")
@@ -423,13 +536,42 @@ async def chat_api_call_async(
         raise ChatProviderError(provider=endpoint_lower, message=f"Unexpected error: {e}")
 
 
-def _run_coro_sync(coro: Awaitable[_T]) -> _T:
+# Default timeout for synchronous coroutine execution (5 minutes)
+# Configurable via CHAT_SYNC_CORO_TIMEOUT_SECONDS environment variable
+def _get_sync_coro_timeout() -> float:
+    """Get configurable timeout for sync coroutine execution."""
+    import os
+    try:
+        env_val = os.getenv("CHAT_SYNC_CORO_TIMEOUT_SECONDS")
+        if env_val is not None:
+            return max(1.0, float(env_val))
+    except (ValueError, TypeError):
+        pass
+    return 300.0
+
+_SYNC_CORO_TIMEOUT_SECONDS = _get_sync_coro_timeout()
+
+
+def _run_coro_sync(coro: Awaitable[_T], timeout: float = _SYNC_CORO_TIMEOUT_SECONDS) -> _T:
     """
     Run an async coroutine from synchronous code in a loop-safe way.
 
     If no event loop is running on the current thread, this uses asyncio.run
     directly. When a loop is already running, it offloads execution to a worker
     thread that owns its own event loop to avoid nested-loop errors.
+
+    Uses a module-level ThreadPoolExecutor to avoid creating a new executor
+    per call, which would cause resource exhaustion under load.
+
+    Args:
+        coro: The coroutine to execute
+        timeout: Maximum time to wait for completion (seconds). Default is 5 minutes.
+
+    Returns:
+        The result of the coroutine
+
+    Raises:
+        TimeoutError: If the coroutine doesn't complete within the timeout
     """
     try:
         asyncio.get_running_loop()
@@ -438,10 +580,15 @@ def _run_coro_sync(coro: Awaitable[_T]) -> _T:
         return asyncio.run(coro)
 
     # Running inside an event loop on this thread: offload to a worker thread
-    # that owns its own event loop.
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(lambda: asyncio.run(coro))
-        return future.result()
+    # that owns its own event loop. Use the pooled executor to avoid resource leak.
+    executor = _get_sync_executor()
+    future = executor.submit(lambda: asyncio.run(coro))
+    try:
+        return future.result(timeout=timeout)
+    except TimeoutError:
+        logger.error(f"Synchronous coroutine execution timed out after {timeout}s")
+        future.cancel()
+        raise
 
 
 def _run_achat_sync(
@@ -600,6 +747,10 @@ def _chat_sync_impl(
         # Parse slash-commands before dictionary processing
         injected_command_system_text: Optional[str] = None
         original_message = message
+        # Initialize command variables for safe access later (instead of using unsafe locals() checks)
+        cmd_name: Optional[str] = None
+        cmd_args: Optional[str] = None
+        cmd_res: Optional[Any] = None
         if command_router.commands_enabled() and isinstance(message, str):
             parsed = command_router.parse_slash_command(message)
             if parsed:
@@ -741,12 +892,12 @@ def _chat_sync_impl(
             # Enrich with audit metadata (non-visible) for downstream logging/adapters that preserve message fields
             _cmd_meta = {
                 "source": "slash_command",
-                "command": cmd_name if 'cmd_name' in locals() else None,
-                "args": cmd_args if 'cmd_args' in locals() else None,
+                "command": cmd_name,
+                "args": cmd_args,
                 "mode": command_router.get_injection_mode(),
-                "result_ok": True if 'cmd_res' in locals() and getattr(cmd_res, 'ok', False) else False,
-                "error": (getattr(cmd_res, 'metadata', {}) or {}).get("error") if 'cmd_res' in locals() else None,
-                "rbac": (getattr(cmd_res, 'metadata', {}) or {}).get("rbac") if 'cmd_res' in locals() else None,
+                "result_ok": getattr(cmd_res, 'ok', False) if cmd_res is not None else False,
+                "error": (getattr(cmd_res, 'metadata', {}) or {}).get("error") if cmd_res is not None else None,
+                "rbac": (getattr(cmd_res, 'metadata', {}) or {}).get("rbac") if cmd_res is not None else None,
             }
             msg_obj = {
                 "role": "system",
@@ -788,8 +939,8 @@ def _chat_sync_impl(
         try:
             if api_key and os.getenv("ALLOW_MASKED_KEY_LOG", "").lower() in {"1", "true", "yes", "on"}:
                 logging.debug("Debug - Chat Function - API Key (masked): %s...%s", api_key[:4], api_key[-4:])
-        except Exception:
-            pass
+        except Exception as key_log_err:
+            logging.debug(f"Could not log masked API key: {key_log_err}")
         logging.debug(f"Debug - Chat Function - Prompt: {custom_prompt}")
 
         # --- Call the LLM via the updated chat_api_call ---
@@ -852,11 +1003,19 @@ def _chat_sync_impl(
                     logging.warning("Post-gen replacement enabled but dict file not found/configured.")
             return response
 
+    except ChatAPIError:
+        # Re-raise ChatAPIError subclasses as-is for proper upstream handling
+        raise
     except Exception as e:
         log_counter("chat_error_multimodal", labels={"api_endpoint": api_endpoint, "error": str(e)})
         logging.error(f"Error in multimodal chat function: {str(e)}", exc_info=True)
-        # Consider if the error format should change from just a string
-        return f"An error occurred in the chat function: {str(e)}"
+        # Raise a proper exception instead of returning an error string
+        raise ChatProviderError(
+            message=f"An error occurred in the chat function: {str(e)}",
+            status_code=500,
+            provider=api_endpoint,
+            details=str(e)
+        ) from e
 
 
 def chat(
@@ -1042,6 +1201,10 @@ async def achat(
 
         injected_command_system_text: Optional[str] = None
         original_message = message
+        # Initialize command variables for safe access later (instead of using unsafe locals() checks)
+        cmd_name: Optional[str] = None
+        cmd_args: Optional[str] = None
+        cmd_res: Optional[Any] = None
         if command_router.commands_enabled() and isinstance(message, str):
             parsed = command_router.parse_slash_command(message)
             if parsed:
@@ -1166,12 +1329,12 @@ async def achat(
         if injected_command_system_text:
             _cmd_meta = {
                 "source": "slash_command",
-                "command": cmd_name if 'cmd_name' in locals() else None,
-                "args": cmd_args if 'cmd_args' in locals() else None,
+                "command": cmd_name,
+                "args": cmd_args,
                 "mode": command_router.get_injection_mode(),
-                "result_ok": True if 'cmd_res' in locals() and getattr(cmd_res, 'ok', False) else False,
-                "error": (getattr(cmd_res, 'metadata', {}) or {}).get("error") if 'cmd_res' in locals() else None,
-                "rbac": (getattr(cmd_res, 'metadata', {}) or {}).get("rbac") if 'cmd_res' in locals() else None,
+                "result_ok": getattr(cmd_res, 'ok', False) if cmd_res is not None else False,
+                "error": (getattr(cmd_res, 'metadata', {}) or {}).get("error") if cmd_res is not None else None,
+                "rbac": (getattr(cmd_res, 'metadata', {}) or {}).get("rbac") if cmd_res is not None else None,
             }
             msg_obj = {
                 "role": "system",
@@ -1256,10 +1419,19 @@ async def achat(
                     logging.warning("Post-gen replacement enabled but dict file not found/configured.")
             return response
 
+    except ChatAPIError:
+        # Re-raise ChatAPIError subclasses as-is for proper upstream handling
+        raise
     except Exception as e:
         log_counter("chat_error_multimodal", labels={"api_endpoint": api_endpoint, "error": str(e)})
         logging.error(f"Error in async multimodal chat function: {str(e)}", exc_info=True)
-        return f"An error occurred in the async chat function: {str(e)}"
+        # Raise a proper exception instead of returning an error string
+        raise ChatProviderError(
+            message=f"An error occurred in the async chat function: {str(e)}",
+            status_code=500,
+            provider=api_endpoint,
+            details=str(e)
+        ) from e
 
 #
 # End of chat_orchestrator.py

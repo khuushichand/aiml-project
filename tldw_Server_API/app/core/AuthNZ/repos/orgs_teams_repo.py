@@ -383,9 +383,277 @@ class AuthnzOrgsTeamsRepo:
             logger.error(f"AuthnzOrgsTeamsRepo.list_organizations failed: {exc}")
             raise
 
+    async def update_organization(
+        self,
+        *,
+        org_id: int,
+        name: Optional[str] = None,
+        slug: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Update an organization row.
+
+        Currently supports updating name and slug; additional fields should be
+        added here so backend-specific SQL stays encapsulated in the repo.
+
+        Args:
+            org_id: Organization ID to update.
+            name: New organization name (optional).
+            slug: New organization slug (optional).
+
+        Returns:
+            Updated organization dict, or None if the organization was not found.
+
+        Raises:
+            DuplicateOrganizationError: If name or slug collides with another org.
+            ValueError: If no update fields are supplied.
+        """
+        updates: Dict[str, Any] = {}
+        if name is not None:
+            updates["name"] = name
+        if slug is not None:
+            updates["slug"] = slug
+
+        if not updates:
+            raise ValueError("No fields to update")
+
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres(conn):
+                    if "slug" in updates and updates["slug"] not in (None, ""):
+                        exists_slug = await conn.fetchrow(
+                            "SELECT 1 FROM organizations WHERE LOWER(slug) = LOWER($1) AND id <> $2",
+                            updates["slug"],
+                            org_id,
+                        )
+                        if exists_slug:
+                            raise DuplicateOrganizationError("slug", str(updates["slug"]))
+                    if "name" in updates:
+                        exists_name = await conn.fetchrow(
+                            "SELECT 1 FROM organizations WHERE LOWER(name) = LOWER($1) AND id <> $2",
+                            updates["name"],
+                            org_id,
+                        )
+                        if exists_name:
+                            raise DuplicateOrganizationError("name", str(updates["name"]))
+
+                    set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(updates.keys()))
+                    params = [org_id] + list(updates.values())
+                    row = await conn.fetchrow(
+                        f"""
+                        UPDATE organizations
+                        SET {set_clause}, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = $1
+                        RETURNING id, name, slug, owner_user_id, is_active, created_at, updated_at
+                        """,
+                        *params,
+                    )
+                    if not row:
+                        return None
+                    d = dict(row)
+                    d["is_active"] = bool(d.get("is_active", True))
+                    try:
+                        from datetime import datetime
+
+                        for key in ("created_at", "updated_at"):
+                            if isinstance(d.get(key), datetime):
+                                d[key] = d[key].isoformat()
+                    except (TypeError, ValueError, AttributeError) as exc:
+                        logger.debug(f"Skipping datetime normalization for org row: {exc}")
+                    return d
+
+                if "slug" in updates and updates["slug"] not in (None, ""):
+                    cur_chk = await conn.execute(
+                        "SELECT 1 FROM organizations WHERE LOWER(slug) = LOWER(?) AND id <> ?",
+                        (updates["slug"], org_id),
+                    )
+                    if await cur_chk.fetchone():
+                        raise DuplicateOrganizationError("slug", str(updates["slug"]))
+                if "name" in updates:
+                    cur_chk2 = await conn.execute(
+                        "SELECT 1 FROM organizations WHERE LOWER(name) = LOWER(?) AND id <> ?",
+                        (updates["name"], org_id),
+                    )
+                    if await cur_chk2.fetchone():
+                        raise DuplicateOrganizationError("name", str(updates["name"]))
+
+                set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+                params = list(updates.values()) + [org_id]
+                await conn.execute(
+                    f"UPDATE organizations SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    tuple(params),
+                )
+                cur = await conn.execute(
+                    "SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at FROM organizations WHERE id = ?",
+                    (org_id,),
+                )
+                row = await cur.fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": row[0],
+                    "name": row[1],
+                    "slug": row[2],
+                    "owner_user_id": row[3],
+                    "is_active": bool(row[4]),
+                    "created_at": row[5],
+                    "updated_at": row[6],
+                }
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzOrgsTeamsRepo.update_organization failed: {exc}")
+            raise
+
+    # -------------------------------------------------------------------------
+    # Single-record getters
+    # -------------------------------------------------------------------------
+
+    async def get_team(self, team_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get a team by ID.
+
+        Returns team dict with id, org_id, name, slug, description, is_active, etc.
+        Returns None if not found.
+        """
+        try:
+            async with self.db_pool.acquire() as conn:
+                if self._is_postgres(conn):
+                    row = await conn.fetchrow(
+                        """
+                        SELECT id, org_id, name, slug, description, is_active, created_at, updated_at
+                        FROM teams WHERE id = $1
+                        """,
+                        team_id
+                    )
+                    if not row:
+                        return None
+                    d = dict(row)
+                    from datetime import datetime
+                    for key in ("created_at", "updated_at"):
+                        if isinstance(d.get(key), datetime):
+                            d[key] = d[key].isoformat()
+                    return d
+                else:
+                    cur = await conn.execute(
+                        """
+                        SELECT id, org_id, name, slug, description, is_active, created_at, updated_at
+                        FROM teams WHERE id = ?
+                        """,
+                        (team_id,)
+                    )
+                    row = await cur.fetchone()
+                    if not row:
+                        return None
+                    return {
+                        "id": row[0],
+                        "org_id": row[1],
+                        "name": row[2],
+                        "slug": row[3],
+                        "description": row[4],
+                        "is_active": bool(row[5]),
+                        "created_at": row[6],
+                        "updated_at": row[7],
+                    }
+        except Exception as exc:
+            logger.error(f"AuthnzOrgsTeamsRepo.get_team failed: {exc}")
+            raise
+
+    async def get_org_member(self, org_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific org membership.
+
+        Returns membership dict with org_id, user_id, role, status, added_at.
+        Returns None if user is not a member.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres(conn):
+                    row = await conn.fetchrow(
+                        """
+                        SELECT org_id, user_id, role, status, added_at
+                        FROM org_members WHERE org_id = $1 AND user_id = $2
+                        """,
+                        org_id, user_id
+                    )
+                    if not row:
+                        return None
+                    d = dict(row)
+                    from datetime import datetime
+                    if isinstance(d.get("added_at"), datetime):
+                        d["added_at"] = d["added_at"].isoformat()
+                    return d
+                else:
+                    cur = await conn.execute(
+                        """
+                        SELECT org_id, user_id, role, status, added_at
+                        FROM org_members WHERE org_id = ? AND user_id = ?
+                        """,
+                        (org_id, user_id)
+                    )
+                    row = await cur.fetchone()
+                    if not row:
+                        return None
+                    return {
+                        "org_id": row[0],
+                        "user_id": row[1],
+                        "role": row[2],
+                        "status": row[3],
+                        "added_at": row[4],
+                    }
+        except Exception as exc:
+            logger.error(f"AuthnzOrgsTeamsRepo.get_org_member failed: {exc}")
+            raise
+
     # -------------------------------------------------------------------------
     # Team membership helpers
     # -------------------------------------------------------------------------
+
+    async def get_team_member(self, team_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific team membership.
+
+        Returns membership dict with team_id, user_id, role, status, added_at.
+        Returns None if user is not a member.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres(conn):
+                    row = await conn.fetchrow(
+                        """
+                        SELECT team_id, user_id, role, status, added_at
+                        FROM team_members
+                        WHERE team_id = $1 AND user_id = $2
+                        """,
+                        team_id,
+                        user_id,
+                    )
+                    if not row:
+                        return None
+                    d = dict(row)
+                    from datetime import datetime
+                    if isinstance(d.get("added_at"), datetime):
+                        d["added_at"] = d["added_at"].isoformat()
+                    return d
+                cur = await conn.execute(
+                    """
+                    SELECT team_id, user_id, role, status, added_at
+                    FROM team_members
+                    WHERE team_id = ? AND user_id = ?
+                    """,
+                    (team_id, user_id),
+                )
+                row = await cur.fetchone()
+                if not row:
+                    return None
+                return {
+                    "team_id": row[0],
+                    "user_id": row[1],
+                    "role": row[2],
+                    "status": row[3],
+                    "added_at": row[4],
+                }
+        except Exception as exc:
+            logger.error(f"AuthnzOrgsTeamsRepo.get_team_member failed: {exc}")
+            raise
 
     async def add_team_member(
         self,
@@ -1133,5 +1401,119 @@ class AuthnzOrgsTeamsRepo:
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzOrgsTeamsRepo.list_org_memberships_for_user failed: {exc}"
+            )
+            raise
+
+    async def list_organizations_for_user(
+        self,
+        user_id: int,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        with_total: bool = False,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        List organizations a given user is a member of with pagination support.
+
+        Returns (rows, total). When with_total=False, total is returned as 0.
+        """
+        try:
+            if self._is_postgres():
+                rows = await self.db_pool.fetchall(
+                    """
+                    SELECT DISTINCT
+                        o.id,
+                        o.name,
+                        o.slug,
+                        o.owner_user_id,
+                        o.is_active,
+                        o.created_at,
+                        o.updated_at,
+                        m.role AS membership_role
+                    FROM organizations o
+                    JOIN org_members m ON m.org_id = o.id
+                    WHERE m.user_id = $1
+                    ORDER BY o.created_at DESC, o.id DESC
+                    LIMIT $2 OFFSET $3
+                    """,
+                    user_id,
+                    limit,
+                    offset,
+                )
+                total = (
+                    await self.db_pool.fetchval(
+                        """
+                        SELECT COUNT(DISTINCT o.id)
+                        FROM organizations o
+                        JOIN org_members m ON m.org_id = o.id
+                        WHERE m.user_id = $1
+                        """,
+                        user_id,
+                    )
+                    if with_total
+                    else 0
+                )
+
+                normalized: List[Dict[str, Any]] = []
+                for r in rows:
+                    d = dict(r)
+                    d["is_active"] = bool(d.get("is_active", True))
+                    normalized.append(d)
+                return normalized, int(total or 0)
+
+            async with self.db_pool.acquire() as conn:
+                cursor = await conn.execute(
+                    """
+                    SELECT DISTINCT
+                        o.id,
+                        o.name,
+                        o.slug,
+                        o.owner_user_id,
+                        o.is_active,
+                        o.created_at,
+                        o.updated_at,
+                        m.role AS membership_role
+                    FROM organizations o
+                    JOIN org_members m ON m.org_id = o.id
+                    WHERE m.user_id = ?
+                    ORDER BY o.created_at DESC, o.id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (user_id, limit, offset),
+                )
+                rows_raw = await cursor.fetchall()
+                rows = [
+                    {
+                        "id": r[0],
+                        "name": r[1],
+                        "slug": r[2],
+                        "owner_user_id": r[3],
+                        "is_active": bool(r[4]),
+                        "created_at": r[5],
+                        "updated_at": r[6],
+                        "membership_role": r[7],
+                    }
+                    for r in rows_raw
+                ]
+
+                if with_total:
+                    cur2 = await conn.execute(
+                        """
+                        SELECT COUNT(DISTINCT o.id)
+                        FROM organizations o
+                        JOIN org_members m ON m.org_id = o.id
+                        WHERE m.user_id = ?
+                        """,
+                        (user_id,),
+                    )
+                    total_row = await cur2.fetchone()
+                    total = int(total_row[0]) if total_row else 0
+                else:
+                    total = 0
+
+                return rows, int(total or 0)
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(
+                f"AuthnzOrgsTeamsRepo.list_organizations_for_user failed: {exc}"
             )
             raise

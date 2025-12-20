@@ -194,8 +194,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             else:
                 prev = records[-1]
                 prev['token_indices'].extend(token_indices)
-                merge_suffix = ' ' + chunk_text if chunk_text else ' '
-                prev['text'] = prev['text'] + merge_suffix
+                prev['text'] = self._merge_chunk_texts(prev.get('text', ''), chunk_text)
 
         return records, tokens, spans
 
@@ -346,6 +345,18 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             # For languages with spaces
             return ' '.join(words)
 
+    def _merge_chunk_texts(self, left: str, right: str) -> str:
+        """Join two chunk texts while preserving language-specific spacing."""
+        if not left:
+            return right
+        if not right:
+            return left
+        if self.language in ['zh', 'zh-cn', 'zh-tw', 'ja', 'th']:
+            return left + right
+        if left[-1].isspace() or right[0].isspace():
+            return left + right
+        return f"{left} {right}"
+
     def chunk_generator(self,
                        text: str,
                        max_size: int,
@@ -370,17 +381,9 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         if overlap >= max_size:
             overlap = max_size - 1
 
-        words = self._tokenize_text(text)
-        step = max(1, max_size - overlap)
-
-        for i in range(0, len(words), step):
-            chunk_words = words[i:i + max_size]
-            chunk = self._join_words(chunk_words)
-
-            # Apply minimum size if specified
-            min_size = options.get('min_chunk_size', 0)
-            if len(chunk_words) >= min_size:
-                yield chunk
+        records, _tokens, _spans = self._prepare_chunk_records(text, max_size, overlap, **options)
+        for record in records:
+            yield record.get('text', '')
 
     def chunk_with_metadata(self,
                             text: str,

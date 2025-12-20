@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 #
@@ -480,8 +481,10 @@ class RateLimiter:
                 "rate_limit_source": "resource_governor",
             }
 
-        # RG disabled → treat as unlimited.
-        return True, {"rate_limit_enabled": False}
+        # RG disabled: fall through to legacy rate limiting if enabled
+        if not self.enabled:
+            # Legacy limiter is also disabled - treat as unlimited
+            return True, {"rate_limit_enabled": False}
 
         # Use provided limits or defaults; treat zero values as intentional
         if limit is None:
@@ -621,17 +624,7 @@ class RateLimiter:
 
         except Exception as e:
             logger.error(f"Database rate limit check failed: {e}")
-            # In test mode, fail open to avoid spurious 429s when tables
-            # are not provisioned by the test harness.
-            try:
-                if os.getenv("TEST_MODE") == "true":
-                    return True, {
-                        "rate_limit_enabled": True,
-                        "note": "bypass on backend error in TEST_MODE"
-                    }
-            except Exception:
-                pass
-            # Otherwise, deny (fail closed) for security
+            # Always fail closed for security - no environment variable bypasses
             return False, {
                 "error": "Rate limit check failed",
                 "limit": limit,
@@ -759,7 +752,7 @@ class RateLimiter:
 
             # Clear Redis cache if available
             if self.redis_client:
-                # Keys are stored as rate:{md5(identifier:endpoint)}:{window}
+                # Keys are stored as rate:{sha256(identifier:endpoint)}:{window}
                 if endpoint:
                     pattern = f"rate:{self._create_key(identifier, endpoint)}:*"
                     async for key in self.redis_client.scan_iter(pattern):
@@ -799,9 +792,15 @@ class RateLimiter:
             logger.error(f"Rate limit cleanup failed: {e}")
 
     def _create_key(self, identifier: str, endpoint: str) -> str:
-        """Create a unique key for rate limiting"""
+        """Create a unique key for rate limiting.
+
+        Uses SHA256 for consistent hashing across the codebase. While this hash
+        is not used for security purposes (only for key uniqueness), SHA256
+        provides better collision resistance and avoids using deprecated
+        cryptographic primitives.
+        """
         combined = f"{identifier}:{endpoint}"
-        return hashlib.md5(combined.encode()).hexdigest()
+        return hashlib.sha256(combined.encode()).hexdigest()
 
     async def get_current_usage(
         self,
@@ -862,17 +861,38 @@ class RateLimiter:
 #
 # Module Functions
 
-# Global instance
+# Global instance with thread-safe initialization
+# Uses both threading.Lock (for cross-thread safety) and asyncio.Lock (for async-safe access)
 _rate_limiter: Optional[RateLimiter] = None
+_rate_limiter_thread_lock = threading.Lock()
+_rate_limiter_async_lock = asyncio.Lock()
 
 
 async def get_rate_limiter() -> RateLimiter:
-    """Get rate limiter singleton instance"""
+    """Get rate limiter singleton instance (thread-safe and async-safe).
+
+    Uses double-checked locking with both threading.Lock and asyncio.Lock to ensure
+    safe initialization in multi-threaded and async contexts.
+    """
     global _rate_limiter
-    if not _rate_limiter:
-        _rate_limiter = RateLimiter()
-        await _rate_limiter.initialize()
-    return _rate_limiter
+    # Fast path - no lock if already initialized
+    if _rate_limiter is not None:
+        return _rate_limiter
+
+    # Thread-safe initialization with threading.Lock for multi-worker safety
+    with _rate_limiter_thread_lock:
+        # Double-check after acquiring thread lock
+        if _rate_limiter is not None:
+            return _rate_limiter
+
+        # Async-safe initialization within the thread lock
+        async with _rate_limiter_async_lock:
+            # Triple-check after acquiring async lock
+            if _rate_limiter is None:
+                limiter = RateLimiter()
+                await limiter.initialize()
+                _rate_limiter = limiter
+            return _rate_limiter
 
 
 # --- Resource Governor plumbing (optional) ---------------------------------

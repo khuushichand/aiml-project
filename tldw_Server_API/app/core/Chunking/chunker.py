@@ -264,8 +264,9 @@ class Chunker:
         if byte_length > self.config.max_text_size:
             try:
                 self._security_logger.log_oversized_input(byte_length, self.config.max_text_size, source=source)
-            except Exception:
-                pass
+            except Exception as e:
+                # Log the failure but don't prevent the size limit enforcement
+                logger.warning(f"Failed to log oversized input event: {e}")
             raise InvalidInputError(
                 f"Text size ({byte_length} bytes) exceeds maximum allowed size "
                 f"({self.config.max_text_size} bytes)"
@@ -470,7 +471,9 @@ class Chunker:
         Returns a dict with a root node and nested children, each child holding "chunks"
         with exact offsets. Designed to be flattened downstream.
         """
-        if not isinstance(text, str) or not text:
+        if not isinstance(text, str):
+            raise InvalidInputError(f"Expected string input, got {type(text).__name__}")
+        if not text:
             return {'type': 'hierarchical', 'schema_version': 1, 'root': {'kind': 'root', 'children': []}}
         self._enforce_text_size(text, source="chunk_text_hierarchical_tree")
         method_opts = dict(method_options or {})
@@ -569,20 +572,17 @@ class Chunker:
                     # Compute sentence spans and group by sentence count to mirror strategy behavior
                     from .strategies.sentences import SentenceChunkingStrategy  # local import
                     ss = SentenceChunkingStrategy(language=language)
-                    # Get sentence spans using strategy to avoid naive find
-                    sent_with_spans = ss._split_sentences_with_spans(segment_clean)  # noqa: SLF001
-                    sentences = [s for (s, _s, _e) in sent_with_spans]
-                    sent_spans: List[Tuple[int, int]] = [(s0, e0) for (_t, s0, e0) in sent_with_spans]
-                    # Group sentences into chunks (max_size sentences, overlap)
-                    step = max(1, (max_size if isinstance(max_size, int) else 0) - (overlap if isinstance(overlap, int) else 0)) or 1
-                    for i in range(0, len(sentences), step):
-                        group = sentences[i:i + (max_size if isinstance(max_size, int) else len(sentences))]
-                        if not group:
+                    records, _combined = ss._prepare_chunk_records(  # noqa: SLF001
+                        segment_clean,
+                        max_size,
+                        overlap,
+                        **method_opts,
+                    )
+                    for record in records or []:
+                        s0 = record.get('start_char')
+                        e0 = record.get('end_char')
+                        if not isinstance(s0, int) or not isinstance(e0, int):
                             continue
-                        ch_text = ''.join(group) if language in ['zh', 'zh-cn', 'zh-tw', 'ja'] else ' '.join(group)
-                        s0 = sent_spans[i][0] if i < len(sent_spans) else 0
-                        j_last = min(len(sent_spans) - 1, i + len(group) - 1)
-                        e0 = sent_spans[j_last][1] if j_last >= 0 else len(segment_clean)
                         _gstart = start + s0
                         _gend = start + e0
                         exact_text = text[_gstart:_gend]
@@ -877,21 +877,22 @@ class Chunker:
                     elif sep == '' and not last_char.isspace():
                         need_sep = True
 
-                if need_sep:
-                    if sep:
-                        eff_sep = sep
-                        if sep.startswith('\n') and combined.endswith('\n'):
-                            trimmed = sep[1:]
-                            eff_sep = trimmed if trimmed else '\n'
-                        header_like = (kind == 'header_atx' or kind_hint == 'header_atx')
-                        if eff_sep.endswith('\n') and header_like and (not language or language.lower() not in languages_no_space):
-                            combined = combined.rstrip('\n')
-                            combined += ' '
-                            combined += '\n\n'
+                    if need_sep:
+                        if sep:
+                            eff_sep = sep
+                            if sep.startswith('\n') and combined.endswith('\n'):
+                                trimmed = sep[1:]
+                                eff_sep = trimmed if trimmed else '\n'
+                            header_like = (kind == 'header_atx' or kind_hint == 'header_atx')
+                            if eff_sep.endswith('\n') and header_like and (not language or language.lower() not in languages_no_space):
+                                combined = combined.rstrip('\n')
+                                combined += ' '
+                                combined += '\n\n'
+                            else:
+                                combined += eff_sep
                         else:
-                            combined += eff_sep
-                    else:
-                        combined += ' '
+                            # Empty separator (no-space languages) should not inject whitespace.
+                            pass
 
                 combined += text_part
                 prev_md = md
@@ -1258,8 +1259,8 @@ class Chunker:
                         "Unicode normalization would change text length; original text retained",
                         source="sanitize_input"
                     )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Unicode normalization failed: {e}")
 
         # Check for control characters (except common ones like \n, \t, \r)
         allowed_control_chars = {'\n', '\t', '\r', '\f'}
@@ -1362,8 +1363,8 @@ class Chunker:
                 elif overlap >= max_size:
                     logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}); adjusting to max_size - 1")
                     overlap = max_size - 1
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Overlap adjustment check failed: {e}")
         language = language or self.config.language
         method = self._resolve_method(method, language, options_raw)
 
@@ -1432,7 +1433,7 @@ class Chunker:
 
         # Update strategy language if different
         if language != strategy.language:
-            strategy.language = language
+            self._apply_strategy_language(strategy, language)
 
         try:
             # Perform chunking
@@ -1550,7 +1551,7 @@ class Chunker:
 
         # Update strategy language if different
         if language != strategy.language:
-            strategy.language = language
+            self._apply_strategy_language(strategy, language)
 
         try:
             # Get chunks with metadata
@@ -1651,7 +1652,7 @@ class Chunker:
 
         # Update strategy language if different
         if language != strategy.language:
-            strategy.language = language
+            self._apply_strategy_language(strategy, language)
 
         # Use generator method when available, otherwise fall back to eager chunking
         chunk_gen = getattr(strategy, 'chunk_generator', None)
@@ -1716,6 +1717,21 @@ class Chunker:
                     strategy.llm_config = cfg
         except Exception:
             logger.debug("Failed to update strategy llm_config", exc_info=True)
+
+    def _apply_strategy_language(self, strategy: Any, language: str) -> None:
+        """Update strategy language and reinitialize language-specific resources if supported."""
+        try:
+            set_lang = getattr(strategy, "set_language", None)
+            if callable(set_lang):
+                set_lang(language)
+                return
+            setattr(strategy, "language", language)
+        except Exception:
+            logger.debug("Failed to update strategy language", exc_info=True)
+            try:
+                setattr(strategy, "language", language)
+            except Exception:
+                pass
 
     def _resolve_method(
         self,
@@ -1852,7 +1868,7 @@ class Chunker:
                 strategy = self.get_strategy(ChunkingMethod.WORDS.value)
                 self._sync_strategy_llm(strategy)
                 if language and strategy.language != language:
-                    strategy.language = language
+                    self._apply_strategy_language(strategy, language)
                 tokens, spans = strategy._tokenize_with_spans(text)  # noqa: SLF001
                 if not spans:
                     return ""
@@ -1866,7 +1882,7 @@ class Chunker:
                 strategy = self.get_strategy(ChunkingMethod.SENTENCES.value)
                 self._sync_strategy_llm(strategy)
                 if language and strategy.language != language:
-                    strategy.language = language
+                    self._apply_strategy_language(strategy, language)
                 sentence_spans = strategy._split_sentences_with_spans(text)  # noqa: SLF001
                 if not sentence_spans:
                     return ""
@@ -1878,11 +1894,38 @@ class Chunker:
                     end_idx += 1
                 return text[start_idx:end_idx]
             if method_norm == ChunkingMethod.PARAGRAPHS.value:
-                spans = [
-                    (s, e)
-                    for (s, e, kind) in self._compute_paragraph_spans(text, template=None)
-                    if kind == "paragraph"
-                ]
+                # Match paragraph strategy semantics: split on two+ newlines
+                spans: List[Tuple[int, int]] = []
+                sep = re.compile(r"\n{2,}")
+                pos = 0
+                n = len(text)
+                for m in sep.finditer(text):
+                    seg_start = pos
+                    seg_end = m.start()
+                    if seg_end > seg_start:
+                        raw_segment = text[seg_start:seg_end]
+                        ltrim = len(raw_segment) - len(raw_segment.lstrip())
+                        rtrim = len(raw_segment) - len(raw_segment.rstrip())
+                        p_start = seg_start + ltrim
+                        p_end = seg_end - rtrim if rtrim else seg_end
+                        if p_end > p_start:
+                            spans.append((p_start, p_end))
+                    pos = m.end()
+                if pos < n:
+                    raw_segment = text[pos:n]
+                    ltrim = len(raw_segment) - len(raw_segment.lstrip())
+                    rtrim = len(raw_segment) - len(raw_segment.rstrip())
+                    p_start = pos + ltrim
+                    p_end = n - rtrim if rtrim else n
+                    if p_end > p_start:
+                        spans.append((p_start, p_end))
+                if not spans:
+                    ltrim = len(text) - len(text.lstrip())
+                    rtrim = len(text) - len(text.rstrip())
+                    p_start = ltrim
+                    p_end = n - rtrim if rtrim else n
+                    if p_end > p_start:
+                        spans.append((p_start, p_end))
                 if not spans:
                     return ""
                 count = min(len(spans), max(0, overlap))
@@ -1895,7 +1938,7 @@ class Chunker:
                 strategy = self.get_strategy(ChunkingMethod.TOKENS.value)
                 self._sync_strategy_llm(strategy)
                 if language and strategy.language != language:
-                    strategy.language = language
+                    self._apply_strategy_language(strategy, language)
                 tokenizer = strategy.tokenizer
                 try:
                     add_special = bool(options.get("add_special_tokens", False))
@@ -1962,7 +2005,7 @@ class Chunker:
         labels = {"component": "chunker", "op": "process_text"}
         increment_counter("chunker_process_total", labels=labels)
         if text is None or not isinstance(text, str):
-            return []
+            raise InvalidInputError(f"Expected string input, got {type(text).__name__}")
         # Shallow copy of options
         opts = dict(options or {})
         if tokenizer_name_or_path:

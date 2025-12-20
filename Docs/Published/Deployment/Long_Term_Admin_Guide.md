@@ -107,6 +107,10 @@ Database
 - Prefer Postgres for multi-user. Tune pool sizes with `TLDW_DB_POOL_SIZE`, `TLDW_DB_MAX_OVERFLOW`, `TLDW_DB_POOL_TIMEOUT`.
 - Postgres maintenance: schedule VACUUM/ANALYZE, monitor autovacuum, and size indices.
 - SQLite: enable WAL; avoid concurrent heavy writers.
+ - Kanban FTS maintenance (optimize/rebuild):
+   - Admin API: `POST /api/v1/admin/kanban/fts/optimize?user_id=1` or `POST /api/v1/admin/kanban/fts/rebuild?user_id=1` (admin auth required).
+   - CLI: `python Helper_Scripts/DB-Related/kanban_fts_maintenance.py --user-id 1 --action optimize` (or `rebuild`).
+   - Use optimize after large imports/migrations; reserve rebuilds for corruption or major search issues (plan for locks/downtime).
 
 LLM providers & cost
 - Track provider usage and cost via metrics and admin endpoints listed in the README under Admin Reporting.

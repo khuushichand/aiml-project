@@ -65,6 +65,8 @@ except ImportError as e:
     logger.debug(f"OpenTelemetry not fully available: {e}")
     logger.debug("Install with: pip install opentelemetry-distro opentelemetry-exporter-otlp opentelemetry-instrumentation-fastapi")
     OTEL_AVAILABLE = False
+    Status = None  # type: ignore
+    StatusCode = None  # type: ignore
 
     # Provide dummy classes for fallback
     class DummyTracer:
@@ -296,8 +298,15 @@ class TelemetryManager:
             headers = {}
             if self.config.otlp_headers:
                 for header in self.config.otlp_headers.split(","):
-                    key, value = header.split("=")
-                    headers[key] = value
+                    header = header.strip()
+                    if not header or "=" not in header:
+                        logger.debug(f"Skipping malformed OTLP header: {header}")
+                        continue
+                    key, value = header.split("=", 1)
+                    key = key.strip()
+                    if not key:
+                        continue
+                    headers[key] = value.strip()
 
             return OTLPSpanExporter(
                 endpoint=self.config.otlp_endpoint,
@@ -339,8 +348,15 @@ class TelemetryManager:
             headers = {}
             if self.config.otlp_headers:
                 for header in self.config.otlp_headers.split(","):
-                    key, value = header.split("=")
-                    headers[key] = value
+                    header = header.strip()
+                    if not header or "=" not in header:
+                        logger.debug(f"Skipping malformed OTLP header: {header}")
+                        continue
+                    key, value = header.split("=", 1)
+                    key = key.strip()
+                    if not key:
+                        continue
+                    headers[key] = value.strip()
 
             exporter = OTLPMetricExporter(
                 endpoint=self.config.otlp_endpoint,
@@ -479,7 +495,8 @@ class TelemetryManager:
                 yield span
             except Exception as e:
                 span.record_exception(e)
-                span.set_status(Status(StatusCode.ERROR, str(e)))
+                if OTEL_AVAILABLE and Status and StatusCode:
+                    span.set_status(Status(StatusCode.ERROR, str(e)))
                 raise
 
     def shutdown(self):

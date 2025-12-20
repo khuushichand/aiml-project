@@ -1248,7 +1248,10 @@ class UnifiedBatchRequest(BaseModel):
 
     # Include all optional parameters from UnifiedRAGRequest that will be applied to all queries
     # Data Sources
-    sources: Optional[List[str]] = Field(default=["media_db"], description="Databases to search")
+    sources: Optional[List[str]] = Field(
+        default=["media_db", "notes", "characters"],
+        description="Databases to search",
+    )
     # Indexing / Namespace
     corpus: Optional[str] = Field(default=None, description="Alias for index_namespace")
     index_namespace: Optional[str] = Field(default=None, description="Corpus/namespace identifier")

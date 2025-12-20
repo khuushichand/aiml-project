@@ -210,7 +210,10 @@ def evaluate_url_policy(
         return out or [80, 443]
 
     allowed_ports = _default_ports()
-    port = parsed.port
+    try:
+        port = parsed.port
+    except ValueError:
+        return URLPolicyResult(False, "Invalid URL port")
     if port is None:
         port = 443 if scheme == "https" else 80
     if allowed_ports and port not in allowed_ports:

@@ -14,12 +14,19 @@ from fastapi import Depends, Header, HTTPException, Request, Response, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
-from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    User,
+    verify_jwt_and_fetch_user,
+    get_request_user,
+)
+from tldw_Server_API.app.api.v1.API_Deps.v1_endpoint_deps import oauth2_scheme
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.exceptions import InactiveUserError
 
 
 security = HTTPBearer(auto_error=False)
@@ -72,6 +79,8 @@ def create_error_response(
 async def verify_api_key(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    *,
+    request: Request,
 ) -> str:
     """Verify API key or JWT token based on auth mode (single_user|multi_user)."""
     settings = get_settings()
@@ -102,6 +111,24 @@ async def verify_api_key(
 
     if isinstance(token, str) and token.startswith("Bearer "):
         token = token[7:]
+
+    client_ip = None
+    try:
+        if request and request.client:
+            client_ip = request.client.host
+    except Exception:
+        client_ip = None
+
+    if settings.AUTH_MODE == "single_user":
+        if not is_single_user_ip_allowed(client_ip, settings):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error": {
+                    "message": "Access denied from this network",
+                    "type": "authentication_error",
+                    "code": "ip_not_allowed",
+                }},
+            )
 
     # Test-mode convenience
     try:
@@ -138,9 +165,9 @@ async def verify_api_key(
         except Exception:
             pass
         try:
-            jwt_service = JWTService(settings)
-            payload = jwt_service.decode_access_token(token)
-            return f"user_{payload['sub']}"
+            jwt_service = get_jwt_service()
+            # Decode early to surface token-specific errors before user lookup.
+            jwt_service.decode_access_token(token)
         except TokenExpiredError:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -159,6 +186,48 @@ async def verify_api_key(
                     "code": "invalid_token",
                 }},
             )
+        except Exception as exc:
+            logger.error(f"Unexpected error decoding JWT for evaluations auth: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error": {
+                    "message": "Invalid API key or token",
+                    "type": "authentication_error",
+                    "code": "invalid_token",
+                }},
+            ) from exc
+        try:
+            user = await verify_jwt_and_fetch_user(request, token)
+            user_id = getattr(user, "id_str", None) or str(getattr(user, "id", ""))
+            return f"user_{user_id}"
+        except InactiveUserError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": {
+                    "message": "Inactive user",
+                    "type": "authentication_error",
+                    "code": "inactive_user",
+                }},
+            ) from exc
+        except HTTPException as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error": {
+                    "message": "Invalid API key or token",
+                    "type": "authentication_error",
+                    "code": "invalid_credentials",
+                }},
+            ) from exc
+        except Exception as exc:
+            logger.error(f"Unexpected error verifying JWT for evaluations auth: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error": {
+                    "message": "Invalid API key or token",
+                    "type": "authentication_error",
+                    "code": "invalid_credentials",
+                }},
+            ) from exc
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -168,6 +237,52 @@ async def verify_api_key(
             "code": "invalid_credentials",
         }},
     )
+
+
+async def get_eval_request_user(
+    request: Request,
+    _user_ctx: str = Depends(verify_api_key),
+    api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    token: Optional[str] = Depends(oauth2_scheme),
+    legacy_token_header: Optional[str] = Header(None, alias="Token"),
+) -> User:
+    """Resolve the authenticated User after evaluations auth validation."""
+    if not api_key and not token and not legacy_token_header:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "error": {
+                    "message": "Missing API key or token",
+                    "type": "authentication_error",
+                    "code": "missing_credentials",
+                }
+            },
+        )
+    return await get_request_user(
+        request=request,
+        api_key=api_key,
+        token=token,
+        legacy_token_header=legacy_token_header,
+    )
+
+
+def require_eval_permissions(*permissions: str):
+    """Evaluation-specific permission gate with consistent auth errors."""
+    perms = [str(p) for p in permissions if str(p).strip()]
+
+    async def _checker(current_user: User = Depends(get_eval_request_user)) -> User:  # noqa: B008
+        if getattr(current_user, "is_admin", False):
+            return current_user
+        user_perms = set(getattr(current_user, "permissions", []) or [])
+        missing = [p for p in perms if p not in user_perms]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission denied: missing {', '.join(missing)}",
+            )
+        return current_user
+
+    return _checker
 
 
 async def check_evaluation_rate_limit(

@@ -226,7 +226,7 @@ class MediaDatabase:
     handling sync metadata and FTS updates internally via Python code.
     Requires client_id on initialization. Includes schema versioning.
     """
-    _CURRENT_SCHEMA_VERSION = 8  # Add scope columns for org/team visibility
+    _CURRENT_SCHEMA_VERSION = 9  # Add visibility and owner_user_id columns
 
     # <<< Schema Definition (Version 1) >>>
 
@@ -261,6 +261,8 @@ class MediaDatabase:
         version INTEGER NOT NULL DEFAULT 1,
         org_id INTEGER,
         team_id INTEGER,
+        visibility TEXT DEFAULT 'personal' CHECK (visibility IN ('personal', 'team', 'org')),
+        owner_user_id INTEGER,
         client_id TEXT NOT NULL,
         deleted BOOLEAN NOT NULL DEFAULT 0,
         prev_version INTEGER,
@@ -483,6 +485,8 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_media_merge_parent_uuid ON Media(merge_parent_uuid);
     CREATE INDEX IF NOT EXISTS idx_media_org_id ON Media(org_id);
     CREATE INDEX IF NOT EXISTS idx_media_team_id ON Media(team_id);
+    CREATE INDEX IF NOT EXISTS idx_media_visibility ON Media(visibility);
+    CREATE INDEX IF NOT EXISTS idx_media_owner_user_id ON Media(owner_user_id);
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_keywords_uuid ON Keywords(uuid);
     CREATE INDEX IF NOT EXISTS idx_keywords_last_modified ON Keywords(last_modified);
@@ -868,6 +872,17 @@ class MediaDatabase:
             except Exception:
                 pass
 
+        # In test contexts, honor explicit db_path to keep fixtures on SQLite.
+        try:
+            test_mode = (
+                os.getenv("PYTEST_CURRENT_TEST") is not None
+                or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            )
+        except Exception:
+            test_mode = False
+        if forced_postgres and test_mode and self.db_path_str and self.db_path_str != ":memory:":
+            forced_postgres = False
+
         if forced_postgres:
             if parser is None:
                 raise DatabaseError("PostgreSQL content backend requested but configuration could not be loaded")
@@ -1085,6 +1100,28 @@ class MediaDatabase:
         if self.backend_type != BackendType.SQLITE:
             return
 
+    def _apply_sqlite_connection_pragmas(self, conn: sqlite3.Connection) -> None:
+        if self.backend_type != BackendType.SQLITE:
+            return
+        try:
+            cfg = getattr(self.backend, "config", None)
+            wal_mode = True
+            foreign_keys = True
+            if cfg is not None:
+                wal_mode = bool(getattr(cfg, "sqlite_wal_mode", True))
+                foreign_keys = bool(getattr(cfg, "sqlite_foreign_keys", True))
+
+            if foreign_keys:
+                conn.execute("PRAGMA foreign_keys = ON")
+            if wal_mode and not self.is_memory_db:
+                conn.execute("PRAGMA journal_mode = WAL")
+                conn.execute("PRAGMA synchronous = NORMAL")
+            conn.execute("PRAGMA busy_timeout = 10000")
+            conn.execute("PRAGMA cache_size = -2000")
+            conn.execute("PRAGMA temp_store = MEMORY")
+        except Exception:
+            pass
+
     # --- Query Execution (Unchanged, catches IntegrityError from validation triggers) ---
     def execute_query(
         self,
@@ -1121,6 +1158,7 @@ class MediaDatabase:
                 if eff_conn is None and not self.is_memory_db:
                     eph = sqlite3.connect(self.db_path_str, check_same_thread=False)
                     eph.row_factory = sqlite3.Row
+                    self._apply_sqlite_connection_pragmas(eph)
                     cur = eph.cursor()
                     cur.execute(prepared_query, prepared_params or ())
                     upper = prepared_query.strip().upper()
@@ -1233,6 +1271,7 @@ class MediaDatabase:
                 if eff_conn is None and not self.is_memory_db:
                     eph = sqlite3.connect(self.db_path_str, check_same_thread=False)
                     eph.row_factory = sqlite3.Row
+                    self._apply_sqlite_connection_pragmas(eph)
                     cur = eph.cursor()
                     cur.executemany(prepared_query, prepared_params_list)
                     # executemany implies DML; commit when using ephemeral connection
@@ -1874,7 +1913,7 @@ class MediaDatabase:
 
             if current_db_version == target_version:
                 logging.debug("Database schema is up to date.")
-                # Optionally ensure FTS tables exist even if schema version matches
+                # Optionally ensure FTS tables and newer helper structures exist
                 try:
                     # Ensure Claims table exists for older DBs without bumping version
                     conn.executescript(self._CLAIMS_TABLE_SQL)
@@ -1907,16 +1946,18 @@ class MediaDatabase:
                             color TEXT,
                             note TEXT,
                             created_at TEXT NOT NULL,
-                            anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote',
-                            content_hash_ref TEXT,
-                            context_before TEXT,
-                            context_after TEXT,
-                            state TEXT NOT NULL DEFAULT 'active'
-                        );
-                        CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
-                        """
-                    )
-                    logging.debug("Verified FTS tables exist.")
+	                            anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote',
+	                            content_hash_ref TEXT,
+	                            context_before TEXT,
+	                            context_after TEXT,
+	                            state TEXT NOT NULL DEFAULT 'active'
+	                        );
+	                        CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
+	                        """
+	                    )
+                    # Ensure visibility/owner columns and indexes exist on upgraded DBs
+                    self._ensure_sqlite_visibility_columns(conn)
+                    logging.debug("Verified FTS tables and visibility columns exist.")
                 except (sqlite3.Error, DatabaseError) as fts_err:
                     logging.warning(f"Could not verify/create FTS tables on already correct schema version: {fts_err}")
                 return
@@ -2020,6 +2061,8 @@ class MediaDatabase:
                                 CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
                                 """
                             )
+                            # Ensure visibility/owner columns and indexes exist on upgraded DBs
+                            self._ensure_sqlite_visibility_columns(conn)
                         else:
                             raise SchemaError(f"Migration failed: {result}")
 
@@ -2187,6 +2230,7 @@ class MediaDatabase:
             6: self._postgres_migrate_to_v6,
             7: self._postgres_migrate_to_v7,
             8: self._postgres_migrate_to_v8,
+            9: self._postgres_migrate_to_v9,
         }
 
     def _postgres_migrate_to_v5(self, conn) -> None:
@@ -2314,6 +2358,76 @@ class MediaDatabase:
                 connection=conn,
             )
 
+    def _postgres_migrate_to_v9(self, conn) -> None:
+        """Add visibility and owner_user_id columns for content sharing (PostgreSQL)."""
+        backend = self.backend
+        ident = backend.escape_identifier
+
+        # Add visibility column with check constraint
+        backend.execute(
+            f"ALTER TABLE {ident('media')} ADD COLUMN IF NOT EXISTS {ident('visibility')} TEXT DEFAULT 'personal'",
+            connection=conn,
+        )
+
+        # Add check constraint for visibility values (idempotent)
+        try:
+            backend.execute(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'chk_media_visibility'
+                          AND conrelid = 'media'::regclass
+                    ) THEN
+                        ALTER TABLE {media_table}
+                        ADD CONSTRAINT chk_media_visibility
+                        CHECK ({visibility_col} IN ('personal', 'team', 'org'));
+                    END IF;
+                END $$;
+                """.format(
+                    media_table=ident("media"),
+                    visibility_col=ident("visibility"),
+                ),
+                connection=conn,
+            )
+        except Exception as exc:
+            logging.debug(f"Could not add visibility check constraint: {exc}")
+
+        # Add owner_user_id column
+        backend.execute(
+            f"ALTER TABLE {ident('media')} ADD COLUMN IF NOT EXISTS {ident('owner_user_id')} BIGINT",
+            connection=conn,
+        )
+
+        # Backfill owner_user_id from client_id where possible
+        try:
+            backend.execute(
+                """
+                UPDATE {media_table}
+                SET {owner_user_id_col} = CAST({client_id_col} AS BIGINT)
+                WHERE {owner_user_id_col} IS NULL
+                  AND {client_id_col} ~ '^[0-9]+$'
+                """.format(
+                    media_table=ident("media"),
+                    owner_user_id_col=ident("owner_user_id"),
+                    client_id_col=ident("client_id"),
+                ),
+                connection=conn,
+            )
+        except Exception as exc:
+            logging.debug(f"Could not backfill owner_user_id: {exc}")
+
+        # Add indexes
+        backend.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_media_visibility ON {ident('media')}({ident('visibility')})",
+            connection=conn,
+        )
+        backend.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_media_owner_user_id ON {ident('media')}({ident('owner_user_id')})",
+            connection=conn,
+        )
+
     def _update_schema_version_postgres(self, conn, version: int) -> None:
         """Ensure schema_version table reflects the supplied version."""
 
@@ -2413,6 +2527,55 @@ class MediaDatabase:
         finally:
             conn.commit()
 
+    def _ensure_sqlite_visibility_columns(self, conn: sqlite3.Connection) -> None:
+        """
+        Ensure Media.visibility and Media.owner_user_id columns and indexes exist on SQLite.
+
+        This guards against mixed-version databases where the base schema has been
+        updated but older files may have been migrated without the newer columns.
+        """
+        try:
+            cursor = conn.execute("PRAGMA table_info(Media)")
+            columns = {row[1] for row in cursor.fetchall()}
+        except sqlite3.Error as exc:
+            logging.warning(f"Could not introspect Media table for visibility columns: {exc}")
+            return
+
+        try:
+            index_cursor = conn.execute("PRAGMA index_list(Media)")
+            indexes = {row[1] for row in index_cursor.fetchall()}
+        except sqlite3.Error:
+            indexes = set()
+
+        statements: list[str] = []
+
+        if "visibility" not in columns:
+            statements.append(
+                "ALTER TABLE Media ADD COLUMN visibility TEXT DEFAULT 'personal' "
+                "CHECK (visibility IN ('personal', 'team', 'org'));"
+            )
+
+        if "owner_user_id" not in columns:
+            statements.append("ALTER TABLE Media ADD COLUMN owner_user_id INTEGER;")
+
+        # Indexes are idempotent; still skip work when already present.
+        if not indexes or "idx_media_visibility" not in indexes:
+            statements.append(
+                "CREATE INDEX IF NOT EXISTS idx_media_visibility ON Media(visibility);"
+            )
+        if not indexes or "idx_media_owner_user_id" not in indexes:
+            statements.append(
+                "CREATE INDEX IF NOT EXISTS idx_media_owner_user_id ON Media(owner_user_id);"
+            )
+
+        if not statements:
+            return
+
+        try:
+            conn.executescript("\n".join(statements))
+        except sqlite3.Error as exc:
+            logger.warning(f"Could not ensure visibility columns/indexes on Media: {exc}")
+
     def _ensure_postgres_fts(self, conn) -> None:
         backend = self.backend
         backend.create_fts_table(
@@ -2441,8 +2604,8 @@ class MediaDatabase:
                 columns=['chunk_text'],
                 connection=conn,
             )
-        except Exception as e:
-            logging.warning(f"Failed to ensure Postgres chunk-level FTS: {e}")
+        except BackendDatabaseError as exc:
+            logger.warning(f"Failed to ensure Postgres chunk-level FTS: {exc}")
 
     def _postgres_policy_exists(self, conn, table: str, policy: str) -> bool:
         """Check whether a named RLS policy exists for the given table."""
@@ -2454,59 +2617,128 @@ class MediaDatabase:
             )
             rows = getattr(result, "rows", None)
             return bool(rows)
-        except Exception:
+        except BackendDatabaseError as exc:
+            logger.warning(
+                f"Failed to inspect Postgres RLS policy '{policy}' on table '{table}': {exc}"
+            )
             return False
 
     def _ensure_postgres_rls(self, conn) -> None:
-        """Ensure row-level security policies exist for shared content tables."""
+        """Ensure row-level security policies exist for shared content tables.
+
+        Visibility-aware policies:
+        - personal: Only the owner can access (owner_user_id or client_id match)
+        - team: Team members can access (team_id in user's teams)
+        - org: Organization members can access (org_id in user's orgs)
+        - admin: Platform admins can access everything
+        """
         backend = self.backend
         ident = backend.escape_identifier
 
+        # Helper expressions for array conversions
         org_array = "COALESCE(string_to_array(NULLIF(current_setting('app.org_ids', true), ''), ',')::BIGINT[], ARRAY[]::BIGINT[])"
         team_array = "COALESCE(string_to_array(NULLIF(current_setting('app.team_ids', true), ''), ',')::BIGINT[], ARRAY[]::BIGINT[])"
+        current_user = "current_setting('app.current_user_id', true)"
+        is_admin = "COALESCE(current_setting('app.is_admin', true), '0') = '1'"
+        not_deleted_predicate = f"COALESCE({ident('media')}.deleted, FALSE) = FALSE"
+
+        # Build visibility-aware predicates for media table
+        # Personal: owner_user_id matches OR client_id matches (backwards compatibility)
+        personal_predicate = (
+            f"(COALESCE({ident('media')}.visibility, 'personal') = 'personal' "
+            f"AND (COALESCE({ident('media')}.owner_user_id::TEXT, {ident('media')}.client_id) = {current_user}))"
+        )
+
+        # Team: visibility is 'team' AND team_id is in user's team list
+        team_predicate = (
+            f"({ident('media')}.visibility = 'team' "
+            f"AND {ident('media')}.team_id IS NOT NULL "
+            f"AND {ident('media')}.team_id = ANY({team_array}))"
+        )
+
+        # Org: visibility is 'org' AND org_id is in user's org list
+        org_predicate = (
+            f"({ident('media')}.visibility = 'org' "
+            f"AND {ident('media')}.org_id IS NOT NULL "
+            f"AND {ident('media')}.org_id = ANY({org_array}))"
+        )
+
+        # Combined media access: admin OR personal OR team OR org
+        media_access_predicate = (
+            f"({is_admin} OR ({not_deleted_predicate} AND ({personal_predicate} OR {team_predicate} OR {org_predicate})))"
+        )
 
         policy_sets = {
             'media': [
-                ('media_scope_admin', "COALESCE(current_setting('app.is_admin', true), '0') = '1'"),
-                ('media_scope_personal', f"{ident('media')}.client_id = current_setting('app.current_user_id', true)"),
-                ('media_scope_org', f"{ident('media')}.org_id IS NOT NULL AND {ident('media')}.org_id = ANY({org_array})"),
-                ('media_scope_team', f"{ident('media')}.team_id IS NOT NULL AND {ident('media')}.team_id = ANY({team_array})"),
+                ('media_visibility_access', media_access_predicate),
             ],
             'sync_log': [
-                ('sync_scope_admin', "COALESCE(current_setting('app.is_admin', true), '0') = '1'"),
-                ('sync_scope_personal', f"{ident('sync_log')}.client_id = current_setting('app.current_user_id', true)"),
+                ('sync_scope_admin', is_admin),
+                ('sync_scope_personal', f"{ident('sync_log')}.client_id = {current_user}"),
                 ('sync_scope_org', f"{ident('sync_log')}.org_id IS NOT NULL AND {ident('sync_log')}.org_id = ANY({org_array})"),
                 ('sync_scope_team', f"{ident('sync_log')}.team_id IS NOT NULL AND {ident('sync_log')}.team_id = ANY({team_array})"),
             ],
         }
 
-        try:
-            backend.execute(f"ALTER TABLE {ident('media')} ENABLE ROW LEVEL SECURITY", connection=conn)
-            backend.execute(f"ALTER TABLE {ident('media')} FORCE ROW LEVEL SECURITY", connection=conn)
-        except Exception as exc:
-            logging.debug(f"Could not enable RLS for media: {exc}")
-
-        # Create policies only if missing (idempotent)
-        for policy_name, predicate in policy_sets['media']:
+        # Drop old media policies if they exist (migration to new visibility-based policy)
+        old_media_policies = ['media_scope_admin', 'media_scope_personal', 'media_scope_org', 'media_scope_team']
+        for old_policy in old_media_policies:
             try:
-                if not self._postgres_policy_exists(conn, 'media', policy_name):
+                if self._postgres_policy_exists(conn, 'media', old_policy):
                     backend.execute(
-                        f"""
-                        CREATE POLICY {backend.escape_identifier(policy_name)} ON {ident('media')}
-                        FOR ALL
-                        USING ({predicate})
-                        WITH CHECK ({predicate})
-                        """,
+                        f"DROP POLICY IF EXISTS {backend.escape_identifier(old_policy)} ON {ident('media')}",
                         connection=conn,
                     )
-            except Exception as exc:
-                logging.debug(f"Skipping media policy {policy_name}: {exc}")
+                    logger.debug(f"Dropped old media policy: {old_policy}")
+            except BackendDatabaseError as exc:
+                logger.warning(f"Could not drop old media policy '{old_policy}': {exc}")
 
         try:
-            backend.execute(f"ALTER TABLE {ident('sync_log')} ENABLE ROW LEVEL SECURITY", connection=conn)
-            backend.execute(f"ALTER TABLE {ident('sync_log')} FORCE ROW LEVEL SECURITY", connection=conn)
-        except Exception as exc:
-            logging.debug(f"Could not enable RLS for sync_log: {exc}")
+            backend.execute(
+                f"ALTER TABLE {ident('media')} ENABLE ROW LEVEL SECURITY",
+                connection=conn,
+            )
+            backend.execute(
+                f"ALTER TABLE {ident('media')} FORCE ROW LEVEL SECURITY",
+                connection=conn,
+            )
+        except BackendDatabaseError as exc:
+            logger.warning(f"Could not enable RLS for media table: {exc}")
+
+        # Create new visibility-aware media policy
+        for policy_name, predicate in policy_sets['media']:
+            try:
+                # Drop and recreate to ensure latest predicate
+                try:
+                    backend.execute(
+                        f"DROP POLICY IF EXISTS {backend.escape_identifier(policy_name)} ON {ident('media')}",
+                        connection=conn,
+                    )
+                except BackendDatabaseError as exc:
+                    logger.warning(f"Could not drop existing media policy '{policy_name}': {exc}")
+                backend.execute(
+                    f"""
+                    CREATE POLICY {backend.escape_identifier(policy_name)} ON {ident('media')}
+                    FOR ALL
+                    USING ({predicate})
+                    WITH CHECK ({predicate})
+                    """,
+                    connection=conn,
+                )
+            except BackendDatabaseError as exc:
+                logger.warning(f"Skipping creation of media policy '{policy_name}': {exc}")
+
+        try:
+            backend.execute(
+                f"ALTER TABLE {ident('sync_log')} ENABLE ROW LEVEL SECURITY",
+                connection=conn,
+            )
+            backend.execute(
+                f"ALTER TABLE {ident('sync_log')} FORCE ROW LEVEL SECURITY",
+                connection=conn,
+            )
+        except BackendDatabaseError as exc:
+            logger.warning(f"Could not enable RLS for sync_log table: {exc}")
 
         # Create policies only if missing (idempotent)
         for policy_name, predicate in policy_sets['sync_log']:
@@ -2521,8 +2753,8 @@ class MediaDatabase:
                         """,
                         connection=conn,
                     )
-            except Exception as exc:
-                logging.debug(f"Skipping sync_log policy {policy_name}: {exc}")
+            except BackendDatabaseError as exc:
+                logger.warning(f"Skipping creation of sync_log policy '{policy_name}': {exc}")
 
     # --- Internal Helpers (Unchanged) ---
     def _get_current_utc_timestamp_str(self) -> str:
@@ -3280,6 +3512,50 @@ class MediaDatabase:
             conditions.append("m.deleted = 0")
         if not include_trash:
             conditions.append("m.is_trash = 0")
+
+        # Visibility filtering for SQLite (PostgreSQL uses RLS policies)
+        if self.backend_type == BackendType.SQLITE:
+            try:
+                scope = get_scope()
+            except Exception as scope_err:
+                logging.debug(f"Failed to resolve scope for SQLite visibility filter; falling back to no scope: {scope_err}")
+                scope = None
+
+            if scope and not scope.is_admin:
+                # Build visibility conditions for non-admin users
+                visibility_parts = []
+
+                # Personal: visibility is 'personal' and user is the owner
+                user_id_str = str(scope.user_id) if scope.user_id is not None else ""
+                if user_id_str:
+                    visibility_parts.append(
+                        "(COALESCE(m.visibility, 'personal') = 'personal' "
+                        "AND (COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = ?))"
+                    )
+                    params.append(user_id_str)
+
+                # Team: visibility is 'team' and user is a member of the team
+                if scope.team_ids:
+                    team_placeholders = ','.join('?' * len(scope.team_ids))
+                    visibility_parts.append(
+                        f"(m.visibility = 'team' AND m.team_id IN ({team_placeholders}))"
+                    )
+                    params.extend(scope.team_ids)
+
+                # Org: visibility is 'org' and user is a member of the org
+                if scope.org_ids:
+                    org_placeholders = ','.join('?' * len(scope.org_ids))
+                    visibility_parts.append(
+                        f"(m.visibility = 'org' AND m.org_id IN ({org_placeholders}))"
+                    )
+                    params.extend(scope.org_ids)
+
+                if visibility_parts:
+                    conditions.append(f"({' OR '.join(visibility_parts)})")
+                else:
+                    # Fail closed for non-admin scopes with no visibility identifiers
+                    # (no user_id, team_ids, or org_ids): return no rows.
+                    conditions.append("(0 = 1)")
 
         # Media IDs Filter
         if media_ids_filter:
@@ -4353,6 +4629,135 @@ class MediaDatabase:
             logger.error(f"Unexpected error soft deleting media ID {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error during soft delete: {e}") from e
 
+    def share_media(
+        self,
+        media_id: int,
+        visibility: str,
+        *,
+        org_id: Optional[int] = None,
+        team_id: Optional[int] = None,
+    ) -> bool:
+        """
+        Share media by changing its visibility scope.
+
+        Args:
+            media_id: ID of the media to share
+            visibility: New visibility level ('personal', 'team', 'org')
+            org_id: Organization ID (required for 'org' visibility)
+            team_id: Team ID (required for 'team' visibility)
+
+        Returns:
+            True if the media was updated successfully
+
+        Raises:
+            InputError: If visibility is invalid or required scope IDs are missing
+            DatabaseError: If the update fails
+        """
+        valid_visibilities = ('personal', 'team', 'org')
+        if visibility not in valid_visibilities:
+            raise InputError(f"Invalid visibility '{visibility}'. Must be one of: {valid_visibilities}")
+
+        if visibility == 'team' and team_id is None:
+            raise InputError("team_id is required for 'team' visibility")
+        if visibility == 'org' and org_id is None:
+            raise InputError("org_id is required for 'org' visibility")
+
+        now = self._get_current_utc_timestamp_str()
+
+        try:
+            with self.transaction() as conn:
+                # Get current media record
+                row = self._fetchone_with_connection(
+                    conn,
+                    "SELECT id, uuid, version, visibility, org_id, team_id FROM Media WHERE id = ? AND deleted = 0",
+                    (media_id,),
+                )
+                if not row:
+                    raise InputError(f"Media ID {media_id} not found or deleted")
+
+                media_uuid = row['uuid']
+                current_version = row['version']
+                new_version = current_version + 1
+
+                # Determine new org_id and team_id based on visibility
+                new_org_id = org_id if visibility in ('team', 'org') else None
+                new_team_id = team_id if visibility == 'team' else None
+
+                # Update the record
+                update_sql = """
+                    UPDATE Media
+                    SET visibility = ?, org_id = ?, team_id = ?, version = ?, last_modified = ?, client_id = ?
+                    WHERE id = ? AND version = ?
+                """
+                cursor = self._execute_with_connection(
+                    conn,
+                    update_sql,
+                    (visibility, new_org_id, new_team_id, new_version, now, self.client_id, media_id, current_version),
+                )
+                if cursor.rowcount == 0:
+                    raise ConflictError(f"Concurrent modification detected for media ID {media_id}", entity="Media", identifier=media_id)
+
+                # Log sync event
+                payload = {
+                    "visibility": visibility,
+                    "org_id": new_org_id,
+                    "team_id": new_team_id,
+                    "version": new_version,
+                    "last_modified": now,
+                }
+                self._log_sync_event(conn, "Media", media_uuid, "update", new_version, payload)
+
+                logger.info(f"Shared media ID {media_id} with visibility '{visibility}'")
+                return True
+
+        except (InputError, ConflictError, DatabaseError) as e:
+            logger.error(f"Error sharing media ID {media_id}: {e}", exc_info=True)
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error sharing media ID {media_id}: {e}", exc_info=True)
+            raise DatabaseError(f"Failed to share media: {e}") from e
+
+    def unshare_media(self, media_id: int) -> bool:
+        """
+        Revert media to personal visibility.
+
+        This removes team/org sharing and makes the content private to the owner.
+
+        Args:
+            media_id: ID of the media to unshare
+
+        Returns:
+            True if the media was updated successfully
+        """
+        return self.share_media(media_id, visibility='personal')
+
+    def get_media_visibility(self, media_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get the current visibility settings for a media item.
+
+        Args:
+            media_id: ID of the media to check
+
+        Returns:
+            Dict with visibility, org_id, team_id, owner_user_id or None if not found
+        """
+        cursor = self.execute_query(
+            "SELECT visibility, org_id, team_id, owner_user_id, client_id "
+            "FROM Media WHERE id = ? AND deleted = 0",
+            (media_id,),
+        )
+        row = cursor.fetchone() if cursor else None
+        if not row:
+            return None
+
+        return {
+            "visibility": row.get("visibility", "personal"),
+            "org_id": row.get("org_id"),
+            "team_id": row.get("team_id"),
+            "owner_user_id": row.get("owner_user_id"),
+            "client_id": row.get("client_id"),
+        }
+
     def add_media_with_keywords(
             self,
             *,
@@ -4370,8 +4775,17 @@ class MediaDatabase:
             overwrite: bool = False,
             chunk_options: Optional[Dict] = None,
             chunks: Optional[List[Dict[str, Any]]] = None,
+            visibility: Optional[str] = None,
+            owner_user_id: Optional[int] = None,
     ) -> Tuple[Optional[int], Optional[str], str]:
-        """Add or update a media record, handle keyword links, optional chunks and full-text sync."""
+        """Add or update a media record, handle keyword links, optional chunks and full-text sync.
+
+        Args:
+            visibility: Content visibility ('personal', 'team', 'org'). Defaults to 'personal'. When overwriting an
+                existing record, leaving this unset preserves the current visibility.
+            owner_user_id: User ID of the content owner. Defaults to client_id if numeric. When overwriting an existing
+                record, leaving this unset preserves the current owner.
+        """
 
         # ---------------------------------------------------------------------
         # 1. Fast-fail validation & normalisation
@@ -4383,9 +4797,23 @@ class MediaDatabase:
         media_type = media_type or "unknown"
         keywords_norm = [k.strip().lower() for k in keywords or [] if k and k.strip()]
 
+        # Validate visibility (normalize defaults later, based on insert vs overwrite semantics)
+        valid_visibilities = ("personal", "team", "org")
+        requested_visibility = visibility if visibility else None
+        if requested_visibility is not None and requested_visibility not in valid_visibilities:
+            raise InputError(f"Invalid visibility '{requested_visibility}'. Must be one of: {valid_visibilities}")
+
         now = self._get_current_utc_timestamp_str()
         ingestion_date = ingestion_date or now
         client_id = self.client_id
+
+        # Derive default owner_user_id from client_id (only used for inserts unless caller explicitly sets owner_user_id)
+        derived_owner_user_id = None
+        if client_id is not None:
+            try:
+                derived_owner_user_id = int(client_id)
+            except (TypeError, ValueError):
+                derived_owner_user_id = None
 
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         url = url or f"local://{media_type}/{content_hash}"
@@ -4411,10 +4839,18 @@ class MediaDatabase:
         # ------------------------------------------------------------------
         # Helper builders
         # ------------------------------------------------------------------
-        def _media_payload(uuid_: str, version_: int, *, chunk_status: str) -> Dict[str, Any]:
+        def _media_payload(
+            uuid_: str,
+            version_: int,
+            *,
+            chunk_status: str,
+            org_id: Optional[int],
+            team_id: Optional[int],
+            visibility: str,
+            owner_user_id: Optional[int],
+        ) -> Dict[str, Any]:
             """Return a dict suitable for INSERT/UPDATE parameters and for sync logging."""
             bool_false = False if self.backend_type == BackendType.POSTGRESQL else 0
-            scope_org_id, scope_team_id = self._resolve_scope_ids()
             return {
                 "url": url,
                 "title": title,
@@ -4432,8 +4868,10 @@ class MediaDatabase:
                 "uuid": uuid_,
                 "last_modified": now,
                 "version": version_,
-                "org_id": scope_org_id,
-                "team_id": scope_team_id,
+                "org_id": org_id,
+                "team_id": team_id,
+                "visibility": visibility,
+                "owner_user_id": owner_user_id,
                 "client_id": client_id,
                 "deleted": bool_false,
             }
@@ -4495,13 +4933,15 @@ class MediaDatabase:
 
                 # Find existing record by URL or content_hash
                 row = _fetchone(
-                    "SELECT id, uuid, version, url, content_hash FROM Media WHERE url = ? AND deleted = 0 LIMIT 1",
+                    "SELECT id, uuid, version, url, content_hash, visibility, owner_user_id, org_id, team_id "
+                    "FROM Media WHERE url = ? AND deleted = 0 LIMIT 1",
                     (url,),
                 )
 
                 if not row:
                     row = _fetchone(
-                        "SELECT id, uuid, version, url, content_hash FROM Media WHERE content_hash = ? AND deleted = 0 LIMIT 1",
+                        "SELECT id, uuid, version, url, content_hash, visibility, owner_user_id, org_id, team_id "
+                        "FROM Media WHERE content_hash = ? AND deleted = 0 LIMIT 1",
                         (content_hash,),
                     )
 
@@ -4512,6 +4952,10 @@ class MediaDatabase:
                     current_ver = row["version"]
                     existing_url = row["url"]
                     existing_hash = row["content_hash"]
+                    existing_visibility = row.get("visibility") or "personal"
+                    existing_owner_user_id = row.get("owner_user_id")
+                    existing_org_id = row.get("org_id")
+                    existing_team_id = row.get("team_id")
 
                     # Case A.1: Overwrite is requested.
                     if overwrite:
@@ -4542,14 +4986,29 @@ class MediaDatabase:
 
                         # Case A.1.b: Content is different. Proceed with a full versioned update.
                         new_ver = current_ver + 1
-                        payload = _media_payload(media_uuid, new_ver, chunk_status=final_chunk_status)
+                        effective_visibility = (
+                            requested_visibility if requested_visibility is not None else existing_visibility
+                        )
+                        effective_owner_user_id = (
+                            owner_user_id if owner_user_id is not None else existing_owner_user_id
+                        )
+                        payload = _media_payload(
+                            media_uuid,
+                            new_ver,
+                            chunk_status=final_chunk_status,
+                            org_id=existing_org_id,
+                            team_id=existing_team_id,
+                            visibility=effective_visibility,
+                            owner_user_id=effective_owner_user_id,
+                        )
                         update_sql = """
                             UPDATE Media
                                SET url = ?, title = ?, type = ?, content = ?, author = ?,
                                    ingestion_date = ?, transcription_model = ?,
                                    content_hash = ?, is_trash = ?, trash_date = ?,
                                    chunking_status = ?, vector_processing = ?,
-                                   last_modified = ?, version = ?, client_id = ?, deleted = ?
+                                   last_modified = ?, version = ?, org_id = ?, team_id = ?,
+                                   visibility = ?, owner_user_id = ?, client_id = ?, deleted = ?
                                WHERE id = ? AND version = ?
                         """
                         update_params = (
@@ -4567,6 +5026,10 @@ class MediaDatabase:
                             payload['vector_processing'],
                             payload['last_modified'],
                             payload['version'],
+                            payload['org_id'],
+                            payload['team_id'],
+                            payload['visibility'],
+                            payload['owner_user_id'],
                             payload['client_id'],
                             payload['deleted'],
                             media_id,
@@ -4658,13 +5121,23 @@ class MediaDatabase:
 
                         # Proceed with INSERT - now protected by lock
                         media_uuid = self._generate_uuid()
-                        payload = _media_payload(media_uuid, 1, chunk_status=final_chunk_status)
+                        scope_org_id, scope_team_id = self._resolve_scope_ids()
+                        payload = _media_payload(
+                            media_uuid,
+                            1,
+                            chunk_status=final_chunk_status,
+                            org_id=scope_org_id,
+                            team_id=scope_team_id,
+                            visibility=requested_visibility or "personal",
+                            owner_user_id=owner_user_id if owner_user_id is not None else derived_owner_user_id,
+                        )
                         insert_sql = """
                             INSERT INTO Media (url, title, type, content, author, ingestion_date,
                                                transcription_model, content_hash, is_trash, trash_date,
                                                chunking_status, vector_processing, uuid, last_modified,
-                                               version, org_id, team_id, client_id, deleted)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                               version, org_id, team_id, visibility, owner_user_id,
+                                               client_id, deleted)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """
                         insert_params = (
                             payload['url'],
@@ -4684,6 +5157,8 @@ class MediaDatabase:
                             payload['version'],
                             payload['org_id'],
                             payload['team_id'],
+                            payload['visibility'],
+                            payload['owner_user_id'],
                             payload['client_id'],
                             payload['deleted'],
                         )

@@ -70,6 +70,7 @@ class Task:
 
     # Metadata
     created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: Optional[datetime] = None
     queued_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
@@ -77,6 +78,7 @@ class Task:
     # Tracking
     worker_id: Optional[str] = None
     lease_id: Optional[str] = None
+    lease_expires_at: Optional[datetime] = None
     execution_time: Optional[float] = None
 
     # Payload reference (for large payloads)
@@ -104,11 +106,13 @@ class Task:
             'error': self.error,
             'metadata': self.metadata,
             'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'queued_at': self.queued_at.isoformat() if self.queued_at else None,
             'started_at': self.started_at.isoformat() if self.started_at else None,
             'completed_at': self.completed_at.isoformat() if self.completed_at else None,
             'worker_id': self.worker_id,
             'lease_id': self.lease_id,
+            'lease_expires_at': self.lease_expires_at.isoformat() if self.lease_expires_at else None,
             'execution_time': self.execution_time,
             'payload_ref': self.payload_ref,
             'result_ref': self.result_ref
@@ -133,8 +137,8 @@ class Task:
             task.status = TaskStatus(data['status'])
 
         # Datetime fields
-        datetime_fields = ['scheduled_at', 'expires_at', 'created_at',
-                          'queued_at', 'started_at', 'completed_at']
+        datetime_fields = ['scheduled_at', 'expires_at', 'created_at', 'updated_at',
+                          'queued_at', 'started_at', 'completed_at', 'lease_expires_at']
         for field_name in datetime_fields:
             if field_name in data and data[field_name]:
                 value = data[field_name]

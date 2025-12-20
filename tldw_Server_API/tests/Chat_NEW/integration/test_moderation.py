@@ -80,6 +80,33 @@ class _StubModerationService:
         return red
 
 
+class _EvalModerationService:
+    def __init__(self, policy: _StubPolicy):
+        self._policy = policy
+
+    def get_effective_policy(self, user_id: str):
+        return self._policy
+
+    def evaluate_action(self, text: str, policy: _StubPolicy, phase: str):
+        for pat in policy.block_patterns:
+            if pat.search(text or ""):
+                red = pat.sub(policy.redact_replacement, text)
+                return "redact", red, pat.pattern, None
+        return "pass", None, None, None
+
+    def redact_text(self, text: str, policy: _StubPolicy):
+        red = text
+        for pat in policy.block_patterns:
+            red = pat.sub(policy.redact_replacement, red)
+        return red
+
+    def check_text(self, text: str, policy: _StubPolicy):
+        for pat in policy.block_patterns:
+            if pat.search(text or ""):
+                return True, pat.pattern
+        return False, None
+
+
 @pytest.mark.unit
 def test_input_block_returns_400(monkeypatch):
     db, db_path = _make_test_db()
@@ -250,6 +277,60 @@ def test_streaming_block_emits_sse_error_and_finishes():
             os.unlink(db_path)
             if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
             if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
+        except Exception:
+            pass
+        app.dependency_overrides.pop(get_chacha_db_for_user, None)
+
+
+@pytest.mark.unit
+def test_streaming_cross_chunk_redaction_persisted(monkeypatch):
+    db, db_path = _make_test_db()
+    try:
+        monkeypatch.setenv("STREAMS_UNIFIED", "0")
+        app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+        policy = _StubPolicy(enabled=True, input_action='warn', output_action='redact', redact='[REDACTED]')
+
+        def upstream_stream():
+            chunk1 = {"choices": [{"delta": {"content": "sec"}}]}
+            chunk2 = {"choices": [{"delta": {"content": "ret data"}}]}
+            yield f"data: {json.dumps(chunk1)}\n\n"
+            yield f"data: {json.dumps(chunk2)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        with patch("tldw_Server_API.app.api.v1.endpoints.chat.get_moderation_service", return_value=_EvalModerationService(policy)), \
+             patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call", return_value=upstream_stream()):
+            with TestClient(app) as client:
+                resp = client.get("/api/v1/health")
+                client.csrf_token = resp.cookies.get("csrf_token", "")
+                body = {
+                    "api_provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "stream": True,
+                    "save_to_db": True,
+                }
+                headers = _auth_headers(client)
+                with client.stream("POST", "/api/v1/chat/completions", json=body, headers=headers) as r:
+                    assert r.status_code == 200
+                    for line in r.iter_text():
+                        if "[DONE]" in line:
+                            break
+
+        convs = db.get_conversations_for_user("test_client", limit=1)
+        assert convs, "Expected a persisted conversation"
+        conv_id = convs[0]["id"]
+        msgs = db.get_messages_for_conversation(conv_id, order_by_timestamp="ASC")
+        assert msgs, "Expected persisted messages"
+        saved = msgs[-1].get("content", "")
+        assert "[REDACTED]" in saved
+        assert "secret" not in saved.lower()
+    finally:
+        try:
+            os.unlink(db_path)
+            if os.path.exists(db_path + "-wal"):
+                os.unlink(db_path + "-wal")
+            if os.path.exists(db_path + "-shm"):
+                os.unlink(db_path + "-shm")
         except Exception:
             pass
         app.dependency_overrides.pop(get_chacha_db_for_user, None)

@@ -4,15 +4,11 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
+from starlette.requests import Request
 from tldw_Server_API.tests.Embeddings.fakes import FakeAsyncRedisSummary
 from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import _build_orchestrator_snapshot
-
-
-def _override_user_admin():
-    async def _f():
-        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
-        return User(id=42, username="admin", email="a@x", is_active=True, is_admin=True)
-    return _f
 
 
 @pytest.mark.unit
@@ -79,6 +75,33 @@ def test_orchestrator_summary_endpoint_unauthorized(monkeypatch):
 
     app.dependency_overrides[get_request_user] = _non_admin_user
 
+    async def _non_admin_principal(request: Request) -> AuthPrincipal:  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=7,
+            api_key_id=None,
+            subject="user",
+            token_type="access",
+            jti=None,
+            roles=["user"],
+            permissions=[],
+            is_admin=False,
+            org_ids=[],
+            team_ids=[],
+        )
+        try:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=None,
+                user_agent=None,
+                request_id=None,
+            )
+        except Exception:
+            pass
+        return principal
+
+    app.dependency_overrides[get_auth_principal] = _non_admin_principal
+
     # Patch redis client factory used by the endpoint
     import redis.asyncio as aioredis
     fake = FakeAsyncRedisSummary()
@@ -94,6 +117,7 @@ def test_orchestrator_summary_endpoint_unauthorized(monkeypatch):
 
     # Cleanup overrides and reset settings back to default for isolation
     app.dependency_overrides.pop(get_request_user, None)
+    app.dependency_overrides.pop(get_auth_principal, None)
     reset_settings()
 
 
@@ -116,10 +140,8 @@ def test_orchestrator_summary_flags_per_stage(disable_heavy_startup, admin_user,
 
 
 @pytest.mark.unit
-def test_orchestrator_summary_no_redis(monkeypatch):
+def test_orchestrator_summary_no_redis(monkeypatch, admin_user):
     # When Redis connection fails, endpoint should return 200 with zeroed structure
-    app.dependency_overrides[get_request_user] = _override_user_admin()
-
     import redis.asyncio as aioredis
 
     async def fake_from_url(url, decode_responses=True):
@@ -138,7 +160,7 @@ def test_orchestrator_summary_no_redis(monkeypatch):
     assert data["stages"] == {}
     assert data["flags"] == {}
 
-    app.dependency_overrides.pop(get_request_user, None)
+    # Cleanup handled by admin_user fixture
 
 
 @pytest.mark.unit

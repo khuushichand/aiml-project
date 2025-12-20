@@ -71,7 +71,8 @@ class TestUnifiedPipeline:
             result = await unified_rag_pipeline(
                 query="cached query",
                 enable_cache=True,
-                cache_ttl=3600
+                cache_ttl=3600,
+                adaptive_cache=False,
             )
 
             answer = (

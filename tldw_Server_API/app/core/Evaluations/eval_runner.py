@@ -186,7 +186,6 @@ class EvaluationRunner:
             batch_size = eval_config.get("config", {}).get("batch_size", 10)
             max_workers = eval_config.get("config", {}).get("max_workers", 4)
 
-            all_results = []
             sample_results = []
 
             for i in range(0, total_samples, batch_size):
@@ -209,27 +208,26 @@ class EvaluationRunner:
                         progress["failed_samples"] += 1
                     else:
                         progress["completed_samples"] += 1
-                        all_results.append(result)
 
                     sample_results.append(result)
 
                 self.db.update_run_progress(run_id, progress)
 
-            # Calculate aggregate results
+            # Calculate aggregate results (include failed samples)
             aggregate = self._calculate_aggregate_results(
-                all_results,
+                sample_results,
                 eval_spec.get("metrics", []),
                 eval_spec.get("threshold", 0.7)
             )
 
             # Calculate token usage
-            usage = self._calculate_usage(all_results)
+            usage = self._calculate_usage(sample_results)
 
             # Prepare final results
             duration = time.time() - start_time
             results = {
                 "aggregate": aggregate,
-                "by_metric": self._calculate_metric_stats(all_results, eval_spec.get("metrics", [])),
+                "by_metric": self._calculate_metric_stats(sample_results, eval_spec.get("metrics", [])),
                 "sample_results": sample_results,
                 "failed_samples": [r for r in sample_results if r.get("error")]
             }
@@ -371,6 +369,7 @@ class EvaluationRunner:
         # Progress accounting
         total_work = max(1, len(config_grid) * max(1, len(samples)))
         completed = 0
+        failed = 0
 
         per_config_results = []
         best = None
@@ -406,6 +405,19 @@ class EvaluationRunner:
 
         # Optional ephemeral indexing base namespace
         base_namespace = rp.get("index_namespace")
+
+        # Initialize progress for total work units
+        try:
+            self.db.update_run_progress(
+                run_id,
+                {
+                    "total_samples": total_work,
+                    "completed_samples": 0,
+                    "failed_samples": 0,
+                },
+            )
+        except Exception:
+            pass
 
         # Iterate configs
         for idx, cfg in enumerate(config_grid):
@@ -527,7 +539,15 @@ class EvaluationRunner:
                     logger.error(f"unified_rag_pipeline failed for {cfg_id} sample {s_idx}: {e}")
                     per_sample.append({"sample_index": s_idx, "error": str(e)})
                     completed += 1
-                    self.db.update_run_progress(run_id, {"completed": completed, "total": total_work})
+                    failed += 1
+                    self.db.update_run_progress(
+                        run_id,
+                        {
+                            "completed_samples": completed,
+                            "total_samples": total_work,
+                            "failed_samples": failed,
+                        },
+                    )
                     continue
 
                 # Extract contexts and response from pipeline result
@@ -652,7 +672,14 @@ class EvaluationRunner:
 
                 completed += 1
                 # Lightweight progress update
-                self.db.update_run_progress(run_id, {"completed": completed, "total": total_work})
+                self.db.update_run_progress(
+                    run_id,
+                    {
+                        "completed_samples": completed,
+                        "total_samples": total_work,
+                        "failed_samples": failed,
+                    },
+                )
 
             # Aggregate per-config
             if agg_scores:
@@ -955,8 +982,21 @@ class EvaluationRunner:
     ) -> List[Dict[str, Any]]:
         """Get samples for evaluation"""
         # Check for dataset override
-        if eval_config.get("dataset_override"):
-            return eval_config["dataset_override"]["samples"]
+        override = eval_config.get("dataset_override")
+        if override:
+            try:
+                if hasattr(override, "model_dump"):
+                    override = override.model_dump()
+                elif hasattr(override, "dict"):
+                    override = override.dict()
+            except Exception:
+                pass
+            if isinstance(override, dict) and "samples" in override:
+                return override["samples"]
+            if isinstance(override, list):
+                return override
+            if isinstance(override, dict):
+                return [override]
 
         # Get from evaluation's dataset
         dataset_id = evaluation.get("dataset_id")
@@ -1095,27 +1135,60 @@ class EvaluationRunner:
             source_text = sample["input"].get("source_text", "")
             summary = sample["input"].get("summary", "")
 
-            # Run G-Eval with controlled thread pool usage
-            # Use a dedicated executor to avoid exhausting the default thread pool
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,  # Use default executor but with timeout control
-                run_geval,
-                source_text,
-                summary,
-                eval_spec.get("evaluator_model", "openai"),
-                False  # save=False
+            # Resolve provider and API key (if provided)
+            run_config = config.get("config", {}) if isinstance(config, dict) else {}
+            api_name = (
+                eval_spec.get("api_name")
+                or eval_spec.get("provider")
+                or eval_spec.get("evaluator_model")
+                or run_config.get("api_name")
+                or "openai"
+            )
+            api_key = (
+                eval_spec.get("api_key")
+                or eval_spec.get("apiKey")
+                or run_config.get("api_key")
             )
 
+            # Run G-Eval with controlled thread pool usage
+            loop = asyncio.get_event_loop()
+            from functools import partial
+            call_geval = partial(
+                run_geval,
+                transcript=source_text,
+                summary=summary,
+                api_key=api_key,
+                api_name=api_name,
+                save=False,
+            )
+            result = await loop.run_in_executor(None, call_geval)
+
             # Parse results
-            scores = {}
-            for metric in eval_spec.get("metrics", ["fluency", "consistency", "relevance", "coherence"]):
-                # Extract score from result string (G-Eval returns formatted text)
+            scores: Dict[str, float] = {}
+            metrics_list = eval_spec.get("metrics", ["fluency", "consistency", "relevance", "coherence"])
+
+            if isinstance(result, dict):
+                metric_blob = result.get("metrics") or result.get("scores") or {}
+                for metric in metrics_list:
+                    raw_val = metric_blob.get(metric)
+                    if raw_val is None:
+                        continue
+                    if isinstance(raw_val, dict):
+                        raw_val = raw_val.get("score") or raw_val.get("raw_score")
+                    try:
+                        raw = float(raw_val)
+                    except (TypeError, ValueError):
+                        continue
+                    max_score = 3.0 if metric == "fluency" else 5.0
+                    scores[metric] = raw / max_score if raw > 1.0 else raw
+            else:
+                # Legacy string output fallback
                 import re
-                pattern = f"{metric}.*?([0-9.]+)"
-                match = re.search(pattern, result, re.IGNORECASE)
-                if match:
-                    scores[metric] = float(match.group(1)) / 5.0  # Normalize to 0-1
+                for metric in metrics_list:
+                    pattern = f"{metric}.*?([0-9.]+)"
+                    match = re.search(pattern, str(result), re.IGNORECASE)
+                    if match:
+                        scores[metric] = float(match.group(1)) / 5.0  # Normalize to 0-1
 
             # Calculate pass/fail
             avg_score = statistics.mean(scores.values()) if scores else 0
@@ -1160,7 +1233,15 @@ class EvaluationRunner:
             # Extract scores
             scores = {}
             for metric_name, metric_data in result.get("metrics", {}).items():
-                scores[metric_name] = metric_data.score
+                score_val = metric_data
+                if isinstance(metric_data, dict):
+                    score_val = metric_data.get("score", metric_data.get("raw_score"))
+                else:
+                    score_val = getattr(metric_data, "score", metric_data)
+                try:
+                    scores[metric_name] = float(score_val)
+                except (TypeError, ValueError):
+                    scores[metric_name] = 0.0
 
             # Calculate pass/fail
             avg_score = statistics.mean(scores.values()) if scores else 0
@@ -1203,7 +1284,15 @@ class EvaluationRunner:
             # Extract scores
             scores = {}
             for metric_name, metric_data in result.get("metrics", {}).items():
-                scores[metric_name] = metric_data.score
+                score_val = metric_data
+                if isinstance(metric_data, dict):
+                    score_val = metric_data.get("score", metric_data.get("raw_score"))
+                else:
+                    score_val = getattr(metric_data, "score", metric_data)
+                try:
+                    scores[metric_name] = float(score_val)
+                except (TypeError, ValueError):
+                    scores[metric_name] = 0.0
 
             # Add overall quality
             scores["overall_quality"] = result.get("overall_quality", 0)
@@ -1772,12 +1861,21 @@ class EvaluationRunner:
         # Get all scores
         all_scores = []
         passed_count = 0
+        failed_samples = 0
 
         for result in results:
-            if "avg_score" in result:
-                all_scores.append(result["avg_score"])
-                if result.get("passed", False):
-                    passed_count += 1
+            score_val = result.get("avg_score")
+            if score_val is None:
+                failed_samples += 1
+                score_val = 0.0
+            try:
+                score_val = float(score_val)
+            except (TypeError, ValueError):
+                failed_samples += 1
+                score_val = 0.0
+            all_scores.append(score_val)
+            if result.get("passed", False):
+                passed_count += 1
 
         if not all_scores:
             return {
@@ -1797,7 +1895,7 @@ class EvaluationRunner:
             "max_score": max(all_scores),
             "pass_rate": passed_count / len(results),
             "total_samples": len(results),
-            "failed_samples": len(results) - len(all_scores)
+            "failed_samples": failed_samples
         }
 
     def _calculate_metric_stats(

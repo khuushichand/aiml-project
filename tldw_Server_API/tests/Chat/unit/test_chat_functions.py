@@ -274,13 +274,25 @@ def test_chat_api_call_exception_propagation_and_mapping_unit(
         # The endpoint might map these to 400, but the error itself might not store a status_code
         pass  # No specific status_code on these, but they are ChatBadRequestError
 
-    # Check that original error message part is in the custom error
+    # Check that error message contains appropriate user-friendly content
+    # Note: Error messages are now sanitized to prevent information leakage
     if isinstance(raised_exception, requests.exceptions.HTTPError):
-        assert "text" in exc_info.value.message.lower()  # Example check
+        status_code = raised_exception.response.status_code
+        if status_code == 401:
+            assert "authentication" in exc_info.value.message.lower()
+        elif status_code == 429:
+            assert "rate limit" in exc_info.value.message.lower()
+        elif 500 <= status_code < 600:
+            assert "provider" in exc_info.value.message.lower() or "error" in exc_info.value.message.lower()
+        else:
+            # For other HTTP errors, check for status code or generic error indication
+            assert "request" in exc_info.value.message.lower() or str(status_code) in exc_info.value.message
     elif isinstance(raised_exception, requests.exceptions.RequestException):
         assert "network" in exc_info.value.message.lower()
     else:  # For ValueError, TypeError, KeyError, Exception
-        assert str(raised_exception).lower() in exc_info.value.message.lower()
+        # Generic errors should contain some indication of the error type or message
+        assert str(raised_exception).lower() in exc_info.value.message.lower() or \
+               "error" in exc_info.value.message.lower()
 
 
 # --- Tests for the `chat` function (multimodal chat coordinator) ---

@@ -47,6 +47,25 @@ def test_reschedule_and_retry_now_sqlite(tmp_path):
     acq = jm.acquire_next_job(domain="ps", queue="default", lease_seconds=5, worker_id="w")
     assert acq
 
+    # Reschedule with delta_seconds using scoped filters (set_now=False)
+    j_delta = jm.create_job(domain="ps", queue="default", job_type="t_delta", payload={}, owner_user_id="u")
+    before = jm.get_job(int(j_delta["id"]))["available_at"]
+    moved = jm.reschedule_jobs(
+        domain="ps",
+        queue="default",
+        job_type="t_delta",
+        status="queued",
+        set_now=False,
+        delta_seconds=60,
+        dry_run=False,
+    )
+    assert moved >= 1
+    after = jm.get_job(int(j_delta["id"]))["available_at"]
+    assert after is not None
+    before_dt = datetime.fromisoformat(before) if before else datetime.utcnow()
+    after_dt = datetime.fromisoformat(after)
+    assert after_dt >= before_dt
+
     # Create a failed job with retries remaining
     j2 = jm.create_job(domain="ps", queue="default", job_type="t", payload={}, owner_user_id="u")
     acq2 = jm.acquire_next_job(domain="ps", queue="default", lease_seconds=1, worker_id="w2")

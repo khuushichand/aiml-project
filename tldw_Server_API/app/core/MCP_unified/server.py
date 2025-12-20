@@ -17,9 +17,11 @@ from loguru import logger
 from .config import get_config, validate_config
 from .protocol import MCPProtocol, MCPRequest, MCPResponse, RequestContext
 from .modules.registry import get_module_registry
-from .auth.jwt_manager import get_jwt_manager
+from .auth.jwt_manager import get_jwt_manager, JWTManager
 from .auth.authnz_rbac import get_rbac_policy
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 from .auth.rate_limiter import get_rate_limiter, RateLimitExceeded
 from .monitoring.metrics import get_metrics_collector
 from .security.ip_filter import get_ip_access_controller
@@ -27,6 +29,30 @@ from .security.request_guards import enforce_client_certificate_headers
 import ipaddress
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+
+
+def _is_authnz_access_token(token: str) -> bool:
+    """Return True when the token verifies as an AuthNZ access token."""
+    try:
+        jwt_service = get_jwt_service()
+        jwt_service.decode_access_token(token)
+        return True
+    except TokenExpiredError:
+        return True
+    except InvalidTokenError:
+        return False
+    except Exception:
+        return False
+
+
+class _JWTManagerProxy:
+    """Proxy for JWT manager to allow per-server monkeypatching without global side effects."""
+
+    def __init__(self, manager: JWTManager):
+        self._manager = manager
+
+    def __getattr__(self, name: str):
+        return getattr(self._manager, name)
 
 
 class WebSocketConnection:
@@ -123,9 +149,10 @@ class MCPServer:
         self.config = get_config()
         self.protocol = MCPProtocol()
         self.module_registry = get_module_registry()
-        self.jwt_manager = get_jwt_manager()
+        self.jwt_manager = _JWTManagerProxy(get_jwt_manager())
         self.rbac_policy = get_rbac_policy()
         self.rate_limiter = get_rate_limiter()
+        self._ws_auth_required_initial = self.config.ws_auth_required
 
         # Connection management
         self.connections: Dict[str, WebSocketConnection] = {}
@@ -659,27 +686,44 @@ class MCPServer:
             ok = False
             try:
                 # Try AuthNZ JWT first for consistency with HTTP endpoints
-                from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
-                jwt_service = get_jwt_service()
-                payload = jwt_service.decode_access_token(auth_token)
-                user_id = str(payload.get("user_id") or payload.get("sub")) if payload else None
+                from starlette.requests import Request as _Request
+                from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
+
+                scope = {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/api/v1/mcp/ws",
+                    "headers": [
+                        (k.encode("latin-1"), v.encode("latin-1"))
+                        for k, v in websocket.headers.items()
+                    ],
+                }
+                try:
+                    client = websocket.client
+                    if isinstance(client, (list, tuple)) and len(client) >= 2:
+                        scope["client"] = (client[0], client[1])
+                    elif client is not None and getattr(client, "host", None) is not None:
+                        scope["client"] = (client.host, getattr(client, "port", 0))
+                except Exception:
+                    pass
+
+                req = _Request(scope)
+                user = await verify_jwt_and_fetch_user(req, auth_token)
+                user_id = str(getattr(user, "id", None) or "")
                 ok = bool(user_id)
                 if ok:
                     logger.info(f"WebSocket authenticated for user (AuthNZ JWT): {user_id}")
-                    try:
-                        if payload:
-                            roles = payload.get("roles")
-                            permissions = payload.get("permissions") or payload.get("scopes")
-                            if isinstance(roles, list):
-                                metadata["roles"] = roles
-                            if isinstance(permissions, list):
-                                metadata["permissions"] = permissions
-                            elif isinstance(permissions, str):
-                                metadata["permissions"] = [permissions]
-                    except Exception:
-                        pass
+                    roles = list(getattr(user, "roles", []) or [])
+                    perms = list(getattr(user, "permissions", []) or [])
+                    if roles:
+                        metadata["roles"] = roles
+                    if perms:
+                        metadata["permissions"] = perms
             except Exception as e:
                 logger.debug(f"AuthNZ JWT auth failed: {self._mask_secrets(str(e))}")
+                if _is_authnz_access_token(auth_token):
+                    await websocket.close(code=1008, reason="Authentication failed")
+                    return
                 # Try MCP JWT
                 try:
                     token_data = self.jwt_manager.verify_token(auth_token)
@@ -736,7 +780,19 @@ class MCPServer:
                 return
 
         # Optionally require authentication for WS (production hardening)
-        if self.config.ws_auth_required and not user_id:
+        ws_auth_required = self.config.ws_auth_required
+        try:
+            if _is_test_env:
+                # Honor test env override to avoid stale cached config in pytest.
+                import os as _os
+                override = _os.getenv("MCP_WS_AUTH_REQUIRED")
+                if override is not None:
+                    override_val = override.strip().lower() in {"1", "true", "yes", "on"}
+                    if self.config.ws_auth_required == self._ws_auth_required_initial:
+                        ws_auth_required = override_val
+        except Exception:
+            pass
+        if ws_auth_required and not user_id:
             await websocket.close(code=1008, reason="Authentication required")
             return
 
@@ -784,7 +840,7 @@ class MCPServer:
         )
 
         # Initialize unified WS lifecycle (ping/idle/error) and accept the socket
-        stream = WebSocketStream(
+        stream: Optional[WebSocketStream] = WebSocketStream(
             websocket,
             heartbeat_interval_s=float(self.config.ws_ping_interval) if self.config.ws_ping_interval else None,
             idle_timeout_s=float(self.config.ws_idle_timeout_seconds) if self.config.ws_idle_timeout_seconds else None,
@@ -811,6 +867,12 @@ class MCPServer:
             except Exception:
                 pass
         finally:
+            # Stop WS background tasks (ping/idle loops) to avoid leaks
+            if stream is not None:
+                try:
+                    await stream.stop()
+                except Exception:
+                    pass
             # Remove connection
             async with self.connection_lock:
                 if connection_id in self.connections:
@@ -834,6 +896,7 @@ class MCPServer:
     async def _handle_websocket_messages(self, connection: WebSocketConnection, stream: WebSocketStream):
         """Handle incoming WebSocket messages"""
         while True:
+            sess: Optional[SessionData] = None
             # Receive message
             try:
                 data = await connection.receive_json()
@@ -934,12 +997,18 @@ class MCPServer:
                 pass
 
             # Create request context
+            context_metadata = dict(connection.metadata)
+            try:
+                if sess and sess.safe_config:
+                    context_metadata["safe_config"] = dict(sess.safe_config)
+            except Exception:
+                pass
             context = RequestContext(
                 request_id=data.get("id", "unknown") if isinstance(data, dict) else "unknown",
                 user_id=connection.user_id,
                 client_id=connection.client_id,
                 session_id=connection.connection_id,
-                metadata=connection.metadata
+                metadata=context_metadata
             )
 
             # Process MCP request (supports single, notification, and batch)
@@ -1025,6 +1094,7 @@ class MCPServer:
             safe_cfg = {}
 
         # If we have a session id, ensure session exists and merge safe config
+        sess: Optional[SessionData] = None
         try:
             if session_id:
                 sess = await self._get_or_create_session(session_id)
@@ -1040,12 +1110,20 @@ class MCPServer:
             pass
 
         # Create request context
+        metadata_map = dict(metadata or {})
+        try:
+            if sess and sess.safe_config:
+                metadata_map["safe_config"] = dict(sess.safe_config)
+            elif safe_cfg:
+                metadata_map["safe_config"] = safe_cfg
+        except Exception:
+            pass
         context = RequestContext(
             request_id=request.id or "http_request",
             user_id=user_id,
             client_id=client_id,
             session_id=session_id,
-            metadata=metadata or {}
+            metadata=metadata_map
         )
 
         # Process request

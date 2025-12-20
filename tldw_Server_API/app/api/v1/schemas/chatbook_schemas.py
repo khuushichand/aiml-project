@@ -9,8 +9,8 @@ Pydantic models for chatbook creation, import, export, and preview operations.
 """
 
 from datetime import datetime
-from typing import List, Dict, Optional, Any
-from pydantic import BaseModel, Field
+from typing import List, Dict, Optional, Any, Literal, Union
+from pydantic import BaseModel, Field, field_validator
 from pydantic import ConfigDict
 from enum import Enum
 
@@ -20,6 +20,7 @@ from enum import Enum
 class ChatbookVersion(str, Enum):
     """Chatbook format versions (semantic)."""
     V1 = "1.0.0"
+    V1_LEGACY = "1.0"  # Backwards compatibility with early chatbooks
     V2 = "2.0.0"  # Future version
 
 
@@ -65,24 +66,66 @@ class ConflictResolution(str, Enum):
     MERGE = "merge"        # Merge with existing (where applicable)
 
 
+class MediaQuality(str, Enum):
+    """Media quality levels for export."""
+    THUMBNAIL = "thumbnail"
+    COMPRESSED = "compressed"
+    ORIGINAL = "original"
+
+
+# Allowed values for job listing sort field (prevents SQL injection)
+JobOrderByField = Literal["created_at", "status", "chatbook_name", "updated_at", "completed_at"]
+
+# Combined status type for job queries (supports both export and import)
+JobStatusFilter = Union[ExportStatus, ImportStatus, None]
+
+
 # Request Schemas
 
 class CreateChatbookRequest(BaseModel):
     """Request for creating a chatbook."""
-    name: str = Field(..., description="Name of the chatbook")
-    description: str = Field(..., description="Description of the chatbook")
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description="Name of the chatbook"
+    )
+    description: str = Field(
+        ...,
+        max_length=5000,
+        description="Description of the chatbook"
+    )
     content_selections: Dict[ContentType, List[str]] = Field(
         ...,
         description="Content to include by type and IDs"
     )
-    author: Optional[str] = Field(None, description="Author name")
+    author: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Author name"
+    )
     include_media: bool = Field(False, description="Include media files")
-    media_quality: str = Field("compressed", description="Media quality level (thumbnail/compressed/original)")
+    media_quality: MediaQuality = Field(
+        MediaQuality.COMPRESSED,
+        description="Media quality level"
+    )
     include_embeddings: bool = Field(False, description="Include embeddings")
     include_generated_content: bool = Field(True, description="Include generated documents")
-    tags: List[str] = Field(default_factory=list, description="Chatbook tags")
-    categories: List[str] = Field(default_factory=list, description="Chatbook categories")
+    tags: List[str] = Field(default_factory=list, max_length=50, description="Chatbook tags")
+    categories: List[str] = Field(default_factory=list, max_length=20, description="Chatbook categories")
     async_mode: bool = Field(False, description="Run as background job")
+
+    @field_validator('tags', 'categories', mode='before')
+    @classmethod
+    def validate_string_lists(cls, v):
+        """Validate that list items are reasonable length."""
+        if v is None:
+            return []
+        if isinstance(v, list):
+            for item in v:
+                if isinstance(item, str) and len(item) > 50:
+                    raise ValueError(f"Item '{item[:20]}...' exceeds maximum length of 50 characters")
+        return v
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -95,7 +138,7 @@ class CreateChatbookRequest(BaseModel):
             },
             "author": "Jane Doe",
             "include_media": False,
-            "media_quality": "compressed",
+            "media_quality": MediaQuality.COMPRESSED.value,
             "include_embeddings": False,
             "include_generated_content": True,
             "tags": ["research", "AI"],
@@ -200,10 +243,10 @@ class ExportJobResponse(BaseModel):
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     error_message: Optional[str] = None
-    progress_percentage: int = 0
-    total_items: int = 0
-    processed_items: int = 0
-    file_size_bytes: Optional[int] = None
+    progress_percentage: int = Field(default=0, ge=0, le=100)
+    total_items: int = Field(default=0, ge=0)
+    processed_items: int = Field(default=0, ge=0)
+    file_size_bytes: Optional[int] = Field(default=None, ge=0)
     download_url: Optional[str] = None
     expires_at: Optional[datetime] = None
 
@@ -217,12 +260,12 @@ class ImportJobResponse(BaseModel):
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     error_message: Optional[str] = None
-    progress_percentage: int = 0
-    total_items: int = 0
-    processed_items: int = 0
-    successful_items: int = 0
-    failed_items: int = 0
-    skipped_items: int = 0
+    progress_percentage: int = Field(default=0, ge=0, le=100)
+    total_items: int = Field(default=0, ge=0)
+    processed_items: int = Field(default=0, ge=0)
+    successful_items: int = Field(default=0, ge=0)
+    failed_items: int = Field(default=0, ge=0)
+    skipped_items: int = Field(default=0, ge=0)
     conflicts: List[Dict[str, Any]] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
 
@@ -299,11 +342,36 @@ class DownloadChatbookResponse(BaseModel):
 
 class ListJobsQuery(BaseModel):
     """Query parameters for listing jobs."""
-    status: Optional[str] = Field(None, description="Filter by status")
+    status: Optional[str] = Field(
+        None,
+        description="Filter by status (pending, in_progress, completed, failed, cancelled, expired)"
+    )
     limit: int = Field(100, ge=1, le=1000, description="Maximum results")
     offset: int = Field(0, ge=0, description="Offset for pagination")
-    order_by: str = Field("created_at", description="Sort field")
+    order_by: JobOrderByField = Field("created_at", description="Sort field")
     order_desc: bool = Field(True, description="Sort descending")
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def validate_status(cls, v):
+        """Validate status is a known value to prevent injection."""
+        if v is None:
+            return None
+        # Whitelist of allowed status values (from both ExportStatus and ImportStatus)
+        allowed_statuses = {
+            'pending', 'in_progress', 'completed', 'failed',
+            'cancelled', 'expired', 'validating'
+        }
+        if v.lower() not in allowed_statuses:
+            raise ValueError(f"Invalid status '{v}'. Allowed: {', '.join(sorted(allowed_statuses))}")
+        return v.lower()
+
+
+class CancelJobResponse(BaseModel):
+    """Response for job cancellation."""
+    success: bool
+    message: str
+    job_id: str
 
 
 # Error Responses

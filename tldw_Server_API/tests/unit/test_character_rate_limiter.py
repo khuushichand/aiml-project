@@ -272,6 +272,38 @@ def test_get_usage_stats_redis_reports_true_reset_time(monkeypatch):
 
 
 @pytest.mark.unit
+def test_character_limit_uses_existing_count_before_creation():
+    """check_character_limit expects the current character count (before create)."""
+    limiter = CharacterRateLimiter(redis_client=None, max_characters=2)
+
+    async def run_checks():
+        ok0 = await limiter.check_character_limit(user_id=1, current_count=0)
+        ok1 = await limiter.check_character_limit(user_id=1, current_count=1)
+        assert ok0 and ok1
+        with pytest.raises(HTTPException):
+            # When current_count equals max_characters, creating another should be rejected.
+            await limiter.check_character_limit(user_id=1, current_count=2)
+
+    asyncio.run(run_checks())
+
+
+@pytest.mark.unit
+def test_chat_limit_uses_existing_count_before_creation():
+    """check_chat_limit expects the current chat count (before create)."""
+    limiter = CharacterRateLimiter(redis_client=None, max_chats_per_user=2)
+
+    async def run_checks():
+        ok0 = await limiter.check_chat_limit(user_id=1, current_chat_count=0)
+        ok1 = await limiter.check_chat_limit(user_id=1, current_chat_count=1)
+        assert ok0 and ok1
+        with pytest.raises(HTTPException):
+            # When current_chat_count equals max_chats_per_user, creating another should be rejected.
+            await limiter.check_chat_limit(user_id=1, current_chat_count=2)
+
+    asyncio.run(run_checks())
+
+
+@pytest.mark.unit
 def test_get_character_rate_limiter_tolerates_invalid_numeric_overrides(monkeypatch):
     import importlib
     module = importlib.import_module("tldw_Server_API.app.core.Character_Chat.character_rate_limiter")

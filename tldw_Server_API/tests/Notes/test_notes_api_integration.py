@@ -134,6 +134,8 @@ def reset_db_mock_calls():
     mock_chacha_db_instance.get_keyword_by_id.side_effect = None
     mock_chacha_db_instance.link_note_to_keyword.side_effect = None
     mock_chacha_db_instance.get_keywords_for_note.side_effect = None
+    mock_chacha_db_instance.get_conversation_by_id.side_effect = None
+    mock_chacha_db_instance.get_message_conversation_id.side_effect = None
     _stub_rate_limiter.reset()
     # Default: unlimited for endpoints unless test sets otherwise
     _stub_rate_limiter.set_limit("notes.create", None)
@@ -191,6 +193,26 @@ def test_create_note(client: TestClient):
         message_id=None,
     )
     mock_chacha_db_instance.get_note_by_id.assert_called_once_with(note_id=note_id_val)
+
+
+def test_create_note_invalid_conversation_id_returns_404(client: TestClient):
+    mock_chacha_db_instance.get_conversation_by_id.return_value = None
+    response = client.post(
+        "/api/v1/notes/",
+        json={"title": "New Note", "content": "Note content", "conversation_id": "missing-conv"},
+    )
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    mock_chacha_db_instance.add_note.assert_not_called()
+
+
+def test_create_note_invalid_message_id_returns_404(client: TestClient):
+    mock_chacha_db_instance.get_message_conversation_id.return_value = None
+    response = client.post(
+        "/api/v1/notes/",
+        json={"title": "New Note", "content": "Note content", "message_id": "missing-msg"},
+    )
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    mock_chacha_db_instance.add_note.assert_not_called()
 
 
 def test_create_note_db_error(client: TestClient):
@@ -345,6 +367,18 @@ def test_update_note_rejects_null_values(client: TestClient):
     mock_chacha_db_instance.update_note.assert_not_called()
 
 
+def test_update_note_rejects_whitespace_title(client: TestClient):
+    note_id_val = str(uuid.uuid4())
+    response = client.put(
+        f"/api/v1/notes/{note_id_val}",
+        json={"title": "   "},
+        headers={"expected-version": "1"}
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json()["detail"] == "Title cannot be empty or whitespace."
+    mock_chacha_db_instance.update_note.assert_not_called()
+
+
 def test_patch_note_rejects_null_values(client: TestClient):
     note_id_val = str(uuid.uuid4())
     response = client.patch(f"/api/v1/notes/{note_id_val}", json={"title": None})
@@ -392,6 +426,58 @@ def test_search_notes(client: TestClient):
     assert data[0]["title"] == "Important Note"
     assert data[0]["content"] == "This content is important."
     mock_chacha_db_instance.search_notes.assert_called_once_with(search_term=query_term, limit=5, offset=0)
+
+
+def test_search_notes_without_trailing_slash(client: TestClient):
+    query_term, note_id_val = "important", str(uuid.uuid4())
+    expected_db_client_id = "test_api_client_for_user_db"
+    mock_chacha_db_instance.search_notes.return_value = [
+        create_timestamped_data(
+            {"id": note_id_val, "title": "Important Note", "content": "This content is important."},
+            expected_db_client_id
+        )
+    ]
+    response = client.get(f"/api/v1/notes/search?query={query_term}&limit=5")
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["id"] == note_id_val
+    mock_chacha_db_instance.search_notes.assert_called_once_with(search_term=query_term, limit=5, offset=0)
+
+
+def test_export_notes_route_not_shadowed(client: TestClient):
+    note_id_val = str(uuid.uuid4())
+    expected_db_client_id = "test_api_client_for_user_db"
+    mock_chacha_db_instance.list_notes.return_value = [
+        create_timestamped_data(
+            {"id": note_id_val, "title": "Exported Note", "content": "Export content"},
+            expected_db_client_id
+        )
+    ]
+    mock_chacha_db_instance.count_notes.return_value = 1
+    response = client.get("/api/v1/notes/export")
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    assert data["count"] == 1
+    assert data["notes"][0]["id"] == note_id_val
+    mock_chacha_db_instance.list_notes.assert_called_once_with(limit=1000, offset=0)
+
+
+def test_export_notes_csv_route(client: TestClient):
+    note_id_val = str(uuid.uuid4())
+    expected_db_client_id = "test_api_client_for_user_db"
+    mock_chacha_db_instance.list_notes.return_value = [
+        create_timestamped_data(
+            {"id": note_id_val, "title": "Exported Note", "content": "Export content"},
+            expected_db_client_id
+        )
+    ]
+    response = client.get("/api/v1/notes/export.csv")
+    assert response.status_code == status.HTTP_200_OK
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "notes_export_" in response.headers.get("content-disposition", "")
+    assert "Exported Note" in response.text
+    mock_chacha_db_instance.list_notes.assert_called_once_with(limit=1000, offset=0)
 
 
 def test_create_keyword(client: TestClient):

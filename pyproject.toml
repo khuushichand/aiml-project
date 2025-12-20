@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 ###########################
 [project]
 name = "tldw-server"
-version = "0.1.11"
+version = "0.1.12"
 description = "A comprehensive research assistant and media analysis platform - Too Long; Didn't Watch Server"
 requires-python = ">=3.10"
 readme = "README.md"
@@ -178,6 +178,7 @@ dev = [
   "pytest>=7.4.0",
   "pytest-asyncio>=0.21.0",
   "pytest-cov>=4.1.0",
+  "pytest-xdist>=3.3.0",
   "pytest-mock>=3.11.0",
   "pytest-timeout>=2.1.0",
   "pytest-benchmark>=4.0.0",

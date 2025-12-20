@@ -136,12 +136,20 @@ class FakePrivilegeMapService(PrivilegeMapService):
             {"team_id": "team-1", "user_id": "user-2", "team_name": "Core Admins", "org_id": "acme"},
             {"team_id": "team-2", "user_id": "user-3", "team_name": "Viewers", "org_id": "acme"},
         ]
+        self.sample_org_memberships = [
+            {"org_id": "acme", "user_id": "user-1", "membership_role": "member"},
+            {"org_id": "acme", "user_id": "user-2", "membership_role": "member"},
+            {"org_id": "acme", "user_id": "user-3", "membership_role": "member"},
+        ]
 
     async def _fetch_users(self):
         return list(self.sample_users)
 
     async def _fetch_team_memberships(self):
         return list(self.sample_memberships)
+
+    async def _fetch_org_memberships(self):
+        return list(self.sample_org_memberships)
 
 
 @pytest.fixture()

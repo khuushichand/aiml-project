@@ -683,6 +683,21 @@ class TestNotes:
             assert note_ids_in_order[0] == id2
             assert note_ids_in_order[1] == id1
 
+    def test_get_keywords_for_notes(self, db_instance: CharactersRAGDB):
+        note1 = db_instance.add_note("Note One", "Content One")
+        note2 = db_instance.add_note("Note Two", "Content Two")
+        kw1 = db_instance.add_keyword("alpha")
+        kw2 = db_instance.add_keyword("beta")
+        assert note1 and note2 and kw1 and kw2
+
+        db_instance.link_note_to_keyword(note1, kw1)
+        db_instance.link_note_to_keyword(note1, kw2)
+        db_instance.link_note_to_keyword(note2, kw2)
+
+        kw_map = db_instance.get_keywords_for_notes([note1, note2])
+        assert set(k["keyword"] for k in kw_map[note1]) == {"alpha", "beta"}
+        assert set(k["keyword"] for k in kw_map[note2]) == {"beta"}
+
     def test_search_notes(self, db_instance: CharactersRAGDB):
         db_instance.add_note("Alpha Note", "Contains a keyword ZYX")
         db_instance.add_note("Beta Note", "Another one with ZYX in title")

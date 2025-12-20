@@ -3,15 +3,112 @@
 #
 # Imports
 import base64
-import json
 import pathlib
 from datetime import datetime
-from typing import List, Union, Any, Dict, Optional
+from typing import List, Any, Dict, Optional, Tuple
 #
 # Third-party Libraries
-from fastapi import HTTPException, Depends, Query, UploadFile, File, APIRouter, Path as FastAPIPath, Body
+from fastapi import HTTPException, Depends, Query, UploadFile, File, APIRouter, Path as FastAPIPath
+from fastapi.responses import JSONResponse
 from loguru import logger
 from starlette import status
+
+# Constants for file upload validation
+MAX_CHARACTER_FILE_SIZE = 10 * 1024 * 1024  # 10MB max file size
+ALLOWED_EXTENSIONS = frozenset({".png", ".webp", ".jpeg", ".jpg", ".json", ".yaml", ".yml", ".txt", ".md"})
+
+def _detect_mime_type(data: bytes) -> Optional[str]:
+    """
+    Detect MIME type from file magic bytes.
+
+    Returns the detected MIME type or None if unknown.
+    This is more reliable than extension-based detection for security.
+    """
+    if len(data) < 12:
+        return None
+
+    # Check PNG
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        return 'image/png'
+
+    # Check WebP (RIFF....WEBP)
+    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return 'image/webp'
+
+    # Check JPEG (various signatures)
+    if data[:2] == b'\xff\xd8':
+        return 'image/jpeg'
+
+    # Check for JSON (starts with { or [, possibly with BOM or whitespace)
+    stripped = data.lstrip(b'\xef\xbb\xbf \t\n\r')  # Strip BOM and whitespace
+    if stripped and stripped[0:1] in (b'{', b'['):
+        return 'application/json'
+
+    # Check for YAML/Markdown (text files - check for printable ASCII)
+    try:
+        # Check first 100 bytes for text-like content
+        sample = data[:100].decode('utf-8', errors='strict')
+        # If it decodes as valid UTF-8 and contains printable chars, likely text
+        if sample.isprintable() or '\n' in sample or '\r' in sample:
+            return 'text/plain'
+    except (UnicodeDecodeError, AttributeError):
+        pass
+
+    return None
+
+
+def _validate_file_type(data: bytes, filename: Optional[str]) -> Tuple[bool, str, Optional[str]]:
+    """
+    Validate file type via both magic bytes and extension.
+
+    Returns:
+        Tuple of (is_valid, error_message, detected_type) where detected_type is
+        one of: "image", "json", "yaml", "text".
+    """
+    ext = None
+    if filename:
+        ext = pathlib.Path(filename).suffix.lower()
+
+    # Check extension first
+    if ext and ext not in ALLOWED_EXTENSIONS:
+        return False, f"File extension '{ext}' not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}", None
+
+    # Detect MIME type from content
+    detected_mime = _detect_mime_type(data)
+
+    # For image files, validate magic bytes match extension claim
+    if ext in ('.png', '.webp', '.jpeg', '.jpg'):
+        expected_mimes = {
+            '.png': 'image/png',
+            '.webp': 'image/webp',
+            '.jpeg': 'image/jpeg',
+            '.jpg': 'image/jpeg',
+        }
+        expected = expected_mimes.get(ext)
+        if expected:
+            if detected_mime is None:
+                return False, f"File content missing or invalid magic bytes for extension {ext}", None
+            if detected_mime != expected:
+                return False, f"File content doesn't match extension. Extension: {ext}, detected: {detected_mime}", None
+
+    # Determine file type for processing
+    if detected_mime in ('image/png', 'image/webp', 'image/jpeg'):
+        return True, "", "image"
+
+    if detected_mime == 'application/json':
+        return True, "", "json"
+
+    if ext in ('.json',):
+        return True, "", "json"
+    if ext in ('.yaml', '.yml'):
+        return True, "", "yaml"
+    if ext in ('.txt', '.md'):
+        return True, "", "text"
+
+    if detected_mime == 'text/plain':
+        return True, "", "text"
+
+    return False, "Could not determine file type", None
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
@@ -53,18 +150,50 @@ def _convert_db_char_to_response_model(char_dict_from_db: Dict[str, Any]) -> Cha
             response_data['image_present'] = True
         except Exception as e:
             logger.error(f"Error encoding image for char {response_data.get('id')}: {e}")
-            response_data['image_base64'] = None;
+            response_data['image_base64'] = None
             response_data['image_present'] = False
     else:
         response_data['image_base64'] = None
         response_data['image_present'] = bool(
             response_data.get('image') and isinstance(response_data.get('image'), bytes))
-    for field_name in ["alternate_greetings", "tags", "extensions"]:
-        value = response_data.get(field_name)
-        if isinstance(value, str):  # Already deserialized by DB layer if stored as JSON text
-            pass  # Should be Python objects now from DB layer
     response_data.pop('image', None)
     return CharacterResponse.model_validate(response_data)
+
+
+def _build_conflict_import_response(
+    error: ConflictError,
+    db: CharactersRAGDB,
+) -> Optional[CharacterImportResponse]:
+    existing_id: Optional[int] = None
+    try:
+        entity_id = getattr(error, "entity_id", None)
+        if isinstance(entity_id, int):
+            existing_id = entity_id
+        elif isinstance(entity_id, str) and entity_id.strip():
+            existing_char_obj = db.get_character_card_by_name(entity_id)
+            if existing_char_obj:
+                try:
+                    existing_id = int(existing_char_obj.get("id"))
+                except (TypeError, ValueError) as exc:
+                    logger.debug(f"Invalid conflict character id from name lookup: {exc}")
+    except (CharactersRAGDBError, ValueError, TypeError) as exc:
+        logger.debug(f"Failed to resolve conflict character id: {exc}")
+        return None
+    if not existing_id:
+        return None
+    existing_char_db = db.get_character_card_by_id(existing_id)
+    if not existing_char_db:
+        return None
+    existing_name = existing_char_db.get("name", "Unknown")
+    return CharacterImportResponse(
+        id=existing_id,
+        name=existing_name,
+        message=(
+            f"Character '{existing_name}' already exists (ID: {existing_id}). "
+            "Details provided."
+        ),
+        character=_convert_db_char_to_response_model(existing_char_db),
+    )
 
 
 # --- API Endpoints ---
@@ -75,7 +204,7 @@ def _convert_db_char_to_response_model(char_dict_from_db: Dict[str, Any]) -> Cha
 async def import_character_endpoint(
         character_file: UploadFile = File(..., description="Character card file (PNG, WEBP, JSON, MD)."),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        current_user: User = Depends(get_request_user)
+        current_user: User = Depends(get_request_user),
 ):
     """
     Import a character card from a file.
@@ -89,6 +218,15 @@ async def import_character_endpoint(
     For JSON data, you can upload a .json file or a text file containing JSON.
     """
     try:
+        # Pre-size check using content-length header (if available)
+        # This prevents loading very large files into memory
+        if character_file.size is not None and character_file.size > MAX_CHARACTER_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File too large. Maximum allowed size is {MAX_CHARACTER_FILE_SIZE // (1024 * 1024)}MB"
+            )
+
+        # Read file with size limit
         file_content_bytes = await character_file.read()
         if not file_content_bytes:
             raise HTTPException(
@@ -96,31 +234,40 @@ async def import_character_endpoint(
                 detail="Uploaded file is empty"
             )
 
+        # Post-read size check (in case content-length was not accurate)
+        if len(file_content_bytes) > MAX_CHARACTER_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File too large. Maximum allowed size is {MAX_CHARACTER_FILE_SIZE // (1024 * 1024)}MB"
+            )
+
+        # Validate file type via magic bytes and extension
+        is_valid, error_msg, detected_type = _validate_file_type(
+            file_content_bytes, character_file.filename
+        )
+        if not is_valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_msg
+            )
+
         # Check rate limits
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_rate_limit(current_user.id, "character_import")
         rate_limiter.check_import_size(len(file_content_bytes))
 
-        # Check character count limit
+        # Check character count limit. The helper expects the current count
+        # (before this import) and rejects when current_count >= max_characters.
         existing_chars = db.list_character_cards(limit=10000)
         await rate_limiter.check_character_limit(current_user.id, len(existing_chars))
 
         logger.info(f"API: Importing character from file: {character_file.filename}")
 
-        # import_and_save_character_from_file handles all file types including JSON
-        inferred_type = None
-        try:
-            fname = character_file.filename or ""
-            lower = fname.lower()
-            if lower.endswith((".png", ".webp")):
-                inferred_type = "image"
-            elif lower.endswith((".json", ".yaml", ".yml", ".txt", ".md")):
-                inferred_type = "json"
-        except Exception:
-            inferred_type = None
+        # Use the detected type from validation
+        file_type_validated = detected_type
 
         success, message, char_id = import_and_save_character_from_file(
-            db, file_content=file_content_bytes, file_type=inferred_type
+            db, file_content=file_content_bytes, file_type=file_type_validated
         )
 
         if not success or not char_id:
@@ -154,20 +301,12 @@ async def import_character_endpoint(
         # Try to retrieve the conflicting character if the error message provides enough info or if the lib returned an ID
         # This part needs careful alignment with how `import_and_save_character_from_file` signals "already exists"
         # If it returns the existing ID, then the initial `char_id` would be that.
-        existing_char_id_from_conflict = None
-        if hasattr(e, 'entity_id') and isinstance(e.entity_id, int):  # If ConflictError has the ID
-            existing_char_id_from_conflict = e.entity_id
-        elif isinstance(e.entity_id, str):  # If entity_id is the name
-            existing_char_obj = db.get_character_card_by_name(e.entity_id)
-            if existing_char_obj: existing_char_id_from_conflict = existing_char_obj['id']
-
-        if existing_char_id_from_conflict:
-            existing_char_db = db.get_character_card_by_id(existing_char_id_from_conflict)
-            if existing_char_db:
-                return CharacterImportResponse(
-                    message=f"Character '{existing_char_db['name']}' already exists (ID: {existing_char_id_from_conflict}). Details provided.",
-                    character=_convert_db_char_to_response_model(existing_char_db)
-                )  # Consider HTTP 200 OK for this case
+        conflict_response = _build_conflict_import_response(e, db)
+        if conflict_response:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=conflict_response.model_dump()
+            )
 
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
@@ -226,7 +365,8 @@ async def create_new_character_endpoint(
         rate_limiter = get_character_rate_limiter()
         await rate_limiter.check_rate_limit(current_user.id, "character_create")
 
-        # Check character count limit
+        # Check character count limit. The helper expects the current count
+        # (before this create) and rejects when current_count >= max_characters.
         existing_chars = db.list_character_cards(limit=10000)
         await rate_limiter.check_character_limit(current_user.id, len(existing_chars))
 

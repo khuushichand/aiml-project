@@ -566,7 +566,7 @@ class KokoroAdapter(TTSAdapter):
 
         # Validate request using new validation system
         try:
-            validate_tts_request(request, provider=self.provider_name.lower())
+            validate_tts_request(request, provider=self.provider_key)
         except Exception as e:
             logger.error(f"{self.provider_name} request validation failed: {e}")
             raise

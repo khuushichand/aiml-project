@@ -649,7 +649,7 @@ class EvaluationsDatabase:
         CREATE INDEX IF NOT EXISTS idx_evals_unified_type ON evaluations_unified(evaluation_type);
         CREATE INDEX IF NOT EXISTS idx_internal_evals_type ON internal_evaluations(evaluation_type);
         CREATE INDEX IF NOT EXISTS idx_internal_evals_user ON internal_evaluations(user_id);
-        CREATE INDEX IF NOT EXISTS idx_webhooks_active ON evaluation_runs(status);
+        CREATE INDEX IF NOT EXISTS idx_webhook_registrations_active ON webhook_registrations(active);
         CREATE INDEX IF NOT EXISTS idx_pipeline_presets_updated ON pipeline_presets(updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_ephemeral_created ON ephemeral_collections(created_at DESC);
 

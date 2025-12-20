@@ -190,6 +190,45 @@ When writing a new strategy:
 - `__init__.py` also sets legacy defaults `DEFAULT_CHUNK_OPTIONS` and reads system config (if available) for a few toggles (e.g., proposition engine defaults).
 - Some `process_text` behaviors (e.g., adaptive sizing) respond to options like `adaptive`, `base_adaptive_chunk_size`, etc.
 
+## Config & Metrics Integration (Library Hooks)
+
+The v2 Chunking module is being extracted into a reusable library (`tldw_chunking`) so that it can be used outside the server. To keep the core portable while still honoring tldw_server settings and observability, configuration and metrics are wired through narrow integration hooks.
+
+### Config Provider
+
+- The library defines a small config integration module (planned name: `tldw_chunking.config_integration`):
+  - `ChunkingConfigProvider` protocol with a single method:
+    - `get(section: str, key: str, default: Optional[str] = None) -> Optional[str]`
+  - Global helpers:
+    - `set_config_provider(provider: Optional[ChunkingConfigProvider])`
+    - `get_config_provider()`
+- Library code uses the following precedence for config-like values:
+  1. Environment variables (e.g., `STRICT_GRAPHEME_END_EXPANSION`, `CHUNKING_MAX_STREAMING_FLUSH_CHARS`).
+  2. Optional `ChunkingConfigProvider` for `[Chunking]` keys (e.g., `cache_copy_on_access`, `verbose_logging`, `regex_timeout_seconds`, `max_streaming_flush_threshold_chars`).
+  3. Hard-coded defaults in `ChunkerConfig` or the relevant helper.
+- Inside tldw_server, an adapter (e.g., `tldw_Server_API.app.core.Chunking.config_adapter`) wraps `load_comprehensive_config()` in a `ChunkingConfigProvider` implementation and installs it at startup via `set_config_provider(...)`. The core library never imports `tldw_Server_API.app.core.config` directly.
+
+### Metrics Facade
+
+- The library exposes metrics via a facade module (planned name: `tldw_chunking.metrics_integration`) instead of importing the server’s `Metrics` module:
+  - `ChunkingSpan` protocol: context manager with `add_event`, `set_attribute`, `record_exception`.
+  - `ChunkingMetricsFacade` protocol with:
+    - `increment_counter(name: str, value: float = 1.0, labels: Optional[Dict[str, str]] = None)`
+    - `observe_histogram(name: str, value: float, labels: Optional[Dict[str, str]] = None)`
+    - `set_gauge(name: str, value: float, labels: Optional[Dict[str, str]] = None)`
+    - `start_span(name: str, attributes: Optional[Dict[str, Any]] = None) -> ChunkingSpan`
+  - Global helpers:
+    - `set_metrics_facade(facade: Optional[ChunkingMetricsFacade])`
+    - `increment_counter(...)`, `observe_histogram(...)`, `set_gauge(...)`, `start_span(...)`
+    - Thin helpers `add_span_event(span, name, attributes=None)`, `set_span_attribute(span, key, value)`, `record_span_exception(span, exc)`
+  - A no-op default implementation is provided so the library can run without any metrics backend.
+- Library call sites (e.g., `Chunker.process_text`, cache metrics, streaming helpers) import from this facade and do not depend on tldw_server internals.
+- Inside tldw_server, a bridge module (e.g., `tldw_Server_API.app.core.Chunking.metrics_adapter`) implements `ChunkingMetricsFacade` by delegating to `tldw_Server_API.app.core.Metrics` and is installed at startup via `set_metrics_facade(...)`. Metric registration and exporter wiring remain on the server side.
+
+When contributing new features to Chunking, prefer:
+- Reading configuration via constructor parameters, environment variables, or the config provider (not direct server config imports).
+- Emitting observability via the metrics facade (or the existing Prometheus helpers in `utils/metrics.py`), not direct server metrics imports.
+
 ## Hierarchical & Templates
 
 - Hierarchical chunking builds a simple tree of sections and blocks (headers, paragraphs, code fences, lists, hrules, tables, template matches), then chunks leaf blocks using a base method.

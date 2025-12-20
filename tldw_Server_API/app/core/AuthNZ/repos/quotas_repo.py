@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from loguru import logger
@@ -97,7 +97,7 @@ class AuthnzQuotasRepo:
                     )
                 else:
                     # SQLite path – INSERT OR IGNORE + UPDATE + SELECT
-                    now_iso = datetime.utcnow().isoformat()
+                    now_iso = datetime.now(timezone.utc).isoformat()
                     await conn.execute(
                         """
                         INSERT OR IGNORE INTO vk_jwt_counters (jti, counter_type, count, updated_at)
@@ -173,7 +173,7 @@ class AuthnzQuotasRepo:
                     )
                 else:
                     # SQLite path – INSERT OR IGNORE + UPDATE + SELECT
-                    now_iso = datetime.utcnow().isoformat()
+                    now_iso = datetime.now(timezone.utc).isoformat()
                     await conn.execute(
                         """
                         INSERT OR IGNORE INTO vk_api_key_counters (api_key_id, counter_type, count, updated_at)

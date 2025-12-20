@@ -421,7 +421,7 @@ class BaseModule(ABC):
             self._resources_cache = await self.get_resources()
         return any(resource["uri"] == uri for resource in self._resources_cache)
 
-    async def read_resource(self, uri: str) -> Dict[str, Any]:
+    async def read_resource(self, uri: str, context: Optional[Any] = None) -> Dict[str, Any]:
         """Read a resource"""
         raise NotImplementedError(f"Resource reading not implemented for {self.name}")
 

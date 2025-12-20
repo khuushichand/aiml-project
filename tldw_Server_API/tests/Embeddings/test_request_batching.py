@@ -81,6 +81,71 @@ async def test_batched_requests_include_provider_credentials(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_process_batch_skips_cancelled_futures(monkeypatch):
+    config = EmbeddingsConfig(
+        providers=[
+            ProviderConfig(
+                name="openai",
+                api_key="sk-test",
+                models=["text-embedding-3-small"],
+            )
+        ],
+        batching=BatchingConfig(
+            enabled=True,
+            max_batch_size=4,
+            batch_timeout_ms=10,
+            adaptive_batching=False,
+        ),
+        security=SecurityConfig(enable_rate_limiting=False),
+        default_provider="openai",
+        default_model="text-embedding-3-small",
+    )
+    batcher = RequestBatcher(config=config)
+
+    async def fake_create_embeddings_batch_async(texts, user_app_config, model_id_override=None):
+        return [[0.1] for _ in texts]
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch_async",
+        fake_create_embeddings_batch_async,
+        raising=True,
+    )
+
+    loop = asyncio.get_running_loop()
+    cancelled_future = loop.create_future()
+    cancelled_future.cancel()
+    active_future = loop.create_future()
+
+    batch = [
+        BatchRequest(
+            request_id="req-cancelled",
+            text="cancelled",
+            model="text-embedding-3-small",
+            provider="openai",
+            metadata={},
+            future=cancelled_future,
+            timestamp=time.time(),
+        ),
+        BatchRequest(
+            request_id="req-active",
+            text="active",
+            model="text-embedding-3-small",
+            provider="openai",
+            metadata={},
+            future=active_future,
+            timestamp=time.time(),
+        ),
+    ]
+
+    await batcher._process_batch(batch, "openai", "text-embedding-3-small")
+
+    assert cancelled_future.cancelled()
+    assert active_future.result() == [0.1]
+
+    await batcher.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_override_config_passthrough(monkeypatch, tmp_path):
     """Override configs supplied at submit time should reach the embedder."""
     config = EmbeddingsConfig(

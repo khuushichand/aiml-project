@@ -1,6 +1,7 @@
 import datetime
 import pytest
 
+from tldw_Server_API.app.api.v1.API_Deps.chat_documents_deps import get_document_generator_service
 from tldw_Server_API.app.api.v1.endpoints import chat as chat_router
 from tldw_Server_API.tests._plugins.chat_fixtures import get_auth_headers
 
@@ -21,7 +22,7 @@ def _make_payload(**overrides):
     return base
 
 
-def test_document_generate_streams_as_sse(monkeypatch, authenticated_client, auth_token):
+def test_document_generate_streams_as_sse(authenticated_client, auth_token):
     calls = {}
 
     class StreamingStubService:
@@ -80,7 +81,7 @@ def test_document_generate_streams_as_sse(monkeypatch, authenticated_client, aut
             docs.sort(key=lambda item: item["id"], reverse=True)
             return docs[:limit]
 
-    monkeypatch.setattr(chat_router, "DocumentGeneratorService", StreamingStubService)
+    authenticated_client.app.dependency_overrides[get_document_generator_service] = lambda: StreamingStubService
     StreamingStubService.stored_docs = []
     StreamingStubService.next_id = 1
 
@@ -112,7 +113,7 @@ def test_document_generate_streams_as_sse(monkeypatch, authenticated_client, aut
     assert StreamingStubService.stored_docs, "Streamed document was not persisted"
 
 
-def test_document_generate_bubbles_service_error(monkeypatch, authenticated_client):
+def test_document_generate_bubbles_service_error(authenticated_client):
     class FailingStubService:
         record_calls = 0
 
@@ -129,7 +130,7 @@ def test_document_generate_bubbles_service_error(monkeypatch, authenticated_clie
             FailingStubService.record_calls += 1
             return None
 
-    monkeypatch.setattr(chat_router, "DocumentGeneratorService", FailingStubService)
+    authenticated_client.app.dependency_overrides[get_document_generator_service] = lambda: FailingStubService
     FailingStubService.record_calls = 0
 
     response = authenticated_client.post(
@@ -172,7 +173,7 @@ def test_document_generate_uses_configured_api_key(monkeypatch, authenticated_cl
 
     from tldw_Server_API.app.api.v1.schemas import chat_request_schemas as chat_schemas
 
-    monkeypatch.setattr(chat_router, "DocumentGeneratorService", KeyCaptureService)
+    authenticated_client.app.dependency_overrides[get_document_generator_service] = lambda: KeyCaptureService
     monkeypatch.setitem(chat_router.API_KEYS, "openai", "sk-configured")
     monkeypatch.setitem(chat_schemas.API_KEYS, "openai", "sk-configured")
 

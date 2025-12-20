@@ -17,11 +17,15 @@ Key Adaptations from Single-User:
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Optional, Any, Set
 from enum import Enum
 import json
-from typing import Dict, Any
+
+
+def _utc_now() -> datetime:
+    """Return current UTC time as a timezone-aware datetime."""
+    return datetime.now(timezone.utc)
 
 
 class ChatbookVersion(Enum):
@@ -188,8 +192,8 @@ class ChatbookManifest:
     name: str
     description: str
     author: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utc_now)
+    updated_at: datetime = field(default_factory=_utc_now)
     export_id: Optional[str] = None  # Unique export identifier
     exported_at: Optional[str] = None  # For compatibility with tests
     user_id: Optional[str] = None  # User who created the export
@@ -282,8 +286,8 @@ class ChatbookManifest:
             name=data["name"],
             description=data["description"],
             author=data.get("author"),
-            created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.utcnow(),
-            updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else datetime.utcnow(),
+            created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else _utc_now(),
+            updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else _utc_now(),
             export_id=data.get("export_id"),
             content_items=[ContentItem.from_dict(item) for item in data.get("content_items", [])],
             relationships=[Relationship.from_dict(rel) for rel in data.get("relationships", [])],
@@ -346,7 +350,7 @@ class ExportJob:
     status: ExportStatus
     chatbook_name: str
     output_path: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utc_now)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     error_message: Optional[str] = None
@@ -398,7 +402,7 @@ class ImportJob:
     user_id: str
     status: ImportStatus
     chatbook_path: str
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utc_now)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     error_message: Optional[str] = None

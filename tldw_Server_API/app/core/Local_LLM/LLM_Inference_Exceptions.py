@@ -3,12 +3,15 @@
 Defines a small hierarchy of exceptions for the Local_LLM module.
 """
 
+
 # Base class
 class LLMInferenceLibError(Exception):
     """Base exception for the Local LLM inference library."""
     pass
 
-# Backwards-compatibility alias (fix prior typo while avoiding import breaks)
+
+# Backwards-compatibility alias for typo in original name
+# DEPRECATED: Use LLMInferenceLibError instead
 LLMInfereceLibError = LLMInferenceLibError
 
 

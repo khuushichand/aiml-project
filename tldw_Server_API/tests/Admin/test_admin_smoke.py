@@ -4,6 +4,7 @@ import importlib
 import asyncio
 from uuid import uuid4
 from pathlib import Path
+from typing import Optional
 
 from fastapi.testclient import TestClient
 
@@ -13,7 +14,7 @@ from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
 from tldw_Server_API.app.core.AuthNZ.initialize import ensure_single_user_rbac_seed_if_needed
 
 
-def _fresh_client() -> TestClient:
+def _fresh_client(test_mode: bool = False, user_db_base_dir: Optional[str] = None) -> TestClient:
     """Create a TestClient against a fresh single-user SQLite auth DB.
 
     Ensures RBAC migrations (including seeded roles/permissions) run on a new DB file.
@@ -25,8 +26,10 @@ def _fresh_client() -> TestClient:
     os.environ["SINGLE_USER_API_KEY"] = os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
     os.environ["DATABASE_URL"] = f"sqlite:///{tmp_path}"
     # Ensure test-mode shortcuts are disabled for this smoke test
-    os.environ["TEST_MODE"] = "0"
-    os.environ["TLDW_TEST_MODE"] = "0"
+    os.environ["TEST_MODE"] = "1" if test_mode else "0"
+    os.environ["TLDW_TEST_MODE"] = "1" if test_mode else "0"
+    if user_db_base_dir:
+        os.environ["USER_DB_BASE_DIR"] = user_db_base_dir
 
     # Reset singletons so the app picks up new settings/DB
     reset_settings()
@@ -140,3 +143,19 @@ def test_admin_smoke_roles_permissions_sqlite_and_pg():
             assert r_del_role2.status_code == 200, r_del_role2.text
         finally:
             admin_mod._is_postgres_backend = original  # type: ignore[assignment]
+
+
+def test_admin_kanban_fts_maintenance_smoke():
+    with tempfile.TemporaryDirectory(prefix="kanban_admin_smoke_") as tmp_user_db_dir:
+        with _fresh_client(test_mode=True, user_db_base_dir=tmp_user_db_dir) as client:
+            resp_opt = client.post("/api/v1/admin/kanban/fts/optimize", params={"user_id": 1})
+            assert resp_opt.status_code == 200, resp_opt.text
+            payload_opt = resp_opt.json()
+            assert payload_opt["user_id"] == 1
+            assert payload_opt["action"] == "optimize"
+
+            resp_rebuild = client.post("/api/v1/admin/kanban/fts/rebuild", params={"user_id": 1})
+            assert resp_rebuild.status_code == 200, resp_rebuild.text
+            payload_rebuild = resp_rebuild.json()
+            assert payload_rebuild["user_id"] == 1
+            assert payload_rebuild["action"] == "rebuild"

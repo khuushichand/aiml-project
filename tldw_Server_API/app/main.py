@@ -366,8 +366,6 @@ logger.info("Logging configured (Loguru + stdlib interception)")
 
 #
 # Auth Endpoint (NEW)
-#
-# Auth Endpoint (NEW)
 """
 Initialize feature flags up-front so later references in route inclusion do not
 raise NameError when running under ULTRA/MINIMAL test modes or when optional
@@ -387,6 +385,9 @@ _HAS_SCHEDULER_WF = False
 _HAS_JOBS_ADMIN = False
 _HAS_AUTH_ENHANCED = False
 _HAS_CHUNKING = False
+_HAS_NOTES_GRAPH = False
+_HAS_READING_HIGHLIGHTS = False
+_HAS_KANBAN = False
 
 from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
 
@@ -535,6 +536,22 @@ else:
         _HAS_NOTES_GRAPH = False
     from tldw_Server_API.app.api.v1.endpoints.prompts import router as prompt_router
 
+    # Kanban Board endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.kanban_boards import router as kanban_boards_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_lists import router as kanban_lists_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_cards import router as kanban_cards_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_labels import router as kanban_labels_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_checklists import router as kanban_checklists_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_comments import router as kanban_comments_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_search import router as kanban_search_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_links import router as kanban_links_router
+
+        _HAS_KANBAN = True
+    except ImportError as _kanban_err:
+        logger.warning(f"Kanban endpoints unavailable; skipping import: {_kanban_err}")
+        _HAS_KANBAN = False
+
     # Prompt Studio (guarded)
     try:
         from tldw_Server_API.app.api.v1.endpoints.prompt_studio_projects import router as prompt_studio_projects_router
@@ -642,6 +659,8 @@ else:
         tools_router = None  # type: ignore[assignment]
     # Users Endpoint (NEW)
     from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
+    from tldw_Server_API.app.api.v1.endpoints.user_keys import router as user_keys_router
+    from tldw_Server_API.app.api.v1.endpoints.shared_keys_scoped import router as shared_keys_scoped_router
 
     # Privilege Maps Endpoint
     from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
@@ -2354,6 +2373,13 @@ async def lifespan(app: FastAPI):
 
         await shutdown_all_registered_executors(wait=True, cancel_futures=True)
         logger.info("App Shutdown: Registered executors shutdown")
+        try:
+            loop = asyncio.get_running_loop()
+            if hasattr(loop, "shutdown_default_executor"):
+                await loop.shutdown_default_executor()
+                logger.info("App Shutdown: Default executor shutdown")
+        except Exception as e:
+            logger.debug(f"App Shutdown: Default executor shutdown skipped/failed: {e}")
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down executors: {e}")
 
@@ -2403,6 +2429,15 @@ async def lifespan(app: FastAPI):
         logger.info("App Shutdown: Telemetry shutdown")
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down telemetry: {e}")
+
+    # Close cached MediaDatabase instances so Postgres pooled connections are released
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import reset_media_db_cache
+
+        reset_media_db_cache()
+        logger.info("App Shutdown: Media DB cache cleared")
+    except Exception as e:
+        logger.debug(f"App Shutdown: Media DB cache cleanup skipped/failed: {e}")
 
     # Close shared content database backend pool (PostgreSQL content mode)
     try:
@@ -2470,6 +2505,22 @@ OPENAPI_TAGS = [
             "description": "Permission matrix",
             "url": _ext_url("/docs-static/AUTHNZ_PERMISSION_MATRIX.md"),
         },
+    },
+    {
+        "name": "organizations",
+        "description": "Organization management: create orgs, manage membership, teams, and roles.",
+    },
+    {
+        "name": "invites",
+        "description": "Organization invite codes: preview, redeem, and audit.",
+    },
+    {
+        "name": "billing",
+        "description": "Billing and subscription management (plans, invoices, webhooks).",
+    },
+    {
+        "name": "kanban",
+        "description": "Kanban board endpoints: boards, lists, cards, and actions.",
     },
     {
         "name": "admin",
@@ -3255,9 +3306,6 @@ else:
     # HTTP request metrics middleware (records count and latency per route)
     app.add_middleware(HTTPMetricsMiddleware)
 
-    # Request ID propagation (adds X-Request-ID header)
-    app.add_middleware(RequestIDMiddleware)
-
     # Structured access logs (request_id, method, host, status, duration)
     try:
         from tldw_Server_API.app.core.Logging.access_log_middleware import AccessLogMiddleware
@@ -3265,6 +3313,9 @@ else:
         app.add_middleware(AccessLogMiddleware)
     except Exception as _e:
         logger.debug(f"Skipping AccessLogMiddleware: {_e}")
+
+    # Request ID propagation (adds X-Request-ID header)
+    app.add_middleware(RequestIDMiddleware)
 
     # Sandbox artifact traversal guard (pre-routing)
     try:
@@ -3699,7 +3750,16 @@ async def api_metrics():
 
 
 # Router for health monitoring endpoints (NEW)
-if _MINIMAL_TEST_APP:
+if _ULTRA_MINIMAL_APP:
+    # Ultra-minimal: only mount health endpoints (no optional routers, no gating)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
+
+        app.include_router(health_router, prefix=f"{API_V1_PREFIX}", tags=["health"])
+        app.include_router(health_router, prefix="", tags=["health"])
+    except Exception as _health_ultra_err:  # noqa: BLE001
+        logger.warning(f"Health router unavailable in ULTRA_MINIMAL_APP: {_health_ultra_err}")
+elif _MINIMAL_TEST_APP:
     # Minimal set for paper_search tests
     app.include_router(research_router, prefix=f"{API_V1_PREFIX}/research", tags=["research"])
     app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
@@ -3871,6 +3931,27 @@ if _MINIMAL_TEST_APP:
         app.include_router(notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
     except Exception as _notes_min_err:
         logger.debug(f"Skipping notes router in minimal test app: {_notes_min_err}")
+    # Kanban Board endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.kanban_boards import router as kanban_boards_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_lists import router as kanban_lists_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_cards import router as kanban_cards_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_labels import router as kanban_labels_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_checklists import router as kanban_checklists_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_comments import router as kanban_comments_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_search import router as kanban_search_router
+        from tldw_Server_API.app.api.v1.endpoints.kanban_links import router as kanban_links_router
+
+        app.include_router(kanban_boards_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
+        app.include_router(kanban_lists_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
+        app.include_router(kanban_cards_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
+        app.include_router(kanban_labels_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
+        app.include_router(kanban_checklists_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
+        app.include_router(kanban_comments_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
+        app.include_router(kanban_search_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
+        app.include_router(kanban_links_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"])
+    except Exception as _kanban_min_err:
+        logger.debug(f"Skipping kanban router in minimal test app: {_kanban_min_err}")
     # Auth endpoints (login/register/refresh/logout/me)
     try:
         app.include_router(auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
@@ -3887,6 +3968,11 @@ if _MINIMAL_TEST_APP:
         from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
 
         app.include_router(users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+        from tldw_Server_API.app.api.v1.endpoints.user_keys import router as user_keys_router
+        from tldw_Server_API.app.api.v1.endpoints.shared_keys_scoped import router as shared_keys_scoped_router
+
+        app.include_router(user_keys_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+        app.include_router(shared_keys_scoped_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
     except Exception as _users_min_err:
         logger.debug(f"Skipping users router in minimal test app: {_users_min_err}")
     # Include Jobs admin endpoints for tests that exercise jobs stats/counters
@@ -4070,6 +4156,7 @@ else:
             "auth-enhanced", auth_enhanced_router, prefix=f"{API_V1_PREFIX}", tags=["authentication-enhanced"]
         )
     _include_if_enabled("users", users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+    _include_if_enabled("users", user_keys_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
 
     # Include AuthNZ debug endpoints once via the gated path.
     # Force-enable when _TEST_MODE is true; otherwise respect route policy.
@@ -4091,6 +4178,35 @@ else:
 
     _include_if_enabled("admin", admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
     _include_if_enabled("mcp-catalogs", mcp_catalogs_manage_router, prefix=f"{API_V1_PREFIX}")
+    # Self-service organization management endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.orgs import router as orgs_router
+
+        _include_if_enabled("orgs", orgs_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
+        _include_if_enabled("orgs", shared_keys_scoped_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
+    except ImportError as _orgs_err:
+        logger.warning(f"Skipping orgs router due to import error: {_orgs_err}")
+    # Organization invite preview and redemption endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.org_invites import router as org_invites_router
+
+        _include_if_enabled("org-invites", org_invites_router, prefix=f"{API_V1_PREFIX}", tags=["invites"])
+    except ImportError as _inv_err:
+        logger.warning(f"Skipping org_invites router due to import error: {_inv_err}")
+    # Billing and subscription management endpoints
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.billing import router as billing_router
+
+        _include_if_enabled("billing", billing_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
+    except ImportError as _bill_err:
+        logger.warning(f"Skipping billing router due to import error: {_bill_err}")
+    # Stripe webhook handler (no auth required)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.billing_webhooks import router as billing_webhooks_router
+
+        _include_if_enabled("billing-webhooks", billing_webhooks_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
+    except ImportError as _wh_err:
+        logger.warning(f"Skipping billing_webhooks router due to import error: {_wh_err}")
     if _HAS_MEDIA:
         _include_if_enabled("media", media_router, prefix=f"{API_V1_PREFIX}/media", tags=["media"])
     if _HAS_AUDIO:
@@ -4197,6 +4313,32 @@ else:
         )  # /api/v1/notes/graph
     _include_if_enabled("notes", notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
     _include_if_enabled("prompts", prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
+    # Kanban Board endpoints
+    if _HAS_KANBAN:
+        _include_if_enabled(
+            "kanban", kanban_boards_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"]
+        )
+        _include_if_enabled(
+            "kanban", kanban_lists_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"]
+        )
+        _include_if_enabled(
+            "kanban", kanban_cards_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"]
+        )
+        _include_if_enabled(
+            "kanban", kanban_labels_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"]
+        )
+        _include_if_enabled(
+            "kanban", kanban_checklists_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"]
+        )
+        _include_if_enabled(
+            "kanban", kanban_comments_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"]
+        )
+        _include_if_enabled(
+            "kanban", kanban_search_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"]
+        )
+        _include_if_enabled(
+            "kanban", kanban_links_router, prefix=f"{API_V1_PREFIX}/kanban", tags=["kanban"]
+        )
     if _HAS_READING_HIGHLIGHTS:
         _include_if_enabled(
             "reading-highlights", reading_highlights_router, prefix=f"{API_V1_PREFIX}", tags=["reading-highlights"]

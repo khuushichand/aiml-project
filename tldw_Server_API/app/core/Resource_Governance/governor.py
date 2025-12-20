@@ -182,6 +182,7 @@ class MemoryResourceGovernor(ResourceGovernor):
         self._time = time_source
         self._backend_label = backend_label
         self._default_handle_ttl = max(5, int(default_handle_ttl))
+        self._op_ttl = max(60, int(default_handle_ttl))
 
         # Keyed by (policy_id, category, scope, entity_value)
         self._buckets: Dict[Tuple[str, str, str, str], _Bucket] = {}
@@ -238,6 +239,32 @@ class MemoryResourceGovernor(ResourceGovernor):
         expired = [lid for lid, l in m.items() if l.expires_at <= now]
         for lid in expired:
             del m[lid]
+
+    def _purge_expired_handles(self, now: float) -> None:
+        expired = [hid for hid, h in self._handles.items() if h.expires_at <= now]
+        for hid in expired:
+            try:
+                del self._handles[hid]
+            except KeyError:
+                pass
+
+    def _purge_expired_ops(self, now: float) -> None:
+        ttl = self._op_ttl
+        expired: list[str] = []
+        for op_id, rec in self._ops.items():
+            try:
+                created_at = rec.get("created_at")
+                if created_at is None:
+                    continue
+                if (now - float(created_at)) > float(ttl):
+                    expired.append(op_id)
+            except Exception:
+                continue
+        for op_id in expired:
+            try:
+                del self._ops[op_id]
+            except KeyError:
+                pass
 
     # --- Core evaluation ---
     def _category_limits(self, policy: Dict[str, Any], category: str) -> Dict[str, Any]:
@@ -473,6 +500,9 @@ class MemoryResourceGovernor(ResourceGovernor):
         return RGDecision(allowed=overall_allowed, retry_after=(retry_after_overall or None), details={"policy_id": policy_id, "categories": per_category})
 
     async def reserve(self, req: RGRequest, op_id: Optional[str] = None) -> Tuple[RGDecision, Optional[str]]:
+        now_purge = self._time()
+        self._purge_expired_handles(now_purge)
+        self._purge_expired_ops(now_purge)
         # Idempotency: return previous outcome for same op_id
         if op_id and op_id in self._ops:
             rec = self._ops[op_id]
@@ -482,7 +512,7 @@ class MemoryResourceGovernor(ResourceGovernor):
         dec = await self.check(req)
         if not dec.allowed:
             if op_id:
-                self._ops[op_id] = {"type": "reserve", "decision": dec, "handle_id": None}
+                self._ops[op_id] = {"type": "reserve", "decision": dec, "handle_id": None, "created_at": now_purge}
             return dec, None
 
         # Consume from buckets / acquire leases
@@ -540,11 +570,14 @@ class MemoryResourceGovernor(ResourceGovernor):
                         continue
                     m = self._get_lease_map(policy_id, category, sc, ev)
                     self._purge_expired_leases(m, now)
-                    if len(m) >= limit:
+                    if units <= 0:
+                        continue
+                    if (len(m) + units) > limit:
                         logger.debug("lease contention on reserve: scope={} ev={}", sc, ev)
                         continue
-                    lid = f"{handle_id}:{sc}:{ev}"
-                    m[lid] = _Lease(lease_id=lid, expires_at=now + ttl_sec)
+                    for i in range(units):
+                        lid = f"{handle_id}:{sc}:{ev}:{i}"
+                        m[lid] = _Lease(lease_id=lid, expires_at=now + ttl_sec)
                     # Gauge update (best-effort)
                     if get_metrics_registry:
                         get_metrics_registry().set_gauge(
@@ -558,10 +591,13 @@ class MemoryResourceGovernor(ResourceGovernor):
 
         self._handles[handle_id] = h
         if op_id:
-            self._ops[op_id] = {"type": "reserve", "decision": dec, "handle_id": handle_id}
+            self._ops[op_id] = {"type": "reserve", "decision": dec, "handle_id": handle_id, "created_at": now}
         return dec, handle_id
 
     async def commit(self, handle_id: str, actuals: Optional[Dict[str, int]] = None, op_id: Optional[str] = None) -> None:
+        now_purge = self._time()
+        self._purge_expired_handles(now_purge)
+        self._purge_expired_ops(now_purge)
         # Idempotent per op_id
         if op_id and op_id in self._ops:
             rec = self._ops[op_id]
@@ -641,10 +677,14 @@ class MemoryResourceGovernor(ResourceGovernor):
                         )
 
         h.state = "finalized"
+        self._handles.pop(handle_id, None)
         if op_id:
-            self._ops[op_id] = {"type": "commit", "handle_id": handle_id}
+            self._ops[op_id] = {"type": "commit", "handle_id": handle_id, "created_at": now}
 
     async def refund(self, handle_id: str, deltas: Optional[Dict[str, int]] = None, op_id: Optional[str] = None) -> None:
+        now_purge = self._time()
+        self._purge_expired_handles(now_purge)
+        self._purge_expired_ops(now_purge)
         # Idempotent per op_id
         if op_id and op_id in self._ops:
             rec = self._ops[op_id]
@@ -702,7 +742,7 @@ class MemoryResourceGovernor(ResourceGovernor):
                         pass
 
         if op_id:
-            self._ops[op_id] = {"type": "refund", "handle_id": handle_id}
+            self._ops[op_id] = {"type": "refund", "handle_id": handle_id, "created_at": now}
 
     async def renew(self, handle_id: str, ttl_s: int) -> None:
         h = self._handles.get(handle_id)

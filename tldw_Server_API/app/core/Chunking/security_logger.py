@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 from enum import Enum
 import json
+import threading
 from pathlib import Path
 from loguru import logger
 
@@ -212,20 +213,26 @@ class SecurityLogger:
         logger.info("Security event log cleared")
 
 
-# Global security logger instance
-_security_logger = None
+# Global security logger instance with thread-safe initialization
+_security_logger: Optional[SecurityLogger] = None
+_security_logger_lock = threading.Lock()
 
 
 def get_security_logger() -> SecurityLogger:
     """
     Get the global security logger instance.
 
+    Uses double-checked locking pattern for thread-safe lazy initialization.
+
     Returns:
         SecurityLogger instance
     """
     global _security_logger
     if _security_logger is None:
-        _security_logger = SecurityLogger()
+        with _security_logger_lock:
+            # Double-check after acquiring lock
+            if _security_logger is None:
+                _security_logger = SecurityLogger()
     return _security_logger
 
 
@@ -233,9 +240,12 @@ def configure_security_logging(log_file: Optional[Path] = None, enable_console: 
     """
     Configure security logging.
 
+    Thread-safe reconfiguration of the global security logger.
+
     Args:
         log_file: Optional path to security log file
         enable_console: Whether to also log to console
     """
     global _security_logger
-    _security_logger = SecurityLogger(log_file, enable_console)
+    with _security_logger_lock:
+        _security_logger = SecurityLogger(log_file, enable_console)

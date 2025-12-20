@@ -9,6 +9,7 @@ from starlette.types import Scope
 from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import get_auth_principal
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
 def _make_request(headers: Dict[str, str] | None = None) -> Request:
@@ -78,6 +79,10 @@ async def test_get_auth_principal_single_user_mode(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_auth_principal_jwt_path(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    reset_settings()
+
     async def _fake_verify_jwt_and_fetch_user(request, _token: str = "") -> User:
         # simulate User with claims and membership already attached to request.state
         request.state.user_id = 42
@@ -99,12 +104,17 @@ async def test_get_auth_principal_jwt_path(monkeypatch):
 
     req = _make_request(headers={"Authorization": "Bearer token-abc"})
 
-    principal = await get_auth_principal(req)
-    assert principal.kind == "user"
-    assert principal.user_id == 42
-    assert principal.api_key_id is None
-    assert principal.org_ids == [10]
-    assert principal.team_ids == [20]
+    try:
+        principal = await get_auth_principal(req)
+        assert principal.kind == "user"
+        assert principal.user_id == 42
+        assert principal.api_key_id is None
+        assert principal.org_ids == [10]
+        assert principal.team_ids == [20]
+    finally:
+        for env_key in ("AUTH_MODE", "DATABASE_URL"):
+            monkeypatch.delenv(env_key, raising=False)
+        reset_settings()
 
 
 @pytest.mark.asyncio

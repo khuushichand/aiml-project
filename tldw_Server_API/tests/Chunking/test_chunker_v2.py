@@ -118,6 +118,61 @@ class TestV2Chunker:
         assert headers, "Expected header chunk to be present"
         assert headers[0]['text'].strip().startswith("# Heading")
 
+    def test_flatten_hierarchical_no_space_language_no_extra_space(self):
+        """Flattening should not inject spaces for no-space languages."""
+        chunker = Chunker()
+        tree = {
+            'method': 'structure_aware',
+            'max_size': 2,
+            'overlap': 0,
+            'root': {
+                'kind': 'root',
+                'children': [
+                    {
+                        'kind': 'section',
+                        'level': 1,
+                        'title': None,
+                        'children': [
+                            {
+                                'kind': 'paragraph',
+                                'chunks': [
+                                    {
+                                        'text': '你好',
+                                        'metadata': {
+                                            'language': 'zh',
+                                            'paragraph_kind': 'paragraph',
+                                            'start_offset': 0,
+                                            'end_offset': 2,
+                                        },
+                                    }
+                                ],
+                                'children': [],
+                            },
+                            {
+                                'kind': 'paragraph',
+                                'chunks': [
+                                    {
+                                        'text': '世界',
+                                        'metadata': {
+                                            'language': 'zh',
+                                            'paragraph_kind': 'paragraph',
+                                            'start_offset': 2,
+                                            'end_offset': 4,
+                                        },
+                                    }
+                                ],
+                                'children': [],
+                            },
+                        ],
+                    }
+                ],
+            },
+        }
+
+        rows = chunker.flatten_hierarchical(tree)
+        assert len(rows) == 1
+        assert rows[0]['text'] == "你好世界"
+
     def test_hierarchical_respects_method_options(self):
         """Hierarchical chunking should propagate strategy options."""
         chunker = Chunker()
@@ -173,6 +228,12 @@ class TestV2Chunker:
         )
         token_strategy = chunker.get_strategy('tokens')
         assert getattr(token_strategy, "tokenizer_name", None) == 'test-tokenizer'
+
+    def test_process_text_rejects_non_string_input(self):
+        """process_text should raise on non-string inputs."""
+        chunker = Chunker()
+        with pytest.raises(InvalidInputError):
+            chunker.process_text(None)
 
     def test_chunk_text_with_metadata_ignores_whitespace_only_input(self):
         """Whitespace-only payloads should return an empty list just like chunk_text."""

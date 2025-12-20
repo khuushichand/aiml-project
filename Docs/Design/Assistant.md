@@ -10,6 +10,8 @@ https://github.com/fagenorn/handcrafted-persona-engine
 https://github.com/abdibrokhim/paper-ai-voice-assistant
 https://arxiv.org/abs/2504.02197
 https://github.com/yankooliveira/toads
+https://techtiff.substack.com/p/the-iphone-shortcut-that-runs-my
+https://github.com/Shichun-Liu/Agent-Memory-Paper-List?tab=readme-ov-file
 https://github.com/kortix-ai/suna
 https://github.com/joinly-ai/joinly
 https://github.com/dyad-sh/dyad

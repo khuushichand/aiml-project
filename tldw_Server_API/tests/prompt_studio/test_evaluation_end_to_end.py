@@ -59,13 +59,13 @@ def mock_chat_api_call(mock_llm_responses):
             if user_message:
                 content = user_message.get('content', '')
                 if 'capital' in content.lower() and 'france' in content.lower():
-                    return [mock_llm_responses["test_case_1"]]
+                    return mock_llm_responses["test_case_1"]
                 elif 'python' in content.lower():
-                    return [mock_llm_responses["test_case_2"]]
+                    return mock_llm_responses["test_case_2"]
                 elif 'machine learning' in content.lower():
-                    return [mock_llm_responses["test_case_3"]]
+                    return mock_llm_responses["test_case_3"]
 
-        return [mock_llm_responses["default"]]
+        return mock_llm_responses["default"]
 
     return _mock_call
 

@@ -22,10 +22,8 @@ def _normalize_scores(results: List[Dict[str, Any]], score_key: Optional[str] = 
         mn, mx = min(vals), max(vals)
         if mx - mn < 1e-9:
             return [1.0 for _ in vals]
-        # If this looks like bm25 (lower is better), invert scale
-        # Heuristic: if the average is > 1.0, treat as bm25-like
-        avg = sum(vals) / len(vals)
-        if avg > 1.0:
+        # If this is bm25 (lower is better), invert scale
+        if score_key and "bm25" in score_key.lower():
             return [(mx - v) / (mx - mn + 1e-9) for v in vals]
         # Otherwise assume higher is better
         return [(v - mn) / (mx - mn + 1e-9) for v in vals]

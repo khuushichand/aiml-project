@@ -22,6 +22,7 @@ Notes
 #
 # Import necessary libraries
 import asyncio
+import threading
 import json
 import os
 import time
@@ -723,9 +724,63 @@ async def legacy_chat_with_anthropic_async(
         app_config: Optional[Dict[str, Any]] = None,
 ):
     from tldw_Server_API.app.core.LLM_Calls.adapter_shims import anthropic_chat_handler
-    # No dedicated async shim for Anthropic; call sync adapter via loop or rely on
-    # adapter's async if present (shims expose async for common providers already)
-    return anthropic_chat_handler(
+    if streaming:
+        gen = await asyncio.to_thread(
+            anthropic_chat_handler,
+            input_data=input_data,
+            model=model,
+            api_key=api_key,
+            system_prompt=system_prompt,
+            temp=temp,
+            topp=topp,
+            topk=topk,
+            streaming=streaming,
+            max_tokens=max_tokens,
+            stop_sequences=stop_sequences,
+            tools=tools,
+            custom_prompt_arg=custom_prompt_arg,
+            app_config=app_config,
+        )
+
+        async def _astream():
+            loop = asyncio.get_running_loop()
+            queue: asyncio.Queue[Any] = asyncio.Queue()
+            sentinel = object()
+            stop_event = threading.Event()
+
+            def _worker() -> None:
+                try:
+                    for item in gen:
+                        if stop_event.is_set():
+                            break
+                        loop.call_soon_threadsafe(queue.put_nowait, item)
+                except Exception as exc:
+                    loop.call_soon_threadsafe(queue.put_nowait, exc)
+                finally:
+                    try:
+                        if hasattr(gen, "close"):
+                            gen.close()
+                    except Exception:
+                        pass
+                    loop.call_soon_threadsafe(queue.put_nowait, sentinel)
+
+            thread = threading.Thread(target=_worker, daemon=True)
+            thread.start()
+
+            try:
+                while True:
+                    item = await queue.get()
+                    if item is sentinel:
+                        break
+                    if isinstance(item, Exception):
+                        raise item
+                    yield item
+            finally:
+                stop_event.set()
+
+        return _astream()
+    return await asyncio.to_thread(
+        anthropic_chat_handler,
         input_data=input_data,
         model=model,
         api_key=api_key,
@@ -1223,7 +1278,12 @@ def _raise_httpx_chat_error(provider: str, error: httpx.HTTPStatusError) -> None
     raise ChatAPIError(provider=provider, message=text, status_code=status_code or 500)
 
 
-def get_openai_embeddings(input_data: str, model: str, app_config: Optional[Dict[str, Any]] = None) -> List[float]:
+def get_openai_embeddings(
+    input_data: str,
+    model: str,
+    app_config: Optional[Dict[str, Any]] = None,
+    dimensions: Optional[int] = None,
+) -> List[float]:
     """
     Get embeddings for a single input text from OpenAI API.
     Args:
@@ -1276,6 +1336,13 @@ def get_openai_embeddings(input_data: str, model: str, app_config: Optional[Dict
         "input": input_data,
         "model": model,
     }
+    if dimensions is not None:
+        try:
+            dim = int(dimensions)
+        except Exception:
+            dim = None
+        if dim and dim > 0:
+            request_data["dimensions"] = dim
     # Resolve OpenAI API base URL using shared helper
     api_base = _resolve_openai_api_base(openai_cfg)
     api_url = api_base.rstrip('/') + '/embeddings'
@@ -1320,8 +1387,12 @@ def get_openai_embeddings(input_data: str, model: str, app_config: Optional[Dict
 
 
 # NEW BATCH FUNCTION
-def get_openai_embeddings_batch(texts: List[str], model: str, app_config: Optional[Dict[str, Any]] = None) -> List[
-    List[float]]:
+def get_openai_embeddings_batch(
+    texts: List[str],
+    model: str,
+    app_config: Optional[Dict[str, Any]] = None,
+    dimensions: Optional[int] = None,
+) -> List[List[float]]:
     """
     Get embeddings for a batch of input texts from OpenAI API in a single call.
     Args:
@@ -1362,6 +1433,13 @@ def get_openai_embeddings_batch(texts: List[str], model: str, app_config: Option
         "input": texts,
         "model": model,
     }
+    if dimensions is not None:
+        try:
+            dim = int(dimensions)
+        except Exception:
+            dim = None
+        if dim and dim > 0:
+            request_data["dimensions"] = dim
     # Resolve OpenAI API base URL using shared helper
     api_base = _resolve_openai_api_base(openai_cfg)
     api_url = api_base.rstrip('/') + '/embeddings'
@@ -1726,6 +1804,8 @@ async def chat_with_anthropic_async(
         from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
         registry.register_adapter("anthropic", AnthropicAdapter)
         adapter = registry.get_adapter("anthropic")
+    if adapter is None:
+        raise ChatProviderError(provider="anthropic", message="Anthropic adapter unavailable")
     req: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -1808,6 +1888,8 @@ async def chat_with_openrouter_async(
         from tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter import OpenRouterAdapter
         registry.register_adapter("openrouter", OpenRouterAdapter)
         adapter = registry.get_adapter("openrouter")
+    if adapter is None:
+        raise ChatProviderError(provider="openrouter", message="OpenRouter adapter unavailable")
 
     req: Dict[str, Any] = {
         "messages": input_data,
@@ -2175,6 +2257,8 @@ def chat_with_anthropic(
         from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
         registry.register_adapter("anthropic", AnthropicAdapter)
         adapter = registry.get_adapter("anthropic")
+    if adapter is None:
+        raise ChatProviderError(provider="anthropic", message="Anthropic adapter unavailable")
     req: Dict[str, Any] = {
         "messages": input_data,
         "model": model,

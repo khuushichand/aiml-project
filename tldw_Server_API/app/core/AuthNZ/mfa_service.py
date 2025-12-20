@@ -383,7 +383,10 @@ class MFAService:
         except DatabaseError:
             raise
         except Exception as exc:
-            logger.error(f"Failed to load MFA secret for user {user_id}: {exc}")
+            if self.settings.PII_REDACT_LOGS:
+                logger.error("Failed to load MFA secret (details redacted)")
+            else:
+                logger.error(f"Failed to load MFA secret for user {user_id}: {exc}")
             raise DatabaseError("Failed to load MFA secret") from exc
 
     async def get_user_mfa_status(self, user_id: int) -> Dict[str, Any]:

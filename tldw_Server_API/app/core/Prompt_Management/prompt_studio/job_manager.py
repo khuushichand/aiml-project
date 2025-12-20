@@ -318,8 +318,8 @@ class JobManager:
             if isinstance(payload, str):
                 try:
                     payload = json.loads(payload)
-                except Exception as hb_err:
-                    logger.debug(f"lease renewal metrics increment failed: error={hb_err}")
+                except Exception as parse_err:
+                    logger.warning(f"Failed to parse job payload JSON: error={parse_err}")
 
             # Start lease heartbeat
             lease_secs = 60

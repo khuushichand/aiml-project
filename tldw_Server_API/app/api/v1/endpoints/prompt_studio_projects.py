@@ -22,14 +22,14 @@ See also
 - Prompt Studio Evaluations API: /api/v1/prompt-studio/evaluations
 """
 
-from typing import List, Optional, Dict, Any
+from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, Request, Header
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
 
 # Local imports
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import (
-    StandardResponse, ListResponse, ListQueryParams
+    StandardResponse, ListResponse
 )
 from tldw_Server_API.app.api.v1.schemas.prompt_studio_project import (
     ProjectCreate, ProjectUpdate, ProjectResponse, ProjectListItem
@@ -175,8 +175,8 @@ async def create_project(
                     existing = db.get_project(existing_id)
                     if existing:
                         return StandardResponse(success=True, data=ProjectResponse(**existing))
-            except Exception:
-                pass
+            except DatabaseError as e:
+                logger.warning(f"Idempotency lookup failed for key {idempotency_key}: {e}")
 
         # Create project
         project = db.create_project(
@@ -195,10 +195,7 @@ async def create_project(
 
         # Record idempotency mapping
         if idempotency_key and project.get("id"):
-            try:
-                db.record_idempotency("project", idempotency_key, int(project["id"]), user_id_str)
-            except Exception:
-                pass
+            db.record_idempotency("project", idempotency_key, int(project["id"]), user_id_str)
 
         return StandardResponse(
             success=True,
@@ -221,8 +218,11 @@ async def create_project(
             if row:
                 project = db._row_to_dict(cursor, row)
                 return StandardResponse(success=True, data=ProjectResponse(**project))
-        except Exception:
-            pass
+        except DatabaseError as fallback_err:
+            logger.error(f"Failed to retrieve existing project after conflict: {fallback_err}")
+        except Exception as fallback_err:
+            logger.exception(f"Unexpected error retrieving existing project after conflict: {fallback_err}")
+            raise
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e)
@@ -374,9 +374,10 @@ async def get_project(
 @router.get("/{project_id}")
 async def get_project_simple(
     project_id: int = Path(..., description="Project ID"),
+    _: bool = Depends(require_project_access),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
 ) -> Dict[str, Any]:
-    resp = await get_project(project_id, True, db)  # type: ignore[arg-type]
+    resp = await get_project(project_id, _, db)  # type: ignore[arg-type]
     if isinstance(resp, dict) and resp.get("data"):
         data = resp["data"]
         return data if isinstance(data, dict) else data.model_dump()  # type: ignore[attr-defined]

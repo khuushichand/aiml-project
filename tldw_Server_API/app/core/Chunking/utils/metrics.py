@@ -6,6 +6,7 @@ Uses Prometheus client for metrics export.
 
 from typing import Optional, Dict, Any
 from functools import wraps
+import threading
 import time
 from loguru import logger
 
@@ -230,20 +231,26 @@ class ChunkingMetrics:
         return self.chunking_duration.labels(method=method).time()
 
 
-# Global metrics instance
+# Global metrics instance with thread-safe initialization
 _metrics_instance: Optional[ChunkingMetrics] = None
+_metrics_lock = threading.Lock()
 
 
 def get_metrics() -> ChunkingMetrics:
     """
     Get the global metrics instance.
 
+    Uses double-checked locking pattern for thread-safe lazy initialization.
+
     Returns:
         ChunkingMetrics instance
     """
     global _metrics_instance
     if _metrics_instance is None:
-        _metrics_instance = ChunkingMetrics()
+        with _metrics_lock:
+            # Double-check after acquiring lock
+            if _metrics_instance is None:
+                _metrics_instance = ChunkingMetrics()
     return _metrics_instance
 
 

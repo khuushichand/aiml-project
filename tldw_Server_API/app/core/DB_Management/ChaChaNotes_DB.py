@@ -112,8 +112,16 @@ class ConflictError(CharactersRAGDBError):
         entity_id (Any): The ID or unique identifier of the entity involved.
     """
 
-    def __init__(self, message="Conflict detected.", entity: Optional[str] = None, entity_id: Any = None):
+    def __init__(
+        self,
+        message: str = "Conflict detected.",
+        entity: Optional[str] = None,
+        entity_id: Any = None,
+        identifier: Any = None,
+    ):
         super().__init__(message)
+        if entity_id is None and identifier is not None:
+            entity_id = identifier
         self.entity = entity
         self.entity_id = entity_id
 
@@ -357,7 +365,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 10  # Schema v10 adds chat state/topic metadata + note backlinks
+    _CURRENT_SCHEMA_VERSION = 11  # Schema v11 allows NULL message content for image-only messages
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: Tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -565,7 +573,7 @@ CREATE TABLE IF NOT EXISTS messages(
   conversation_id   TEXT  NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   parent_message_id TEXT  REFERENCES messages(id)     ON DELETE SET NULL,
   sender            TEXT  NOT NULL,
-  content           TEXT  NOT NULL, -- Text content of the message
+  content           TEXT, -- Text content of the message (nullable for image-only)
   image_data        BLOB DEFAULT NULL,
   image_mime_type   TEXT DEFAULT NULL,
   timestamp         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1550,6 +1558,156 @@ UPDATE db_schema_version
    AND version < 10;
 """
 
+    # --- Migration: V10 -> V11 (Allow NULL message content) ---
+    _MIGRATION_SQL_V10_TO_V11 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 11 - Nullable message content (2025-11-25)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = OFF;
+
+DROP TRIGGER IF EXISTS messages_ai;
+DROP TRIGGER IF EXISTS messages_au;
+DROP TRIGGER IF EXISTS messages_ad;
+DROP TRIGGER IF EXISTS messages_sync_create;
+DROP TRIGGER IF EXISTS messages_sync_update;
+DROP TRIGGER IF EXISTS messages_sync_delete;
+DROP TRIGGER IF EXISTS messages_sync_undelete;
+
+DROP TABLE IF EXISTS messages_fts;
+DROP TABLE IF EXISTS messages_new;
+
+CREATE TABLE IF NOT EXISTS messages_new(
+  id                TEXT PRIMARY KEY,                 /* UUID */
+  conversation_id   TEXT  NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  parent_message_id TEXT  REFERENCES messages_new(id) ON DELETE SET NULL,
+  sender            TEXT  NOT NULL,
+  content           TEXT, -- Text content of the message (nullable for image-only)
+  image_data        BLOB DEFAULT NULL,
+  image_mime_type   TEXT DEFAULT NULL,
+  timestamp         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ranking           INTEGER,
+  last_modified     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted           BOOLEAN NOT NULL DEFAULT 0,
+  client_id         TEXT    NOT NULL,
+  version           INTEGER NOT NULL DEFAULT 1
+);
+
+INSERT INTO messages_new (
+  id, conversation_id, parent_message_id, sender, content, image_data, image_mime_type,
+  timestamp, ranking, last_modified, deleted, client_id, version
+)
+SELECT
+  id, conversation_id, parent_message_id, sender, content, image_data, image_mime_type,
+  timestamp, ranking, last_modified, deleted, client_id, version
+FROM messages;
+
+DROP TABLE messages;
+ALTER TABLE messages_new RENAME TO messages;
+
+CREATE INDEX IF NOT EXISTS idx_msgs_conversation ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_msgs_parent       ON messages(parent_message_id);
+CREATE INDEX IF NOT EXISTS idx_msgs_timestamp    ON messages(timestamp);
+CREATE INDEX IF NOT EXISTS idx_msgs_ranking      ON messages(ranking);
+CREATE INDEX IF NOT EXISTS idx_msgs_conv_ts      ON messages(conversation_id,timestamp);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
+USING fts5(
+  content,
+  content='messages',
+  content_rowid='rowid'
+);
+
+CREATE TRIGGER messages_ai
+AFTER INSERT ON messages BEGIN
+  INSERT INTO messages_fts(rowid,content)
+  SELECT new.rowid,new.content
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER messages_au
+AFTER UPDATE ON messages BEGIN
+  INSERT INTO messages_fts(messages_fts,rowid,content)
+  VALUES('delete',old.rowid,old.content);
+
+  INSERT INTO messages_fts(rowid,content)
+  SELECT new.rowid,new.content
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER messages_ad
+AFTER DELETE ON messages BEGIN
+  INSERT INTO messages_fts(messages_fts,rowid,content)
+  VALUES('delete',old.rowid,old.content);
+END;
+
+CREATE TRIGGER messages_sync_create
+AFTER INSERT ON messages BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('messages',NEW.id,'create',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'conversation_id',NEW.conversation_id,'parent_message_id',NEW.parent_message_id,
+                     'sender',NEW.sender,'content',NEW.content,
+                     'image_mime_type',NEW.image_mime_type,
+                     'timestamp',NEW.timestamp,'ranking',NEW.ranking,
+                     'last_modified',NEW.last_modified,'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER messages_sync_update
+AFTER UPDATE ON messages
+WHEN OLD.deleted = NEW.deleted AND (
+     OLD.content IS NOT NEW.content OR
+     OLD.image_data IS NOT NEW.image_data OR
+     OLD.image_mime_type IS NOT NEW.image_mime_type OR
+     OLD.ranking IS NOT NEW.ranking OR
+     OLD.parent_message_id IS NOT NEW.parent_message_id OR
+     OLD.last_modified IS NOT NEW.last_modified OR
+     OLD.version IS NOT NEW.version)
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('messages',NEW.id,'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'conversation_id',NEW.conversation_id,'parent_message_id',NEW.parent_message_id,
+                     'sender',NEW.sender,'content',NEW.content,
+                     'image_mime_type',NEW.image_mime_type,
+                     'timestamp',NEW.timestamp,'ranking',NEW.ranking,
+                     'last_modified',NEW.last_modified,'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+CREATE TRIGGER messages_sync_delete
+AFTER UPDATE ON messages
+WHEN OLD.deleted = 0 AND NEW.deleted = 1
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('messages',NEW.id,'delete',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                     'version',NEW.version,'client_id',NEW.client_id));
+END;
+
+CREATE TRIGGER messages_sync_undelete
+AFTER UPDATE ON messages
+WHEN OLD.deleted = 1 AND NEW.deleted = 0
+BEGIN
+  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+  VALUES('messages',NEW.id,'update',NEW.last_modified,NEW.client_id,NEW.version,
+         json_object('id',NEW.id,'conversation_id',NEW.conversation_id,'parent_message_id',NEW.parent_message_id,
+                     'sender',NEW.sender,'content',NEW.content,
+                     'image_mime_type',NEW.image_mime_type,
+                     'timestamp',NEW.timestamp,'ranking',NEW.ranking,
+                     'last_modified',NEW.last_modified,'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+END;
+
+INSERT INTO messages_fts(messages_fts) VALUES('rebuild');
+
+PRAGMA foreign_keys = ON;
+
+UPDATE db_schema_version
+   SET version = 11
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 11;
+"""
+
+    _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
+ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
+"""
+
     def __init__(
         self,
         db_path: Union[str, Path],
@@ -2387,6 +2545,37 @@ UPDATE db_schema_version
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V9->V10: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V10 for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _migrate_from_v10_to_v11(self, conn: sqlite3.Connection):
+        """Migrates schema from V10 to V11 (nullable message content)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V10 to V11 for DB: {self.db_path_str}...")
+        try:
+            # Legacy safety: ensure columns referenced by the migration exist.
+            # Some older databases marked as v10 may be missing message image/ranking columns.
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info('messages')").fetchall()}
+            column_additions = {
+                "image_data": "BLOB",
+                "image_mime_type": "TEXT",
+                "ranking": "INTEGER",
+            }
+            for col_name, col_type in column_additions.items():
+                if col_name not in existing_cols:
+                    conn.execute(f"ALTER TABLE messages ADD COLUMN {col_name} {col_type}")
+            conn.executescript(self._MIGRATION_SQL_V10_TO_V11)
+            final_version = self._get_db_version(conn)
+            if final_version != 11:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V10->V11 failed version check. Expected 11, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V11 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V10->V11 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V10->V11 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V10->V11: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V11 for '{self._SCHEMA_NAME}': {e}") from e
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -2532,6 +2721,9 @@ UPDATE db_schema_version
                     if target_version >= 10 and current_db_version == 9:
                         self._migrate_from_v9_to_v10(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 11 and current_db_version == 10:
+                        self._migrate_from_v10_to_v11(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -2569,6 +2761,9 @@ UPDATE db_schema_version
                         if target_version >= 10 and current_db_version == 9:
                             self._migrate_from_v9_to_v10(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 11 and current_db_version == 10:
+                            self._migrate_from_v10_to_v11(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 5 and target_version >= 6:
                         self._migrate_from_v5_to_v6(conn)
                         current_db_version = self._get_db_version(conn)
@@ -2584,6 +2779,9 @@ UPDATE db_schema_version
                         if target_version >= 10 and current_db_version == 9:
                             self._migrate_from_v9_to_v10(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 11 and current_db_version == 10:
+                            self._migrate_from_v10_to_v11(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 6 and target_version >= 7:
                         self._migrate_from_v6_to_v7(conn)
                         current_db_version = self._get_db_version(conn)
@@ -2596,6 +2794,9 @@ UPDATE db_schema_version
                         if target_version >= 10 and current_db_version == 9:
                             self._migrate_from_v9_to_v10(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 11 and current_db_version == 10:
+                            self._migrate_from_v10_to_v11(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 7 and target_version >= 8:
                         self._migrate_from_v7_to_v8(conn)
                         current_db_version = self._get_db_version(conn)
@@ -2605,14 +2806,26 @@ UPDATE db_schema_version
                         if target_version >= 10 and current_db_version == 9:
                             self._migrate_from_v9_to_v10(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 11 and current_db_version == 10:
+                            self._migrate_from_v10_to_v11(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 8 and target_version >= 9:
                         self._migrate_from_v8_to_v9(conn)
                         current_db_version = self._get_db_version(conn)
                         if target_version >= 10 and current_db_version == 9:
                             self._migrate_from_v9_to_v10(conn)
                             current_db_version = self._get_db_version(conn)
+                        if target_version >= 11 and current_db_version == 10:
+                            self._migrate_from_v10_to_v11(conn)
+                            current_db_version = self._get_db_version(conn)
                     elif current_initial_version == 9 and target_version >= 10:
                         self._migrate_from_v9_to_v10(conn)
+                        current_db_version = self._get_db_version(conn)
+                        if target_version >= 11 and current_db_version == 10:
+                            self._migrate_from_v10_to_v11(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 10 and target_version >= 11:
+                        self._migrate_from_v10_to_v11(conn)
                         current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
@@ -2700,6 +2913,13 @@ UPDATE db_schema_version
             if current_version < 10:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V9_TO_V10, conn, expected_version=10)
                 current_version = 10
+            if current_version < 11:
+                self._apply_postgres_migration_script(
+                    self._MIGRATION_SQL_V10_TO_V11_POSTGRES,
+                    conn,
+                    expected_version=11,
+                )
+                current_version = 11
 
             if current_version > target_version:
                 raise SchemaError(
@@ -5221,6 +5441,21 @@ UPDATE db_schema_version
             logger.error(f"Failed to fetch images for message {message_id}: {e}")
             return []
 
+    def get_message_conversation_id(self, message_id: str) -> Optional[str]:
+        """Return the conversation_id for a message if it exists and is not deleted."""
+        query = "SELECT conversation_id FROM messages WHERE id = ? AND deleted = 0"
+        try:
+            cursor = self.execute_query(query, (message_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            if isinstance(row, dict):
+                return row.get("conversation_id")
+            return row[0] if row else None
+        except CharactersRAGDBError as e:
+            logger.error(f"Database error fetching conversation_id for message {message_id}: {e}")
+            raise
+
     def get_message_by_id(self, message_id: str) -> Optional[Dict[str, Any]]:
         """
         Retrieves a specific message by its UUID.
@@ -6205,6 +6440,13 @@ UPDATE db_schema_version
         Returns:
             A list of matching keyword dictionaries.
         """
+        if search_term is None:
+            raise InputError("Search term cannot be empty.")
+        search_term = search_term.strip()
+        if not search_term:
+            raise InputError("Search term cannot be empty.")
+        if not re.fullmatch(r"[\w\s-]+", search_term):
+            raise InputError("Search term contains unsupported characters.")
         if self.backend_type == BackendType.POSTGRESQL:
             tsquery = FTSQueryTranslator.normalize_query(search_term, 'postgresql')
             if not tsquery:
@@ -6232,7 +6474,13 @@ UPDATE db_schema_version
         # e.g., 'fru' should match 'fruit'. FTS5 uses '*' for prefix queries.
         # Avoid quoting here to preserve wildcard behavior.
         fts_query = f"{search_term}*"
-        return self._search_generic_items_fts("keywords_fts", "keywords", "keyword", fts_query, limit)
+        try:
+            return self._search_generic_items_fts("keywords_fts", "keywords", "keyword", fts_query, limit)
+        except CharactersRAGDBError as exc:
+            msg = str(exc).lower()
+            if "fts" in msg or "match" in msg or "syntax" in msg:
+                raise InputError("Search term contains unsupported characters.") from exc
+            raise
 
     # Keyword Collections
     def add_keyword_collection(self, name: str, parent_id: Optional[int] = None) -> Optional[int]:
@@ -6398,9 +6646,19 @@ UPDATE db_schema_version
                 logger.info(f"Added note '{title.strip()}' with ID: {final_note_id}.")
                 return final_note_id
         except sqlite3.IntegrityError as e:
-            if "UNIQUE constraint failed: notes.id" in str(e):
+            msg = str(e).lower()
+            if "foreign key constraint failed" in msg:
+                raise ConflictError("Conversation or message not found.", entity="notes", entity_id=final_note_id) from e
+            if "unique constraint failed: notes.id" in msg:
                 raise ConflictError(f"Note with ID '{final_note_id}' already exists.", entity="notes", entity_id=final_note_id) from e
             raise CharactersRAGDBError(f"Database integrity error adding note: {e}") from e
+        except BackendDatabaseError as e:
+            msg = str(e).lower()
+            if "foreign key" in msg:
+                raise ConflictError("Conversation or message not found.", entity="notes", entity_id=final_note_id) from e
+            if "duplicate key" in msg or "unique constraint" in msg:
+                raise ConflictError(f"Note with ID '{final_note_id}' already exists.", entity="notes", entity_id=final_note_id) from e
+            raise CharactersRAGDBError(f"Backend error adding note: {e}") from e
         except CharactersRAGDBError as e:
             logger.error(f"Database error adding note '{title.strip()}': {e}")
             raise
@@ -6495,6 +6753,16 @@ UPDATE db_schema_version
         # No specific UNIQUE constraint on notes.title or notes.content in the schema, so sqlite3.IntegrityError less likely for these fields.
         except ConflictError:
             raise
+        except sqlite3.IntegrityError as e:
+            msg = str(e).lower()
+            if "foreign key constraint failed" in msg:
+                raise ConflictError("Conversation or message not found.", entity="notes", entity_id=note_id) from e
+            raise CharactersRAGDBError(f"Database integrity error updating note: {e}") from e
+        except BackendDatabaseError as e:
+            msg = str(e).lower()
+            if "foreign key" in msg:
+                raise ConflictError("Conversation or message not found.", entity="notes", entity_id=note_id) from e
+            raise CharactersRAGDBError(f"Backend error updating note: {e}") from e
         except CharactersRAGDBError as e:  # Catches sqlite3.Error
             logger.error(f"Database error updating note ID {note_id} (expected v{expected_version}): {e}",
                          exc_info=True)
@@ -6818,6 +7086,31 @@ UPDATE db_schema_version
         cursor = self.execute_query(query, (note_id,))
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_keywords_for_notes(self, note_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+        """Return keywords for multiple notes as a map of note_id -> keywords list."""
+        if not note_ids:
+            return {}
+        placeholders = ",".join(["?"] * len(note_ids))
+        order_clause = self._case_insensitive_order_clause("k.keyword")
+        query = f"""
+                SELECT nk.note_id AS note_id, k.* \
+                FROM keywords k \
+                         JOIN note_keywords nk ON k.id = nk.keyword_id
+                WHERE nk.note_id IN ({placeholders}) \
+                  AND k.deleted = 0 \
+                {order_clause}
+                """
+        cursor = self.execute_query(query, tuple(note_ids))
+        rows = cursor.fetchall()
+        out: Dict[str, List[Dict[str, Any]]] = {nid: [] for nid in note_ids}
+        for row in rows:
+            record = dict(row)
+            note_id = record.pop("note_id", None)
+            if not note_id:
+                continue
+            out.setdefault(note_id, []).append(record)
+        return out
+
     def get_notes_for_keyword(self, keyword_id: int, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
         query = """
                 SELECT n.* \
@@ -6839,6 +7132,29 @@ UPDATE db_schema_version
         now = self._get_current_utc_timestamp_iso()
         try:
             with self.transaction() as conn:
+                # Undelete if a deck with the same name exists but is deleted
+                deleted_row = conn.execute(
+                    "SELECT id, version FROM decks WHERE name = ? AND deleted = 1",
+                    (name,),
+                ).fetchone()
+                if deleted_row:
+                    deck_id, current_version = int(deleted_row[0]), int(deleted_row[1])
+                    next_version = current_version + 1
+                    deleted_value = False if self.backend_type == BackendType.POSTGRESQL else 0
+                    rc = conn.execute(
+                        (
+                            "UPDATE decks SET deleted = ?, last_modified = ?, version = ?, client_id = ?, "
+                            "description = COALESCE(?, description) WHERE id = ? AND version = ?"
+                        ),
+                        (deleted_value, now, next_version, self.client_id, description, deck_id, current_version),
+                    ).rowcount
+                    if rc == 0:
+                        raise ConflictError(
+                            "Failed to undelete deck due to version mismatch",
+                            entity="decks",
+                            identifier=name,
+                        )
+                    return deck_id
                 insert_sql = (
                     "INSERT INTO decks(name, description, created_at, last_modified, client_id, version, deleted)"
                     " VALUES(?, ?, ?, ?, ?, ?, ?)"
@@ -7409,7 +7725,13 @@ UPDATE db_schema_version
         except CharactersRAGDBError:
             raise
 
-    def update_flashcard(self, card_uuid: str, updates: Dict[str, Any], expected_version: Optional[int] = None) -> bool:
+    def update_flashcard(
+        self,
+        card_uuid: str,
+        updates: Dict[str, Any],
+        expected_version: Optional[int] = None,
+        tags: Optional[List[str]] = None,
+    ) -> bool:
         """
         Update mutable fields: deck_id, front, back, notes, is_cloze, tags_json.
         If expected_version is provided, enforce optimistic locking.
@@ -7421,7 +7743,31 @@ UPDATE db_schema_version
             if k in allowed:
                 set_parts.append(f"{k} = ?")
                 params.append(v)
+        norm_tags: Optional[List[str]] = None
+        if tags is not None:
+            norm_tags = [t.strip() for t in tags if t and t.strip()]
+            set_parts.append("tags_json = ?")
+            params.append(json.dumps(norm_tags))
         if not set_parts:
+            if expected_version is None:
+                return True
+            try:
+                with self.transaction() as conn:
+                    row = conn.execute(
+                        "SELECT version FROM flashcards WHERE uuid = ? AND deleted = 0",
+                        (card_uuid,),
+                    ).fetchone()
+                    if not row:
+                        raise CharactersRAGDBError("Flashcard not found or deleted")
+                    current_version = int(row[0])
+                    if current_version != expected_version:
+                        raise ConflictError(
+                            "Version mismatch updating flashcard",
+                            entity="flashcards",
+                            identifier=card_uuid,
+                        )
+            except sqlite3.Error as e:
+                raise CharactersRAGDBError(f"Failed to update flashcard: {e}") from e
             return True
         now = self._get_current_utc_timestamp_iso()
         set_parts.extend(["last_modified = ?", "version = version + 1", "client_id = ?"])
@@ -7436,6 +7782,8 @@ UPDATE db_schema_version
                 card_id, current_version = int(row[0]), int(row[1])
                 if expected_version is not None and current_version != expected_version:
                     raise ConflictError("Version mismatch updating flashcard", entity="flashcards", identifier=card_uuid)
+                if norm_tags is not None:
+                    self._sync_flashcard_keyword_links(conn, card_id, norm_tags)
                 params_final = params + [card_id]
                 query = f"UPDATE flashcards SET {', '.join(set_parts)} WHERE id = ? AND deleted = 0"
                 rc = conn.execute(query, tuple(params_final)).rowcount
@@ -7494,44 +7842,51 @@ UPDATE db_schema_version
                 if not row:
                     raise CharactersRAGDBError("Flashcard not found or deleted")
                 card_id = int(row[0])
-                # current keyword ids
-                cur_kw_ids = set(r[0] for r in conn.execute(
-                    "SELECT keyword_id FROM flashcard_keywords WHERE card_id = ?", (card_id,)
-                ).fetchall())
-                # ensure keywords exist and collect ids
-                desired_kw_ids = set()
-                for t in norm_tags:
-                    # add or get
-                    kw = self.get_keyword_by_text(t)
-                    if not kw:
-                        kid = self.add_keyword(t)
-                    else:
-                        kid = kw['id']
-                    desired_kw_ids.add(int(kid))
-                # link missing
-                insert_ts = self._get_current_utc_timestamp_iso()
-                for kid in desired_kw_ids - cur_kw_ids:
-                    if self.backend_type == BackendType.POSTGRESQL:
-                        insert_query = (
-                            "INSERT INTO flashcard_keywords(card_id, keyword_id, created_at) "
-                            "VALUES(?, ?, ?) ON CONFLICT (card_id, keyword_id) DO NOTHING"
-                        )
-                    else:
-                        insert_query = (
-                            "INSERT OR IGNORE INTO flashcard_keywords(card_id, keyword_id, created_at) VALUES(?, ?, ?)"
-                        )
-                    conn.execute(insert_query, (card_id, int(kid), insert_ts))
-                # unlink extras
-                for kid in cur_kw_ids - desired_kw_ids:
-                    conn.execute("DELETE FROM flashcard_keywords WHERE card_id = ? AND keyword_id = ?", (card_id, int(kid)))
+                self._sync_flashcard_keyword_links(conn, card_id, norm_tags)
                 # update tags_json mirror
-                conn.execute("UPDATE flashcards SET tags_json = ?, last_modified = ?, version = version + 1, client_id = ? WHERE id = ?",
-                             (json.dumps(norm_tags), self._get_current_utc_timestamp_iso(), self.client_id, card_id))
+                conn.execute(
+                    "UPDATE flashcards SET tags_json = ?, last_modified = ?, version = version + 1, client_id = ? WHERE id = ?",
+                    (json.dumps(norm_tags), self._get_current_utc_timestamp_iso(), self.client_id, card_id),
+                )
                 return True
         except sqlite3.Error as e:
             raise CharactersRAGDBError(f"Failed to set flashcard tags: {e}") from e
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to set flashcard tags: {exc}") from exc
+
+    def _sync_flashcard_keyword_links(self, conn: sqlite3.Connection, card_id: int, tags: List[str]) -> None:
+        # current keyword ids
+        cur_kw_ids = set(
+            r[0] for r in conn.execute(
+                "SELECT keyword_id FROM flashcard_keywords WHERE card_id = ?", (card_id,)
+            ).fetchall()
+        )
+        # ensure keywords exist and collect ids
+        desired_kw_ids = set()
+        for t in tags:
+            kw = self.get_keyword_by_text(t)
+            if not kw:
+                kid = self.add_keyword(t)
+            else:
+                kid = kw['id']
+            if kid is not None:
+                desired_kw_ids.add(int(kid))
+        # link missing
+        insert_ts = self._get_current_utc_timestamp_iso()
+        for kid in desired_kw_ids - cur_kw_ids:
+            if self.backend_type == BackendType.POSTGRESQL:
+                insert_query = (
+                    "INSERT INTO flashcard_keywords(card_id, keyword_id, created_at) "
+                    "VALUES(?, ?, ?) ON CONFLICT (card_id, keyword_id) DO NOTHING"
+                )
+            else:
+                insert_query = (
+                    "INSERT OR IGNORE INTO flashcard_keywords(card_id, keyword_id, created_at) VALUES(?, ?, ?)"
+                )
+            conn.execute(insert_query, (card_id, int(kid), insert_ts))
+        # unlink extras
+        for kid in cur_kw_ids - desired_kw_ids:
+            conn.execute("DELETE FROM flashcard_keywords WHERE card_id = ? AND keyword_id = ?", (card_id, int(kid)))
 
     # --- Sync Log Methods ---
     def get_sync_log_entries(self, since_change_id: int = 0, limit: Optional[int] = None,

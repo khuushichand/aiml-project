@@ -3,11 +3,12 @@
 #
 # Imports
 import asyncio
+import threading
 import time
 import os
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
 
@@ -137,6 +138,9 @@ class ConversationRateLimiter:
         """
         self.config = config
 
+        # Lock for thread-safe bucket and stats operations
+        self._state_lock = asyncio.Lock()
+
         # Token buckets for different scopes
         self.global_bucket = TokenBucket(
             capacity=int(config.global_rpm * config.burst_multiplier),
@@ -156,18 +160,35 @@ class ConversationRateLimiter:
         # Idle cleanup support
         self._last_cleanup: float = time.time()
         self._idle_threshold_seconds: int = 3600  # default: purge buckets idle > 1h
+        self._cleanup_in_progress: bool = False
 
-    def _get_or_create_bucket(
+    async def _get_or_create_bucket(
         self,
         bucket_dict: Dict[str, TokenBucket],
         key: str,
         capacity: int,
         refill_rate: float
     ) -> TokenBucket:
-        """Get or create a token bucket."""
-        if key not in bucket_dict:
-            bucket_dict[key] = TokenBucket(capacity, refill_rate)
-        return bucket_dict[key]
+        """Get or create a token bucket with double-checked locking for efficiency.
+
+        Uses double-checked locking pattern to avoid acquiring the lock on every
+        request when the bucket already exists.
+        """
+        # First check without lock (fast path for existing buckets)
+        bucket = bucket_dict.get(key)
+        if bucket is not None:
+            return bucket
+
+        # Bucket doesn't exist, acquire lock and check again
+        async with self._state_lock:
+            # Double-check after acquiring lock
+            bucket = bucket_dict.get(key)
+            if bucket is not None:
+                return bucket
+            # Create new bucket
+            bucket = TokenBucket(capacity, refill_rate)
+            bucket_dict[key] = bucket
+            return bucket
 
     async def _check_legacy_rate_limit(
         self,
@@ -182,20 +203,28 @@ class ConversationRateLimiter:
         enabled and remains the primary enforcement mechanism when RG is
         disabled or unavailable.
         """
-        # Opportunistic idle cleanup every 5 minutes
+        # Opportunistic idle cleanup every 5 minutes (with lock to prevent concurrent cleanup)
         now = time.time()
-        if now - self._last_cleanup > 300:
+        should_cleanup = False
+        async with self._state_lock:
+            if now - self._last_cleanup > 300 and not self._cleanup_in_progress:
+                self._cleanup_in_progress = True
+                should_cleanup = True
+
+        if should_cleanup:
             try:
-                self.cleanup_idle_buckets(self._idle_threshold_seconds)
+                await self.cleanup_idle_buckets(self._idle_threshold_seconds)
             finally:
-                self._last_cleanup = now
+                async with self._state_lock:
+                    self._last_cleanup = time.time()
+                    self._cleanup_in_progress = False
 
         # Check global rate limit
         if not await self.global_bucket.consume():
             return False, "Global rate limit exceeded"
 
         # Check per-user rate limit
-        user_bucket = self._get_or_create_bucket(
+        user_bucket = await self._get_or_create_bucket(
             self.user_buckets,
             user_id,
             int(self.config.per_user_rpm * self.config.burst_multiplier),
@@ -208,8 +237,9 @@ class ConversationRateLimiter:
             return False, f"User rate limit exceeded for {user_id}"
 
         # Check per-conversation rate limit if specified
+        conv_bucket: Optional[TokenBucket] = None
         if conversation_id:
-            conv_bucket = self._get_or_create_bucket(
+            conv_bucket = await self._get_or_create_bucket(
                 self.conversation_buckets,
                 conversation_id,
                 int(self.config.per_conversation_rpm * self.config.burst_multiplier),
@@ -224,7 +254,7 @@ class ConversationRateLimiter:
 
         # Check token limit if specified
         if estimated_tokens > 0:
-            token_bucket = self._get_or_create_bucket(
+            token_bucket = await self._get_or_create_bucket(
                 self.user_token_buckets,
                 user_id,
                 int(self.config.per_user_tokens_per_minute * self.config.burst_multiplier),
@@ -235,23 +265,23 @@ class ConversationRateLimiter:
                 # Return tokens
                 await self.global_bucket.refund(1)
                 await user_bucket.refund(1)
-                if conversation_id:
-                    # conv_bucket is defined above when conversation_id is provided
-                    await conv_bucket.refund(1)  # type: ignore[name-defined]
+                if conv_bucket is not None:
+                    await conv_bucket.refund(1)
                 return False, f"Token limit exceeded for user {user_id}"
 
-        # Update usage stats
-        stats = self.usage_stats[user_id]
-        stats.request_count += 1
-        stats.token_count += estimated_tokens
-        stats.last_request_time = time.time()
-        if conversation_id:
-            stats.conversation_request_counts[conversation_id] = (
-                stats.conversation_request_counts.get(conversation_id, 0) + 1
-            )
+        # Update usage stats (with lock for thread safety)
+        async with self._state_lock:
+            stats = self.usage_stats[user_id]
+            stats.request_count += 1
+            stats.token_count += estimated_tokens
+            stats.last_request_time = time.time()
+            if conversation_id:
+                stats.conversation_request_counts[conversation_id] = (
+                    stats.conversation_request_counts.get(conversation_id, 0) + 1
+                )
 
-        # Record in sliding window
-        self.request_windows[user_id].append((time.time(), estimated_tokens))
+            # Record in sliding window
+            self.request_windows[user_id].append((time.time(), estimated_tokens))
 
         return True, None
 
@@ -273,11 +303,14 @@ class ConversationRateLimiter:
             Tuple of (allowed, error_message)
         """
         if not _rg_chat_primary_enabled():
-            # Legacy limiter has been retired; when RG is disabled, rate
-            # limiting is treated as disabled for this shim.
-            return True, None
+            # RG is disabled - use legacy limiter as fallback
+            return await self._check_legacy_rate_limit(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                estimated_tokens=estimated_tokens,
+            )
 
-        # RG-only enforcement (legacy fallback retired).
+        # RG is enabled - try RG enforcement first
         try:
             rg_decision = await _maybe_enforce_with_rg_chat(  # type: ignore[name-defined]
                 user_id=user_id,
@@ -291,7 +324,13 @@ class ConversationRateLimiter:
             rg_decision = None
 
         if rg_decision is None:
-            return False, "Rate limit enforcement unavailable (ResourceGovernor not initialized)"
+            # RG unavailable - fallback to legacy limiter instead of failing
+            logger.warning("Chat RG unavailable, falling back to legacy rate limiter")
+            return await self._check_legacy_rate_limit(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                estimated_tokens=estimated_tokens,
+            )
 
         if not rg_decision.get("allowed", False):
             policy_id = rg_decision.get("policy_id", "chat.default")
@@ -337,9 +376,9 @@ class ConversationRateLimiter:
 
         return False, f"Timeout waiting for rate limit capacity"
 
-    def get_usage_stats(self, user_id: str) -> Dict[str, any]:
+    async def get_usage_stats(self, user_id: str) -> Dict[str, Any]:
         """
-        Get usage statistics for a user.
+        Get usage statistics for a user (async with lock protection).
 
         Args:
             user_id: User identifier
@@ -347,10 +386,19 @@ class ConversationRateLimiter:
         Returns:
             Dictionary with usage statistics
         """
-        stats = self.usage_stats.get(user_id, UsageStats())
-        window = self.request_windows.get(user_id, deque())
+        # Snapshot state under lock to avoid race conditions
+        async with self._state_lock:
+            stats = self.usage_stats.get(user_id, UsageStats())
+            window = list(self.request_windows.get(user_id, deque()))
+            user_bucket = self.user_buckets.get(user_id)
+            token_bucket = self.user_token_buckets.get(user_id)
+            # Copy stats values while under lock
+            request_count = stats.request_count
+            token_count = stats.token_count
+            last_request_time = stats.last_request_time
+            conversation_counts = dict(stats.conversation_request_counts)
 
-        # Calculate rates over last minute
+        # Calculate rates over last minute (can be done outside lock)
         now = time.time()
         minute_ago = now - 60
         recent_requests = [(t, tokens) for t, tokens in window if t > minute_ago]
@@ -359,19 +407,17 @@ class ConversationRateLimiter:
         tokens_per_minute = sum(tokens for _, tokens in recent_requests)
 
         # Get current bucket states
-        user_bucket = self.user_buckets.get(user_id)
         user_tokens_available = user_bucket.tokens if user_bucket else self.config.per_user_rpm
-        token_bucket = self.user_token_buckets.get(user_id)
         user_token_capacity = token_bucket.tokens if token_bucket else self.config.per_user_tokens_per_minute
 
         return {
-            "total_requests": stats.request_count,
-            "total_tokens": stats.token_count,
+            "total_requests": request_count,
+            "total_tokens": token_count,
             "requests_per_minute": requests_per_minute,
             "tokens_per_minute": tokens_per_minute,
             "tokens_available": user_token_capacity,
-            "last_request": stats.last_request_time,
-            "conversation_counts": dict(stats.conversation_request_counts),
+            "last_request": last_request_time,
+            "conversation_counts": conversation_counts,
             "limits": {
                 "per_user_rpm": self.config.per_user_rpm,
                 "per_conversation_rpm": self.config.per_conversation_rpm,
@@ -379,31 +425,44 @@ class ConversationRateLimiter:
             }
         }
 
-    def reset_user_limits(self, user_id: str):
+    async def reset_user_limits(self, user_id: str):
         """
         Reset rate limits for a specific user.
+
+        This method is thread-safe and uses locking to prevent race conditions.
 
         Args:
             user_id: User identifier
         """
-        if user_id in self.user_buckets:
-            self.user_buckets[user_id].tokens = self.user_buckets[user_id].capacity
+        async with self._state_lock:
+            if user_id in self.user_buckets:
+                bucket = self.user_buckets[user_id]
+                async with bucket._lock:
+                    bucket.tokens = bucket.capacity
 
-        if user_id in self.user_token_buckets:
-            self.user_token_buckets[user_id].tokens = self.user_token_buckets[user_id].capacity
+            if user_id in self.user_token_buckets:
+                token_bucket = self.user_token_buckets[user_id]
+                async with token_bucket._lock:
+                    token_bucket.tokens = token_bucket.capacity
 
-        # Clear conversation buckets for this user
-        stats = self.usage_stats.get(user_id)
-        if stats:
-            for conv_id in stats.conversation_request_counts:
-                if conv_id in self.conversation_buckets:
-                    self.conversation_buckets[conv_id].tokens = \
-                        self.conversation_buckets[conv_id].capacity
+            # Clear conversation buckets for this user
+            stats = self.usage_stats.get(user_id)
+            if stats:
+                # Create a copy of keys to avoid modification during iteration
+                conv_ids = list(stats.conversation_request_counts.keys())
+                for conv_id in conv_ids:
+                    if conv_id in self.conversation_buckets:
+                        conv_bucket = self.conversation_buckets[conv_id]
+                        async with conv_bucket._lock:
+                            conv_bucket.tokens = conv_bucket.capacity
 
         logger.info(f"Reset rate limits for user {user_id}")
 
-    def cleanup_idle_buckets(self, max_idle_seconds: int = 3600) -> int:
+    async def cleanup_idle_buckets(self, max_idle_seconds: int = 3600) -> int:
         """Remove idle user and conversation buckets and windows.
+
+        This method is thread-safe and uses locking to prevent race conditions
+        with concurrent requests.
 
         Args:
             max_idle_seconds: Threshold of inactivity to purge entries
@@ -414,29 +473,38 @@ class ConversationRateLimiter:
         cutoff = time.time() - max_idle_seconds
         removed = 0
 
-        # Users
-        for uid in list(self.usage_stats.keys()):
-            last = self.usage_stats[uid].last_request_time or 0
-            if last and last < cutoff:
+        async with self._state_lock:
+            # Users - collect keys to remove first, then remove
+            users_to_remove = []
+            for uid in list(self.usage_stats.keys()):
+                stats = self.usage_stats.get(uid)
+                if stats is None:
+                    continue
+                last = stats.last_request_time or 0
+                if last and last < cutoff:
+                    users_to_remove.append(uid)
+
+            for uid in users_to_remove:
                 # Purge buckets and windows
-                if uid in self.user_buckets:
-                    del self.user_buckets[uid]
-                if uid in self.user_token_buckets:
-                    del self.user_token_buckets[uid]
-                if uid in self.request_windows:
-                    del self.request_windows[uid]
-                del self.usage_stats[uid]
+                self.user_buckets.pop(uid, None)
+                self.user_token_buckets.pop(uid, None)
+                self.request_windows.pop(uid, None)
+                self.usage_stats.pop(uid, None)
                 removed += 1
 
-        # Conversations
-        # Remove conversation buckets with no recent activity based on any user's conversation counts
-        active_conversations = set()
-        for stats in self.usage_stats.values():
-            for cid, _cnt in stats.conversation_request_counts.items():
-                active_conversations.add(cid)
-        for cid in list(self.conversation_buckets.keys()):
-            if cid not in active_conversations:
-                del self.conversation_buckets[cid]
+            # Conversations
+            # Remove conversation buckets with no recent activity based on any user's conversation counts
+            active_conversations = set()
+            for stats in self.usage_stats.values():
+                for cid in stats.conversation_request_counts.keys():
+                    active_conversations.add(cid)
+
+            conversations_to_remove = [
+                cid for cid in self.conversation_buckets.keys()
+                if cid not in active_conversations
+            ]
+            for cid in conversations_to_remove:
+                self.conversation_buckets.pop(cid, None)
                 removed += 1
 
         if removed:
@@ -446,6 +514,7 @@ class ConversationRateLimiter:
 
 # Global rate limiter instance
 _rate_limiter: Optional[ConversationRateLimiter] = None
+_rate_limiter_init_lock = threading.Lock()
 
 def get_rate_limiter() -> Optional[ConversationRateLimiter]:
     """Get the global rate limiter instance."""
@@ -455,6 +524,9 @@ def initialize_rate_limiter(config: Optional[RateLimitConfig] = None) -> Convers
     """
     Initialize the global rate limiter.
 
+    This function is thread-safe and uses locking to prevent race conditions
+    during concurrent initialization.
+
     Args:
         config: Rate limit configuration (uses defaults if None)
 
@@ -462,31 +534,32 @@ def initialize_rate_limiter(config: Optional[RateLimitConfig] = None) -> Convers
         The initialized rate limiter
     """
     global _rate_limiter
-    config = config or RateLimitConfig()
-    # Test-mode overrides via environment for deterministic integration testing
-    try:
-        if os.getenv("TEST_MODE", "").lower() == "true":
-            per_user = os.getenv("TEST_CHAT_PER_USER_RPM")
-            per_conv = os.getenv("TEST_CHAT_PER_CONVERSATION_RPM")
-            global_rpm = os.getenv("TEST_CHAT_GLOBAL_RPM")
-            tokens_per_min = os.getenv("TEST_CHAT_TOKENS_PER_MINUTE")
-            # Deterministic tests: disable burst by default in TEST_MODE unless explicitly overridden
-            burst_mult = os.getenv("TEST_CHAT_BURST_MULTIPLIER")
-            if per_user:
-                config.per_user_rpm = max(1, int(per_user))
-            if per_conv:
-                config.per_conversation_rpm = max(1, int(per_conv))
-            if global_rpm:
-                config.global_rpm = max(1, int(global_rpm))
-            if tokens_per_min:
-                config.per_user_tokens_per_minute = max(1, int(tokens_per_min))
-            # Default burst to 1.0 in TEST_MODE to make 429s deterministic on the N+1th call
-            config.burst_multiplier = float(burst_mult) if burst_mult is not None else 1.0
-    except Exception:
-        # Ignore env parse errors and use defaults
-        pass
-    _rate_limiter = ConversationRateLimiter(config)
-    return _rate_limiter
+    with _rate_limiter_init_lock:
+        config = config or RateLimitConfig()
+        # Test-mode overrides via environment for deterministic integration testing
+        try:
+            if os.getenv("TEST_MODE", "").lower() == "true":
+                per_user = os.getenv("TEST_CHAT_PER_USER_RPM")
+                per_conv = os.getenv("TEST_CHAT_PER_CONVERSATION_RPM")
+                global_rpm = os.getenv("TEST_CHAT_GLOBAL_RPM")
+                tokens_per_min = os.getenv("TEST_CHAT_TOKENS_PER_MINUTE")
+                # Deterministic tests: disable burst by default in TEST_MODE unless explicitly overridden
+                burst_mult = os.getenv("TEST_CHAT_BURST_MULTIPLIER")
+                if per_user:
+                    config.per_user_rpm = max(1, int(per_user))
+                if per_conv:
+                    config.per_conversation_rpm = max(1, int(per_conv))
+                if global_rpm:
+                    config.global_rpm = max(1, int(global_rpm))
+                if tokens_per_min:
+                    config.per_user_tokens_per_minute = max(1, int(tokens_per_min))
+                # Default burst to 1.0 in TEST_MODE to make 429s deterministic on the N+1th call
+                config.burst_multiplier = float(burst_mult) if burst_mult is not None else 1.0
+        except Exception:
+            # Ignore env parse errors and use defaults
+            pass
+        _rate_limiter = ConversationRateLimiter(config)
+        return _rate_limiter
 
 
 # --- Resource Governor plumbing (optional) ---------------------------------

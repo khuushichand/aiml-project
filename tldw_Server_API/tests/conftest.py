@@ -300,6 +300,7 @@ except Exception as e:
 import pytest
 from fastapi.testclient import TestClient
 import contextlib
+import asyncio
 
 # Register shared test plugins for the whole suite
 pytest_plugins = (
@@ -348,10 +349,40 @@ def pytest_configure(config):  # pragma: no cover - registration only
         pass
 
 
+@pytest.fixture(scope="function")
+def event_loop():
+    """Provide a fresh event loop per test and shutdown its default executor."""
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    try:
+        if hasattr(loop, "shutdown_default_executor"):
+            loop.run_until_complete(loop.shutdown_default_executor())
+    except Exception:
+        pass
+    try:
+        loop.close()
+    except Exception:
+        pass
+
+
 def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics/cleanup
     """Log and relax any remaining non-daemon threads to avoid interpreter shutdown hangs."""
     try:
         import sys, traceback
+        try:
+            loop = asyncio.get_event_loop_policy().get_event_loop()
+        except Exception:
+            loop = None
+        if loop is not None and not loop.is_closed():
+            try:
+                if hasattr(loop, "shutdown_default_executor"):
+                    loop.run_until_complete(loop.shutdown_default_executor())
+            except Exception:
+                pass
+            try:
+                loop.close()
+            except Exception:
+                pass
         current = threading.current_thread()
         threads = [t for t in threading.enumerate() if t is not current and not t.daemon]
         if threads:

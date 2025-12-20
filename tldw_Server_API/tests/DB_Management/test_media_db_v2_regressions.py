@@ -167,3 +167,47 @@ def test_media_db_backup_helpers_create_and_rotate(tmp_path: Path):
         f for f in os.listdir(backup_dir) if f.endswith((".db", ".sqlib"))
     ]
     assert len(remaining) <= 3
+
+
+def test_add_media_with_keywords_overwrite_preserves_sharing_state():
+    db = MediaDatabase(db_path=":memory:", client_id="1")
+    url = "https://example.com/shared-doc"
+
+    media_id, media_uuid, _ = db.add_media_with_keywords(
+        url=url,
+        title="Shared Doc",
+        media_type="text",
+        content="v1",
+        keywords=None,
+    )
+    assert db.share_media(media_id, visibility="team", org_id=42, team_id=7) is True
+
+    before = db.get_media_visibility(media_id)
+    assert before is not None
+    assert before["visibility"] == "team"
+    assert before["org_id"] == 42
+    assert before["team_id"] == 7
+    assert before["owner_user_id"] == 1
+
+    # Ensure overwrite updates don't reset sharing fields back to the current defaults.
+    db.default_org_id = 999
+    db.default_team_id = 888
+    db.client_id = "not_numeric"
+
+    media_id_after, media_uuid_after, _ = db.add_media_with_keywords(
+        url=url,
+        title="Shared Doc (updated)",
+        media_type="text",
+        content="v2",
+        keywords=None,
+        overwrite=True,
+    )
+    assert media_id_after == media_id
+    assert media_uuid_after == media_uuid
+
+    after = db.get_media_visibility(media_id_after)
+    assert after is not None
+    assert after["visibility"] == "team"
+    assert after["org_id"] == 42
+    assert after["team_id"] == 7
+    assert after["owner_user_id"] == 1

@@ -288,6 +288,28 @@ flowchart LR
 - Egress/SSRF policy and security middleware: `tldw_Server_API/app/core/Security/README.md`.
 - Resource Governor (rate limits, tokens, streams; Redis backend optional): `tldw_Server_API/app/core/Resource_Governance/README.md`.
 
+### API Rate Limits (High-Level)
+
+- **Characters & Character Chat**
+  - Per-user caps (configurable via env/settings; defaults documented in `Docs/API-related/CHARACTER_CHAT_API_DOCUMENTATION.md`):
+    - Max operations/hour (character operations).
+    - Max characters per user.
+    - Max concurrent chats per user.
+    - Max messages per chat.
+    - Per-minute limits for chat completions and message sends.
+  - Status endpoint:
+    - `GET /api/v1/characters/rate-limit-status` → returns a simple snapshot:
+      - `operations_used`, `operations_remaining`, `reset_time` (Unix timestamp or `null`).
+  - Enforcement is handled by `CharacterRateLimiter` with Redis-backed ZSETs when `REDIS_ENABLED=true`, or per-process in-memory counters otherwise.
+
+- **Core Chat / RAG / Embeddings**
+  - Per-user RPM/TPM limits enforced via the Resource Governor (optional Redis backend).
+  - See:
+    - `tldw_Server_API/app/core/Chat/rate_limiter.py`
+    - `tldw_Server_API/app/core/Resource_Governance/README.md`
+
+All limits are designed to be conservative by default and can be tuned using the various `*_RATE_LIMIT_*`, `MAX_*`, and RG policy settings in `Config_Files/` and environment variables.
+
 
 </details>
 

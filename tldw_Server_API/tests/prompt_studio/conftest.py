@@ -11,6 +11,9 @@ import pytest
 from fastapi.testclient import TestClient
 from typing import Any
 
+# Prompt Studio routes are not included in minimal test app mode.
+os.environ["MINIMAL_TEST_APP"] = "0"
+
 from tldw_Server_API.app.main import app as fastapi_app
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_studio_db
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user

@@ -215,12 +215,30 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
         try:
             limits = await get_key_limits(int(key_id))
         except Exception as e:
-            logger.debug(f"LLM budget: failed to read key limits: {e}")
-            limits = None
+            logger.exception("LLM budget: failed to read key limits; rejecting request")
+            return JSONResponse(
+                {
+                    "error": "budget_limits_unavailable",
+                    "message": "Failed to load virtual key limits; request rejected",
+                    "details": {"reason": str(e)},
+                },
+                status_code=503,
+            )
 
-        if not limits or not limits.get('is_virtual'):
+        if limits is None or "is_virtual" not in limits:
             if _mw_debug:
-                logger.debug(f"LLM budget: key {key_id} not virtual or limits missing; skipping")
+                logger.debug(f"LLM budget: key limits missing for key_id={key_id}; rejecting")
+            return JSONResponse(
+                {
+                    "error": "budget_limits_unavailable",
+                    "message": "Failed to load virtual key limits; request rejected",
+                },
+                status_code=503,
+            )
+
+        if not limits.get('is_virtual'):
+            if _mw_debug:
+                logger.debug(f"LLM budget: key {key_id} not virtual; skipping")
             return await call_next(request)
 
         # Endpoint allowlist enforcement

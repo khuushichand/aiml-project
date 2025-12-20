@@ -484,6 +484,7 @@ class DocumentGeneratorService:
         provider: str,
         model: str,
         api_key: str,
+        app_config: Optional[Dict[str, Any]] = None,
         specific_message: Optional[str] = None,
         custom_prompt: Optional[str] = None,
         stream: bool = False
@@ -560,6 +561,7 @@ class DocumentGeneratorService:
                 provider=provider,
                 model=model,
                 api_key=api_key,
+                app_config=app_config,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 temperature=prompt_config.get('temperature', 0.7),
@@ -595,6 +597,7 @@ class DocumentGeneratorService:
         api_key: str,
         system_prompt: str,
         user_prompt: str,
+        app_config: Optional[Dict[str, Any]] = None,
         temperature: float = 0.7,
         max_tokens: int = 2000,
         stream: bool = False
@@ -630,7 +633,8 @@ class DocumentGeneratorService:
             temp=temperature,
             max_tokens=max_tokens,
             streaming=stream,
-            system_message=system_prompt
+            system_message=system_prompt,
+            app_config=app_config,
         )
 
         return response

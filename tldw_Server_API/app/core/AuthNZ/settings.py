@@ -2,13 +2,14 @@
 # Description: Pydantic settings for user registration system with persistent JWT secret management
 #
 # Imports
+import json
 import os
 import secrets
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 #
 # 3rd-party imports
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, NoDecode
 from pydantic import Field, field_validator
 #
 # Local imports
@@ -285,6 +286,24 @@ class Settings(BaseSettings):
     API_KEY_AUDIT_LOG_USAGE: bool = Field(
         default=False,
         description="If true, log a 'used' event in API key audit log on successful validation"
+    )
+
+    # ===== BYOK Settings =====
+    BYOK_ENABLED: bool = Field(
+        default=False,
+        description="Enable per-user BYOK keys in multi-user mode (ignored in single_user mode)"
+    )
+    BYOK_ALLOWED_PROVIDERS: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        description="Optional allowlist of providers eligible for BYOK (comma-separated or list)"
+    )
+    BYOK_ENCRYPTION_KEY: Optional[str] = Field(
+        default=None,
+        description="Base64-encoded 32-byte key for BYOK secret encryption (AES-GCM)"
+    )
+    BYOK_SECONDARY_ENCRYPTION_KEY: Optional[str] = Field(
+        default=None,
+        description="Secondary BYOK encryption key for dual-read during rotations"
     )
 
     # ===== Token Rotation =====
@@ -725,6 +744,48 @@ class Settings(BaseSettings):
             return [str(x).strip() for x in v if str(x).strip()]
         return []
 
+    @field_validator("BYOK_ENABLED", mode="before")
+    @classmethod
+    def parse_byok_enabled(cls, v):
+        if v is None:
+            env_val = os.getenv("BYOK_ENABLED")
+            if env_val is not None:
+                return _bool_from_str(env_val)
+        return v
+
+    @field_validator("BYOK_ALLOWED_PROVIDERS", mode="before")
+    @classmethod
+    def parse_byok_allowed_providers(cls, v):
+        if v is None:
+            env_val = os.getenv("BYOK_ALLOWED_PROVIDERS")
+            if env_val is not None:
+                v = env_val
+        return _split_csv(v)
+
+    @field_validator("BYOK_ENCRYPTION_KEY", mode="before")
+    @classmethod
+    def normalize_byok_encryption_key(cls, v):
+        if v is None:
+            env_val = os.getenv("BYOK_ENCRYPTION_KEY")
+            if env_val is not None:
+                v = env_val
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
+
+    @field_validator("BYOK_SECONDARY_ENCRYPTION_KEY", mode="before")
+    @classmethod
+    def normalize_byok_secondary_encryption_key(cls, v):
+        if v is None:
+            env_val = os.getenv("BYOK_SECONDARY_ENCRYPTION_KEY")
+            if env_val is not None:
+                v = env_val
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
+
     @field_validator("DATABASE_URL")
     @classmethod
     def validate_database_url(cls, v, info):
@@ -775,6 +836,26 @@ def _bool_from_str(val: str) -> bool:
     return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _split_csv(val) -> list[str]:
+    if val is None:
+        return []
+    if isinstance(val, str):
+        stripped = val.strip()
+        if not stripped:
+            return []
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = json.loads(stripped)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+        return [s.strip() for s in val.split(",") if s.strip()]
+    if isinstance(val, (list, tuple)):
+        return [str(x).strip() for x in val if str(x).strip()]
+    return []
+
+
 def _load_overrides_from_config() -> dict:
     """Load Settings overrides from Config_Files/config.txt (AuthNZ section).
 
@@ -802,6 +883,10 @@ def _load_overrides_from_config() -> dict:
         maybe_set("DATABASE_URL", "database_url", lambda v: v.strip())
         maybe_set("JWT_SECRET_KEY", "jwt_secret_key", lambda v: v.strip())
         maybe_set("SINGLE_USER_API_KEY", "single_user_api_key", lambda v: v.strip())
+        maybe_set("BYOK_ENABLED", "byok_enabled", _bool_from_str)
+        maybe_set("BYOK_ALLOWED_PROVIDERS", "byok_allowed_providers", _split_csv)
+        maybe_set("BYOK_ENCRYPTION_KEY", "byok_encryption_key", lambda v: v.strip())
+        maybe_set("BYOK_SECONDARY_ENCRYPTION_KEY", "byok_secondary_encryption_key", lambda v: v.strip())
         maybe_set("ENABLE_REGISTRATION", "enable_registration", _bool_from_str)
         # Legacy aliases in config.txt
         maybe_set("ENABLE_REGISTRATION", "registration_enabled", _bool_from_str)

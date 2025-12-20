@@ -22,16 +22,10 @@ except ImportError:
     # Raise or handle appropriately
     raise ImportError("HuggingFace handler requires 'transformers', 'torch', 'accelerate', 'bitsandbytes'.")
 #
-# Local Imports
-#
 ########################################################################################################################
 #
 # Functions:
 
-# from .base_handler import BaseLLMHandler
-# from .exceptions import ModelNotFoundError, ModelDownloadError, InferenceError
-# from .utils_loader import logging, project_utils
-# from .config_model import HuggingFaceConfig
 
 class HuggingFaceHandler(BaseLLMHandler):
     def __init__(self, config: HuggingFaceConfig, global_app_config: Dict[str, Any]):

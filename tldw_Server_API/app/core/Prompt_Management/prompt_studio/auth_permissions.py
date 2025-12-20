@@ -151,72 +151,70 @@ class AuthenticationManager:
 
     def _init_auth_tables(self):
         """Initialize authentication tables."""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        # Users table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS prompt_studio_users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                uuid TEXT UNIQUE NOT NULL,
-                username TEXT UNIQUE NOT NULL,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'editor',
-                is_active BOOLEAN DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_login TIMESTAMP,
-                settings TEXT DEFAULT '{}',
-                api_key TEXT UNIQUE,
-                client_id TEXT NOT NULL
-            )
-        """)
+            # Users table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS prompt_studio_users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uuid TEXT UNIQUE NOT NULL,
+                    username TEXT UNIQUE NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'editor',
+                    is_active BOOLEAN DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_login TIMESTAMP,
+                    settings TEXT DEFAULT '{}',
+                    api_key TEXT UNIQUE,
+                    client_id TEXT NOT NULL
+                )
+            """)
 
-        # Sessions table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS prompt_studio_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                token TEXT UNIQUE NOT NULL,
-                expires_at TIMESTAMP NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                ip_address TEXT,
-                user_agent TEXT,
-                FOREIGN KEY (user_id) REFERENCES prompt_studio_users(id)
-            )
-        """)
+            # Sessions table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS prompt_studio_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    token TEXT UNIQUE NOT NULL,
+                    expires_at TIMESTAMP NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    ip_address TEXT,
+                    user_agent TEXT,
+                    FOREIGN KEY (user_id) REFERENCES prompt_studio_users(id)
+                )
+            """)
 
-        # Project permissions table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS prompt_studio_project_permissions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                role TEXT NOT NULL,
-                permissions TEXT NOT NULL DEFAULT '[]',
-                granted_by INTEGER,
-                granted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES prompt_studio_users(id),
-                UNIQUE(project_id, user_id)
-            )
-        """)
+            # Project permissions table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS prompt_studio_project_permissions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    role TEXT NOT NULL,
+                    permissions TEXT NOT NULL DEFAULT '[]',
+                    granted_by INTEGER,
+                    granted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES prompt_studio_users(id),
+                    UNIQUE(project_id, user_id)
+                )
+            """)
 
-        # Audit log table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS prompt_studio_audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                action TEXT NOT NULL,
-                resource_type TEXT,
-                resource_id INTEGER,
-                details TEXT,
-                ip_address TEXT,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES prompt_studio_users(id)
-            )
-        """)
-
-        conn.commit()
+            # Audit log table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS prompt_studio_audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    action TEXT NOT NULL,
+                    resource_type TEXT,
+                    resource_id INTEGER,
+                    details TEXT,
+                    ip_address TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES prompt_studio_users(id)
+                )
+            """)
 
     ####################################################################################################################
     # User Management
@@ -235,40 +233,39 @@ class AuthenticationManager:
         Returns:
             Created user details
         """
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        # Check if user exists
-        cursor.execute(
-            "SELECT id FROM prompt_studio_users WHERE username = ? OR email = ?",
-            (username, email)
-        )
-        if cursor.fetchone():
-            raise ValueError("User with this username or email already exists")
+            # Check if user exists
+            cursor.execute(
+                "SELECT id FROM prompt_studio_users WHERE username = ? OR email = ?",
+                (username, email)
+            )
+            if cursor.fetchone():
+                raise ValueError("User with this username or email already exists")
 
-        # Hash password
-        password_hash = self._hash_password(password)
+            # Hash password
+            password_hash = self._hash_password(password)
 
-        # Generate API key
-        api_key = self._generate_api_key()
+            # Generate API key
+            api_key = self._generate_api_key()
 
-        # Create user
-        cursor.execute("""
-            INSERT INTO prompt_studio_users (
-                uuid, username, email, password_hash, role, api_key, client_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            f"user-{secrets.token_urlsafe(16)}",
-            username,
-            email,
-            password_hash,
-            role.value,
-            api_key,
-            self.db.client_id
-        ))
+            # Create user
+            cursor.execute("""
+                INSERT INTO prompt_studio_users (
+                    uuid, username, email, password_hash, role, api_key, client_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                f"user-{secrets.token_urlsafe(16)}",
+                username,
+                email,
+                password_hash,
+                role.value,
+                api_key,
+                self.db.client_id
+            ))
 
-        user_id = cursor.lastrowid
-        conn.commit()
+            user_id = cursor.lastrowid
 
         logger.info(f"Created user: {username} (ID: {user_id})")
 
@@ -291,39 +288,38 @@ class AuthenticationManager:
         Returns:
             User details if authenticated, None otherwise
         """
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        # Get user
-        cursor.execute("""
-            SELECT id, username, email, password_hash, role, is_active
-            FROM prompt_studio_users
-            WHERE (username = ? OR email = ?) AND is_active = 1
-        """, (username, username))
+            # Get user
+            cursor.execute("""
+                SELECT id, username, email, password_hash, role, is_active
+                FROM prompt_studio_users
+                WHERE (username = ? OR email = ?) AND is_active = 1
+            """, (username, username))
 
-        row = cursor.fetchone()
-        if not row:
-            return None
+            row = cursor.fetchone()
+            if not row:
+                return None
 
-        user_id, username, email, password_hash, role, is_active = row
+            user_id, db_username, email, password_hash, role, is_active = row
 
-        # Verify password
-        if not self._verify_password(password, password_hash):
-            return None
+            # Verify password
+            if not self._verify_password(password, password_hash):
+                return None
 
-        # Update last login
-        cursor.execute(
-            "UPDATE prompt_studio_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?",
-            (user_id,)
-        )
-        conn.commit()
+            # Update last login
+            cursor.execute(
+                "UPDATE prompt_studio_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?",
+                (user_id,)
+            )
 
-        # Create session token
+        # Create session token (outside transaction to allow nested transaction)
         token = self.create_session(user_id)
 
         return {
             "id": user_id,
-            "username": username,
+            "username": db_username,
             "email": email,
             "role": role,
             "token": token
@@ -339,23 +335,23 @@ class AuthenticationManager:
         Returns:
             User details if authenticated
         """
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT id, username, email, role
-            FROM prompt_studio_users
-            WHERE api_key = ? AND is_active = 1
-        """, (api_key,))
+            cursor.execute("""
+                SELECT id, username, email, role
+                FROM prompt_studio_users
+                WHERE api_key = ? AND is_active = 1
+            """, (api_key,))
 
-        row = cursor.fetchone()
-        if row:
-            return {
-                "id": row[0],
-                "username": row[1],
-                "email": row[2],
-                "role": row[3]
-            }
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "id": row[0],
+                    "username": row[1],
+                    "email": row[2],
+                    "role": row[3]
+                }
 
         return None
 
@@ -386,22 +382,20 @@ class AuthenticationManager:
         token = jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
 
         # Store session
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            INSERT INTO prompt_studio_sessions (
-                user_id, token, expires_at, ip_address, user_agent
-            ) VALUES (?, ?, ?, ?, ?)
-        """, (
-            user_id,
-            token,
-            payload["exp"],
-            ip_address,
-            user_agent
-        ))
-
-        conn.commit()
+            cursor.execute("""
+                INSERT INTO prompt_studio_sessions (
+                    user_id, token, expires_at, ip_address, user_agent
+                ) VALUES (?, ?, ?, ?, ?)
+            """, (
+                user_id,
+                token,
+                payload["exp"],
+                ip_address,
+                user_agent
+            ))
 
         return token
 
@@ -420,25 +414,25 @@ class AuthenticationManager:
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
 
             # Check if session exists and not expired
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
+            with self.db.transaction() as conn:
+                cursor = conn.cursor()
 
-            cursor.execute("""
-                SELECT u.id, u.username, u.email, u.role
-                FROM prompt_studio_sessions s
-                JOIN prompt_studio_users u ON s.user_id = u.id
-                WHERE s.token = ? AND s.expires_at > CURRENT_TIMESTAMP
-                    AND u.is_active = 1
-            """, (token,))
+                cursor.execute("""
+                    SELECT u.id, u.username, u.email, u.role
+                    FROM prompt_studio_sessions s
+                    JOIN prompt_studio_users u ON s.user_id = u.id
+                    WHERE s.token = ? AND s.expires_at > CURRENT_TIMESTAMP
+                        AND u.is_active = 1
+                """, (token,))
 
-            row = cursor.fetchone()
-            if row:
-                return {
-                    "id": row[0],
-                    "username": row[1],
-                    "email": row[2],
-                    "role": row[3]
-                }
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        "id": row[0],
+                        "username": row[1],
+                        "email": row[2],
+                        "role": row[3]
+                    }
 
         except JWTError:
             pass
@@ -447,15 +441,13 @@ class AuthenticationManager:
 
     def revoke_session(self, token: str):
         """Revoke a session."""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        cursor.execute(
-            "DELETE FROM prompt_studio_sessions WHERE token = ?",
-            (token,)
-        )
-
-        conn.commit()
+            cursor.execute(
+                "DELETE FROM prompt_studio_sessions WHERE token = ?",
+                (token,)
+            )
 
     ####################################################################################################################
     # Helper Methods
@@ -540,45 +532,43 @@ class PermissionManager:
             role: Role for the project
             granted_by: User ID granting access
         """
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        # Get role permissions
-        permissions = list(ROLE_PERMISSIONS.get(role, set()))
+            # Get role permissions
+            permissions = list(ROLE_PERMISSIONS.get(role, set()))
 
-        params = (
-            project_id,
-            user_id,
-            role.value,
-            json.dumps([p.value for p in permissions]),
-            granted_by,
-        )
-
-        if getattr(self.db, "backend_type", BackendType.SQLITE) == BackendType.POSTGRESQL:
-            cursor.execute(
-                """
-                INSERT INTO prompt_studio_project_permissions (
-                    project_id, user_id, role, permissions, granted_by
-                ) VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT (project_id, user_id) DO UPDATE
-                    SET role = EXCLUDED.role,
-                        permissions = EXCLUDED.permissions,
-                        granted_by = EXCLUDED.granted_by,
-                        granted_at = CURRENT_TIMESTAMP
-                """,
-                params,
-            )
-        else:
-            cursor.execute(
-                """
-                INSERT OR REPLACE INTO prompt_studio_project_permissions (
-                    project_id, user_id, role, permissions, granted_by
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                params,
+            params = (
+                project_id,
+                user_id,
+                role.value,
+                json.dumps([p.value for p in permissions]),
+                granted_by,
             )
 
-        conn.commit()
+            if getattr(self.db, "backend_type", BackendType.SQLITE) == BackendType.POSTGRESQL:
+                cursor.execute(
+                    """
+                    INSERT INTO prompt_studio_project_permissions (
+                        project_id, user_id, role, permissions, granted_by
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT (project_id, user_id) DO UPDATE
+                        SET role = EXCLUDED.role,
+                            permissions = EXCLUDED.permissions,
+                            granted_by = EXCLUDED.granted_by,
+                            granted_at = CURRENT_TIMESTAMP
+                    """,
+                    params,
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO prompt_studio_project_permissions (
+                        project_id, user_id, role, permissions, granted_by
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    params,
+                )
 
         # Log action
         self.log_action(
@@ -592,15 +582,13 @@ class PermissionManager:
     def revoke_project_access(self, project_id: int, user_id: int,
                              revoked_by: int):
         """Revoke user access to a project."""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            DELETE FROM prompt_studio_project_permissions
-            WHERE project_id = ? AND user_id = ?
-        """, (project_id, user_id))
-
-        conn.commit()
+            cursor.execute("""
+                DELETE FROM prompt_studio_project_permissions
+                WHERE project_id = ? AND user_id = ?
+            """, (project_id, user_id))
 
         # Log action
         self.log_action(
@@ -613,34 +601,34 @@ class PermissionManager:
 
     def get_user_projects(self, user_id: int) -> List[Dict[str, Any]]:
         """Get projects user has access to."""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        # Get owned projects
-        cursor.execute("""
-            SELECT p.*, 'owner' as role
-            FROM prompt_studio_projects p
-            WHERE p.created_by = ? AND p.deleted = 0
-        """, (user_id,))
+            # Get owned projects
+            cursor.execute("""
+                SELECT p.*, 'owner' as role
+                FROM prompt_studio_projects p
+                WHERE p.created_by = ? AND p.deleted = 0
+            """, (user_id,))
 
-        projects = []
-        for row in cursor.fetchall():
-            project = self.db._row_to_dict(cursor, row)
-            projects.append(project)
+            projects = []
+            for row in cursor.fetchall():
+                project = self.db._row_to_dict(cursor, row)
+                projects.append(project)
 
-        # Get shared projects
-        cursor.execute("""
-            SELECT p.*, pp.role
-            FROM prompt_studio_projects p
-            JOIN prompt_studio_project_permissions pp ON p.id = pp.project_id
-            WHERE pp.user_id = ? AND p.deleted = 0
-        """, (user_id,))
+            # Get shared projects
+            cursor.execute("""
+                SELECT p.*, pp.role
+                FROM prompt_studio_projects p
+                JOIN prompt_studio_project_permissions pp ON p.id = pp.project_id
+                WHERE pp.user_id = ? AND p.deleted = 0
+            """, (user_id,))
 
-        for row in cursor.fetchall():
-            project = self.db._row_to_dict(cursor, row)
-            projects.append(project)
+            for row in cursor.fetchall():
+                project = self.db._row_to_dict(cursor, row)
+                projects.append(project)
 
-        return projects
+            return projects
 
     def log_action(self, user_id: int, action: str,
                   resource_type: Optional[str] = None,
@@ -648,73 +636,71 @@ class PermissionManager:
                   details: Optional[str] = None,
                   ip_address: Optional[str] = None):
         """Log an action for audit trail."""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            INSERT INTO prompt_studio_audit_log (
-                user_id, action, resource_type, resource_id,
-                details, ip_address
-            ) VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            user_id,
-            action,
-            resource_type,
-            resource_id,
-            details,
-            ip_address
-        ))
-
-        conn.commit()
+            cursor.execute("""
+                INSERT INTO prompt_studio_audit_log (
+                    user_id, action, resource_type, resource_id,
+                    details, ip_address
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                user_id,
+                action,
+                resource_type,
+                resource_id,
+                details,
+                ip_address
+            ))
 
     def _get_user_role(self, user_id: int) -> Optional[str]:
         """Get user's global role."""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        cursor.execute(
-            "SELECT role FROM prompt_studio_users WHERE id = ?",
-            (user_id,)
-        )
+            cursor.execute(
+                "SELECT role FROM prompt_studio_users WHERE id = ?",
+                (user_id,)
+            )
 
-        row = cursor.fetchone()
-        return row[0] if row else None
+            row = cursor.fetchone()
+            return row[0] if row else None
 
     def _check_project_permission(self, user_id: int, project_id: int,
                                  permission: Permission) -> bool:
         """Check project-specific permission."""
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        with self.db.transaction() as conn:
+            cursor = conn.cursor()
 
-        # Check if user owns the project
-        cursor.execute("""
-            SELECT created_by FROM prompt_studio_projects
-            WHERE id = ? AND deleted = 0
-        """, (project_id,))
+            # Check if user owns the project
+            cursor.execute("""
+                SELECT created_by FROM prompt_studio_projects
+                WHERE id = ? AND deleted = 0
+            """, (project_id,))
 
-        row = cursor.fetchone()
-        if row and row[0] == user_id:
-            return True  # Owner has all permissions
+            row = cursor.fetchone()
+            if row and row[0] == user_id:
+                return True  # Owner has all permissions
 
-        # Check granted permissions
-        cursor.execute("""
-            SELECT permissions FROM prompt_studio_project_permissions
-            WHERE project_id = ? AND user_id = ?
-        """, (project_id, user_id))
+            # Check granted permissions
+            cursor.execute("""
+                SELECT permissions FROM prompt_studio_project_permissions
+                WHERE project_id = ? AND user_id = ?
+            """, (project_id, user_id))
 
-        row = cursor.fetchone()
-        if row:
-            raw_permissions = row[0]
-            if isinstance(raw_permissions, list):
-                permissions = raw_permissions
-            else:
-                try:
-                    permissions = json.loads(raw_permissions) if raw_permissions else []
-                except (json.JSONDecodeError, TypeError):
-                    permissions = []
-            return permission.value in permissions
+            row = cursor.fetchone()
+            if row:
+                raw_permissions = row[0]
+                if isinstance(raw_permissions, list):
+                    granted_permissions = raw_permissions
+                else:
+                    try:
+                        granted_permissions = json.loads(raw_permissions) if raw_permissions else []
+                    except (json.JSONDecodeError, TypeError):
+                        granted_permissions = []
+                return permission.value in granted_permissions
 
-        return False
+            return False
 
 ########################################################################################################################
 # Resource Access Control

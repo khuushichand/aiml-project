@@ -103,3 +103,30 @@ def test_openai_adapter_native_http_streaming(monkeypatch):
     # Should produce SSE lines with double newlines
     assert any(c.startswith("data: ") for c in chunks)
     assert sum(1 for c in chunks if "[DONE]" in c) == 1
+
+
+def test_openai_adapter_native_http_logprobs_forwarded(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
+    import tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter as openai_mod
+
+    captured = {}
+
+    def _factory(*args, **kwargs):
+        client = _FakeClient(*args, **kwargs)
+        captured["client"] = client
+        return client
+
+    monkeypatch.setattr(openai_mod, "http_client_factory", _factory, raising=True)
+
+    adapter = OpenAIAdapter()
+    req = {
+        "messages": [{"role": "user", "content": "logprobs please"}],
+        "model": "gpt-4o-mini",
+        "api_key": "sk-test",
+        "logprobs": True,
+        "top_logprobs": 4,
+    }
+    _ = adapter.chat(req)
+    payload = captured["client"].last_post["json"]
+    assert payload.get("logprobs") is True
+    assert payload.get("top_logprobs") == 4

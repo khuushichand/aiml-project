@@ -15,6 +15,23 @@ and this project adheres to Some kind of Versioning
 
 ### Fixed
 
+## [0.1.12] - 2025-12-20
+
+### Added
+- Full Kanban API (boards, lists, cards, labels, checklists, comments, import/export, bulk ops, card linking) with hybrid search (FTS + vector).
+- Self‑service Organizations & Teams (invites preview/redeem) and org admin flows.
+- Billing & subscriptions (plans, checkout/portal, invoices, usage) and Stripe webhook handling.
+- BYOK (per‑user and shared provider keys) with admin management and testing.
+- TTS providers onboarding and user TTS guide.
+
+### Changed
+- Adds a full billing/subscription system (plans, limits, Stripe integration, webhooks), BYOK (per‑user and shared provider keys) with admin tooling, invitations/org/team RBAC, a Kanban module with per‑user DB + FTS/vector search, many new endpoints/schemas/repos, DB migrations, audit/auth dependency changes, media visibility, and extensive docs/config updates.
+
+### Removed
+- A sense of failure.
+
+### Fixed
+- 500+ bugs
 
 ## [0.1.11] - 2025-11-27
 

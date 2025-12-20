@@ -71,7 +71,14 @@ Notes on images and attachments:
 - World Book & Dictionary
   - See `world_book_manager.py` and `chat_dictionary.py` for CRUD and processing routines.
 - Rate Limiting
-  - `get_character_rate_limiter()` → `CharacterRateLimiter` with: `check_rate_limit`, `check_chat_limit`, `check_message_limit`, `check_chat_completion_rate`, `check_message_send_rate`, `get_usage_stats`.
+  - `get_character_rate_limiter()` → `CharacterRateLimiter` with:
+    - `check_rate_limit(user_id, operation)` – global operations window (character ops/imports/etc.)
+    - `check_character_limit(user_id, current_count)` – caps total characters per user. Pass the current character count *before* creation; the limiter denies when `current_count >= max_characters`.
+    - `check_chat_limit(user_id, current_chat_count)` – caps total chats per user. Pass the current chat count *before* creation; the limiter denies when `current_chat_count >= max_chats_per_user`.
+    - `check_message_limit(chat_id, current_message_count)` – caps messages per chat (enforced by message endpoints).
+    - `check_chat_completion_rate(user_id)` / `check_message_send_rate(user_id)` – per‑minute throttles.
+    - `get_usage_stats(user_id)` – returns a local snapshot:
+      - `operations_used`, `operations_remaining`, `reset_time` (Unix timestamp or `null` when unused).
 
 ## Schemas (Requests/Responses)
 - Chat sessions/messages: `tldw_Server_API/app/api/v1/schemas/chat_session_schemas.py`

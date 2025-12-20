@@ -6,7 +6,6 @@ Provides async/await interfaces for chunking operations.
 
 import asyncio
 import copy
-import threading
 from typing import List, Dict, Any, Optional, AsyncGenerator, Union
 from pathlib import Path
 import aiofiles
@@ -35,7 +34,7 @@ class AsyncChunker:
         """
         self.config = config or ChunkerConfig()
         self._metrics = get_metrics()
-        self._thread_local = threading.local()
+        self._closed = False
 
         # Thread pool for CPU-bound operations
         self._executor = ThreadPoolExecutor(
@@ -49,14 +48,19 @@ class AsyncChunker:
 
         logger.info("AsyncChunker initialized")
 
+    def __del__(self):
+        """Safety net to ensure executor is cleaned up if close() was not called."""
+        if not self._closed and hasattr(self, '_executor') and self._executor is not None:
+            try:
+                self._executor.shutdown(wait=False)
+                logger.warning("AsyncChunker.__del__: executor was not properly closed, shutting down now")
+            except Exception as e:
+                logger.debug(f"AsyncChunker.__del__: error during cleanup: {e}")
+
     def _get_chunker(self) -> Chunker:
-        """Return a thread-local Chunker instance to avoid shared mutable state."""
-        chunker = getattr(self._thread_local, "chunker", None)
-        if chunker is None:
-            cfg_copy = copy.deepcopy(self.config)
-            chunker = Chunker(config=cfg_copy)
-            self._thread_local.chunker = chunker
-        return chunker
+        """Return a fresh Chunker instance per call to avoid shared mutable state."""
+        cfg_copy = copy.deepcopy(self.config)
+        return Chunker(config=cfg_copy)
 
     async def chunk_text(self,
                         text: str,
@@ -202,6 +206,7 @@ class AsyncChunker:
         normalized_method = Chunker._normalize_method_argument(base_method)
         method_name = normalized_method or str(base_method)
         method_lower = method_name.lower()
+        language = options.get('language') or self.config.language
         space_delimited_methods = {
             'words', 'sentences', 'paragraphs', 'semantic', 'tokens',
             'propositions', 'structure_aware', 'code', 'fixed_size',
@@ -221,51 +226,56 @@ class AsyncChunker:
                 return ""
 
         async for text_piece in text_stream:
-                buffer += text_piece
+            buffer += text_piece
 
-                # Process buffer when it's large enough
-                if len(buffer) >= buffer_size:
-                    # Chunk the buffer using precise boundary concatenation
-                    overlap_text = _coerce_overlap_value(overlap_buffer)
-                    sep = ''
-                    if overlap_text and buffer and not buffer[0].isspace() and not overlap_text.endswith((' ', '\t', '\n', '\r', '\v', '\f')):
-                        if method_lower == 'words':
-                            sep = ' '
-                        elif method_lower in space_delimited_methods:
-                            sep = ' '
-                    combined = overlap_text + sep + buffer
-                    chunks = await self.chunk_text(
-                        combined,
-                        method, max_size, overlap, **options
-                    )
+            # Process buffer only when it's large enough
+            if len(buffer) < buffer_size:
+                continue
 
-                # Overlap handling: when overlap>0, we can yield all chunks now and carry only the tail.
-                # When overlap==0, yield all but the last and carry the last chunk for the next iteration.
-                if overlap_size > 0:
-                    if method_lower == 'words':
-                        for chunk in chunks:
-                            yield chunk
-                        last = chunks[-1] if chunks else None
-                        if last:
-                            toks = last.split()
-                            overlap_buffer = ' '.join(toks[-overlap_size:]) if toks else ''
-                        else:
-                            overlap_buffer = ''
-                    else:
-                        for chunk in chunks[:-1]:
-                            yield chunk
-                        overlap_buffer = _coerce_overlap_value(chunks[-1]) if chunks else ''
+            # Chunk the buffer using precise boundary concatenation
+            overlap_text = _coerce_overlap_value(overlap_buffer)
+            sep = ''
+            if overlap_text and buffer and not buffer[0].isspace() and not overlap_text.endswith((' ', '\t', '\n', '\r', '\v', '\f')):
+                if method_lower == 'words':
+                    sep = ' '
+                elif method_lower in space_delimited_methods:
+                    sep = ' '
+            combined = overlap_text + sep + buffer
+            chunks = await self.chunk_text(
+                combined,
+                method, max_size, overlap, **options
+            )
+
+            # Overlap handling: when overlap>0, we can yield all chunks now and carry only the tail.
+            # When overlap==0, yield all but the last and carry the last chunk for the next iteration.
+            if overlap_size > 0:
+                for chunk in chunks:
+                    yield chunk
+                if chunks:
+                    try:
+                        chunker = self._get_chunker()
+                        overlap_buffer = chunker._compute_overlap_buffer_text(  # noqa: SLF001
+                            combined,
+                            method_name,
+                            overlap_size,
+                            language,
+                            options,
+                        )
+                    except Exception:
+                        overlap_buffer = _coerce_overlap_value(chunks[-1])
                 else:
-                    for chunk in chunks[:-1]:
-                        yield chunk
-                    withheld = chunks[-1] if chunks else None
-                    if withheld:
-                        # No explicit overlap: carry full last chunk forward so it will be emitted on next iteration/final flush
-                        overlap_buffer = _coerce_overlap_value(withheld)
-                    else:
-                        overlap_buffer = ""
+                    overlap_buffer = ''
+            else:
+                for chunk in chunks[:-1]:
+                    yield chunk
+                withheld = chunks[-1] if chunks else None
+                if withheld:
+                    # No explicit overlap: carry full last chunk forward so it will be emitted on next iteration/final flush
+                    overlap_buffer = _coerce_overlap_value(withheld)
+                else:
+                    overlap_buffer = ""
 
-                buffer = ""
+            buffer = ""
 
         # Process remaining buffer
         should_flush = bool(buffer)
@@ -329,6 +339,7 @@ class AsyncChunker:
                        method: Optional[str] = None,
                        max_size: Optional[int] = None,
                        overlap: Optional[int] = None,
+                       timeout: float = 30.0,
                        **options) -> List[str]:
         """
         Asynchronously fetch and chunk content from URL.
@@ -338,6 +349,7 @@ class AsyncChunker:
             method: Chunking method
             max_size: Maximum chunk size
             overlap: Overlap between chunks
+            timeout: HTTP request timeout in seconds (default: 30.0)
             **options: Additional options
 
         Returns:
@@ -345,7 +357,9 @@ class AsyncChunker:
         """
         import aiohttp
 
-        async with aiohttp.ClientSession() as session:
+        # Configure timeout for HTTP request to prevent hanging connections
+        client_timeout = aiohttp.ClientTimeout(total=timeout)
+        async with aiohttp.ClientSession(timeout=client_timeout) as session:
             async with session.get(url) as response:
                 text = await response.text()
 
@@ -379,8 +393,13 @@ class AsyncChunker:
 
     async def close(self):
         """Clean up resources."""
-        self._executor.shutdown(wait=True)
-        self._thread_local = threading.local()
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._executor.shutdown(wait=True)
+        except RuntimeError as e:
+            logger.debug(f"AsyncChunker.close: executor shutdown error (may already be shutdown): {e}")
         logger.info("AsyncChunker closed")
 
     async def __aenter__(self):
@@ -388,13 +407,23 @@ class AsyncChunker:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit."""
-        await self.close()
+        """Async context manager exit. Preserves original exception if close() also raises."""
+        try:
+            await self.close()
+        except Exception as close_error:
+            if exc_type is None:
+                # No exception in context, so raise the close error
+                raise
+            # There was an exception in context; log close error and let original propagate
+            logger.warning(f"AsyncChunker.__aexit__: error during cleanup (original exception preserved): {close_error}")
 
 
 class AsyncBatchProcessor:
     """
     Process multiple chunking requests in batches for efficiency.
+
+    Note: Caller must call stop_processing() or use as async context manager
+    to ensure proper resource cleanup.
     """
 
     def __init__(self,
@@ -410,11 +439,17 @@ class AsyncBatchProcessor:
         self.batch_size = batch_size
         self.max_concurrent = max_concurrent
         self._chunker = AsyncChunker()
-        self._queue = asyncio.Queue()
-        self._results = {}
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._results: Dict[str, Dict[str, Any]] = {}
         self._processing = False
+        self._closed = False
 
         logger.info(f"AsyncBatchProcessor initialized with batch_size={batch_size}")
+
+    def __del__(self):
+        """Safety net for cleanup if stop_processing() was not called."""
+        if not self._closed and hasattr(self, '_chunker'):
+            logger.warning("AsyncBatchProcessor.__del__: processor was not properly stopped")
 
     async def add_request(self,
                          request_id: str,
@@ -490,14 +525,20 @@ class AsyncBatchProcessor:
                 await asyncio.gather(*batch_tasks)
 
     async def stop_processing(self):
-        """Stop processing requests."""
+        """Stop processing requests and clean up resources."""
+        if self._closed:
+            return
         self._processing = False
 
         # Process remaining requests
         while not self._queue.empty():
             await self.process_batch()
 
-        await self._chunker.close()
+        try:
+            await self._chunker.close()
+        except Exception as e:
+            logger.warning(f"AsyncBatchProcessor.stop_processing: error closing chunker: {e}")
+        self._closed = True
 
     def get_result(self, request_id: str) -> Optional[Dict[str, Any]]:
         """

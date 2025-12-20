@@ -21,6 +21,9 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import (
     AuthPrincipal,
     PrincipalKind,
 )
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.exceptions import InactiveUserError
 
 
 def is_single_user_mode() -> bool:
@@ -56,7 +59,21 @@ def _extract_api_key(request: Request) -> Optional[str]:
     """Extract API key from X-API-KEY header."""
     try:
         api_key = request.headers.get("X-API-KEY")
-        return api_key.strip() if isinstance(api_key, str) and api_key.strip() else None
+        if isinstance(api_key, str) and api_key.strip():
+            return api_key.strip()
+    except (AttributeError, TypeError):
+        return None
+
+    # Legacy compatibility: allow "Token: Bearer <api_key>" header
+    try:
+        legacy = request.headers.get("Token")
+        if not isinstance(legacy, str) or not legacy.strip():
+            return None
+        legacy = legacy.strip()
+        if legacy.lower().startswith("bearer "):
+            extracted = legacy[len("Bearer ") :].strip()
+            return extracted if extracted else None
+        return None
     except (AttributeError, TypeError):
         return None
 
@@ -168,6 +185,16 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
     token = _extract_bearer_token(request)
     api_key = _extract_api_key(request)
 
+    # In single-user mode, treat Authorization Bearer as an API key for compatibility.
+    if token and not api_key:
+        try:
+            settings = get_settings()
+            if getattr(settings, "AUTH_MODE", None) == "single_user":
+                api_key = token
+                token = None
+        except Exception:
+            pass
+
     if not token and not api_key:
         # Align with existing 401 semantics when no credentials are provided
         raise HTTPException(
@@ -180,6 +207,11 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
     if token:
         try:
             user = await User_DB_Handling.verify_jwt_and_fetch_user(request, token)
+        except InactiveUserError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Inactive user",
+            ) from exc
         except HTTPException:
             # Propagate explicit HTTP errors (401/400/etc.) unchanged
             raise
@@ -234,6 +266,19 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                 if test_key:
                     allowed_keys.add(test_key)
                 if api_key in allowed_keys:
+                    client_ip = None
+                    try:
+                        client = getattr(request, "client", None)
+                        if client is not None:
+                            client_ip = getattr(client, "host", None)
+                    except Exception:
+                        client_ip = None
+                    if not is_single_user_ip_allowed(client_ip, settings):
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Not authenticated (provide Bearer token or X-API-KEY)",
+                            headers={"WWW-Authenticate": "Bearer"},
+                        )
                     user = User_DB_Handling.get_single_user_instance()
                     principal = _build_principal_from_user(
                         user=user,

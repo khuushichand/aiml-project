@@ -53,7 +53,7 @@ class AuthDatabaseConfig:
         try:
             self.settings = get_settings()
         except Exception as exc:  # pragma: no cover - defensive
-            logger.debug(f"AuthDatabaseConfig: falling back to existing settings snapshot: {exc}")
+            logger.warning(f"AuthDatabaseConfig: falling back to existing settings snapshot: {exc}")
 
         # Check environment variable first
         self.backend_type = os.getenv("TLDW_USER_DB_BACKEND", "").lower()

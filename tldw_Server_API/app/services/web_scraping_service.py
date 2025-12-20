@@ -271,8 +271,12 @@ async def process_web_scraping_task(
                 }
             else:
                 # Get the database path and create instance
-                # Default to user_id 1 if not provided (single-user mode)
-                effective_user_id = 1  # Default for legacy fallback
+                if user_id is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="user_id is required for legacy persistence in multi-user mode.",
+                    )
+                effective_user_id = user_id
                 db_path = get_user_media_db_path(effective_user_id)
                 db = create_media_database(
                     client_id="webscraping_legacy_service",
@@ -369,6 +373,8 @@ async def process_web_scraping_task(
                     "total_articles": len(result_list)
                 }
 
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -410,7 +416,7 @@ async def ingest_web_content_orchestrate(
         uid = getattr(db, "client_id", None) if hasattr(db, "client_id") else None
         for u in (getattr(request, "urls", []) or [])[:10]:
             if u:
-                mon.evaluate_and_alert(
+                mon.schedule_evaluate_and_alert(
                     user_id=str(uid) if uid else None,
                     text=str(u),
                     source="ingestion.web",
@@ -419,7 +425,7 @@ async def ingest_web_content_orchestrate(
                 )
         for t in (getattr(request, "titles", []) or [])[:10]:
             if t:
-                mon.evaluate_and_alert(
+                mon.schedule_evaluate_and_alert(
                     user_id=str(uid) if uid else None,
                     text=str(t),
                     source="ingestion.web",

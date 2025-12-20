@@ -40,7 +40,7 @@ class DependencyService:
         Returns:
             List of task IDs ready to run
         """
-        return await self.backend.get_ready_tasks()
+        return await self.backend.get_ready_tasks(queue_name)
 
     async def check_dependencies(self, task_id: str) -> bool:
         """

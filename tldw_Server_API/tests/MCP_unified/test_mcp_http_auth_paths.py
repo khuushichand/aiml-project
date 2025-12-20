@@ -216,6 +216,42 @@ async def test_mcp_single_user_api_key_flag_enabled_uses_compat_shim(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_mcp_single_user_api_key_respects_ip_allowlist(monkeypatch):
+    """
+    Single-user compat auth should reject API keys when the client IP is not
+    in SINGLE_USER_ALLOWED_IPS, and accept them when it is.
+    """
+    from starlette.requests import Request
+
+    monkeypatch.setenv("MCP_SINGLE_USER_COMPAT_SHIM", "1")
+    monkeypatch.setattr(mcp_ep, "is_single_user_profile_mode", lambda: True)
+
+    class _Settings:
+        SINGLE_USER_API_KEY = "single-user-admin-key"
+        SINGLE_USER_FIXED_ID = 999
+        SINGLE_USER_ALLOWED_IPS = ["203.0.113.10"]
+
+    monkeypatch.setattr(mcp_ep, "get_settings", lambda: _Settings())
+
+    request_denied = Request({"type": "http", "client": ("198.51.100.5", 12345)})
+    user_denied = await mcp_ep.get_current_user(
+        credentials=None,
+        x_api_key="single-user-admin-key",
+        request=request_denied,
+    )
+    assert user_denied is None
+
+    request_allowed = Request({"type": "http", "client": ("203.0.113.10", 12345)})
+    user_allowed = await mcp_ep.get_current_user(
+        credentials=None,
+        x_api_key="single-user-admin-key",
+        request=request_allowed,
+    )
+    assert isinstance(user_allowed, mcp_ep.TokenData)
+    assert user_allowed.sub == str(_Settings.SINGLE_USER_FIXED_ID)
+
+
+@pytest.mark.asyncio
 async def test_mcp_single_user_api_key_flag_disabled_uses_api_key_manager(monkeypatch):
     """
     When MCP_SINGLE_USER_COMPAT_SHIM is disabled, even in single-user runtime
@@ -269,13 +305,16 @@ async def test_get_current_user_authnz_jwt_failure_falls_back_to_mcp_jwt(monkeyp
     return the MCP TokenData instead of raising or propagating a 500-style error.
     """
     from fastapi.security.http import HTTPAuthorizationCredentials
+    from fastapi import HTTPException, status
 
-    # Simulate invalid AuthNZ JWT: decode_access_token raises.
-    class _FailingJwtService:
-        def decode_access_token(self, token: str):
-            raise RuntimeError("invalid access token")
+    async def _fail_verify_jwt(_request, _token: str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+        )
 
-    monkeypatch.setattr(mcp_ep, "get_jwt_service", lambda: _FailingJwtService())
+    # Simulate invalid AuthNZ JWT: verify_jwt_and_fetch_user raises.
+    monkeypatch.setattr(mcp_ep, "verify_jwt_and_fetch_user", _fail_verify_jwt)
 
     # Provide a successful MCP JWT verification path.
     expected = mcp_ep.TokenData(
@@ -304,6 +343,40 @@ async def test_get_current_user_authnz_jwt_failure_falls_back_to_mcp_jwt(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_get_current_user_authnz_revoked_does_not_fallback(monkeypatch):
+    """
+    If an AuthNZ JWT verifies but is revoked/inactive, do not fall back to MCP JWT.
+    """
+    from fastapi.security.http import HTTPAuthorizationCredentials
+    from fastapi import HTTPException, status
+
+    async def _revoked_verify(_request, _token: str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+        )
+
+    class _JwtService:
+        def decode_access_token(self, token: str):
+            assert token == "revoked.jwt.token"
+            return {"sub": "42"}
+
+    class _FailingJwtManager:
+        def verify_token(self, _token: str):
+            raise AssertionError("MCP JWT fallback should not be attempted")
+
+    monkeypatch.setattr(mcp_ep, "verify_jwt_and_fetch_user", _revoked_verify)
+    monkeypatch.setattr(mcp_ep, "get_jwt_service", lambda: _JwtService())
+    monkeypatch.setattr(mcp_ep, "get_jwt_manager", lambda: _FailingJwtManager())
+
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="revoked.jwt.token")
+
+    user = await mcp_ep.get_current_user(credentials=creds, x_api_key=None, request=None)
+
+    assert user is None
+
+
+@pytest.mark.asyncio
 async def test_get_current_user_authnz_and_mcp_failure_use_api_key_and_set_state(monkeypatch):
     """
     When both AuthNZ JWT and MCP JWT fail, get_current_user should fall back to
@@ -313,12 +386,16 @@ async def test_get_current_user_authnz_and_mcp_failure_use_api_key_and_set_state
     from fastapi.security.http import HTTPAuthorizationCredentials
     from starlette.requests import Request
 
-    # AuthNZ JWT decode always fails.
-    class _FailingJwtService:
-        def decode_access_token(self, token: str):
-            raise RuntimeError("invalid access token")
+    from fastapi import HTTPException, status
 
-    monkeypatch.setattr(mcp_ep, "get_jwt_service", lambda: _FailingJwtService())
+    async def _fail_verify_jwt(_request, _token: str):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+        )
+
+    # AuthNZ JWT validation always fails.
+    monkeypatch.setattr(mcp_ep, "verify_jwt_and_fetch_user", _fail_verify_jwt)
 
     # MCP JWT verify also fails to force API key fallback.
     class _FailingJwtManager:

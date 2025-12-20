@@ -864,5 +864,9 @@ class PromptStudioHealthCheck:
             "prompt_studio.websocket.connections"
         ])
 
-# Global metrics instance
+# Global metrics instance (singleton)
+# NOTE: This is created at module import time. Thread safety depends on the
+# underlying MetricsRegistry implementation. In multi-worker deployments (e.g.,
+# gunicorn with multiple workers), each worker will have its own instance.
+# For cross-worker aggregation, use an external metrics collector like Prometheus.
 prompt_studio_metrics = PromptStudioMetrics()

@@ -61,6 +61,8 @@ class MediaModule(BaseModule):
             self._media_cache = {}
             self._cache_ttl = self.config.settings.get("cache_ttl", 300)  # 5 minutes
             self._semantic_retrievers: Dict[Tuple[Optional[str], Optional[str]], Any] = {}
+            self._ingestion_jobs: Dict[str, Dict[str, Any]] = {}
+            self._ingestion_jobs_lock = asyncio.Lock()
 
             logger.info(f"Media module initialized with database: {db_path}")
 
@@ -474,7 +476,9 @@ class MediaModule(BaseModule):
 
         # Map order
         sort_by = "relevance" if order_by == "relevance" else "last_modified_desc"
-        page = (offset // max(1, limit)) + 1 if limit > 0 else 1
+        page_size = max(1, limit)
+        page = (offset // page_size) + 1
+        local_offset = offset % page_size
         dbi = self._open_media_db(context)
         results, total = dbi.search_media_db(
             search_query=query,
@@ -483,10 +487,27 @@ class MediaModule(BaseModule):
             date_range=date_range,
             sort_by=sort_by,
             page=page,
-            results_per_page=limit,
+            results_per_page=page_size,
             include_trash=False,
             include_deleted=False,
         )
+        if local_offset:
+            if len(results) == page_size and (offset + limit) < total:
+                more_results, _ = dbi.search_media_db(
+                    search_query=query,
+                    search_fields=["title", "content"],
+                    media_types=media_types or None,
+                    date_range=date_range,
+                    sort_by=sort_by,
+                    page=page + 1,
+                    results_per_page=page_size,
+                    include_trash=False,
+                    include_deleted=False,
+                )
+                results = results + more_results
+            results = results[local_offset: local_offset + limit]
+        else:
+            results = results[:limit]
         scores = self._normalize_scores(results)
         out = []
         for i, r in enumerate(results):
@@ -505,8 +526,8 @@ class MediaModule(BaseModule):
             try:
                 if approx_offset is not None and isinstance(mid, (int, str)):
                     mid_int = int(mid)
-                    if self._open_media_db(context).has_unvectorized_chunks(mid_int):
-                        cidx = self._open_media_db(context).get_unvectorized_anchor_index_for_offset(mid_int, int(approx_offset))
+                    if dbi.has_unvectorized_chunks(mid_int):
+                        cidx = dbi.get_unvectorized_anchor_index_for_offset(mid_int, int(approx_offset))
                         if cidx is not None:
                             loc_hint = {"chunk_index": cidx}
             except Exception:
@@ -560,7 +581,7 @@ class MediaModule(BaseModule):
         if not meta:
             raise ValueError(f"Media not found: {media_id}")
         # Ownership check
-        self._assert_media_access(media_id, context)
+        self._assert_media_access(media_id, context, dbi)
         content = meta.get("content") or ""
         item = {
             "id": meta.get("id"),
@@ -818,7 +839,7 @@ class MediaModule(BaseModule):
 
         cache_key = self._make_cache_key("search_media", cache_payload)
         cached = self._media_cache.get(cache_key)
-        if cached and (datetime.utcnow() - cached["time"]).seconds < self._cache_ttl:
+        if cached and (datetime.utcnow() - cached["time"]).total_seconds() < self._cache_ttl:
             logger.debug(f"Cache hit for search: {cache_key}")
             return cached["data"]
 
@@ -935,7 +956,9 @@ class MediaModule(BaseModule):
         include_trash: bool,
         include_deleted: bool,
     ) -> Tuple[List[Dict[str, Any]], int]:
-        page = (offset // max(1, limit)) + 1
+        page_size = max(1, limit)
+        page = (offset // page_size) + 1
+        local_offset = offset % page_size
         rows, total = dbi.search_media_db(
             search_query=query,
             search_fields=search_fields,
@@ -946,10 +969,30 @@ class MediaModule(BaseModule):
             sort_by=sort_by_value or "last_modified_desc",
             media_ids_filter=media_ids_filter,
             page=page,
-            results_per_page=limit,
+            results_per_page=page_size,
             include_trash=include_trash,
             include_deleted=include_deleted,
         )
+        if local_offset:
+            if len(rows) == page_size and (offset + limit) < total:
+                more_rows, _ = dbi.search_media_db(
+                    search_query=query,
+                    search_fields=search_fields,
+                    media_types=media_types,
+                    date_range=date_range,
+                    must_have_keywords=must_have_keywords,
+                    must_not_have_keywords=must_not_have_keywords,
+                    sort_by=sort_by_value or "last_modified_desc",
+                    media_ids_filter=media_ids_filter,
+                    page=page + 1,
+                    results_per_page=page_size,
+                    include_trash=include_trash,
+                    include_deleted=include_deleted,
+                )
+                rows = rows + more_rows
+            rows = rows[local_offset: local_offset + limit]
+        else:
+            rows = rows[:limit]
         return rows, total
 
     def _keyword_search_head(
@@ -1180,9 +1223,10 @@ class MediaModule(BaseModule):
         """Get media transcript with formatting options"""
         try:
             # Ownership check first
-            self._assert_media_access(media_id, context)
+            dbi = self._open_media_db(context)
+            self._assert_media_access(media_id, context, dbi)
             # Get transcript from database
-            transcript_data = self.db.get_transcript(media_id)
+            transcript_data = dbi.get_transcript(media_id)
 
             if not transcript_data:
                 raise ValueError(f"No transcript found for media ID: {media_id}")
@@ -1228,9 +1272,10 @@ class MediaModule(BaseModule):
         """Get comprehensive media metadata"""
         try:
             # Ownership check
-            self._assert_media_access(media_id, context)
+            dbi = self._open_media_db(context)
+            self._assert_media_access(media_id, context, dbi)
             # Get basic metadata
-            metadata = self.db.get_media_metadata(media_id)
+            metadata = dbi.get_media_metadata(media_id)
 
             if not metadata:
                 raise ValueError(f"Media not found: {media_id}")
@@ -1300,9 +1345,10 @@ class MediaModule(BaseModule):
         """Update media with validation"""
         try:
             # Ownership check
-            self._assert_media_access(media_id, context)
+            dbi = self._open_media_db(context)
+            self._assert_media_access(media_id, context, dbi)
             # Validate media exists
-            existing = self.db.get_media_metadata(media_id)
+            existing = dbi.get_media_metadata(media_id)
             if not existing:
                 raise ValueError(f"Media not found: {media_id}")
 
@@ -1310,15 +1356,15 @@ class MediaModule(BaseModule):
             updated_fields = []
 
             if "title" in updates:
-                self.db.update_media_title(media_id, updates["title"])
+                dbi.update_media_title(media_id, updates["title"])
                 updated_fields.append("title")
 
             if "description" in updates:
-                self.db.update_media_description(media_id, updates["description"])
+                dbi.update_media_description(media_id, updates["description"])
                 updated_fields.append("description")
 
             if "tags" in updates:
-                self.db.update_media_tags(media_id, updates["tags"])
+                dbi.update_media_tags(media_id, updates["tags"])
                 updated_fields.append("tags")
 
             # Clear cache for this media
@@ -1344,20 +1390,21 @@ class MediaModule(BaseModule):
         """Delete media with soft/hard delete options"""
         try:
             # Ownership check
-            self._assert_media_access(media_id, context)
+            dbi = self._open_media_db(context)
+            self._assert_media_access(media_id, context, dbi)
             # Validate media exists
-            existing = self.db.get_media_metadata(media_id)
+            existing = dbi.get_media_metadata(media_id)
             if not existing:
                 raise ValueError(f"Media not found: {media_id}")
 
             if permanent:
                 # Hard delete (requires admin)
                 # Check would be done at protocol level
-                self.db.delete_media_permanent(media_id)
+                dbi.delete_media_permanent(media_id)
                 action = "permanently_deleted"
             else:
                 # Soft delete
-                self.db.delete_media_soft(media_id)
+                dbi.delete_media_soft(media_id)
                 action = "soft_deleted"
 
             # Clear cache
@@ -1396,8 +1443,9 @@ class MediaModule(BaseModule):
             ),
         ]
 
-    async def read_resource(self, uri: str) -> Dict[str, Any]:
+    async def read_resource(self, uri: str, context: Any | None = None) -> Dict[str, Any]:
         """Read media resource"""
+        dbi = self._open_media_db(context)
         def _rows_to_items(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             items = []
             for row in rows:
@@ -1413,7 +1461,7 @@ class MediaModule(BaseModule):
             return items
 
         if uri == "media://recent":
-            rows, _ = self.db.search_media_db(
+            rows, _ = dbi.search_media_db(
                 search_query=None,
                 search_fields=None,
                 media_types=None,
@@ -1434,7 +1482,7 @@ class MediaModule(BaseModule):
             }
 
         elif uri == "media://popular":
-            rows, _ = self.db.search_media_db(
+            rows, _ = dbi.search_media_db(
                 search_query=None,
                 search_fields=None,
                 media_types=None,
@@ -1454,7 +1502,7 @@ class MediaModule(BaseModule):
                 "items": _rows_to_items(rows),
             }
         elif uri == "media://types":
-            types = self.db.get_distinct_media_types()
+            types = dbi.get_distinct_media_types()
             return {"uri": uri, "type": "media_types", "items": types}
 
         else:
@@ -1468,7 +1516,7 @@ class MediaModule(BaseModule):
         expired_keys = []
 
         for key, value in self._media_cache.items():
-            if (current_time - value["time"]).seconds > self._cache_ttl:
+            if (current_time - value["time"]).total_seconds() > self._cache_ttl:
                 expired_keys.append(key)
 
         for key in expired_keys:
@@ -1559,14 +1607,15 @@ class MediaModule(BaseModule):
         except Exception:
             return False
 
-    def _assert_media_access(self, media_id: int, context: Any | None) -> None:
+    def _assert_media_access(self, media_id: int, context: Any | None, dbi: Optional[MediaDatabase] = None) -> None:
         """Enforce that non-admin users can only access their own media when ownership is present."""
         try:
             if context is None or getattr(context, "user_id", None) is None:
                 return
             if self._is_admin(context):
                 return
-            row = self.db.get_media_by_id(media_id, include_deleted=False, include_trash=False)
+            dbi = dbi or self._open_media_db(context)
+            row = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
             if not row:
                 return
             owner = row.get("user_id")
@@ -1629,15 +1678,54 @@ class MediaModule(BaseModule):
         """Create media ingestion job"""
         # Generate job ID
         job_id = str(uuid.uuid4())
-
+        try:
+            job_payload = dict(kwargs)
+            job_payload["created_at"] = datetime.utcnow()
+            lock = getattr(self, "_ingestion_jobs_lock", None)
+            if lock:
+                async with lock:
+                    self._ingestion_jobs[job_id] = job_payload
+            else:
+                self._ingestion_jobs[job_id] = job_payload
+        except Exception:
+            pass
         # Store job details (in production, use job queue)
         # For now, return job ID
         return job_id
 
     async def _process_media_job(self, job_id: str):
         """Process media ingestion job"""
-        # Placeholder for actual processing
-        await asyncio.sleep(0.1)
+        job = None
+        try:
+            lock = getattr(self, "_ingestion_jobs_lock", None)
+            if lock:
+                async with lock:
+                    job = self._ingestion_jobs.get(job_id)
+            else:
+                job = self._ingestion_jobs.get(job_id)
+        except Exception:
+            job = None
+
+        if not job:
+            raise ValueError(f"Ingestion job not found: {job_id}")
+
+        url = job.get("url")
+        if not isinstance(url, str) or not self._validate_url(url):
+            raise ValueError("URL failed validation before processing")
+
+        try:
+            # Placeholder for actual processing
+            await asyncio.sleep(0.1)
+        finally:
+            try:
+                lock = getattr(self, "_ingestion_jobs_lock", None)
+                if lock:
+                    async with lock:
+                        self._ingestion_jobs.pop(job_id, None)
+                else:
+                    self._ingestion_jobs.pop(job_id, None)
+            except Exception:
+                pass
 
     async def _queue_media_job(self, job_id: str):
         """Queue media job for background processing"""

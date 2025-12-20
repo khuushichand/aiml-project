@@ -3,9 +3,15 @@
 
 from typing import List, Optional
 import re
+from loguru import logger
 
 # Local Imports
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+
+
+class PromptGenerationError(Exception):
+    """Raised when prompt generation fails."""
+    pass
 
 #######################################################################################################################
 # Function Definitions
@@ -501,18 +507,23 @@ def generate_prompt(api_endpoint: str, api_key: str, task: str, variables_str: s
     Note: If you want the AI to output its entire response or parts of its response inside certain tags, specify the name of these tags (e.g. "write your answer inside <answer> tags") but do not include closing tags or unnecessary open-and-close tag sections."""
 
     # Call chat API to generate the prompt
-    response = chat_api_call(
-        api_endpoint=api_endpoint,
-        api_key=api_key,
-        input_data="",
-        prompt=metaprompt,
-        temp=temperature,
-        streaming=False,
-        minp=None,
-        maxp=None,
-        model=None,
-    )
-    return response
+    try:
+        response = chat_api_call(
+            api_endpoint=api_endpoint,
+            api_key=api_key,
+            messages_payload=[{"role": "user", "content": metaprompt}],
+            temp=temperature,
+            streaming=False,
+            minp=None,
+            maxp=None,
+            model=None,
+        )
+        if response is None:
+            raise PromptGenerationError("Chat API returned empty response")
+        return response
+    except Exception as e:
+        logger.error(f"Failed to generate prompt via chat API: {e}")
+        raise PromptGenerationError(f"Failed to generate prompt: {e}") from e
 
 def extract_between_tags(tag: str, string: str, strip: bool = False) -> List[str]:
     """Extract all substrings between specific XML-like tags.
@@ -547,18 +558,17 @@ def strip_last_sentence(text: str) -> str:
 def extract_prompt(metaprompt_response: str) -> str:
     """Extract the <Instructions> block from the meta-prompt response safely.
 
-    Falls back to returning a cleaned/truncated response when the tag
-    cannot be found.
+    Falls back to returning a cleaned response when the tag cannot be found.
     """
     blocks = extract_between_tags("Instructions", metaprompt_response)
     if not blocks:
         # Fallback: best-effort cleanup of the raw response
         cleaned = strip_last_sentence(remove_empty_tags(metaprompt_response).strip())
         return cleaned
+    # Return the full instructions block after cleaning
     between_tags = blocks[0]
-    prefix = between_tags[:1000]
-    suffix = strip_last_sentence(remove_empty_tags(between_tags[1000:].strip()).strip())
-    return prefix + suffix
+    cleaned = strip_last_sentence(remove_empty_tags(between_tags.strip()).strip())
+    return cleaned
 
 
 def test_generated_prompt(
@@ -601,19 +611,24 @@ def test_generated_prompt(
         prompt_with_values = prompt_with_values.replace(ph, val)
 
     # Send the filled-in prompt to the chat API
-    response = chat_api_call(
-        api_endpoint=api_endpoint,
-        api_key=api_key,
-        input_data="",
-        prompt=prompt_with_values,
-        temp=temperature,
-        system_message=None,
-        streaming=False,
-        minp=None,
-        maxp=None,
-        model=None,
-    )
-    return response
+    try:
+        response = chat_api_call(
+            api_endpoint=api_endpoint,
+            api_key=api_key,
+            messages_payload=[{"role": "user", "content": prompt_with_values}],
+            temp=temperature,
+            system_message=None,
+            streaming=False,
+            minp=None,
+            maxp=None,
+            model=None,
+        )
+        if response is None:
+            raise PromptGenerationError("Chat API returned empty response")
+        return response
+    except Exception as e:
+        logger.error(f"Failed to test generated prompt via chat API: {e}")
+        raise PromptGenerationError(f"Failed to test generated prompt: {e}") from e
 
 #
 # End of Function Definitions

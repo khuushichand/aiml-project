@@ -5,7 +5,7 @@ repo_name: rmusser01/tldw_server
 edit_uri: edit/main/
 
 # Only publish the curated set under Docs/Published
-docs_dir: Docs/Published
+docs_dir: Published
 
 theme:
   name: material
@@ -67,6 +67,7 @@ copyright: |
 
 nav:
   - Home: index.md
+  - Overview: Overview/Feature_Status.md
   - Workflows:
       - Workflows PRD: Workflows_PRD.md
       - Runbook: Workflows_Runbook.md
@@ -92,6 +93,7 @@ nav:
       - Chatbook API: API-related/Chatbook_API_Documentation.md
       - Chatbook Features API: API-related/Chatbook_Features_API_Documentation.md
       - Chunking Templates API: API-related/Chunking_Templates_API_Documentation.md
+      - Chunking API: API-related/Chunking_API_Documentation.md
       - Embeddings API: API-related/Embeddings_API_Documentation.md
       - Embeddings Module: API-related/Embeddings_Module_Documentation.md
       - Embeddings API Guide: API-related/Embeddings-API-Guide.md
@@ -105,6 +107,7 @@ nav:
       - Providers API: API-related/Providers_API_Documentation.md
       - RAG API: API-related/RAG_API_Documentation.md
       - RAG API Guide: API-related/RAG-API-Guide.md
+      - Orgs & Billing API: API-related/Orgs_Billing_API.md
       - Transcript Segmentation API: API-related/Transcript_Segmentation_API.md
       - User Registration API: API-related/User_Registration_API_Documentation.md
       - Watchlists API: API-related/Watchlists_API.md
@@ -159,6 +162,7 @@ nav:
       - WebUI - Vector Backends: User_Guides/WebUI_Vector_Backends.md
       - Usage Module: User_Guides/Usage_Module.md
       - Authentication Setup: User_Guides/Authentication_Setup.md
+      - BYOK User Guide: User_Guides/BYOK_User_Guide.md
       - Backups using Litestream: User_Guides/Backups_Using_Litestream.md
       - Chatbook User Guide: User_Guides/Chatbook_User_Guide.md
       - Chunking Templates User Guide: User_Guides/Chunking_Templates_User_Guide.md
@@ -169,6 +173,8 @@ nav:
       - Evaluations User Guide: User_Guides/Evaluations_User_Guide.md
       - Installation & Setup: User_Guides/Installation-Setup-Guide.md
       - Multi-User Deployment Guide: User_Guides/Multi-User_Deployment_Guide.md
+      - Organizations and Sharing: User_Guides/Organizations_and_Sharing.md
+      - Organization Administration: User_Guides/Organization_Administration.md
       - Production Hardening Checklist: User_Guides/Production_Hardening_Checklist.md
       - Prompt Engineering Notes: User_Guides/Prompt_Engineering_Notes.md
       - RAG Deployment Guide: User_Guides/RAG_Deployment_Guide.md
@@ -177,6 +183,7 @@ nav:
       - TTS Getting Started: User_Guides/TTS_Getting_Started.md
       - Chatterbox TTS Setup: User_Guides/Chatterbox_TTS_Setup.md
       - User Guide: User_Guides/User_Guide.md
+  - Release Notes: RELEASE_NOTES.md
   - MCP Unified:
       - Overview: MCP/Unified_Overview.md
       - Client Snippets: MCP/Unified_Client_Snippets.md

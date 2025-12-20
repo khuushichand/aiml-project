@@ -6,6 +6,7 @@ Leverages PostgreSQL-specific features for optimal performance.
 import asyncio
 import json
 from typing import List, Optional, Dict, Any, Tuple
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import uuid
 
@@ -185,6 +186,30 @@ class PostgreSQLBackend(QueueBackend):
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 );
 
+                -- Dead letter queue
+                CREATE TABLE IF NOT EXISTS dead_letter_queue (
+                    id TEXT PRIMARY KEY,
+                    original_task_id TEXT NOT NULL,
+                    queue_name TEXT NOT NULL,
+                    handler TEXT NOT NULL,
+                    payload JSONB,
+                    error_count INTEGER DEFAULT 1,
+                    last_error TEXT,
+                    moved_at TIMESTAMPTZ DEFAULT NOW(),
+                    original_created_at TIMESTAMPTZ,
+                    metadata JSONB
+                );
+
+                -- Schema version tracking
+                CREATE TABLE IF NOT EXISTS schema_version (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TIMESTAMPTZ DEFAULT NOW()
+                );
+
+                INSERT INTO schema_version (version)
+                VALUES (1)
+                ON CONFLICT (version) DO NOTHING;
+
                 -- Trigger for updated_at
                 CREATE OR REPLACE FUNCTION update_updated_at()
                 RETURNS TRIGGER AS $$
@@ -199,6 +224,22 @@ class PostgreSQLBackend(QueueBackend):
                 FOR EACH ROW
                 EXECUTE FUNCTION update_updated_at();
             """)
+
+    async def create_schema(self) -> None:
+        """Create database schema (idempotent)."""
+        await self._initialize_schema()
+
+    async def get_schema_version(self) -> int:
+        """Get current schema version."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("SELECT MAX(version) FROM schema_version") or 0
+
+    async def migrate_schema(self, target_version: int) -> None:
+        """Placeholder schema migration hook."""
+        current = await self.get_schema_version()
+        if current < target_version:
+            # TODO: implement migrations
+            pass
 
     async def enqueue(self, task: Task) -> str:
         """
@@ -326,7 +367,7 @@ class PostgreSQLBackend(QueueBackend):
                               AND t2.status != 'completed'
                           )
                       ))
-                    ORDER BY priority DESC, created_at
+                    ORDER BY priority ASC, created_at
                     FOR UPDATE SKIP LOCKED
                     LIMIT 1
                 )
@@ -356,7 +397,7 @@ class PostgreSQLBackend(QueueBackend):
 
             return affected != "UPDATE 0"
 
-    async def nack(self, task_id: str, error: Optional[str] = None) -> bool:
+    async def nack(self, task_id: str, error: Optional[str] = None, retry: bool = True) -> bool:
         """
         Negative acknowledge - task failed but may be retried.
         """
@@ -364,6 +405,7 @@ class PostgreSQLBackend(QueueBackend):
             row = await conn.fetchrow("""
                 UPDATE tasks
                 SET status = CASE
+                        WHEN $3 = FALSE THEN 'failed'
                         WHEN retry_count >= max_retries THEN 'failed'
                         ELSE 'queued'
                     END,
@@ -372,13 +414,13 @@ class PostgreSQLBackend(QueueBackend):
                     lease_expires_at = NULL,
                     worker_id = NULL,
                     scheduled_at = CASE
-                        WHEN retry_count < max_retries
+                        WHEN $3 = TRUE AND retry_count < max_retries
                         THEN NOW() + INTERVAL '1 second' * retry_delay
                         ELSE NULL
                     END
                 WHERE id = $2 AND status = 'running'
                 RETURNING status, queue_name
-            """, error, task_id)
+            """, error, task_id, retry)
 
             if row and row['status'] == 'queued':
                 # Notify queue for retry
@@ -400,6 +442,41 @@ class PostgreSQLBackend(QueueBackend):
             """, new_expires, task_id, lease_id)
 
             return affected != "UPDATE 0"
+
+    async def create_lease(self, lease_id: str, task_id: str,
+                           worker_id: str, expires_at: datetime) -> bool:
+        """Create lease for task."""
+        async with self.pool.acquire() as conn:
+            affected = await conn.execute("""
+                UPDATE tasks
+                SET lease_id = $1,
+                    worker_id = $2,
+                    lease_expires_at = $3
+                WHERE id = $4
+            """, lease_id, worker_id, expires_at, task_id)
+            return affected != "UPDATE 0"
+
+    async def delete_lease(self, lease_id: str) -> bool:
+        """Delete lease by lease_id."""
+        async with self.pool.acquire() as conn:
+            affected = await conn.execute("""
+                UPDATE tasks
+                SET lease_id = NULL,
+                    lease_expires_at = NULL
+                WHERE lease_id = $1
+            """, lease_id)
+            return affected != "UPDATE 0"
+
+    async def get_expired_leases(self) -> List[Dict[str, Any]]:
+        """Get expired leases."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT lease_id, id AS task_id, worker_id, lease_expires_at AS expires_at
+                FROM tasks
+                WHERE lease_id IS NOT NULL
+                  AND lease_expires_at < NOW()
+            """)
+            return [dict(row) for row in rows]
 
     async def reclaim_expired_leases(self) -> int:
         """
@@ -443,6 +520,31 @@ class PostgreSQLBackend(QueueBackend):
                 idempotency_key
             )
 
+    async def update_task(self, task: Task) -> bool:
+        """Update task state."""
+        async with self.pool.acquire() as conn:
+            affected = await conn.execute("""
+                UPDATE tasks
+                SET status = $1,
+                    error = $2,
+                    result = $3,
+                    worker_id = $4,
+                    lease_id = $5,
+                    lease_expires_at = $6,
+                    completed_at = COALESCE($7, completed_at)
+                WHERE id = $8
+            """,
+                task.status.value,
+                task.error,
+                json.dumps(task.result) if task.result is not None else None,
+                task.worker_id,
+                task.lease_id,
+                task.lease_expires_at,
+                task.completed_at,
+                task.id
+            )
+            return affected != "UPDATE 0"
+
     async def get_queue_size(self, queue_name: str) -> int:
         """
         Get number of queued tasks.
@@ -454,13 +556,88 @@ class PostgreSQLBackend(QueueBackend):
             """, queue_name)
             return result or 0
 
-    async def get_ready_tasks(self) -> List[str]:
+    async def clear_queue(self, queue_name: str) -> int:
+        """Clear queued tasks for a queue."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                DELETE FROM tasks
+                WHERE queue_name = $1 AND status = 'queued'
+                RETURNING id
+            """, queue_name)
+            return len(rows)
+
+    async def get_dead_letter_queue(self) -> List[Task]:
+        """Get DLQ tasks."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM dead_letter_queue")
+        tasks: List[Task] = []
+        for row in rows:
+            row_dict = dict(row)
+            payload = row_dict.get('payload')
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    pass
+            metadata = row_dict.get('metadata')
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except json.JSONDecodeError:
+                    metadata = None
+            if payload is None:
+                payload = {}
+            if metadata is None:
+                metadata = {}
+            tasks.append(Task(
+                id=row_dict['original_task_id'],
+                queue_name=row_dict['queue_name'],
+                handler=row_dict['handler'],
+                payload=payload,
+                status=TaskStatus.DEAD,
+                error=row_dict.get('last_error'),
+                metadata=metadata,
+                created_at=row_dict.get('original_created_at') or datetime.now(timezone.utc)
+            ))
+        return tasks
+
+    async def move_to_dlq(self, task_id: str, reason: str) -> bool:
+        """Move task to DLQ."""
+        task = await self.get_task(task_id)
+        if not task:
+            return False
+
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO dead_letter_queue (
+                    id, original_task_id, queue_name, handler, payload,
+                    last_error, original_created_at, metadata
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """,
+                str(uuid.uuid4()),
+                task.id,
+                task.queue_name,
+                task.handler,
+                json.dumps(task.payload) if task.payload is not None else None,
+                reason,
+                task.created_at,
+                json.dumps(task.metadata) if task.metadata else None
+            )
+
+            await conn.execute(
+                "UPDATE tasks SET status = 'dead' WHERE id = $1",
+                task_id
+            )
+
+        return True
+
+    async def get_ready_tasks(self, queue_name: Optional[str] = None) -> List[str]:
         """
         Get IDs of tasks ready to run (dependencies satisfied).
         Uses efficient CTE for dependency checking.
         """
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("""
+            base_query = """
                 WITH dependency_status AS (
                     SELECT
                         t1.id,
@@ -480,9 +657,18 @@ class PostgreSQLBackend(QueueBackend):
                     FROM tasks t1
                     WHERE t1.status = 'queued'
                       AND (t1.scheduled_at IS NULL OR t1.scheduled_at <= NOW())
+            """
+            params = []
+            if queue_name:
+                base_query += " AND t1.queue_name = $1"
+                params.append(queue_name)
+
+            base_query += """
                 )
                 SELECT id FROM dependency_status WHERE ready = TRUE
-            """)
+            """
+
+            rows = await conn.fetch(base_query, *params)
 
             return [row['id'] for row in rows]
 
@@ -554,6 +740,30 @@ class PostgreSQLBackend(QueueBackend):
         async with self.pool.acquire() as conn:
             return await conn.execute(query, *args)
 
+    async def fetch(self, query: str, *args) -> List[Dict[str, Any]]:
+        """Execute query and fetch rows as dictionaries."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *args)
+            return [dict(row) for row in rows]
+
+    async def fetchval(self, query: str, *args) -> Any:
+        """Execute query and fetch a single value."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(query, *args)
+
+    async def fetchrow(self, query: str, *args) -> Optional[Dict[str, Any]]:
+        """Execute query and fetch a single row as dictionary."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(query, *args)
+            return dict(row) if row else None
+
+    @asynccontextmanager
+    async def transaction(self):
+        """Transaction context manager (yields a live connection)."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                yield conn
+
     async def _store_external_payload(self, conn: Connection, task_id: str, payload: Dict) -> str:
         """
         Store large payload externally.
@@ -598,22 +808,34 @@ class PostgreSQLBackend(QueueBackend):
         """
         Convert database row to Task object.
         """
+        def _maybe_load_json(value: Any) -> Any:
+            if value is None:
+                return None
+            if isinstance(value, (dict, list)):
+                return value
+            if isinstance(value, str):
+                try:
+                    return json.loads(value)
+                except json.JSONDecodeError:
+                    return value
+            return value
+
         # Load payload (from column or external storage)
         payload = None
         if row['payload']:
-            payload = json.loads(row['payload'])
+            payload = _maybe_load_json(row['payload'])
         elif row['payload_ref']:
             payload = await self._load_external_payload(conn, row['payload_ref'])
 
         # Parse metadata
-        metadata = None
+        metadata = {}
         if row['metadata']:
-            metadata = json.loads(row['metadata'])
+            metadata = _maybe_load_json(row['metadata']) or {}
 
         # Parse result
         result = None
         if row['result']:
-            result = json.loads(row['result'])
+            result = _maybe_load_json(row['result'])
 
         return Task(
             id=row['id'],

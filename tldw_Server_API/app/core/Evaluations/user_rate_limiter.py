@@ -350,8 +350,17 @@ class UserRateLimiter:
                 "rate_limit_source": "resource_governor",
             }
 
-        # RG disabled → treat as unlimited.
-        return True, {}
+        # RG disabled → use legacy per-user limits and headers.
+        config = await self._get_user_config(user_id)
+        minute_ok, minute_meta = await self._check_minute_limit(user_id, endpoint, is_batch, config)
+        if not minute_ok:
+            return False, minute_meta
+        daily_ok, daily_meta = await self._check_daily_limits(user_id, tokens_requested, estimated_cost, config)
+        if not daily_ok:
+            return False, daily_meta
+
+        await self._record_request(user_id, endpoint, tokens_requested, estimated_cost)
+        return True, self._generate_rate_limit_headers(user_id, config, minute_meta, daily_meta)
 
     async def _get_user_config(self, user_id: str) -> RateLimitConfig:
         """Get user's rate limit configuration."""

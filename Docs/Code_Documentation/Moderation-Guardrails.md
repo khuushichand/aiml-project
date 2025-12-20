@@ -19,6 +19,7 @@ Configuration ([Moderation] in `tldw_Server_API/Config_Files/config.txt`)
 - `redact_replacement` (str): default replacement when redacting.
 - `blocklist_file` (path): default `tldw_Server_API/Config_Files/moderation_blocklist.txt`.
 - `user_overrides_file` (path): JSON mapping of user_id -> overrides.
+- Paths are resolved relative to the project root when not absolute.
 - `per_user_overrides` (bool): enable per-user overrides.
 - `pii_enabled` (bool): include built-in PII redaction rules (defaults off).
 - `categories_enabled` (csv): categories to permit globally (empty = allow all).
@@ -49,6 +50,7 @@ Blocklist Grammar
 Per-user Overrides (user_overrides_file)
 - Keys mirror [Moderation] defaults: `enabled`, `input_enabled`, `output_enabled`, `input_action`, `output_action`, `redact_replacement`.
 - `categories_enabled`: comma-separated string or list of category names. If set, only rules with intersecting category are active.
+- To explicitly clear category gating for a user (allow all categories), set `categories_enabled` to an empty string or empty list.
 
 Categories Behavior
 - When `categories_enabled` is provided (globally or per-user), only rules whose `categories` intersect with the enabled set will apply.

@@ -1,0 +1,46 @@
+import asyncio
+
+import pytest
+
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, UnifiedAuditService
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Evaluations.audit_adapter import (
+    log_evaluation_created,
+    shutdown_evaluations_audit_services,
+)
+from tldw_Server_API.app.core.config import settings
+
+
+@pytest.mark.asyncio
+async def test_evaluation_created_threadpool_fallback(tmp_path, monkeypatch):
+    monkeypatch.setitem(settings, "USER_DB_BASE_DIR", str(tmp_path))
+    user_id = 9090
+    eval_id = "eval-sync-1"
+
+    await asyncio.to_thread(
+        log_evaluation_created,
+        user_id=str(user_id),
+        eval_id=eval_id,
+        name="Threadpool Eval",
+        eval_type="unit",
+    )
+
+    db_path = DatabasePaths.get_audit_db_path(user_id)
+    svc = UnifiedAuditService(db_path=str(db_path))
+    await svc.initialize()
+    try:
+        events = await svc.query_events(user_id=str(user_id))
+        match = next(
+            (
+                e
+                for e in events
+                if e.get("event_type") == AuditEventType.DATA_WRITE.value
+                and e.get("resource_id") == eval_id
+                and e.get("action") == "evaluation_create"
+            ),
+            None,
+        )
+        assert match is not None, "Threadpool evaluation_create event not found"
+    finally:
+        await svc.stop()
+        await shutdown_evaluations_audit_services()

@@ -106,3 +106,30 @@ def test_language_autodetect_thai():
     assert out and isinstance(out, list)
     md = out[0].get("metadata", {})
     assert md.get("language") == "th", f"Expected Thai autodetect, got {md.get('language')}"
+
+
+@pytest.mark.asyncio
+async def test_async_chunk_stream_sentences_overlap_tail():
+    from tldw_Server_API.app.core.Chunking.async_chunker import AsyncChunker
+
+    part1 = " ".join([f"Sentence {i}." for i in range(1, 7)]) + " "
+    part2 = " ".join([f"Sentence {i}." for i in range(7, 11)])
+
+    async def text_stream():
+        yield part1
+        yield part2
+
+    async with AsyncChunker() as chunker:
+        chunks = [
+            ch
+            async for ch in chunker.chunk_stream(
+                text_stream(),
+                method="sentences",
+                max_size=3,
+                overlap=1,
+                buffer_size=len(part1),
+                language="en",
+            )
+        ]
+
+    assert "Sentence 5. Sentence 6." in chunks

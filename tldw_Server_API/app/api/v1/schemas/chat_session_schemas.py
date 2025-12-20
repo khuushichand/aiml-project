@@ -277,7 +277,7 @@ class CharacterChatStreamPersistRequest(BaseModel):
 
     Use after a streamed completion where the assistant content was not persisted.
     """
-    assistant_content: str = Field(..., min_length=1, description="Assistant text to persist")
+    assistant_content: str = Field(..., min_length=1, max_length=1_000_000, description="Assistant text to persist (max 1MB)")
     user_message_id: Optional[str] = Field(None, description="Optional parent user message id to link threading")
     tool_calls: Optional[List[Dict[str, Any]]] = Field(None, description="Optional tool_calls metadata to store")
     usage: Optional[Dict[str, int]] = Field(None, description="Optional token usage stats: prompt_tokens, completion_tokens, total_tokens")

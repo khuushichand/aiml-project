@@ -2,29 +2,32 @@
 RAG pipeline preset and cleanup endpoints extracted from evaluations_unified.
 """
 
-from typing import Optional, List, Dict, Any
 from datetime import datetime
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
-    verify_api_key,
     create_error_response,
+    get_eval_request_user,
     sanitize_error_message,
+    verify_api_key,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
+    PipelineCleanupResponse,
+    PipelinePresetCreate,
+    PipelinePresetListResponse,
+    PipelinePresetResponse,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
-from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
-    PipelinePresetCreate, PipelinePresetResponse, PipelinePresetListResponse, PipelineCleanupResponse,
-)
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores import (
-    VectorStoreFactory,
     create_from_settings_for_user,
 )
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
-
 
 pipeline_router = APIRouter()
 
@@ -36,15 +39,14 @@ pipeline_router = APIRouter()
 )
 async def create_or_update_pipeline_preset(
     preset: PipelinePresetCreate,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
         db = svc.db
         if db is None:
             raise ValueError("Database not available")
-        db.upsert_pipeline_preset(preset.name, preset.config, user_id=user_id)
+        db.upsert_pipeline_preset(preset.name, preset.config, user_id=current_user.id_str)
         row = db.get_pipeline_preset(preset.name)
 
         def to_ts(x: str) -> Optional[int]:
@@ -80,8 +82,7 @@ async def create_or_update_pipeline_preset(
 async def list_pipeline_presets(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -125,8 +126,7 @@ async def list_pipeline_presets(
 )
 async def get_pipeline_preset(
     name: str,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -175,8 +175,7 @@ async def get_pipeline_preset(
 )
 async def delete_pipeline_preset(
     name: str,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -208,8 +207,7 @@ async def delete_pipeline_preset(
     dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="evals.rag_pipeline.cleanup"))],
 )
 async def cleanup_ephemeral_collections(
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     """Delete expired ephemeral collections according to TTL registry."""
     try:
@@ -221,10 +219,10 @@ async def cleanup_ephemeral_collections(
         if not expired:
             return PipelineCleanupResponse(expired_count=0, deleted_count=0)
         from tldw_Server_API.app.core.config import settings as app_settings
-        adapter = create_from_settings_for_user(app_settings, str(app_settings.get("SINGLE_USER_FIXED_ID", "1")))
+        adapter = create_from_settings_for_user(app_settings, current_user.id_str)
         await adapter.initialize()
         deleted = 0
-        errors: List[str] = []
+        errors: list[str] = []
         for name in expired:
             try:
                 await adapter.delete_collection(name)

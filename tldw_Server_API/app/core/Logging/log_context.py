@@ -18,9 +18,9 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from typing import Iterator, Any, Optional
-import uuid
 
 from loguru import logger
+from tldw_Server_API.app.core.Security.request_id_middleware import _clean_request_id
 try:
     # Optional import for FastAPI Request type annotation
     from fastapi import Request  # type: ignore
@@ -29,8 +29,8 @@ except Exception:  # pragma: no cover - typing aid only
 
 
 def new_request_id() -> str:
-    """Return a new opaque request identifier (hex)."""
-    return uuid.uuid4().hex
+    """Return a new opaque request identifier."""
+    return _clean_request_id(None)
 
 
 @contextmanager
@@ -58,9 +58,8 @@ def ensure_request_id(request: Any) -> str:
         req_id = getattr(getattr(request, "state", None), "request_id", None)
         if not req_id:
             headers = getattr(request, "headers", {}) or {}
-            req_id = headers.get("X-Request-ID") or headers.get("x-request-id")
-        if not req_id:
-            req_id = new_request_id()
+            header_value = headers.get("X-Request-ID") or headers.get("x-request-id")
+            req_id = _clean_request_id(header_value)
             try:
                 setattr(request.state, "request_id", req_id)  # type: ignore[attr-defined]
             except Exception:

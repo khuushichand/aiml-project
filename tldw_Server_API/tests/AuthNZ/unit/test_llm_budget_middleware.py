@@ -386,3 +386,53 @@ def test_middleware_budget_check_failure_fails_closed(monkeypatch, mock_middlewa
     data = r.json()
     assert data.get("error") == "budget_check_failed"
     assert "Failed to evaluate budget enforcement" in data.get("message", "")
+
+
+def test_middleware_key_limits_exception_fails_closed(monkeypatch, mock_middleware_dependencies):
+    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
+    # Ensure middleware path and settings are active and key resolves
+    mock_middleware_dependencies(False, 100, 0.1)
+
+    async def fake_get_key_limits(_key_id: int):
+        raise RuntimeError("limits unavailable")
+
+    monkeypatch.setattr(mw, "get_key_limits", fake_get_key_limits)
+
+    app = _build_app_with_middleware()
+    client = TestClient(app)
+
+    r = client.post(
+        "/api/v1/chat/completions",
+        headers={"X-API-KEY": "dummy-key"},
+        json={"model": "m", "messages": []},
+    )
+
+    assert r.status_code == 503
+    data = r.json()
+    assert data.get("error") == "budget_limits_unavailable"
+    assert "Failed to load virtual key limits" in data.get("message", "")
+
+
+def test_middleware_key_limits_missing_fails_closed(monkeypatch, mock_middleware_dependencies):
+    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
+    # Ensure middleware path and settings are active and key resolves
+    mock_middleware_dependencies(False, 100, 0.1)
+
+    async def fake_get_key_limits(_key_id: int):
+        return None
+
+    monkeypatch.setattr(mw, "get_key_limits", fake_get_key_limits)
+
+    app = _build_app_with_middleware()
+    client = TestClient(app)
+
+    r = client.post(
+        "/api/v1/chat/completions",
+        headers={"X-API-KEY": "dummy-key"},
+        json={"model": "m", "messages": []},
+    )
+
+    assert r.status_code == 503
+    data = r.json()
+    assert data.get("error") == "budget_limits_unavailable"
+    assert "Failed to load virtual key limits" in data.get("message", "")

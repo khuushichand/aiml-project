@@ -7,6 +7,7 @@ supporting both OpenTelemetry and fallback implementations.
 
 import time
 import asyncio
+import os
 from typing import Dict, Any, Optional, List, Callable, Union
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -55,10 +56,18 @@ class MetricsRegistry:
 
     def __init__(self):
         """Initialize the metrics registry."""
+        raw_maxlen = os.getenv("METRICS_RING_BUFFER_MAXLEN", "10000")
+        try:
+            buffer_maxlen = int(raw_maxlen)
+        except ValueError:
+            buffer_maxlen = 10000
+        if buffer_maxlen <= 0:
+            buffer_maxlen = None
+
         self.metrics: Dict[str, MetricDefinition] = {}
         self.instruments: Dict[str, Any] = {}
-        # Increase ring buffer to avoid plateauing counts in longer test runs
-        self.values: Dict[str, deque] = defaultdict(lambda: deque(maxlen=10000))
+        # Rolling window of metric samples; size configurable via METRICS_RING_BUFFER_MAXLEN.
+        self.values: Dict[str, deque] = defaultdict(lambda: deque(maxlen=buffer_maxlen))
         self.callbacks: Dict[str, List[Callable]] = defaultdict(list)
 
         # Initialize with telemetry manager
@@ -1041,6 +1050,24 @@ class MetricsRegistry:
                 name="security_headers_responses_total",
                 type=MetricType.COUNTER,
                 description="Total number of responses where security headers were applied",
+            )
+        )
+
+        # BYOK metrics
+        self.register_metric(
+            MetricDefinition(
+                name="byok_resolution_total",
+                type=MetricType.COUNTER,
+                description="Total number of BYOK credential resolutions by source",
+                labels=["provider", "source", "allowlisted", "byok_enabled"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="byok_missing_credentials_total",
+                type=MetricType.COUNTER,
+                description="Total number of missing provider credential errors",
+                labels=["provider", "operation", "allowlisted", "byok_enabled"],
             )
         )
 

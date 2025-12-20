@@ -99,6 +99,8 @@ jobs:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
       TEST_MODE: 'true'
       DISABLE_HEAVY_STARTUP: '1'
+      # Enable pytest-xdist parallelism for this heavy suite
+      PYTEST_ADDOPTS: "-p xdist.plugin -n auto"
       # Expose Postgres service to tests
       POSTGRES_TEST_HOST: 127.0.0.1
       POSTGRES_TEST_DB: tldw_content
@@ -1437,6 +1439,8 @@ jobs:
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
       TEST_MODE: 'true'
       DISABLE_HEAVY_STARTUP: '1'
+      # Enable pytest-xdist parallelism for this heavy suite
+      PYTEST_ADDOPTS: "-p xdist.plugin -n auto"
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
@@ -1450,7 +1454,8 @@ jobs:
         uses: ./.github/actions/setup-python-deps
         with:
           python-version: '3.12'
-          use-uv: 'true'
+          # Use uv on macOS, pip on Windows (leveraging pip cache on runners)
+          use-uv: ${{ matrix.os != 'windows-latest' }}
           cache-dependency-path: |
             pyproject.toml
             uv.lock
@@ -1497,6 +1502,12 @@ jobs:
           E2E_TEST_BASE_URL: "http://127.0.0.1:8000"
           TEST_MODE: 'true'
           DISABLE_HEAVY_STARTUP: '1'
+          STARTUP_TRACE: '1'
+          MCP_DEBUG: '1'
+          # Start the minimal test app profile for smoke to reduce startup cost
+          MINIMAL_TEST_APP: '1'
+          # Skip strict privilege catalog validation in smoke
+          PRIVILEGE_METADATA_VALIDATE_ON_STARTUP: '0'
         shell: bash
         run: |
           python tldw_Server_API/tests/scripts/server_lifecycle.py start

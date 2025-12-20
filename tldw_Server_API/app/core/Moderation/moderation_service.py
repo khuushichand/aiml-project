@@ -23,7 +23,7 @@ import threading
 import time
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple, Set
+from typing import Callable, Dict, List, Optional, Tuple, Set, Iterator
 
 from loguru import logger
 
@@ -139,6 +139,17 @@ class ModerationService:
             val = str(mod_cfg.get(key, default)).strip().lower()
             return val in {"1", "true", "yes", "y", "on"}
 
+        def _anchor(p: str) -> str:
+            try:
+                from pathlib import Path as _Path
+                pp = _Path(str(p))
+                if pp.is_absolute():
+                    return str(pp)
+                from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+                return str((_Path(_gpr()) / pp).resolve())
+            except Exception:
+                return str(p)
+
         # Paths (defaults set when unset)
         blocklist_path = (
             mod_cfg.get("blocklist_file")
@@ -151,6 +162,12 @@ class ModerationService:
             or "tldw_Server_API/Config_Files/moderation_user_overrides.json"
         )
         runtime_overrides_path = mod_cfg.get("runtime_overrides_file") or os.getenv("MODERATION_RUNTIME_OVERRIDES_FILE")
+        blocklist_path = _anchor(blocklist_path) if blocklist_path else blocklist_path
+        user_overrides_path = _anchor(user_overrides_path) if user_overrides_path else user_overrides_path
+        if runtime_overrides_path:
+            runtime_overrides_path = _anchor(runtime_overrides_path)
+        else:
+            runtime_overrides_path = _anchor("tldw_Server_API/Config_Files/moderation_runtime_overrides.json")
         # Optional safety/perf overrides
         try:
             self._max_scan_chars = int(mod_cfg.get("max_scan_chars", self._max_scan_chars))
@@ -194,23 +211,10 @@ class ModerationService:
             categories_enabled=categories_enabled or None,
         )
 
-        # Store paths for overrides (anchor runtime-overrides to project root when relative)
+        # Store paths for overrides
         self._user_overrides_path = user_overrides_path
         self._blocklist_path = blocklist_path
-        def _anchor(p: str) -> str:
-            try:
-                from pathlib import Path as _Path
-                pp = _Path(str(p))
-                if pp.is_absolute():
-                    return str(pp)
-                from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
-                return str((_Path(_gpr()) / pp).resolve())
-            except Exception:
-                return str(p)
-        if runtime_overrides_path:
-            self._runtime_overrides_path = _anchor(runtime_overrides_path)
-        else:
-            self._runtime_overrides_path = _anchor("tldw_Server_API/Config_Files/moderation_runtime_overrides.json")
+        self._runtime_overrides_path = runtime_overrides_path
 
         # Optionally augment with built-in PII rules
         if pii_enabled:
@@ -495,9 +499,19 @@ class ModerationService:
             redact_replacement=str(u.get("redact_replacement", p.redact_replacement)),
             per_user_overrides=p.per_user_overrides,
             block_patterns=p.block_patterns,  # same global patterns for now
-            categories_enabled=self._parse_categories_override(u.get("categories_enabled")) or p.categories_enabled,
+            categories_enabled=self._resolve_categories_override(u, p.categories_enabled),
         )
         return policy
+
+    def _resolve_categories_override(
+        self,
+        overrides: Dict[str, str],
+        default_categories: Optional[Set[str]],
+    ) -> Optional[Set[str]]:
+        if "categories_enabled" not in overrides:
+            return default_categories
+        parsed = self._parse_categories_override(overrides.get("categories_enabled"))
+        return parsed if parsed is not None else default_categories
 
     @staticmethod
     def _parse_categories_override(v: Optional[str]) -> Optional[Set[str]]:
@@ -534,7 +548,6 @@ class ModerationService:
             return False, None
         if not policy.block_patterns:
             return False, None
-        scan_text = text[: self._max_scan_chars]
         for rule in policy.block_patterns:
             # Category gating mirrors evaluate_action() behavior
             if isinstance(rule, PatternRule) and policy.categories_enabled:
@@ -542,14 +555,14 @@ class ModerationService:
                 if not (rcats & policy.categories_enabled):
                     continue
             pat = rule.regex if isinstance(rule, PatternRule) else rule
-            m = pat.search(scan_text)
-            if m:
+            match_span = self._find_match_span(pat, text)
+            if match_span:
                 # Build a sanitized snippet with context that does not expose matched content
-                start, end = m.span()
+                start, end = match_span
                 left_start = max(0, start - 16)
-                right_end = min(len(scan_text), end + 16)
-                left = scan_text[left_start:start]
-                right = scan_text[end:right_end]
+                right_end = min(len(text), end + 16)
+                left = text[left_start:start]
+                right = text[end:right_end]
                 mask = None
                 if isinstance(rule, PatternRule) and rule.replacement:
                     mask = rule.replacement
@@ -565,10 +578,7 @@ class ModerationService:
     def redact_text(self, text: str, policy: ModerationPolicy) -> str:
         if not text or not policy.block_patterns:
             return text
-        # Operate on a bounded slice for safety
-        head = text[: self._max_scan_chars]
-        tail = text[self._max_scan_chars:]
-        redacted = head
+        redacted = text
         for rule in policy.block_patterns:
             # Respect category gating similar to evaluate_action/check_text
             if isinstance(rule, PatternRule) and policy.categories_enabled:
@@ -584,7 +594,7 @@ class ModerationService:
             except re.error:
                 # in case of unexpected regex issue, skip
                 continue
-        return redacted + tail
+        return redacted
 
     # --------------- Decision helpers ---------------
     def evaluate_action(self, text: str, policy: ModerationPolicy, phase: str) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
@@ -601,7 +611,12 @@ class ModerationService:
         enabled_phase = policy.input_enabled if phase == 'input' else policy.output_enabled
         if not enabled_phase:
             return 'pass', None, None, None
-        scan_text = text[: self._max_scan_chars]
+        default_action = policy.input_action if phase == 'input' else policy.output_action
+        best_action = "pass"
+        best_rank = 0
+        best_pattern = None
+        best_category = None
+        best_match_pos = None
         for rule in policy.block_patterns or []:
             pat = rule.regex if isinstance(rule, PatternRule) else rule
             # Category gating
@@ -609,47 +624,70 @@ class ModerationService:
                 rcats = rule.categories or set()
                 if not (rcats & policy.categories_enabled):
                     continue
-            m = pat.search(scan_text)
-            if not m:
+            match_span = self._find_match_span(pat, text)
+            if not match_span:
                 continue
             # Prefer rule action if specified, else global
-            default_action = policy.input_action if phase == 'input' else policy.output_action
             action = None
             if isinstance(rule, PatternRule) and rule.action:
                 action = rule.action
             else:
                 action = default_action
             action = (action or 'warn').lower()
-            if action == 'redact':
-                # Apply per-rule replacement if present
-                head = text[: self._max_scan_chars]
-                tail = text[self._max_scan_chars:]
-                repl = rule.replacement if isinstance(rule, PatternRule) and rule.replacement else policy.redact_replacement
-                try:
-                    red = pat.sub(repl, head, count=self._max_replacements_per_pattern)
-                except re.error:
-                    red = head
-                cat = None
-                if isinstance(rule, PatternRule) and rule.categories:
-                    # Prefer specific subtype over generic 'pii' if present
-                    sub = sorted([c for c in rule.categories if c != "pii"]) or ["pii"]
-                    cat = sub[0]
-                return 'redact', red + tail, pat.pattern, cat
-            if action == 'block':
-                cat = None
+            if action not in {"block", "redact", "warn"}:
+                action = "warn"
+            rank = {"warn": 1, "redact": 2, "block": 3}.get(action, 1)
+            match_pos = match_span[0]
+            if rank > best_rank or (rank == best_rank and (best_match_pos is None or match_pos < best_match_pos)):
+                best_action = action
+                best_rank = rank
+                best_match_pos = match_pos
+                best_pattern = pat.pattern
                 if isinstance(rule, PatternRule) and rule.categories:
                     sub = sorted([c for c in rule.categories if c != "pii"]) or ["pii"]
-                    cat = sub[0]
-                return 'block', None, pat.pattern, cat
-            if action == 'warn':
-                cat = None
-                if isinstance(rule, PatternRule) and rule.categories:
-                    sub = sorted([c for c in rule.categories if c != "pii"]) or ["pii"]
-                    cat = sub[0]
-                return 'warn', None, pat.pattern, cat
-            # Unknown -> treat as warn
-            return 'warn', None, pat.pattern, None
-        return 'pass', None, None, None
+                    best_category = sub[0]
+                else:
+                    best_category = None
+        if best_action == "pass":
+            return "pass", None, None, None
+        if best_action == "redact":
+            red = self.redact_text(text, policy)
+            return "redact", red, best_pattern, best_category
+        if best_action == "block":
+            return "block", None, best_pattern, best_category
+        if best_action == "warn":
+            return "warn", None, best_pattern, best_category
+        return "pass", None, None, None
+
+    def _iter_scan_chunks(self, text: str) -> Iterator[Tuple[int, int]]:
+        if not text:
+            return
+        chunk_size = max(1, int(self._max_scan_chars))
+        if len(text) <= chunk_size:
+            yield 0, len(text)
+            return
+        overlap = min(1024, max(32, chunk_size // 10))
+        if overlap >= chunk_size:
+            overlap = max(0, chunk_size - 1)
+        step = chunk_size - overlap if chunk_size > overlap else chunk_size
+        start = 0
+        text_len = len(text)
+        while start < text_len:
+            end = min(text_len, start + chunk_size)
+            yield start, end
+            if end == text_len:
+                break
+            start += step
+
+    def _find_match_span(self, pat: re.Pattern, text: str) -> Optional[Tuple[int, int]]:
+        for start, end in self._iter_scan_chunks(text):
+            try:
+                m = pat.search(text, start, end)
+            except re.error:
+                return None
+            if m:
+                return m.start(), m.end()
+        return None
 
     # --------------- Persistence helpers ---------------
     def list_user_overrides(self) -> Dict[str, Dict[str, str]]:
@@ -733,7 +771,10 @@ class ModerationService:
                 if dirpath:
                     os.makedirs(dirpath, exist_ok=True)
                 # Normalize line endings; ensure trailing newline for POSIX friendliness
-                text = "\n".join(lines).rstrip("\n") + "\n"
+                if lines:
+                    text = "\n".join(lines).rstrip("\n") + "\n"
+                else:
+                    text = ""
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(text)
                 # Reload patterns

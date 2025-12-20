@@ -18,7 +18,9 @@ https://github.com/presstab/jrdev
 https://github.com/rmusser01/slice
 https://github.com/coderabbitai/git-worktree-runner
 https://github.com/mrgoonie/claudekit-skills/tree/main
-
+https://github.com/TheAuditorTool/Auditor
+https://astral.sh/blog/ty
+https://corridor.dev/blog/introducing-acsm/
 
 
 ### Link Dump:

@@ -14,6 +14,7 @@ from loguru import logger
 # Constants:
 
 # Load configuration values
+import os
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
 _config = load_comprehensive_config()
@@ -23,10 +24,41 @@ if _config and _config.has_section('Chat-Module'):
     _chat_config = dict(_config.items('Chat-Module'))
 
 # Timeout for idle connections (seconds)
-STREAMING_IDLE_TIMEOUT = int(_chat_config.get('streaming_idle_timeout_seconds', 300))  # Default 5 minutes
+STREAMING_IDLE_TIMEOUT = int(
+    os.getenv('STREAMING_IDLE_TIMEOUT_SECONDS') or
+    _chat_config.get('streaming_idle_timeout_seconds', 300)
+)  # Default 5 minutes
 
 # Heartbeat interval for long-running streams (seconds)
-HEARTBEAT_INTERVAL = int(_chat_config.get('streaming_heartbeat_interval_seconds', 30))
+HEARTBEAT_INTERVAL = int(
+    os.getenv('STREAMING_HEARTBEAT_INTERVAL_SECONDS') or
+    _chat_config.get('streaming_heartbeat_interval_seconds', 30)
+)
+
+# Maximum response size in bytes (default 10MB) - configurable via env or config
+MAX_RESPONSE_SIZE_BYTES = int(
+    os.getenv('STREAMING_MAX_RESPONSE_SIZE_BYTES') or
+    _chat_config.get('streaming_max_response_size_bytes', 10 * 1024 * 1024)
+)
+
+# Tool call accumulator max index to prevent memory exhaustion - configurable
+MAX_TOOL_CALL_INDEX = int(
+    os.getenv('STREAMING_MAX_TOOL_CALL_INDEX') or
+    _chat_config.get('streaming_max_tool_call_index', 1000)
+)
+
+# Maximum length for accumulated tool call arguments (in characters)
+# This prevents OOM attacks from malicious streams with unbounded arguments
+MAX_TOOL_ARGUMENT_LENGTH = int(
+    os.getenv('STREAMING_MAX_TOOL_ARGUMENT_LENGTH') or
+    _chat_config.get('streaming_max_tool_argument_length', 50_000)
+)
+
+# Maximum number of items in the full_response list to prevent unbounded growth
+MAX_RESPONSE_LIST_LENGTH = int(
+    os.getenv('STREAMING_MAX_RESPONSE_LIST_LENGTH') or
+    _chat_config.get('streaming_max_response_list_length', 100_000)
+)
 
 #######################################################################################################################
 #
@@ -114,6 +146,9 @@ def _extract_text_from_upstream_sse(chunk_str: str) -> Tuple[Optional[str], Opti
 class StreamingResponseHandler:
     """
     Handles streaming responses with proper error handling, cleanup, and timeouts.
+
+    This class is designed to be thread-safe for concurrent state access through
+    the use of an asyncio.Lock for state modifications.
     """
 
     def __init__(
@@ -122,7 +157,7 @@ class StreamingResponseHandler:
         model_name: str,
         idle_timeout: int = STREAMING_IDLE_TIMEOUT,
         heartbeat_interval: int = HEARTBEAT_INTERVAL,
-        max_response_size: int = 10 * 1024 * 1024,  # 10MB default
+        max_response_size: int = MAX_RESPONSE_SIZE_BYTES,
         text_transform: Optional[callable] = None,
     ):
         """
@@ -142,7 +177,7 @@ class StreamingResponseHandler:
         self.max_response_size = max_response_size
         self.last_activity = time.time()
         self.is_cancelled = False
-        self.full_response = []
+        self.full_response: List[str] = []
         self.response_size = 0
         self.error_occurred = False
         # Optional transform to apply to textual deltas before emission (e.g., moderation redaction)
@@ -153,6 +188,8 @@ class StreamingResponseHandler:
         self.tool_call_accumulator: Dict[int, Dict[str, Any]] = {}
         self.tool_call_order: List[int] = []
         self.function_call_accumulator: Optional[Dict[str, Any]] = None
+        # Lock for thread-safe state modifications
+        self._state_lock = asyncio.Lock()
 
     def update_activity(self):
         """Update the last activity timestamp."""
@@ -168,7 +205,11 @@ class StreamingResponseHandler:
         logger.info(f"Stream cancelled for conversation {self.conversation_id}")
 
     def _accumulate_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> None:
-        """Merge incremental tool call deltas into a final structure."""
+        """Merge incremental tool call deltas into a final structure.
+
+        This method includes bounds checking to prevent memory exhaustion from
+        malformed tool call indices.
+        """
         if not isinstance(tool_calls, list):
             return
         for idx, entry in enumerate(tool_calls):
@@ -181,6 +222,14 @@ class StreamingResponseHandler:
                 call_index = int(call_index)
             except Exception:
                 call_index = idx
+
+            # Bounds check to prevent memory exhaustion
+            if call_index < 0 or call_index > MAX_TOOL_CALL_INDEX:
+                logger.warning(
+                    f"Tool call index {call_index} out of bounds (0-{MAX_TOOL_CALL_INDEX}), skipping"
+                )
+                continue
+
             if call_index not in self.tool_call_accumulator:
                 self.tool_call_accumulator[call_index] = {
                     "id": None,
@@ -197,7 +246,20 @@ class StreamingResponseHandler:
             if function_delta.get("name"):
                 accumulator["function"]["name"] = function_delta["name"]
             if function_delta.get("arguments"):
-                accumulator["function"]["arguments"] += function_delta["arguments"]
+                new_args = function_delta["arguments"]
+                current_len = len(accumulator["function"]["arguments"])
+                # Enforce bounds on accumulated argument length to prevent OOM
+                if current_len + len(new_args) > MAX_TOOL_ARGUMENT_LENGTH:
+                    logger.warning(
+                        f"Tool call arguments exceeded max length ({MAX_TOOL_ARGUMENT_LENGTH}), truncating"
+                    )
+                    # Truncate to fit within bounds
+                    remaining = MAX_TOOL_ARGUMENT_LENGTH - current_len
+                    if remaining > 0:
+                        accumulator["function"]["arguments"] += new_args[:remaining]
+                    # Skip further argument accumulation for this tool call
+                else:
+                    accumulator["function"]["arguments"] += new_args
 
     def _accumulate_function_call(self, function_delta: Dict[str, Any]) -> None:
         """Merge incremental function call deltas into a final structure."""
@@ -208,7 +270,18 @@ class StreamingResponseHandler:
         if function_delta.get("name"):
             self.function_call_accumulator["name"] = function_delta["name"]
         if function_delta.get("arguments"):
-            self.function_call_accumulator["arguments"] += function_delta["arguments"]
+            new_args = function_delta["arguments"]
+            current_len = len(self.function_call_accumulator["arguments"])
+            # Enforce bounds on accumulated argument length to prevent OOM
+            if current_len + len(new_args) > MAX_TOOL_ARGUMENT_LENGTH:
+                logger.warning(
+                    f"Function call arguments exceeded max length ({MAX_TOOL_ARGUMENT_LENGTH}), truncating"
+                )
+                remaining = MAX_TOOL_ARGUMENT_LENGTH - current_len
+                if remaining > 0:
+                    self.function_call_accumulator["arguments"] += new_args[:remaining]
+            else:
+                self.function_call_accumulator["arguments"] += new_args
 
     def get_accumulated_tool_calls(self) -> Optional[List[Dict[str, Any]]]:
         """Return the finalized list of tool calls, if any were streamed."""
@@ -270,7 +343,8 @@ class StreamingResponseHandler:
     async def safe_stream_generator(
         self,
         stream: Union[Iterator, AsyncIterator],
-        save_callback: Optional[callable] = None
+        save_callback: Optional[callable] = None,
+        finalize_callback: Optional[callable] = None,
     ) -> AsyncIterator[str]:
         """
         Safely generate streaming responses with error handling and cleanup.
@@ -278,6 +352,7 @@ class StreamingResponseHandler:
         Args:
             stream: The stream to process (sync or async iterator)
             save_callback: Optional callback to save the full response
+            finalize_callback: Optional callback invoked on error/cancel to finalize state
 
         Yields:
             SSE formatted messages
@@ -295,6 +370,12 @@ class StreamingResponseHandler:
                     return True
                 chunk_size = len(text_piece.encode("utf-8"))
                 if self.response_size + chunk_size > self.max_response_size:
+                    return False
+                # Also check list length to prevent unbounded item count
+                if len(self.full_response) >= MAX_RESPONSE_LIST_LENGTH:
+                    logger.warning(
+                        f"Response list length exceeded max ({MAX_RESPONSE_LIST_LENGTH}) for {self.conversation_id}"
+                    )
                     return False
                 self.full_response.append(text_piece)
                 self.response_size += chunk_size
@@ -513,12 +594,25 @@ class StreamingResponseHandler:
                     elif hasattr(stream, "close") and callable(getattr(stream, "close")):
                         # Sync generator
                         stream.close()  # type: ignore[attr-defined]
-                except Exception:
-                    # Best effort; ignore cleanup errors
-                    pass
+                except Exception as cleanup_err:
+                    # Log cleanup errors for debugging, but don't propagate
+                    logger.debug(
+                        f"Stream cleanup warning for {self.conversation_id}: {cleanup_err}"
+                    )
 
                 # If cancelled (e.g., client disconnect or generator close), do not yield or await further
                 if self.is_cancelled:
+                    if finalize_callback and (self.is_cancelled or self.error_occurred):
+                        try:
+                            maybe_result = finalize_callback(
+                                success=False,
+                                cancelled=True,
+                                error=self.error_occurred,
+                            )
+                            if hasattr(maybe_result, "__await__"):
+                                await maybe_result
+                        except Exception as finalize_err:
+                            logger.debug(f"Finalize callback error after cancel: {finalize_err}")
                     return
 
                 if not self.is_cancelled:
@@ -572,6 +666,18 @@ class StreamingResponseHandler:
                     except Exception as e:
                         logger.error(f"Failed to save streaming response for {self.conversation_id}: {e}")
 
+                if finalize_callback and self.error_occurred:
+                    try:
+                        maybe_result = finalize_callback(
+                            success=False,
+                            cancelled=False,
+                            error=True,
+                        )
+                        if hasattr(maybe_result, "__await__"):
+                            await maybe_result
+                    except Exception as finalize_err:
+                        logger.debug(f"Finalize callback error after stream error: {finalize_err}")
+
                 # Send stream end event (only when not cancelled)
                 if not self.is_cancelled:
                     yield f"event: stream_end\ndata: {json.dumps({'conversation_id': self.conversation_id, 'success': not self.error_occurred, 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
@@ -589,6 +695,7 @@ async def create_streaming_response_with_timeout(
     conversation_id: str,
     model_name: str,
     save_callback: Optional[callable] = None,
+    finalize_callback: Optional[callable] = None,
     idle_timeout: int = STREAMING_IDLE_TIMEOUT,
     heartbeat_interval: int = HEARTBEAT_INTERVAL,
     text_transform: Optional[callable] = None,
@@ -601,6 +708,7 @@ async def create_streaming_response_with_timeout(
         conversation_id: ID of the conversation
         model_name: Name of the model
         save_callback: Optional callback to save the response
+        finalize_callback: Optional callback invoked on error/cancel to finalize state
         idle_timeout: Timeout for idle connections
         heartbeat_interval: Interval for heartbeat messages
 
@@ -617,7 +725,7 @@ async def create_streaming_response_with_timeout(
 
     # Create tasks for streaming and optional heartbeat using persistent generator instances
     async def stream_with_heartbeat():
-        stream_gen = handler.safe_stream_generator(stream, save_callback)
+        stream_gen = handler.safe_stream_generator(stream, save_callback, finalize_callback)
         heartbeats_enabled = isinstance(heartbeat_interval, (int, float)) and heartbeat_interval > 0
         heartbeat_gen = handler.heartbeat_generator() if heartbeats_enabled else None
 
@@ -670,15 +778,15 @@ async def create_streaming_response_with_timeout(
                     if gather_targets:
                         try:
                             await asyncio.gather(*gather_targets, return_exceptions=True)
-                        except Exception:
-                            pass
+                        except Exception as gather_err:
+                            logger.debug(f"Task gather cleanup: {gather_err}")
                     # As a safety net, emit a final [DONE] only if it hasn't been sent yet
                     try:
                         if not handler.done_sent and not handler.is_cancelled:
                             yield "data: [DONE]\n\n"
                             handler.done_sent = True
-                    except Exception:
-                        pass
+                    except Exception as done_err:
+                        logger.debug(f"Final DONE emission error: {done_err}")
                     break
         finally:
             # Ensure any pending tasks are cancelled and awaited exactly once
@@ -689,18 +797,18 @@ async def create_streaming_response_with_timeout(
             if remaining_tasks:
                 try:
                     await asyncio.gather(*remaining_tasks, return_exceptions=True)
-                except Exception:
-                    pass
+                except Exception as final_gather_err:
+                    logger.debug(f"Final task cleanup: {final_gather_err}")
             # Ensure generators are properly closed; avoid yielding here
             try:
                 await stream_gen.aclose()
-            except Exception:
-                pass
+            except Exception as stream_close_err:
+                logger.debug(f"Stream generator close: {stream_close_err}")
             if heartbeat_gen is not None:
                 try:
                     await heartbeat_gen.aclose()
-                except Exception:
-                    pass
+                except Exception as heartbeat_close_err:
+                    logger.debug(f"Heartbeat generator close: {heartbeat_close_err}")
 
     async for message in stream_with_heartbeat():
         yield message

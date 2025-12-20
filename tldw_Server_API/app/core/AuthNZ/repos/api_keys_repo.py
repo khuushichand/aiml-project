@@ -682,6 +682,144 @@ class AuthnzApiKeysRepo:
             logger.error(f"AuthnzApiKeysRepo.mark_rotated failed: {exc}")
             raise
 
+    async def rotate_key_atomic(
+        self,
+        *,
+        user_id: int,
+        old_key_id: int,
+        new_key_hash: str,
+        new_key_prefix: str,
+        new_name: Optional[str],
+        new_description: Optional[str],
+        new_scope: str,
+        new_expires_at: Optional[datetime],
+        new_rate_limit: Optional[int],
+        new_allowed_ips: Optional[List[str]],
+        new_metadata: Optional[Dict[str, Any]],
+        rotated_status: str,
+        reason: str,
+        revoked_at: datetime,
+    ) -> int:
+        """
+        Atomically create a new API key and mark the old one as rotated.
+
+        This ensures that either both operations succeed or both fail,
+        preventing the security issue where a new key is created but the
+        old key remains active.
+
+        Returns:
+            The ID of the newly created key.
+
+        Raises:
+            Exception: If any part of the rotation fails (entire transaction rolls back).
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if hasattr(conn, "fetchval"):
+                    # PostgreSQL path
+                    expires_at_param = new_expires_at
+                    if (
+                        isinstance(expires_at_param, datetime)
+                        and expires_at_param.tzinfo is not None
+                    ):
+                        expires_at_param = expires_at_param.astimezone(timezone.utc).replace(tzinfo=None)
+
+                    # Create new key
+                    new_key_id = await conn.fetchval(
+                        """
+                        INSERT INTO api_keys (
+                            user_id, key_hash, key_prefix, name, description,
+                            scope, expires_at, rate_limit, allowed_ips, metadata
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        RETURNING id
+                        """,
+                        user_id,
+                        new_key_hash,
+                        new_key_prefix,
+                        new_name,
+                        new_description,
+                        new_scope,
+                        expires_at_param,
+                        new_rate_limit,
+                        json.dumps(new_allowed_ips) if new_allowed_ips else None,
+                        json.dumps(new_metadata) if new_metadata else None,
+                    )
+
+                    # Mark old key as rotated
+                    norm_revoked_at = revoked_at
+                    if isinstance(norm_revoked_at, datetime) and norm_revoked_at.tzinfo is not None:
+                        norm_revoked_at = norm_revoked_at.astimezone(timezone.utc).replace(tzinfo=None)
+
+                    await conn.execute(
+                        """
+                        UPDATE api_keys
+                        SET status = $1, rotated_to = $2, revoked_at = $3,
+                            revoke_reason = $4
+                        WHERE id = $5
+                        """,
+                        rotated_status,
+                        new_key_id,
+                        norm_revoked_at,
+                        reason,
+                        old_key_id,
+                    )
+                    await conn.execute(
+                        "UPDATE api_keys SET rotated_from = $1 WHERE id = $2",
+                        old_key_id,
+                        new_key_id,
+                    )
+                else:
+                    # SQLite path
+                    cursor = await conn.execute(
+                        """
+                        INSERT INTO api_keys (
+                            user_id, key_hash, key_prefix, name, description,
+                            scope, expires_at, rate_limit, allowed_ips, metadata
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            user_id,
+                            new_key_hash,
+                            new_key_prefix,
+                            new_name,
+                            new_description,
+                            new_scope,
+                            new_expires_at.isoformat() if new_expires_at else None,
+                            new_rate_limit,
+                            json.dumps(new_allowed_ips) if new_allowed_ips else None,
+                            json.dumps(new_metadata) if new_metadata else None,
+                        ),
+                    )
+                    new_key_id = getattr(cursor, "lastrowid", None)
+
+                    # Mark old key as rotated
+                    await conn.execute(
+                        """
+                        UPDATE api_keys
+                        SET status = ?, rotated_to = ?, revoked_at = ?,
+                            revoke_reason = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            rotated_status,
+                            new_key_id,
+                            revoked_at.isoformat(),
+                            reason,
+                            old_key_id,
+                        ),
+                    )
+                    await conn.execute(
+                        "UPDATE api_keys SET rotated_from = ? WHERE id = ?",
+                        (old_key_id, new_key_id),
+                    )
+
+                return int(new_key_id)
+        except Exception as exc:
+            logger.error(f"AuthnzApiKeysRepo.rotate_key_atomic failed: {exc}")
+            raise
+
     async def revoke_api_key_for_user(
         self,
         *,

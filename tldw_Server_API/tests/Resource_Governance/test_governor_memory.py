@@ -87,6 +87,25 @@ async def test_concurrency_streams_limit_and_renew_release():
 
 
 @pytest.mark.asyncio
+async def test_concurrency_streams_units_enforced():
+    ft = FakeTime(0.0)
+    policies = {"p": {"streams": {"max_concurrent": 2, "ttl_sec": 30}, "scopes": ["user"]}}
+    rg = MemoryResourceGovernor(policies=policies, time_source=ft)
+    req_two = RGRequest(entity="user:9", categories={"streams": {"units": 2}}, tags={"policy_id": "p"})
+    req_one = RGRequest(entity="user:9", categories={"streams": {"units": 1}}, tags={"policy_id": "p"})
+
+    d1, h1 = await rg.reserve(req_two, op_id="u1")
+    assert d1.allowed and h1
+
+    d2, h2 = await rg.reserve(req_one, op_id="u2")
+    assert not d2.allowed and h2 is None
+
+    await rg.release(h1)
+    d3, h3 = await rg.reserve(req_one, op_id="u3")
+    assert d3.allowed and h3
+
+
+@pytest.mark.asyncio
 async def test_commit_refund_difference_returns_tokens():
     ft = FakeTime(0.0)
     # tokens per minute 1000; reserve 800 and commit 200 → refund 600

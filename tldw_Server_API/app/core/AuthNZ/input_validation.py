@@ -12,6 +12,7 @@ from loguru import logger
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.exceptions import RegistrationError
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 #######################################################################################################################
 #
@@ -45,16 +46,17 @@ class InputValidator:
         }
 
         # Dangerous patterns to prevent injection attacks
+        # Uses case-insensitive matching (?i) and word boundaries where appropriate
         self.dangerous_patterns = [
-            r'<script',  # XSS attempt
-            r'javascript:',  # XSS attempt
-            r'data:text/html',  # Data URI XSS
-            r'vbscript:',  # VBScript injection
-            r'on\w+=',  # Event handler injection
-            r'\.\./',  # Path traversal
-            r'%00',  # Null byte injection
-            r'\\x00',  # Null byte (hex)
-            r'[<>]',  # HTML tags
+            r'(?i)<script\b',  # XSS attempt (case insensitive, word boundary prevents false positives)
+            r'(?i)\bjavascript\s*:',  # XSS attempt (word boundary, optional whitespace)
+            r'(?i)\bdata\s*:\s*text/html',  # Data URI XSS (case insensitive)
+            r'(?i)\bvbscript\s*:',  # VBScript injection (case insensitive, word boundary)
+            r'(?i)\bon\w+\s*=',  # Event handler injection (word boundary prevents matching "onion")
+            r'\.\./|\.\.\\',  # Path traversal (both / and \ separators)
+            r'%00',  # Null byte injection (URL encoded)
+            r'\\x00|\\u0000',  # Null byte (hex and unicode escape)
+            r'[<>]',  # HTML tags (keep as-is, still useful for basic tag detection)
         ]
 
         logger.debug("InputValidator initialized with security rules")
@@ -94,15 +96,24 @@ class InputValidator:
         if username.lower() in self.blocked_usernames:
             return False, "This username is reserved and cannot be used"
 
-        # Check for dangerous patterns
+        # Check for dangerous patterns (patterns include (?i) inline flag for case-insensitivity)
         for pattern in self.dangerous_patterns:
-            if re.search(pattern, username, re.IGNORECASE):
-                logger.warning(f"Dangerous pattern detected in username: {pattern}")
+            if re.search(pattern, username):
+                settings = get_settings()
+                if settings.PII_REDACT_LOGS:
+                    logger.warning("Dangerous pattern detected in username (details redacted)")
+                else:
+                    logger.warning(f"Dangerous pattern detected in username: {pattern}")
                 return False, "Username contains invalid characters or patterns"
 
         # Check for consecutive special characters
         if re.search(r'[._-]{2,}', username):
             return False, "Username cannot contain consecutive special characters"
+
+        # Check for visually confusing character combinations that could enable impersonation
+        if self._has_confusing_characters(username):
+            logger.debug("Username contains confusing character combinations")
+            return False, "Username contains visually confusing character combinations that could be used for impersonation"
 
         return True, None
 
@@ -135,16 +146,24 @@ class InputValidator:
             # Additional security checks
             local_part = normalized_email.split('@')[0]
 
-            # Check for dangerous patterns in local part
+            # Check for dangerous patterns in local part (patterns include (?i) inline flag)
             for pattern in self.dangerous_patterns:
-                if re.search(pattern, local_part, re.IGNORECASE):
-                    logger.warning(f"Dangerous pattern detected in email: {pattern}")
+                if re.search(pattern, local_part):
+                    settings = get_settings()
+                    if settings.PII_REDACT_LOGS:
+                        logger.warning("Dangerous pattern detected in email (details redacted)")
+                    else:
+                        logger.warning(f"Dangerous pattern detected in email: {pattern}")
                     return False, "Email contains invalid characters or patterns"
 
             # Check for subdomain abuse (e.g., admin@fake.example.com)
             domain = normalized_email.split('@')[1]
             if domain.count('.') > 3:  # Unusual number of subdomains
-                logger.warning(f"Suspicious domain in email: {domain}")
+                settings = get_settings()
+                if settings.PII_REDACT_LOGS:
+                    logger.warning("Suspicious domain in email (details redacted)")
+                else:
+                    logger.warning(f"Suspicious domain in email: {domain}")
                 return False, "Email domain appears invalid"
 
             return True, None
@@ -152,7 +171,11 @@ class InputValidator:
         except EmailNotValidError as e:
             return False, str(e)
         except Exception as e:
-            logger.error(f"Email validation error: {e}")
+            settings = get_settings()
+            if settings.PII_REDACT_LOGS:
+                logger.error("Email validation error (details redacted)")
+            else:
+                logger.error(f"Email validation error: {e}")
             return False, "Email validation failed"
 
     def sanitize_input(self, text: str, max_length: int = 1000) -> str:
@@ -213,29 +236,34 @@ class InputValidator:
 
     def _has_confusing_characters(self, username: str) -> bool:
         """
-        Check for visually confusing character combinations
+        Check for visually confusing character combinations that are truly ambiguous.
+
+        Only flags character pairs that are nearly indistinguishable in common fonts,
+        such as uppercase I vs lowercase l, or uppercase O vs digit 0.
+
+        Common patterns like "alice1" (with both 'l' and '1') are allowed since they
+        are visually distinct in most contexts and very common in usernames.
 
         Args:
             username: Username to check
 
         Returns:
-            True if confusing characters detected
+            True if truly confusing character pairs detected
         """
-        # Confusing pairs that could be used for impersonation
-        confusing_sets = [
-            {'l', '1', 'I', '|'},  # Lowercase L, one, uppercase i, pipe
-            {'O', '0', 'o'},  # Letters O and zero
-            {'S', '5', '$'},  # S, five, dollar
-            {'Z', '2'},  # Z and two
-            {'B', '8'},  # B and eight
-            {'G', '6'},  # G and six
+        # Only flag truly ambiguous pairs that look nearly identical in most fonts
+        # Each tuple contains characters that look almost identical to each other
+        high_risk_pairs = [
+            ('l', 'I'),  # lowercase L and uppercase I - nearly identical
+            ('I', '|'),  # uppercase I and pipe - nearly identical
+            ('l', '|'),  # lowercase L and pipe - nearly identical
+            ('O', '0'),  # uppercase O and digit zero - very similar
         ]
 
         username_chars = set(username)
 
-        for confusing_set in confusing_sets:
-            # If username contains multiple characters from a confusing set
-            if len(username_chars.intersection(confusing_set)) > 1:
+        # Check for high-risk pairs - if both characters from a pair are present
+        for char1, char2 in high_risk_pairs:
+            if char1 in username_chars and char2 in username_chars:
                 return True
 
         return False

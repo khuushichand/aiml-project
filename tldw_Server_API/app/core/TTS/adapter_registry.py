@@ -220,8 +220,8 @@ class TTSAdapterRegistry:
                         f"Skipping {provider.value} - retry available in {retry_after - time.time():.1f}s"
                     )
                     return None
-                else:
-                    self._failed_providers.pop(provider, None)
+            else:
+                self._failed_providers.pop(provider, None)
 
             if provider not in self._adapters:
                 success = await self._initialize_adapter(provider)
@@ -234,8 +234,71 @@ class TTSAdapterRegistry:
                 self._failed_providers.pop(provider, None)
                 return adapter
             else:
-                logger.warning(f"Adapter for {provider.value} is not available (status: {adapter.status if adapter else 'None'})")
+                logger.warning(
+                    f"Adapter for {provider.value} is not available (status: {adapter.status if adapter else 'None'})"
+                )
                 return None
+
+    async def create_adapter_with_overrides(
+        self,
+        provider: TTSProvider,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> Optional[TTSAdapter]:
+        """Create a non-cached adapter instance with config overrides."""
+        if provider not in self._adapter_specs:
+            error_msg = f"No adapter registered for provider {provider.value}"
+            logger.error(error_msg)
+            raise TTSProviderNotConfiguredError(error_msg, provider=provider.value)
+
+        # Respect explicit enable/disable flags; BYOK can supply credentials.
+        if self.config_manager:
+            try:
+                if not self.config_manager.is_provider_enabled(provider.value):
+                    logger.info(f"Provider {provider.value} is disabled in configuration")
+                    return None
+            except Exception:
+                pass
+        else:
+            enabled_key = f"{provider.value}_enabled"
+            if enabled_key in self.config:
+                enabled = parse_bool(self.config.get(enabled_key), default=True)
+                if not enabled:
+                    logger.info(f"Provider {provider.value} is disabled in configuration")
+                    return None
+
+        adapter_class = self._resolve_adapter_class(self._adapter_specs[provider])
+
+        provider_cfg: Dict[str, Any] = {}
+        if self.config_manager:
+            base_cfg = self.config_manager.get_provider_config(provider.value)
+            if base_cfg:
+                provider_cfg = (
+                    dict(base_cfg)
+                    if isinstance(base_cfg, dict)
+                    else model_dump_compat(base_cfg)
+                )
+        else:
+            providers = self.config.get("providers") if isinstance(self.config, dict) else None
+            if isinstance(providers, dict):
+                base_cfg = providers.get(provider.value)
+                if isinstance(base_cfg, dict):
+                    provider_cfg = dict(base_cfg)
+                elif base_cfg is not None:
+                    provider_cfg = model_dump_compat(base_cfg)
+
+        if overrides:
+            provider_cfg.update(overrides)
+
+        adapter = adapter_class(config=provider_cfg)
+        try:
+            success = await adapter.ensure_initialized()
+        except Exception as exc:
+            logger.error(f"Error initializing {provider.value} adapter with overrides: {exc}")
+            return None
+        if not success:
+            logger.error(f"Failed to initialize {provider.value} adapter with overrides")
+            return None
+        return adapter
 
     async def _initialize_adapter(self, provider: TTSProvider) -> bool:
         """

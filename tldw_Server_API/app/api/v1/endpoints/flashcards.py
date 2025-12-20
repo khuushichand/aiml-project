@@ -233,25 +233,59 @@ def get_flashcard(card_uuid: str, db: CharactersRAGDB = Depends(get_chacha_db_fo
 @router.patch("/{card_uuid}")
 def update_flashcard(card_uuid: str, payload: FlashcardUpdate, db: CharactersRAGDB = Depends(get_chacha_db_for_user)):
     try:
-        data = payload.model_dump()
+        data = payload.model_dump(exclude_unset=True)
         expected_version = data.pop("expected_version", None)
         tags = data.pop("tags", None)
         # Validate cloze if model_type/is_cloze implies cloze
         current = db.get_flashcard(card_uuid)
         if not current:
             raise HTTPException(status_code=404, detail="Flashcard not found")
-        incoming_model = data.get("model_type")
-        incoming_is_cloze = data.get("is_cloze")
-        # derive effective model type
-        effective_is_cloze = False
-        if incoming_model is not None:
-            effective_is_cloze = (str(incoming_model).lower() == "cloze")
-        elif incoming_is_cloze is not None:
-            effective_is_cloze = bool(incoming_is_cloze)
-        else:
-            effective_is_cloze = (current.get("model_type") == "cloze") or bool(current.get("is_cloze"))
-        if effective_is_cloze:
-            front_text = data.get("front") if data.get("front") is not None else (current.get("front") or "")
+        # Validate deck_id if provided (including deleted decks)
+        if "deck_id" in data:
+            deck_id = data.get("deck_id")
+            if deck_id is not None:
+                deck = db.get_deck(int(deck_id))
+                if not deck or bool(deck.get("deleted")):
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "Deck not found",
+                            "invalid_deck_ids": [int(deck_id)],
+                            "message": "Fix or remove invalid deck_id and retry",
+                        },
+                    )
+                data["deck_id"] = int(deck_id)
+        # Normalize model_type / reverse / is_cloze if any were provided
+        if any(k in data for k in ("model_type", "reverse", "is_cloze")):
+            current_model = current.get("model_type") or "basic"
+            incoming_model = data.get("model_type")
+            incoming_reverse = data.get("reverse")
+            incoming_is_cloze = data.get("is_cloze")
+
+            if incoming_model is not None:
+                effective_model = str(incoming_model).lower()
+            elif incoming_is_cloze is True:
+                effective_model = "cloze"
+            elif incoming_is_cloze is False:
+                effective_model = "basic_reverse" if incoming_reverse is True else "basic"
+            else:
+                if incoming_reverse is True:
+                    effective_model = "basic_reverse" if current_model != "cloze" else "cloze"
+                elif incoming_reverse is False:
+                    effective_model = "basic" if current_model == "basic_reverse" else current_model
+                else:
+                    effective_model = current_model
+
+            if effective_model not in ("basic", "basic_reverse", "cloze"):
+                raise HTTPException(status_code=400, detail="Invalid model_type")
+
+            data["model_type"] = effective_model
+            data["is_cloze"] = (effective_model == "cloze")
+            data["reverse"] = (effective_model == "basic_reverse")
+
+        effective_model = data.get("model_type") or current.get("model_type")
+        if effective_model == "cloze":
+            front_text = data.get("front") if "front" in data else (current.get("front") or "")
             if not re.search(r"\{\{c\d+::", front_text):
                 raise HTTPException(
                     status_code=400,
@@ -261,10 +295,7 @@ def update_flashcard(card_uuid: str, payload: FlashcardUpdate, db: CharactersRAG
                         "message": "Front must contain one or more {{cN::...}} patterns",
                     },
                 )
-        # If tags provided, update keyword links and avoid duplicating tags_json update here
-        if tags is not None:
-            db.set_flashcard_tags(card_uuid, tags)
-        ok = db.update_flashcard(card_uuid, data, expected_version)
+        ok = db.update_flashcard(card_uuid, data, expected_version, tags=tags)
         if not ok:
             raise HTTPException(status_code=404, detail="Flashcard not found or not updated")
         card = db.get_flashcard(card_uuid)
@@ -700,18 +731,7 @@ def export_flashcards(
     try:
         items = db.list_flashcards(deck_id=deck_id, tag=tag, q=q, due_status='all', include_deleted=False, limit=100000, offset=0)
         if format == 'apkg':
-            # Normalize rows: when include_reverse is False and both basic + basic_reverse exist,
-            # demote basic_reverse to basic to match integration expectations.
-            has_basic = any((it.get('model_type') == 'basic') for it in items)
-            has_basic_rev = any((it.get('model_type') == 'basic_reverse') for it in items)
-            rows = []
-            for r in items:
-                r2 = dict(r)
-                if not include_reverse and has_basic and has_basic_rev and (r2.get('model_type') == 'basic_reverse'):
-                    r2['model_type'] = 'basic'
-                    r2['reverse'] = False
-                rows.append(r2)
-            apkg = export_apkg_from_rows(rows, include_reverse=include_reverse)
+            apkg = export_apkg_from_rows(items, include_reverse=include_reverse)
             return StreamingResponse(iter([apkg]), media_type="application/apkg",
                                      headers={"Content-Disposition": "attachment; filename=flashcards.apkg"})
         # default csv/tsv

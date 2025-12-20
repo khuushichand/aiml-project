@@ -9,6 +9,7 @@ import tempfile
 import io
 import base64
 import time
+import configparser
 from types import SimpleNamespace
 from functools import lru_cache
 from pathlib import Path as PathLib
@@ -53,6 +54,10 @@ from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
 )
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys, DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
+)
 from tldw_Server_API.app.core.config import AUTH_BEARER_PREFIX
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
@@ -516,7 +521,7 @@ async def get_tts_service() -> TTSServiceV2:
     "/speech",
     summary="Generates audio from text input.",
     dependencies=[
-        Depends(require_token_scope("any", require_if_present=False, endpoint_id="audio.speech", count_as="call"))
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call"))
     ],
 )
 @limiter.limit("10/minute", key_func=_rate_limit_key)  # Rate limit: 10 requests per minute per user/IP
@@ -556,6 +561,7 @@ async def create_speech(
     # current_user is available for audit/logging if needed
 
     # Input validation using the new validation system
+    provider_hint: Optional[str] = None
     try:
         # Create validator instance; strictness can be configured via TTS config
         tts_config = get_tts_config()
@@ -577,6 +583,55 @@ async def create_speech(
     except TTSValidationError as e:
         logger.warning(f"TTS validation error: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    # Resolve BYOK credentials for TTS providers (OpenAI/ElevenLabs)
+    user_id_int: Optional[int] = None
+    try:
+        user_id_int = getattr(current_user, "id_int", None)
+        if user_id_int is None:
+            raw_id = getattr(current_user, "id", None)
+            if raw_id is not None:
+                user_id_int = int(raw_id)
+    except (AttributeError, TypeError, ValueError) as exc:
+        logger.debug(f"Failed to extract user_id from current_user: {exc}")
+        user_id_int = None
+
+    tts_provider_hint = provider_hint
+
+    def _tts_fallback_resolver(name: str) -> Optional[str]:
+        try:
+            cfg = get_tts_config()
+            provider_cfg = getattr(cfg, "providers", {}).get(name)
+            api_key = getattr(provider_cfg, "api_key", None) if provider_cfg else None
+            return api_key or None
+        except (AttributeError, KeyError, TypeError) as exc:
+            logger.debug(f"TTS fallback resolver failed for provider '{name}': {exc}")
+            return None
+
+    byok_tts_resolution = None
+    tts_overrides: Optional[Dict[str, Any]] = None
+    if tts_provider_hint:
+        byok_tts_resolution = await resolve_byok_credentials(
+            tts_provider_hint,
+            user_id=user_id_int,
+            request=request,
+            fallback_resolver=_tts_fallback_resolver,
+        )
+        if byok_tts_resolution.uses_byok:
+            tts_overrides = {"api_key": byok_tts_resolution.api_key}
+            base_url = byok_tts_resolution.credential_fields.get("base_url")
+            if isinstance(base_url, str) and base_url.strip():
+                tts_overrides["base_url"] = base_url.strip()
+        elif not byok_tts_resolution.api_key:
+            if tts_provider_hint in {"openai", "elevenlabs"}:
+                record_byok_missing_credentials(tts_provider_hint, operation="audio_tts")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error_code": "missing_provider_credentials",
+                        "message": f"TTS provider '{tts_provider_hint}' requires an API key.",
+                    },
+                )
     # Correlate via request id (header or generated)
     try:
         request_id = request.headers.get("x-request-id") or request.headers.get("X-Request-Id") or str(uuid4())
@@ -668,8 +723,9 @@ async def create_speech(
     try:
         speech_iter = tts_service.generate_speech(
             request_data,
-            provider=None,
+            provider=tts_provider_hint,
             fallback=True,
+            provider_overrides=tts_overrides,
             voice_to_voice_start=voice_to_voice_start,
             voice_to_voice_route="audio.speech",
         )
@@ -702,6 +758,12 @@ async def create_speech(
             raise
         except Exception as exc:
             _raise_for_tts_error(exc)
+        finally:
+            if byok_tts_resolution is not None:
+                try:
+                    await byok_tts_resolution.touch_last_used()
+                except Exception as exc:
+                    logger.debug(f"Failed to update BYOK last_used timestamp: {exc}")
 
     if request_data.stream:
         first_chunk = await _pull_first_chunk()
@@ -744,6 +806,12 @@ async def create_speech(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Audio generation failed to produce data."
         )
 
+    if byok_tts_resolution is not None:
+        try:
+            await byok_tts_resolution.touch_last_used()
+        except Exception as exc:
+            logger.debug(f"Failed to update BYOK last_used timestamp: {exc}")
+
     return Response(
         content=all_audio_bytes,
         media_type=content_type,
@@ -760,7 +828,7 @@ async def create_speech(
     summary="Transcribes audio into text (OpenAI Compatible)",
     dependencies=[
         Depends(
-            require_token_scope("any", require_if_present=False, endpoint_id="audio.transcriptions", count_as="call")
+            require_token_scope("any", require_if_present=True, endpoint_id="audio.transcriptions", count_as="call")
         )
     ],
 )
@@ -1370,7 +1438,7 @@ async def create_transcription(
     "/translations",
     summary="Translates audio into English (OpenAI Compatible)",
     dependencies=[
-        Depends(require_token_scope("any", require_if_present=False, endpoint_id="audio.translations", count_as="call"))
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.translations", count_as="call"))
     ],
 )
 @limiter.limit("20/minute", key_func=_rate_limit_key)
@@ -1433,7 +1501,7 @@ async def create_translation(
         Depends(
             require_token_scope(
                 "any",
-                require_if_present=False,
+                require_if_present=True,
                 endpoint_id="audio.chat",
                 count_as="call",
             )
@@ -2875,8 +2943,21 @@ async def websocket_audio_chat_stream(
 
         async def _stream_llm(transcript_text: str) -> tuple[str, Optional[str], Optional[Dict[str, Any]]]:
             nonlocal chat_history
-            api_keys = get_api_keys()
-            provider_api_key = api_keys.get(llm_provider)
+            def _fallback_resolver(name: str) -> Optional[str]:
+                try:
+                    return get_api_keys().get(name)
+                except (KeyError, FileNotFoundError, OSError, ValueError, configparser.Error) as exc:
+                    logger.debug(f"LLM fallback resolver failed for provider '{name}': {exc}")
+                    return None
+
+            user_id_int = int(user_id_for_usage) if user_id_for_usage else None
+            byok_resolution = await resolve_byok_credentials(
+                llm_provider,
+                user_id=user_id_int,
+                request=websocket,
+                fallback_resolver=_fallback_resolver,
+            )
+            provider_api_key = byok_resolution.api_key
             messages_payload = list(chat_history)
             messages_payload.append({"role": "user", "content": transcript_text})
             try:
@@ -2891,6 +2972,7 @@ async def websocket_audio_chat_stream(
                     system_message=llm_system_prompt,
                     user_identifier=str(user_id_for_usage),
                     extra_body=llm_extra_params,
+                    app_config=byok_resolution.app_config,
                 )
             except Exception as exc:
                 if _outer_stream:
@@ -2972,6 +3054,10 @@ async def websocket_audio_chat_stream(
                 chat_history.append({"role": "assistant", "content": assistant_text})
             if len(chat_history) > CHAT_HISTORY_MAX_MESSAGES:
                 chat_history = chat_history[-CHAT_HISTORY_MAX_MESSAGES:]
+            try:
+                await byok_resolution.touch_last_used()
+            except Exception as exc:
+                logger.debug(f"Failed to update BYOK last_used timestamp for LLM: {exc}")
             return assistant_text, finish_reason, usage_payload
 
         async def _stream_tts(text: str, voice_to_voice_start: float) -> None:

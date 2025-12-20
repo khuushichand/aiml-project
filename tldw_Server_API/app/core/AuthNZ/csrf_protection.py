@@ -75,7 +75,11 @@ class CSRFTokenManager:
         except Exception:
             uid = None
         suffix = self._bind_suffix(uid)
-        return f"{base}.{suffix}" if suffix else base
+        if suffix:
+            return f"{base}.{suffix}"
+        if get_settings().CSRF_BIND_TO_USER:
+            return f"{base}.unbound"
+        return base
 
     def hash_token(self, token: str) -> str:
         """Create a hash of the token for comparison"""
@@ -100,9 +104,11 @@ class CSRFTokenManager:
             return False
         # If token includes binding suffix, validate it
         parts = cookie_token.split('.')
-        if len(parts) == 2 and get_settings().CSRF_BIND_TO_USER:
+        if get_settings().CSRF_BIND_TO_USER:
+            if len(parts) != 2:
+                return False
             suffix = parts[1]
-            if not suffix or user_id is None:
+            if not suffix or suffix == "unbound" or user_id is None:
                 return False
             expected = self._bind_suffix(user_id)
             return secrets.compare_digest(suffix, expected)
@@ -153,17 +159,37 @@ class CSRFTokenManager:
 
     def set_cookie(self, response: Response, token: str):
         """
-        Set CSRF token cookie
+        Set CSRF token cookie.
 
         Args:
             response: Response to add cookie to
             token: CSRF token to set
+
+        SECURITY NOTE: The CSRF cookie is intentionally NOT HttpOnly.
+
+        This is required for the double-submit cookie pattern to work:
+        1. JavaScript must read the cookie value
+        2. JavaScript includes this value in a custom header (X-CSRF-Token)
+        3. Server validates that cookie value matches header value
+
+        This is secure because:
+        - An attacker cannot read the cookie value due to Same-Origin Policy
+        - An attacker cannot set custom headers in cross-origin requests
+        - The token changes per-session and is cryptographically random
+
+        If an XSS vulnerability exists, the attacker could read this token,
+        but XSS would also allow reading any other data on the page.
+        The primary defense against XSS is input sanitization and CSP,
+        not CSRF token secrecy.
+
+        Reference: OWASP CSRF Prevention Cheat Sheet
+        https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
         """
         response.set_cookie(
             key=self.token_cookie_name,
             value=token,
             max_age=3600 * 24,  # 24 hours
-            httponly=False,  # Must be readable by JavaScript
+            httponly=False,  # Required for double-submit pattern - JS must read this
             secure=self.settings.SESSION_COOKIE_SECURE,
             samesite=self.settings.SESSION_COOKIE_SAMESITE,
             path="/"

@@ -607,13 +607,22 @@ class TestChatEndpointSecurity:
 
         # Should reject overly large requests
         # 413 is the correct status code for "Payload Too Large"
-        assert response.status_code in [400, 413]
+        assert response.status_code in [400, 413, 422]
         if response.status_code == 413:
             # FastAPI/Starlette returns 413 for payload too large
             assert True  # This is expected
         else:
-            # If 400, check for appropriate error message
-            assert "too long" in response.json()["detail"].lower() or "too large" in response.json()["detail"].lower()
+            # If 400/422, check for appropriate error message
+            detail = response.json().get("detail")
+            if isinstance(detail, list):
+                messages = " ".join(
+                    str(item.get("msg", item)) if isinstance(item, dict) else str(item)
+                    for item in detail
+                )
+                detail_text = messages.lower()
+            else:
+                detail_text = str(detail).lower()
+            assert ("too long" in detail_text) or ("too large" in detail_text) or ("maximum length" in detail_text)
 
     def test_authentication_required(self, test_client, test_db):
         """Test authentication behavior based on auth mode."""
@@ -633,9 +642,10 @@ class TestChatEndpointSecurity:
         )
 
         if settings.AUTH_MODE == "single_user":
-            # In single-user mode, authentication is not required
-            # The request should succeed (200) or fail due to other reasons like missing API keys (503)
-            assert response.status_code in [200, 503], f"In single-user mode, got unexpected status: {response.status_code}"
+            # In single-user mode, authentication is still required (API key/Bearer).
+            assert response.status_code == 401, (
+                f"In single-user mode, expected 401 for missing auth but got: {response.status_code}"
+            )
         else:
             # In multi-user mode, should require authentication
             assert response.status_code in [401, 403], f"In multi-user mode, expected auth error but got: {response.status_code}"

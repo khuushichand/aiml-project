@@ -205,7 +205,7 @@ class RAGEvaluator:
             metric_names.append("faithfulness")
 
         if "answer_similarity" in metrics and ground_truth:
-            tasks.append(self._evaluate_answer_similarity(response, ground_truth))
+            tasks.append(self._evaluate_answer_similarity(response, ground_truth, api_name=api_name))
             metric_names.append("answer_similarity")
 
         if "context_relevance" in metrics:
@@ -369,7 +369,7 @@ class RAGEvaluator:
                 api_name,  # First param to analyze
                 query,     # input_data
                 prompt,    # custom_prompt_arg
-                None,      # api_key (None to load from config)
+                self.api_key,  # api_key (None to load from config)
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
                 0.1        # temp
             )
@@ -440,7 +440,7 @@ class RAGEvaluator:
                 api_name,  # First param
                 response,  # input_data
                 prompt,    # custom_prompt_arg
-                None,      # api_key (None to load from config)
+                self.api_key,  # api_key (None to load from config)
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
                 0.1        # temp
             )
@@ -467,7 +467,7 @@ class RAGEvaluator:
             # Raise exception instead of returning 0.0
             raise ValueError(f"Faithfulness evaluation failed: {str(e)}")
 
-    async def _evaluate_answer_similarity(self, response: str, ground_truth: str) -> tuple:
+    async def _evaluate_answer_similarity(self, response: str, ground_truth: str, api_name: str = "openai") -> tuple:
         """Evaluate similarity between response and ground truth"""
 
         # Use embedding-based similarity if available
@@ -608,10 +608,10 @@ class RAGEvaluator:
             # Use thread offload for deterministic unit-test mocking
             score_str = await asyncio.to_thread(
                 analyze,
-                "openai",  # api_name - first param
+                api_name,  # api_name - first param
                 response,   # input_data
                 prompt,     # custom_prompt_arg
-                None,       # api_key (None to load from config)
+                self.api_key,  # api_key (None to load from config)
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
                 0.1         # temp
             )
@@ -653,7 +653,7 @@ class RAGEvaluator:
                     api_name,  # First param
                     context,   # input_data
                     prompt,    # custom_prompt_arg
-                    None,      # api_key (None to load from config)
+                    self.api_key,  # api_key (None to load from config)
                     "You are an evaluation expert. Provide only numeric scores.",  # system_message
                     0.1        # temp
                 )
@@ -700,7 +700,7 @@ class RAGEvaluator:
                     api_name,  # First param
                     context,   # input_data
                     prompt,    # custom_prompt_arg
-                    None,      # api_key (None to load from config)
+                    self.api_key,  # api_key (None to load from config)
                     "You are an evaluation expert. Provide only numeric scores.",  # system_message
                     0.1        # temp
                 )
@@ -759,7 +759,7 @@ class RAGEvaluator:
                 api_name,  # First param
                 combined_context,  # input_data
                 prompt,    # custom_prompt_arg
-                None,      # api_key (None to load from config)
+                self.api_key,  # api_key (None to load from config)
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
                 0.1        # temp
             )

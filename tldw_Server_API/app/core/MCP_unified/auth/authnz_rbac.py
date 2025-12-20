@@ -130,6 +130,19 @@ class AuthNZRBAC:
             if row is not None:
                 return bool(row.get("granted", 0))
 
+            # Explicit user wildcard for tools.execute:*
+            if resource == Resource.TOOL and action == Action.EXECUTE:
+                row_wildcard = await pool.fetchone(
+                    """
+                    SELECT up.granted FROM user_permissions up
+                    JOIN permissions p ON p.id = up.permission_id
+                    WHERE up.user_id = ? AND p.name = ?
+                    """,
+                    uid, "tools.execute:*",
+                )
+                if row_wildcard is not None:
+                    return bool(row_wildcard.get("granted", 0))
+
             # Role-based permissions
             row2 = await pool.fetchone(
                 """

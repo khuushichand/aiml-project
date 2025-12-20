@@ -57,6 +57,36 @@ CREATE TABLE IF NOT EXISTS api_keys (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+-- Per-user provider secrets (BYOK)
+CREATE TABLE IF NOT EXISTS user_provider_secrets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    encrypted_blob TEXT NOT NULL,
+    key_hint TEXT,
+    metadata TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_used_at DATETIME,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE (user_id, provider)
+);
+
+-- Org/team shared provider secrets (BYOK)
+CREATE TABLE IF NOT EXISTS org_provider_secrets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope_type TEXT NOT NULL CHECK (scope_type IN ('org', 'team')),
+    scope_id INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    encrypted_blob TEXT NOT NULL,
+    key_hint TEXT,
+    metadata TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_used_at DATETIME,
+    UNIQUE (scope_type, scope_id, provider)
+);
+
 -- Organizations table for multi-tenant support
 CREATE TABLE IF NOT EXISTS organizations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -163,6 +193,10 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash);
 CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status);
 CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at);
+CREATE INDEX IF NOT EXISTS idx_user_provider_secrets_user_id ON user_provider_secrets(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_provider_secrets_provider ON user_provider_secrets(provider);
+CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_scope ON org_provider_secrets(scope_type, scope_id);
+CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_provider ON org_provider_secrets(provider);
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_token ON password_reset_tokens(token);
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_expires_at ON password_reset_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_token ON email_verification_tokens(token);
@@ -174,6 +208,38 @@ CREATE TRIGGER IF NOT EXISTS update_users_timestamp
     FOR EACH ROW
 BEGIN
     UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+-- Update trigger for user_provider_secrets table
+CREATE TRIGGER IF NOT EXISTS update_user_provider_secrets_timestamp
+    AFTER UPDATE ON user_provider_secrets
+    FOR EACH ROW
+BEGIN
+    UPDATE user_provider_secrets SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+-- Update trigger for org_provider_secrets table
+CREATE TRIGGER IF NOT EXISTS update_org_provider_secrets_timestamp
+    AFTER UPDATE ON org_provider_secrets
+    FOR EACH ROW
+BEGIN
+    UPDATE org_provider_secrets SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+-- Cleanup org_provider_secrets when organizations are deleted
+CREATE TRIGGER IF NOT EXISTS delete_org_provider_secrets_on_org_delete
+    AFTER DELETE ON organizations
+    FOR EACH ROW
+BEGIN
+    DELETE FROM org_provider_secrets WHERE scope_type = 'org' AND scope_id = OLD.id;
+END;
+
+-- Cleanup org_provider_secrets when teams are deleted
+CREATE TRIGGER IF NOT EXISTS delete_org_provider_secrets_on_team_delete
+    AFTER DELETE ON teams
+    FOR EACH ROW
+BEGIN
+    DELETE FROM org_provider_secrets WHERE scope_type = 'team' AND scope_id = OLD.id;
 END;
 
 -- Update trigger for session activity

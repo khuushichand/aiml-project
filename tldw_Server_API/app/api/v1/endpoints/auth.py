@@ -34,12 +34,12 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_current_active_user,
     check_auth_rate_limit
 )
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.csrf_protection import (
     global_settings as _csrf_globals,
 )
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
-from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService, get_jwt_service
+from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.input_validation import get_input_validator
@@ -51,7 +51,9 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditEventType,
     AuditContext
 )
-from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+    get_or_create_audit_service_for_user_id,
+)
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     AuthenticationError,
     InvalidCredentialsError,
@@ -319,10 +321,7 @@ async def login(
         # Helper to attempt audit logging without hard dependency (safe no-op in tests)
         async def _safe_audit_log_login(user_id: int, username: str, ip: str, ua: str, success: bool):
             try:
-                from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
-                from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-                svc = UnifiedAuditService(db_path=str(DatabasePaths.get_audit_db_path(user_id)))
-                await svc.initialize()
+                svc = await get_or_create_audit_service_for_user_id(user_id)
                 await svc.log_login(
                     user_id=user_id,
                     username=username,
@@ -330,9 +329,19 @@ async def login(
                     user_agent=ua,
                     success=success,
                 )
-            except Exception:
+                # Persist immediately for observability (tests/admin tools) without relying on background loops.
+                flush_on_login = os.getenv("AUDIT_FLUSH_ON_LOGIN", "").lower() in {"1", "true", "yes", "on"}
+                test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+                if flush_on_login or test_mode:
+                    await svc.flush()
+            except Exception as exc:
                 # Never block auth on audit issues
-                pass
+                logger.debug(
+                    "Login audit failed for user_id={}: {}",
+                    user_id,
+                    exc,
+                    exc_info=True,
+                )
 
         # Fetch user from database using sanitized identifier
         user = await fetch_user_by_login_identifier(db, login_identifier)

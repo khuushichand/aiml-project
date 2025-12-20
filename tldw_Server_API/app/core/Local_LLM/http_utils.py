@@ -26,8 +26,30 @@ DEFAULT_RETRIES: int = 2
 DEFAULT_BACKOFF: float = 0.75
 
 
-def redact_cmd_args(args: Iterable[str], sensitive_flags: Tuple[str, ...] = ("--api-key",)) -> list[str]:
+def redact_cmd_args(
+    args: Iterable[str],
+    sensitive_flags: Tuple[str, ...] = (
+        "--api-key",
+        "--hf-token",
+        "--token",
+        "--openai-api-key",
+        "--anthropic-api-key",
+        "--password",
+        "--secret",
+        "--auth",
+        "--bearer",
+        "--credential",
+        "--credentials",
+        "--access-token",
+        "--refresh-token",
+        "--client-secret",
+    ),
+) -> list[str]:
     """Redact values for flags like --api-key in a command list.
+
+    Handles both space-separated and equals-separated formats:
+    - ["--api-key", "secret"] -> ["--api-key", "REDACTED"]
+    - ["--api-key=secret"] -> ["--api-key=REDACTED"]
 
     Example: ["llamafile", "--api-key", "secret", "-m", "model"] ->
              ["llamafile", "--api-key", "REDACTED", "-m", "model"]
@@ -35,6 +57,12 @@ def redact_cmd_args(args: Iterable[str], sensitive_flags: Tuple[str, ...] = ("--
     redacted: list[str] = []
     itr = iter(args)
     for token in itr:
+        # Check for --flag=value format
+        if "=" in token:
+            flag_part = token.split("=", 1)[0]
+            if flag_part in sensitive_flags:
+                redacted.append(f"{flag_part}=REDACTED")
+                continue
         redacted.append(token)
         if token in sensitive_flags:
             # Replace the next token with REDACTED if present
@@ -72,7 +100,15 @@ async def request_json(
     """
     # Backward-compat shim: if client is not an httpx.AsyncClient (e.g., tests provide a FakeClient),
     # fall back to the legacy minimal retry loop without extra kwargs.
+    # DEPRECATED: This shim is for testing only and will be removed in a future version.
     if not isinstance(client, httpx.AsyncClient):
+        import warnings
+        warnings.warn(
+            "Using non-httpx.AsyncClient in request_json is deprecated. "
+            "Use httpx.AsyncClient or mock httpx.AsyncClient directly in tests.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         attempt = 0
         while True:
             try:
@@ -119,8 +155,17 @@ async def wait_for_http_ready(
     paths: Tuple[str, ...] = ("/health", "/v1/models"),
     timeout_total: float = 30.0,
     interval: float = 0.5,
+    accept_any_non_5xx: bool = False,
 ) -> bool:
-    """Poll service until one of the candidate paths responds with a non-error status.
+    """Poll service until one of the candidate paths responds with a success status.
+
+    Args:
+        base_url: Base URL of the service to poll.
+        paths: Tuple of paths to try (in order).
+        timeout_total: Maximum time to wait for readiness.
+        interval: Time between polling attempts.
+        accept_any_non_5xx: If True, accept any non-5xx status (legacy behavior).
+                           If False (default), only accept 2xx success codes.
 
     Returns True if ready within timeout; otherwise False.
     """
@@ -131,8 +176,14 @@ async def wait_for_http_ready(
                 url = base_url.rstrip("/") + "/" + path.lstrip("/")
                 try:
                     resp = await afetch(method="GET", url=url, client=client)
-                    if resp.status_code < 500:
-                        return True
+                    # Default: only accept 2xx success codes
+                    # Legacy mode: accept any non-5xx (for backward compatibility)
+                    if accept_any_non_5xx:
+                        if resp.status_code < 500:
+                            return True
+                    else:
+                        if 200 <= resp.status_code < 300:
+                            return True
                 except Exception:
                     # Not ready yet
                     pass

@@ -17,6 +17,7 @@ def _setup_env():
     os.environ["MCP_API_KEY_SALT"] = "s" * 64
     os.environ["MCP_TRUST_X_FORWARDED"] = "1"
     os.environ["MCP_ALLOWED_IPS"] = ""
+    os.environ["MCP_CLIENT_CERT_REQUIRED"] = "false"
     # Reset config/IP controller caches to pick up env
     try:
         from tldw_Server_API.app.core.MCP_unified.config import get_config as _gc

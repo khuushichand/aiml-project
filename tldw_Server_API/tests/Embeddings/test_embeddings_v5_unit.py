@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, Mock
 import pytest
 import numpy as np
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -528,8 +529,14 @@ class TestMockedFlow:
         # Mock the embedding function at the right level
         with patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.create_embeddings_with_circuit_breaker') as mock_create:
             # Wrap to track calls
-            async def wrapper(texts, provider, model_id, config, metadata=None):
-                return await mock_embeddings(texts, provider, model_id, metadata=metadata)
+            async def wrapper(texts, provider, model_id, config, metadata=None, dimensions=None):
+                return await mock_embeddings(
+                    texts,
+                    provider,
+                    model_id,
+                    dimensions=dimensions,
+                    metadata=metadata,
+                )
             mock_create.side_effect = wrapper
 
             # First request
@@ -680,3 +687,38 @@ class TestLLMBudgetGuardrails:
         assert resp.status_code == 402
         body = resp.json()
         assert body.get("error") == "budget_exceeded"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_batch_length_mismatch_raises(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
+
+    async def fake_create_embeddings_with_circuit_breaker(
+        texts,
+        provider,
+        model_id,
+        config,
+        metadata=None,
+        dimensions=None,
+    ):
+        _ = (provider, model_id, config, metadata, dimensions)
+        return [[0.1] for _ in range(max(1, len(texts) - 1))]
+
+    monkeypatch.setattr(
+        mod,
+        "create_embeddings_with_circuit_breaker",
+        fake_create_embeddings_with_circuit_breaker,
+        raising=True,
+    )
+    monkeypatch.setattr(mod.embedding_cache, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(mod.embedding_cache, "set", AsyncMock())
+
+    with pytest.raises(HTTPException) as exc:
+        await mod.create_embeddings_batch_async(
+            ["a", "b"],
+            provider="huggingface",
+            model_id="sentence-transformers/all-MiniLM-L6-v2",
+        )
+
+    assert exc.value.status_code == 502

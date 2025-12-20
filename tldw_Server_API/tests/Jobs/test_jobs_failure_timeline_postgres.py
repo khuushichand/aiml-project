@@ -48,5 +48,5 @@ def test_failure_timeline_append_and_jsonb_postgres(monkeypatch):
 
     tl = _read_timeline_pg(jm, int(acq["id"]))
     assert isinstance(tl, list)
-    assert len(tl) >= 1
-    assert all("error_code" in e for e in tl)
+    assert len(tl) >= 5
+    assert all("error_code" in e and "retry_backoff" in e for e in tl)

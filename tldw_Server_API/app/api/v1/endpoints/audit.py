@@ -41,20 +41,30 @@ except Exception:
     STREAM_AUTO_MAX_ROWS_THRESHOLD = _DEFAULT_STREAM_AUTO_THRESHOLD
 
 
-def _parse_dt(val: Optional[str]) -> Optional[datetime]:
-    if not val:
+def _parse_dt(val: Optional[str], *, field_name: str) -> Optional[datetime]:
+    """Parse an optional ISO8601 timestamp.
+
+    Raises:
+        HTTPException: if a non-empty value is provided but cannot be parsed.
+    """
+    if val is None:
+        return None
+    s = str(val).strip()
+    if s == "":
         return None
     try:
         # Handle trailing 'Z' (UTC) which fromisoformat doesn't accept directly
-        s = val.strip()
         if s.endswith("Z"):
             s = s[:-1] + "+00:00"
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        return None
+    except (ValueError, AttributeError) as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {field_name}; expected ISO8601 timestamp (e.g. 2025-01-01T00:00:00Z)",
+        ) from e
+    return dt
 
 
 def _map_event_types(values: Optional[List[str]] | Optional[str]) -> Optional[List[AuditEventType]]:
@@ -78,7 +88,8 @@ def _map_event_types(values: Optional[List[str]] | Optional[str]) -> Optional[Li
         try:
             mapped.append(AuditEventType(v))
         except Exception:
-            # Skip unknown types silently to be user-friendly
+            # Log warning for unknown types
+            logger.warning(f"Unknown audit event type filter ignored: {v!r}")
             continue
     return mapped or None
 
@@ -102,6 +113,8 @@ def _map_categories(values: Optional[List[str]] | Optional[str]) -> Optional[Lis
         try:
             mapped.append(AuditEventCategory(v))
         except Exception:
+            # Log warning for unknown categories
+            logger.warning(f"Unknown audit category filter ignored: {v!r}")
             continue
     return mapped or None
 
@@ -135,7 +148,7 @@ async def export_audit_events(
     end_time: Optional[str] = Query(None, description="ISO8601 end timestamp"),
     event_type: Optional[str] = Query(None, description="Event types (enum name or value), comma-separated"),
     category: Optional[str] = Query(None, description="Categories (enum name or value), comma-separated"),
-    min_risk_score: Optional[int] = Query(None),
+    min_risk_score: Optional[int] = Query(None, ge=0, le=100, description="Minimum risk score (0-100)"),
     user_id: Optional[str] = Query(None),
     request_id: Optional[str] = Query(None),
     correlation_id: Optional[str] = Query(None),
@@ -167,8 +180,8 @@ async def export_audit_events(
     if fmt not in {"json", "csv", "jsonl"}:
         raise HTTPException(status_code=400, detail="format must be 'json', 'csv', or 'jsonl'")
 
-    st = _parse_dt(start_time)
-    et = _parse_dt(end_time)
+    st = _parse_dt(start_time, field_name="start_time")
+    et = _parse_dt(end_time, field_name="end_time")
     ets = _map_event_types(event_type)
     cats = _map_categories(category)
 
@@ -246,7 +259,7 @@ async def count_audit_events(
     end_time: Optional[str] = Query(None, description="ISO8601 end timestamp"),
     event_type: Optional[str] = Query(None, description="Event types (enum name or value), comma-separated"),
     category: Optional[str] = Query(None, description="Categories (enum name or value), comma-separated"),
-    min_risk_score: Optional[int] = Query(None),
+    min_risk_score: Optional[int] = Query(None, ge=0, le=100, description="Minimum risk score (0-100)"),
     user_id: Optional[str] = Query(None),
     request_id: Optional[str] = Query(None),
     correlation_id: Optional[str] = Query(None),
@@ -261,8 +274,8 @@ async def count_audit_events(
     Accepts the same filters as the export endpoint (except format/stream/filename).
     Returns a JSON object: {"count": <int>}.
     """
-    st = _parse_dt(start_time)
-    et = _parse_dt(end_time)
+    st = _parse_dt(start_time, field_name="start_time")
+    et = _parse_dt(end_time, field_name="end_time")
     ets = _map_event_types(event_type)
     cats = _map_categories(category)
 

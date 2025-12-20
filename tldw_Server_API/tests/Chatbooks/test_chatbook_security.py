@@ -65,19 +65,36 @@ class TestPathTraversalSecurity:
             assert safe_name == expected_output
 
     def test_validate_filename_double_extension(self):
-        """Test that double extensions are handled properly."""
+        """Test that double extensions are handled properly.
+
+        Files must END with a valid extension (.zip or .chatbook).
+        Files that contain .zip but end with another extension should be REJECTED.
+        """
+        # Files ending with valid extension should be accepted
+        valid_filenames = [
+            "file.pdf.zip",
+            "archive.tar.gz.zip",
+            "my_backup.chatbook"
+        ]
+
+        for filename in valid_filenames:
+            valid, error, safe_name = ChatbookValidator.validate_filename(filename)
+            assert valid is True, f"Expected {filename} to be valid"
+            # Should keep only last valid extension
+            assert safe_name.count('.') == 1
+            assert safe_name.endswith('.zip') or safe_name.endswith('.chatbook')
+
+        # Files that contain .zip but end with dangerous extension should be REJECTED
         dangerous_filenames = [
             "chatbook.zip.exe",
-            "file.pdf.zip",
-            "archive.tar.gz.zip"
+            "malicious.chatbook.exe",
+            "backup.zip.bat"
         ]
 
         for filename in dangerous_filenames:
             valid, error, safe_name = ChatbookValidator.validate_filename(filename)
-            assert valid is True
-            # Should keep only last valid extension
-            assert safe_name.count('.') == 1
-            assert safe_name.endswith('.zip')
+            assert valid is False, f"Expected {filename} to be rejected (ends with dangerous extension)"
+            assert "Invalid file type" in error
 
     def test_validate_zip_with_path_traversal(self):
         """Test ZIP validation catches path traversal in archive."""

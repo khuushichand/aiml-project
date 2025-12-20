@@ -27,11 +27,12 @@ Features:
 
 import json
 import sqlite3
+import time as _time_module
 from loguru import logger
 import random
 import re
 import warnings
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union, Any, Set, Tuple
 from pathlib import Path
 
@@ -49,11 +50,74 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
+# Import shared constants and helpers
+from tldw_Server_API.app.core.Character_Chat.constants import (
+    MAX_REGEX_LENGTH,
+    MAX_REGEX_COMPILE_TIME_MS,
+    safe_parse_json_dict,
+)
+
+# Import shared regex safety utilities
+from tldw_Server_API.app.core.Character_Chat.regex_safety import (
+    safe_compile_regex as _safe_compile_regex,
+)
+
+
+# Whitelisted field names for dynamic UPDATE statements (SQL injection prevention)
+_DICTIONARY_UPDATE_FIELDS = frozenset({
+    "name", "description", "is_active", "updated_at", "version"
+})
+_ENTRY_UPDATE_FIELDS = frozenset({
+    "key", "content", "is_regex", "probability", "max_replacements",
+    "group_name", "timed_effects", "enabled", "case_sensitive", "updated_at"
+})
+
+
+def _build_safe_update_clause(
+    updates: list[str],
+    allowed_fields: frozenset[str]
+) -> str:
+    """
+    Build a safe UPDATE SET clause from a list of 'field = ?' strings.
+
+    Validates each field name against an allowed whitelist to prevent SQL injection.
+
+    Args:
+        updates: List of strings like 'field = ?'
+        allowed_fields: Frozenset of allowed field names
+
+    Returns:
+        Joined SET clause string
+
+    Raises:
+        ValueError: If any field is not in the whitelist
+    """
+    for update_str in updates:
+        # Extract field name from 'field = ?' or 'field = field + 1' patterns
+        field_name = update_str.split('=')[0].strip()
+        if field_name not in allowed_fields:
+            raise ValueError(f"Invalid field name in UPDATE: {field_name}")
+    return ', '.join(updates)
+
 
 def _is_unique_violation(error: Exception) -> bool:
     """Best-effort detection of unique constraint/duplicate key violations across backends."""
     message = str(error).lower()
     return "unique constraint" in message or "duplicate key" in message
+
+
+def _escape_like_pattern(query: str) -> str:
+    """
+    Escape SQL LIKE wildcards to prevent pattern injection.
+
+    Args:
+        query: User-provided search query
+
+    Returns:
+        Escaped query safe for use in LIKE patterns with ESCAPE '\\'
+    """
+    # Escape backslash first, then the SQL LIKE special characters
+    return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 class TokenBudgetExceededWarning(Warning):
@@ -88,7 +152,11 @@ class ChatDictionaryEntry:
         Args:
             key: Pattern to match (can be regex with /pattern/flags format)
             content: Replacement text
-            probability: Chance of replacement (0-100)
+            probability: Chance of replacement. Accepts:
+                - int 0-100: Interpreted as percentage, normalized to 0.0-1.0
+                - float 0.0-1.0: Used directly as probability
+                - bool: Deprecated, logs warning. True=1.0, False=0.0
+                Values outside valid range are clamped with a warning.
             group: Optional group name for organization
             timed_effects: Dictionary with sticky, cooldown, delay settings
             max_replacements: Maximum number of replacements per processing
@@ -100,20 +168,34 @@ class ChatDictionaryEntry:
         # Store probability as float [0.0, 1.0]
         try:
             if isinstance(probability, bool):
+                # Boolean input is ambiguous - log warning and convert
+                logger.warning(
+                    f"Boolean probability value '{probability}' is deprecated. "
+                    f"Use int 0-100 or float 0.0-1.0 instead."
+                )
                 self.probability = 1.0 if probability else 0.0
             elif isinstance(probability, int):
+                # Integer 0-100 range, normalize to 0.0-1.0
+                if probability < 0 or probability > 100:
+                    logger.warning(f"Probability {probability} outside 0-100 range, clamping.")
                 clamped = max(min(probability, 100), 0)
                 self.probability = float(clamped) / 100.0
             else:
-                self.probability = float(probability)
-        except Exception:
+                # Float - validate range and clamp if needed
+                prob_f = float(probability)
+                if prob_f < 0.0 or prob_f > 1.0:
+                    logger.warning(f"Probability {prob_f} outside 0.0-1.0 range, clamping.")
+                    prob_f = max(min(prob_f, 1.0), 0.0)
+                self.probability = prob_f
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Invalid probability value '{probability}', defaulting to 1.0: {e}")
             self.probability = 1.0
         self.group = group
         self.timed_effects = timed_effects or {"sticky": 0, "cooldown": 0, "delay": 0}
         self.max_replacements = max_replacements
         self.enabled = bool(enabled)
         self.case_sensitive = bool(case_sensitive)
-        self._loaded_at = datetime.utcnow()
+        self._loaded_at = datetime.now(timezone.utc)
 
         # Pattern compilation
         self.is_regex = False
@@ -130,6 +212,7 @@ class ChatDictionaryEntry:
         Compile the key pattern, detecting regex format.
 
         Supports /pattern/flags format for regex patterns.
+        Uses safe compilation to prevent ReDoS attacks.
         """
         self.is_regex = False
         self.key_flags = 0
@@ -160,10 +243,10 @@ class ChatDictionaryEntry:
         self.key_pattern_str = pattern_to_compile
 
         if self.is_regex:
-            # Compile regex and let re.error propagate on invalid patterns
+            # Use safe compilation with ReDoS protection
             if not pattern_to_compile:
                 raise re.error(f"Empty regex pattern from key '{self.raw_key}'")
-            return re.compile(pattern_to_compile, self.key_flags)
+            return _safe_compile_regex(pattern_to_compile, self.key_flags)
         else:
             return key_str
 
@@ -183,7 +266,7 @@ class ChatDictionaryEntry:
                 return False
 
         # Check timed effects
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if self.last_triggered:
             # Cooldown check
             cooldown = self.timed_effects.get("cooldown", 0)
@@ -245,7 +328,7 @@ class ChatDictionaryEntry:
                     text = "".join(result)
 
         if replacement_count > 0:
-            self.last_triggered = datetime.utcnow()
+            self.last_triggered = datetime.now(timezone.utc)
             self.trigger_count += replacement_count
 
         return text, replacement_count
@@ -268,9 +351,8 @@ class ChatDictionaryEntry:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ChatDictionaryEntry":
         """Create instance from database dictionary."""
-        timed_effects = data.get("timed_effects")
-        if isinstance(timed_effects, str):
-            timed_effects = json.loads(timed_effects)
+        # Use safe parsing with structure validation for timed_effects
+        timed_effects = safe_parse_json_dict(data.get("timed_effects"), "timed_effects")
 
         entry = cls(
             key=data.get("key") or data.get("pattern", ""),
@@ -288,20 +370,28 @@ class ChatDictionaryEntry:
             entry.is_regex = bool(data["is_regex"])
             if entry.is_regex and not isinstance(entry.key, re.Pattern) and entry.raw_key:
                 try:
-                    entry.key = re.compile(entry.raw_key)
+                    entry.key = _safe_compile_regex(entry.raw_key)
                 except re.error:
                     # Leave as literal if invalid; caller may handle
+                    logger.warning(f"Invalid or dangerous regex pattern in stored entry: {entry.raw_key[:50]}...")
                     entry.is_regex = False
         created_at_val = data.get("created_at")
         if created_at_val:
             try:
                 if isinstance(created_at_val, datetime):
-                    entry._loaded_at = created_at_val
+                    entry._loaded_at = (
+                        created_at_val
+                        if created_at_val.tzinfo is not None
+                        else created_at_val.replace(tzinfo=timezone.utc)
+                    )
                 else:
                     iso_source = str(created_at_val).replace(" ", "T")
-                    entry._loaded_at = datetime.fromisoformat(iso_source.replace("Z", "+00:00"))
+                    parsed = datetime.fromisoformat(iso_source.replace("Z", "+00:00"))
+                    entry._loaded_at = (
+                        parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+                    )
             except Exception:
-                entry._loaded_at = datetime.utcnow()
+                entry._loaded_at = datetime.now(timezone.utc)
         return entry
 
 
@@ -325,6 +415,9 @@ class ChatDictionaryService:
         self._init_tables()
 
         # Request-scoped cache (not shared between requests)
+        # Note: No lock needed - this service is instantiated per-request and
+        # Python's async model runs on a single-threaded event loop with no
+        # concurrent access within a single request.
         self._entry_cache: Optional[List[ChatDictionaryEntry]] = None
         self._cache_timestamp: Optional[datetime] = None
         self._cache_ttl = timedelta(seconds=60)  # Cache for 1 minute within request
@@ -450,7 +543,16 @@ class ChatDictionaryService:
 
                 if self.db.backend_type == BackendType.POSTGRESQL:
                     row = cursor.fetchone()
-                    dictionary_id = (row or {}).get("id") if row else None
+                    if row is None:
+                        dictionary_id = None
+                    elif isinstance(row, dict):
+                        dictionary_id = row.get("id")
+                    elif hasattr(row, '_mapping'):
+                        # SQLAlchemy Row object
+                        dictionary_id = row._mapping.get("id")
+                    else:
+                        # Tuple or sequence - first column is the ID
+                        dictionary_id = row[0] if row else None
                 else:
                     dictionary_id = cursor.lastrowid
 
@@ -617,8 +719,9 @@ class ChatDictionaryService:
             params.extend([dictionary_id, False])
 
             with self.db.get_connection() as conn:
+                set_clause = _build_safe_update_clause(updates, _DICTIONARY_UPDATE_FIELDS)
                 cursor = conn.execute(
-                    f"UPDATE chat_dictionaries SET {', '.join(updates)} WHERE id = ? AND deleted = ?", tuple(params)
+                    f"UPDATE chat_dictionaries SET {set_clause} WHERE id = ? AND deleted = ?", tuple(params)
                 )
                 conn.commit()
 
@@ -740,7 +843,10 @@ class ChatDictionaryService:
                 if entry_type is not None:
                     entry.is_regex = entry_type == "regex"
                     if entry.is_regex and not isinstance(entry.key, re.Pattern):
-                        entry.key = re.compile(entry.raw_key)
+                        # Use safe regex compilation to validate the pattern and protect against ReDoS.
+                        # The compiled pattern is not stored on this transient instance; persistence
+                        # relies on the `is_regex` flag and `from_dict` will recompile as needed.
+                        _safe_compile_regex(entry.raw_key, entry.key_flags)
             except re.error:
                 raise
 
@@ -771,7 +877,16 @@ class ChatDictionaryService:
 
                 if self.db.backend_type == BackendType.POSTGRESQL:
                     row = cursor.fetchone()
-                    entry_id = (row or {}).get("id") if row else None
+                    if row is None:
+                        entry_id = None
+                    elif isinstance(row, dict):
+                        entry_id = row.get("id")
+                    elif hasattr(row, '_mapping'):
+                        # SQLAlchemy Row object
+                        entry_id = row._mapping.get("id")
+                    else:
+                        # Tuple or sequence - first column is the ID
+                        entry_id = row[0] if row else None
                 else:
                     entry_id = cursor.lastrowid
 
@@ -848,6 +963,45 @@ class ChatDictionaryService:
             logger.error(f"Error fetching dictionary entries: {e}")
             raise CharactersRAGDBError(f"Error fetching dictionary entries: {e}")
 
+    def get_entry(self, entry_id: int, active_only: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        Get a single dictionary entry by ID, including metadata.
+
+        Args:
+            entry_id: Entry ID to fetch
+            active_only: Only return entries from active dictionaries
+
+        Returns:
+            Dictionary representing the entry or None if not found
+        """
+        try:
+            with self.db.get_connection() as conn:
+                query = (
+                    "SELECT e.* FROM dictionary_entries e JOIN chat_dictionaries d ON e.dictionary_id = d.id "
+                    "WHERE d.deleted = ? AND e.id = ?"
+                )
+                params: List[Any] = [False, entry_id]
+                if active_only:
+                    query += " AND d.is_active = ? AND e.enabled = ?"
+                    params.extend([True, True])
+
+                row = conn.execute(query, tuple(params)).fetchone()
+                if not row:
+                    return None
+
+                row_dict = dict(row)
+                entry_obj = ChatDictionaryEntry.from_dict(row_dict)
+                entry = entry_obj.to_dict()
+                entry["dictionary_id"] = row_dict.get("dictionary_id")
+                entry["created_at"] = row_dict.get("created_at")
+                entry["updated_at"] = row_dict.get("updated_at")
+                if not entry.get("group") and row_dict.get("group_name"):
+                    entry["group"] = row_dict.get("group_name")
+                return entry
+        except Exception as e:
+            logger.error(f"Error fetching dictionary entry: {e}")
+            raise CharactersRAGDBError(f"Error fetching dictionary entry: {e}")
+
     def get_entry_objects(
         self,
         dictionary_id: Optional[int] = None,
@@ -855,6 +1009,7 @@ class ChatDictionaryService:
         active_only: bool = True,
     ) -> List[ChatDictionaryEntry]:
         """Internal: get entries as objects for processing, with basic caching."""
+        # Check cache (no lock needed - request-scoped service instance)
         if (
             self._entry_cache is not None
             and self._cache_timestamp
@@ -889,6 +1044,7 @@ class ChatDictionaryService:
                     entry = ChatDictionaryEntry.from_dict(dict(row))
                     entries.append(entry)
 
+                # Update cache (no lock needed - request-scoped)
                 if not dictionary_id and not group and active_only:
                     self._entry_cache = entries
                     self._cache_timestamp = datetime.now()
@@ -941,7 +1097,15 @@ class ChatDictionaryService:
             if pattern is not None:
                 entry = ChatDictionaryEntry(pattern, "test")
                 if entry_type is not None:
-                    entry.is_regex = entry_type == "regex"
+                    is_regex_requested = entry_type == "regex"
+                    # Validate regex pattern if explicitly requested
+                    if is_regex_requested and not entry.is_regex:
+                        # Entry didn't auto-detect as regex, try to compile it explicitly
+                        try:
+                            _safe_compile_regex(pattern)
+                        except re.error as e:
+                            raise InputError(f"Invalid regex pattern: {e}")
+                    entry.is_regex = is_regex_requested
                 updates.append("key = ?")
                 updates.append("is_regex = ?")
                 params.extend([pattern, bool(entry.is_regex)])
@@ -989,7 +1153,8 @@ class ChatDictionaryService:
             params.append(entry_id)
 
             with self.db.get_connection() as conn:
-                cursor = conn.execute(f"UPDATE dictionary_entries SET {', '.join(updates)} WHERE id = ?", tuple(params))
+                set_clause = _build_safe_update_clause(updates, _ENTRY_UPDATE_FIELDS)
+                cursor = conn.execute(f"UPDATE dictionary_entries SET {set_clause} WHERE id = ?", tuple(params))
                 conn.commit()
 
                 if cursor.rowcount > 0:
@@ -1532,8 +1697,10 @@ class ChatDictionaryService:
                     q.append("AND e.dictionary_id = ?")
                     params.append(dictionary_id)
                 if term:
-                    q.append("AND (e.key LIKE ? OR e.content LIKE ?)")
-                    params.extend([f"%{term}%", f"%{term}%"])
+                    # Escape SQL LIKE wildcards to prevent pattern injection
+                    escaped_term = _escape_like_pattern(term)
+                    q.append("AND (e.key LIKE ? ESCAPE '\\' OR e.content LIKE ? ESCAPE '\\')")
+                    params.extend([f"%{escaped_term}%", f"%{escaped_term}%"])
                 q.append("ORDER BY d.name, e.key")
                 cursor = conn.execute(" ".join(q), tuple(params))
                 results: List[Dict[str, Any]] = []

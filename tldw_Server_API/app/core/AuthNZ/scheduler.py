@@ -64,34 +64,47 @@ class AuthNZScheduler:
             self.scheduler = AsyncIOScheduler(event_loop=loop)
             self._loop = loop
 
-        # Register cleanup jobs
-        self._register_session_cleanup()
-        self._register_api_key_cleanup()
-        self._register_rate_limit_cleanup()
-        self._register_audit_log_cleanup()
-        self._register_expired_registration_cleanup()
+        try:
+            # Register cleanup jobs
+            self._register_session_cleanup()
+            self._register_api_key_cleanup()
+            self._register_rate_limit_cleanup()
+            self._register_audit_log_cleanup()
+            self._register_expired_registration_cleanup()
 
-        # Register monitoring jobs
-        self._register_auth_failure_monitor()
-        self._register_api_usage_monitor()
-        self._register_rate_limit_monitor()
-        # Evaluations: idempotency keys cleanup
-        self._register_evaluations_idempotency_cleanup()
+            # Register monitoring jobs
+            self._register_auth_failure_monitor()
+            self._register_api_usage_monitor()
+            self._register_rate_limit_monitor()
+            # Evaluations: idempotency keys cleanup
+            self._register_evaluations_idempotency_cleanup()
 
-        # Usage log pruning jobs
-        self._register_usage_log_cleanup()
-        self._register_llm_usage_log_cleanup()
-        # Daily aggregates pruning jobs
-        self._register_usage_daily_cleanup()
-        self._register_llm_usage_daily_cleanup()
-        # Privilege snapshot retention housekeeping
-        self._register_privilege_snapshot_retention()
+            # Usage log pruning jobs
+            self._register_usage_log_cleanup()
+            self._register_llm_usage_log_cleanup()
+            # Daily aggregates pruning jobs
+            self._register_usage_daily_cleanup()
+            self._register_llm_usage_daily_cleanup()
+            # Privilege snapshot retention housekeeping
+            self._register_privilege_snapshot_retention()
 
-        # Start the scheduler
-        self.scheduler.start()
-        self._started = True
-        self._loop = loop
-        logger.info("AuthNZ scheduler started with all jobs registered")
+            # Start the scheduler
+            self.scheduler.start()
+            self._started = True
+            self._loop = loop
+            logger.info("AuthNZ scheduler started with all jobs registered")
+        except Exception as e:
+            # Cleanup scheduler on initialization failure to prevent resource leak
+            logger.error(f"Failed to initialize scheduler jobs: {e}")
+            if self.scheduler:
+                try:
+                    self.scheduler.shutdown(wait=False)
+                except Exception:
+                    pass
+            self.scheduler = None
+            self._started = False
+            self._loop = None
+            raise
 
     async def stop(self):
         """Stop the scheduler"""
@@ -367,7 +380,7 @@ class AuthNZScheduler:
         try:
             db_pool = await get_db_pool()
             retention_days = self.settings.AUDIT_LOG_RETENTION_DAYS
-            cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=retention_days)
 
             repo = AuthnzMonitoringRepo(db_pool)
             count = await repo.delete_audit_logs_before(cutoff_date)
@@ -381,7 +394,7 @@ class AuthNZScheduler:
         """Prune usage_log rows older than retention period."""
         try:
             db_pool = await get_db_pool()
-            cutoff = datetime.utcnow() - timedelta(days=self.settings.USAGE_LOG_RETENTION_DAYS)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=self.settings.USAGE_LOG_RETENTION_DAYS)
 
             repo = AuthnzUsageRepo(db_pool)
             count = await repo.prune_usage_log_before(cutoff)
@@ -394,7 +407,7 @@ class AuthNZScheduler:
         """Prune llm_usage_log rows older than retention period."""
         try:
             db_pool = await get_db_pool()
-            cutoff = datetime.utcnow() - timedelta(days=self.settings.LLM_USAGE_LOG_RETENTION_DAYS)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=self.settings.LLM_USAGE_LOG_RETENTION_DAYS)
 
             repo = AuthnzUsageRepo(db_pool)
             count = await repo.prune_llm_usage_log_before(cutoff)
@@ -409,7 +422,7 @@ class AuthNZScheduler:
             db_pool = await get_db_pool()
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _gs
             retention_days = _gs().USAGE_DAILY_RETENTION_DAYS
-            cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=retention_days)
 
             repo = AuthnzUsageRepo(db_pool)
             count = await repo.prune_usage_daily_before(cutoff_date.date())
@@ -424,7 +437,7 @@ class AuthNZScheduler:
             db_pool = await get_db_pool()
             from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _gs
             retention_days = _gs().LLM_USAGE_DAILY_RETENTION_DAYS
-            cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=retention_days)
 
             repo = AuthnzUsageRepo(db_pool)
             count = await repo.prune_llm_usage_daily_before(cutoff_date.date())
@@ -583,7 +596,7 @@ class AuthNZScheduler:
             )
 
             repo = AuthnzRegistrationCodesRepo(db_pool)
-            count = await repo.deactivate_expired_codes(datetime.utcnow())
+            count = await repo.deactivate_expired_codes(datetime.now(timezone.utc))
 
             if count > 0:
                 logger.info(f"Deactivated {count} expired registration codes")
@@ -597,7 +610,7 @@ class AuthNZScheduler:
         try:
             db_pool = await get_db_pool()
             threshold = 10  # Alert if more than 10 failures in 5 minutes
-            time_window = datetime.utcnow() - timedelta(minutes=5)
+            time_window = datetime.now(timezone.utc) - timedelta(minutes=5)
             is_postgres = getattr(db_pool, "pool", None) is not None
             cutoff = time_window if is_postgres else time_window.isoformat()
 
@@ -630,15 +643,18 @@ class AuthNZScheduler:
                 unique_ips = result['unique_ips'] or 0
 
                 if failure_count > threshold:
-                    logger.warning(
-                        f"⚠️ High authentication failure rate detected: "
-                        f"{failure_count} failures from {unique_ips} unique IPs in last 5 minutes"
-                    )
+                    if self.settings.PII_REDACT_LOGS:
+                        logger.warning("⚠️ High authentication failure rate detected (details redacted)")
+                    else:
+                        logger.warning(
+                            f"⚠️ High authentication failure rate detected: "
+                            f"{failure_count} failures from {unique_ips} unique IPs in last 5 minutes"
+                        )
 
                     # Here you would trigger actual alerts (email, Slack, etc.)
                     await self._send_security_alert(
                         "High Authentication Failure Rate",
-                        f"{failure_count} failures from {unique_ips} IPs",
+                        f"{failure_count} failures from {unique_ips} IPs" if not self.settings.PII_REDACT_LOGS else "Details redacted",
                         severity="high",
                         metadata={
                             "failure_count": failure_count,
@@ -655,7 +671,7 @@ class AuthNZScheduler:
             db_pool = await get_db_pool()
 
             # Get API usage statistics for the last hour
-            time_window = datetime.utcnow() - timedelta(hours=1)
+            time_window = datetime.now(timezone.utc) - timedelta(hours=1)
             is_postgres = getattr(db_pool, "pool", None) is not None
             cutoff = time_window if is_postgres else time_window.isoformat()
 
@@ -702,7 +718,7 @@ class AuthNZScheduler:
         """Monitor rate limit violations"""
         try:
             db_pool = await get_db_pool()
-            time_window = datetime.utcnow() - timedelta(minutes=15)
+            time_window = datetime.now(timezone.utc) - timedelta(minutes=15)
             rate_threshold = self.settings.RATE_LIMIT_PER_MINUTE * 15  # 15 minute threshold
             repo = AuthnzRateLimitsRepo(db_pool)
             results = await repo.list_recent_violations(

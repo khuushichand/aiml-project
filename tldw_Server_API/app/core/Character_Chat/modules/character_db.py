@@ -56,8 +56,11 @@ def _prepare_character_data_for_db_storage(
             val = db_data[key]
             if isinstance(val, tuple):
                 try:
-                    db_data[key] = val[0] if val else ""
-                except Exception:
+                    # Handle tuple with None as first element - use empty string
+                    db_data[key] = val[0] if (val and val[0] is not None) else ""
+                except (IndexError, TypeError) as e:
+                    # Log unexpected tuple format and fallback to string conversion
+                    logger.debug(f"Unexpected tuple format for field '{key}': {e}, converting to string")
                     db_data[key] = str(val)
             elif not isinstance(val, (str, type(None))):
                 db_data[key] = str(val)
@@ -91,13 +94,22 @@ def _prepare_character_data_for_db_storage(
                         )
 
                     output = io.BytesIO()
-                    img.save(
-                        output,
-                        format="WEBP",
-                        quality=85,
-                        method=6,
-                        optimize=True,
-                    )
+                    if has_alpha:
+                        # Use lossless compression for images with alpha to preserve transparency
+                        img.save(
+                            output,
+                            format="WEBP",
+                            lossless=True,
+                            method=6,
+                        )
+                    else:
+                        img.save(
+                            output,
+                            format="WEBP",
+                            quality=85,
+                            method=6,
+                            optimize=True,
+                        )
                     db_data["image"] = output.getvalue()
                     logger.info(
                         "Optimized character image: %s -> %s bytes",

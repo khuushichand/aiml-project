@@ -13,7 +13,6 @@ from fastapi import (
     HTTPException,
     Query,
     Path,
-    BackgroundTasks,
     status
 )
 from loguru import logger
@@ -51,6 +50,47 @@ from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import (
     get_character_rate_limiter
 )
 
+
+def _detect_image_mime_type(data: bytes) -> Optional[str]:
+    """
+    Detect image MIME type from magic bytes.
+
+    Args:
+        data: Raw image bytes
+
+    Returns:
+        MIME type string if recognized image format, None otherwise
+    """
+    if not data or len(data) < 12:
+        return None
+
+    # Check PNG
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        return 'image/png'
+
+    # Check JPEG (multiple signatures)
+    if data[:3] == b'\xff\xd8\xff':
+        return 'image/jpeg'
+
+    # Check GIF
+    if data[:6] in (b'GIF87a', b'GIF89a'):
+        return 'image/gif'
+
+    # Check WebP (RIFF....WEBP)
+    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return 'image/webp'
+
+    # Check BMP
+    if data[:2] == b'BM':
+        return 'image/bmp'
+
+    # Check ICO
+    if data[:4] == b'\x00\x00\x01\x00':
+        return 'image/x-icon'
+
+    return None
+
+
 router = APIRouter()
 
 # ========================================================================
@@ -64,7 +104,7 @@ def _convert_db_message_to_response(msg_data: Dict[str, Any]) -> MessageResponse
         conversation_id=msg_data.get('conversation_id', ''),
         parent_message_id=msg_data.get('parent_message_id'),
         sender=msg_data.get('sender', ''),
-        content=msg_data.get('content', ''),
+        content=msg_data.get('content') or '',
         timestamp=msg_data.get('timestamp', datetime.now(timezone.utc)),
         ranking=msg_data.get('ranking'),
         has_image=bool(msg_data.get('image_data')),
@@ -170,10 +210,10 @@ async def send_message(
 
         # Verify conversation access
         conversation = _verify_conversation_access(db, chat_id, current_user.id)
-        # Enforce per-chat message cap
+        # Enforce per-chat message cap (using efficient count instead of loading all messages)
         try:
-            existing_msgs = db.get_messages_for_conversation(chat_id, limit=10000)
-            await rate_limiter.check_message_limit(chat_id, len(existing_msgs) + 1)
+            msg_count = db.count_messages_for_conversation(chat_id)
+            await rate_limiter.check_message_limit(chat_id, msg_count + 1)
         except HTTPException:
             raise
         except Exception:
@@ -224,10 +264,25 @@ async def send_message(
                         status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                         detail=f"Image too large. Max {_max_img_bytes} bytes allowed."
                     )
+
+                # Validate image by detecting MIME type from magic bytes
+                detected_mime = _detect_image_mime_type(img_data)
+                if detected_mime is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid image data. Supported formats: PNG, JPEG, GIF, WebP, BMP, ICO."
+                    )
+
                 msg_data['image_data'] = img_data
-                msg_data['image_mime_type'] = 'image/png'  # Default, could detect
+                msg_data['image_mime_type'] = detected_mime
+            except HTTPException:
+                raise
             except Exception as e:
                 logger.warning(f"Failed to decode image data: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Failed to decode image data. Please provide valid base64-encoded image."
+                ) from e
 
         # Add to database
         created_id = db.add_message(msg_data)
@@ -359,7 +414,7 @@ async def get_chat_messages(
                 _suffix_re = _re.compile(r"\[tool_calls\]\s*:\s*(\{.*|\[.*)$", _re.DOTALL)
                 for msg in paginated:
                     role = map_sender_to_role(msg.get('sender'), character.get('name') if character else None)
-                    content = msg.get('content', '')
+                    content = msg.get('content') or ''
                     msg_id = msg.get('id')
 
                     base_message: Dict[str, Any] = {"role": role, "content": content}
@@ -464,20 +519,20 @@ async def get_chat_messages(
             built_messages = []
             for m in paginated:
                 resp = _convert_db_message_to_response(m)
-                if include_tool_calls:
+                # Fetch metadata once if either flag is set (avoid duplicate queries)
+                if include_tool_calls or include_metadata:
                     try:
                         md = db.get_message_metadata(resp.id)
-                        if md and md.get('tool_calls') is not None:
-                            resp = resp.model_copy(update={"tool_calls": md.get('tool_calls')})
+                        if md:
+                            updates = {}
+                            if include_tool_calls and md.get('tool_calls') is not None:
+                                updates["tool_calls"] = md.get('tool_calls')
+                            if include_metadata and md.get('extra') is not None:
+                                updates["metadata_extra"] = md.get('extra')
+                            if updates:
+                                resp = resp.model_copy(update=updates)
                     except Exception as e:
-                        logger.debug(f"character_messages: failed to include tool_calls in response: {e}")
-                if include_metadata:
-                    try:
-                        md = db.get_message_metadata(resp.id)
-                        if md and md.get('extra') is not None:
-                            resp = resp.model_copy(update={"metadata_extra": md.get('extra')})
-                    except Exception as e:
-                        logger.debug(f"character_messages: failed to include metadata_extra in response: {e}")
+                        logger.debug(f"character_messages: failed to include metadata in response: {e}")
                 built_messages.append(resp)
             response = MessageListResponse(
                 messages=built_messages,
@@ -499,25 +554,24 @@ async def get_chat_messages(
 
             return response
 
-        # Standard response
         # Standard response (no character context)
         built_messages = []
         for m in paginated:
             resp = _convert_db_message_to_response(m)
-            if include_tool_calls:
+            # Fetch metadata once if either flag is set (avoid duplicate queries)
+            if include_tool_calls or include_metadata:
                 try:
                     md = db.get_message_metadata(resp.id)
-                    if md and md.get('tool_calls') is not None:
-                        resp = resp.model_copy(update={"tool_calls": md.get('tool_calls')})
+                    if md:
+                        updates = {}
+                        if include_tool_calls and md.get('tool_calls') is not None:
+                            updates["tool_calls"] = md.get('tool_calls')
+                        if include_metadata and md.get('extra') is not None:
+                            updates["metadata_extra"] = md.get('extra')
+                        if updates:
+                            resp = resp.model_copy(update=updates)
                 except Exception as e:
-                    logger.debug(f"character_messages: failed to include tool_calls (std): {e}")
-            if include_metadata:
-                try:
-                    md = db.get_message_metadata(resp.id)
-                    if md and md.get('extra') is not None:
-                        resp = resp.model_copy(update={"metadata_extra": md.get('extra')})
-                except Exception as e:
-                    logger.debug(f"character_messages: failed to include metadata_extra (std): {e}")
+                    logger.debug(f"character_messages: failed to include metadata (std): {e}")
             built_messages.append(resp)
         return MessageListResponse(
             messages=built_messages,
@@ -609,6 +663,10 @@ async def edit_message(
         HTTPException: 404 if not found, 403 if unauthorized, 409 if version conflict
     """
     try:
+        # Check rate limits for message edits
+        rate_limiter = get_character_rate_limiter()
+        await rate_limiter.check_rate_limit(current_user.id, "message_edit")
+
         # Verify message access
         message = _verify_message_access(db, message_id, current_user.id)
 
@@ -687,6 +745,10 @@ async def delete_message(
         HTTPException: 404 if not found, 403 if unauthorized, 409 if version conflict
     """
     try:
+        # Check rate limits for message deletions
+        rate_limiter = get_character_rate_limiter()
+        await rate_limiter.check_rate_limit(current_user.id, "message_delete")
+
         # Verify message access
         message = _verify_message_access(db, message_id, current_user.id)
 
@@ -732,11 +794,15 @@ async def delete_message(
         )
 
 
+# Maximum search query length to prevent abuse
+MAX_SEARCH_QUERY_LENGTH = 500
+
+
 @router.get("/chats/{chat_id}/messages/search", response_model=MessageListResponse,
             summary="Search messages in a chat", tags=["Messages"])
 async def search_messages(
     chat_id: str = Path(..., description="Chat session ID"),
-    query: str = Query(..., description="Search query", min_length=1),
+    query: str = Query(..., description="Search query", min_length=1, max_length=MAX_SEARCH_QUERY_LENGTH),
     limit: int = Query(50, ge=1, le=200, description="Maximum results"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
@@ -758,6 +824,10 @@ async def search_messages(
         HTTPException: 404 if chat not found, 403 if unauthorized
     """
     try:
+        # Check rate limits for message search
+        rate_limiter = get_character_rate_limiter()
+        await rate_limiter.check_rate_limit(current_user.id, "message_search")
+
         # Verify conversation access
         conversation = _verify_conversation_access(db, chat_id, current_user.id)
 

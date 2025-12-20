@@ -1,7 +1,3 @@
-import io
-import json
-import os
-
 import pytest
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -25,20 +21,12 @@ def _make_app() -> FastAPI:
         return JSONResponse({"ok": True}, status_code=200)
 
     # Middlewares needed for request_id propagation and access logging
-    app.add_middleware(RequestIDMiddleware)
     app.add_middleware(AccessLogMiddleware)
+    app.add_middleware(RequestIDMiddleware)
     return app
 
 
-@pytest.mark.asyncio
-async def test_access_log_emits_json_with_core_fields(monkeypatch):
-    # Ensure JSON logging style is conceptually enabled (for documentation parity)
-    monkeypatch.setenv("LOG_JSON", "true")
-
-    # Prepare AccessLogMiddleware instance (standalone)
-    alm = AccessLogMiddleware(object())
-
-    # Monkeypatch the module-level logger used by AccessLogMiddleware to capture fields
+def _capture_access_log(monkeypatch):
     from tldw_Server_API.app.core.Logging import access_log_middleware as alm_mod
 
     captured = []
@@ -56,6 +44,18 @@ async def test_access_log_emits_json_with_core_fields(monkeypatch):
             captured.append({"level": level, "message": message, "extra": dict(self._extra)})
 
     monkeypatch.setattr(alm_mod, "logger", _StubLogger(), raising=True)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_access_log_emits_json_with_core_fields(monkeypatch):
+    # Ensure JSON logging style is conceptually enabled (for documentation parity)
+    monkeypatch.setenv("LOG_JSON", "true")
+
+    # Prepare AccessLogMiddleware instance (standalone)
+    alm = AccessLogMiddleware(object())
+
+    captured = _capture_access_log(monkeypatch)
 
     # Build a minimal Starlette Request with X-Request-ID
     scope = {
@@ -89,3 +89,38 @@ async def test_access_log_emits_json_with_core_fields(monkeypatch):
     assert status_val == 200 or status_val == "200"
     assert extra.get("path") == "/ping"
     assert isinstance(extra.get("duration_ms"), int)
+
+
+def test_access_log_uses_sanitized_request_id(monkeypatch):
+    app = _make_app()
+    captured = _capture_access_log(monkeypatch)
+    client = TestClient(app)
+    resp = client.get("/ping", headers={"X-Request-ID": "bad value"})
+    assert resp.status_code == 200
+
+    assert captured, "no access-log record captured"
+    rec = captured[-1]
+    extra = rec.get("extra") or {}
+    logged_id = extra.get("request_id")
+    response_id = resp.headers.get("X-Request-ID")
+    assert logged_id
+    assert response_id
+    assert logged_id == response_id
+    assert logged_id != "bad value"
+
+
+def test_access_log_generates_request_id_when_missing(monkeypatch):
+    app = _make_app()
+    captured = _capture_access_log(monkeypatch)
+    client = TestClient(app)
+    resp = client.get("/ping")
+    assert resp.status_code == 200
+
+    assert captured, "no access-log record captured"
+    rec = captured[-1]
+    extra = rec.get("extra") or {}
+    logged_id = extra.get("request_id")
+    response_id = resp.headers.get("X-Request-ID")
+    assert logged_id
+    assert response_id
+    assert logged_id == response_id

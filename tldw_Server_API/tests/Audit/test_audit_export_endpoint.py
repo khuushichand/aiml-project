@@ -472,10 +472,7 @@ async def test_audit_count_integration_live(monkeypatch):
         from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
         from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
 
-        with audit_deps._audit_service_lock:
-            svc = audit_deps._user_audit_instances.get(user_id_int)  # type: ignore[attr-defined]
-        if svc is None:
-            svc = await audit_deps._create_audit_service_for_user(user_id_int)
+        svc = await audit_deps.get_or_create_audit_service_for_user_id(user_id_int)
 
         await svc.log_event(
             event_type=AuditEventType.DATA_READ,

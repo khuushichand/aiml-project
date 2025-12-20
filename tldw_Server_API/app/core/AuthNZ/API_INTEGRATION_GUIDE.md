@@ -918,7 +918,7 @@ Note: Enhanced endpoints such as MFA and password reset are implemented in `auth
 ```python
 # Structured logging for authentication events
 import structlog
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = structlog.get_logger()
 
@@ -931,7 +931,7 @@ class AuthEventLogger:
             ip_address=ip,
             success=success,
             mfa_used=mfa_used,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     @staticmethod
@@ -940,7 +940,7 @@ class AuthEventLogger:
             "mfa_setup",
             user_id=user_id,
             success=success,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     @staticmethod
@@ -949,7 +949,7 @@ class AuthEventLogger:
             "password_reset_requested",
             email=email,
             ip_address=ip,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     @staticmethod
@@ -959,7 +959,7 @@ class AuthEventLogger:
             user_id=user_id,
             activity_type=activity_type,
             details=details,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 ```
 

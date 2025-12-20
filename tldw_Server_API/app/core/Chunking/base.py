@@ -114,6 +114,10 @@ class BaseChunkingStrategy(ABC):
         self._cache = {}
         logger.debug(f"Initialized {self.__class__.__name__} for language: {language}")
 
+    def set_language(self, language: str) -> None:
+        """Update strategy language (override in subclasses needing reinit)."""
+        self.language = language
+
     # ---------------- Common helpers: config + grapheme boundaries ----------------
     @staticmethod
     def _get_chunking_bool(key: str, default: bool) -> bool:
@@ -127,15 +131,19 @@ class BaseChunkingStrategy(ABC):
                     v = cp.get('Chunking', key, fallback=str(default))
             s = str(v).strip().lower() if v is not None else str(default).lower()
             return s in ("1", "true", "yes", "on", "y")
-        except Exception:
+        except (ImportError, AttributeError, KeyError) as e:
+            logger.debug(f"_get_chunking_bool: config lookup failed for '{key}', using default={default}: {e}")
+            return default
+        except ValueError as e:
+            logger.debug(f"_get_chunking_bool: invalid value for '{key}', using default={default}: {e}")
             return default
 
     def _strict_grapheme_mode(self, options: dict | None = None) -> bool:
         if options and 'strict_grapheme_end_expansion' in options:
             try:
                 return bool(options.get('strict_grapheme_end_expansion'))
-            except Exception:
-                pass
+            except (TypeError, ValueError) as e:
+                logger.debug(f"_strict_grapheme_mode: invalid option value, falling back to config: {e}")
         return self._get_chunking_bool('strict_grapheme_end_expansion', False)
 
     def _expand_end_to_grapheme_boundary(self, text: str, end: int, *, options: dict | None = None) -> int:
@@ -198,7 +206,8 @@ class BaseChunkingStrategy(ABC):
                             break
                 continue
             break
-        return i
+        # Final bounds check (defensive - should already be in range)
+        return min(i, n)
 
     @abstractmethod
     def chunk(self,
@@ -250,8 +259,8 @@ class BaseChunkingStrategy(ABC):
             # Expand to avoid splitting grapheme clusters in metadata
             try:
                 chunk_end = self._expand_end_to_grapheme_boundary(text, chunk_end, options=options)
-            except Exception:
-                pass
+            except (IndexError, ValueError) as e:
+                logger.debug(f"chunk_with_metadata: grapheme expansion failed for chunk {i}, using original end: {e}")
 
             metadata = ChunkMetadata(
                 index=i,
@@ -267,6 +276,22 @@ class BaseChunkingStrategy(ABC):
             current_pos = chunk_end - overlap if overlap > 0 else chunk_end
 
         return results
+
+    def validate_options(self, options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Validate and normalize options for chunking strategies.
+
+        Args:
+            options: Options dictionary (may be None)
+
+        Returns:
+            A shallow-copied options dict
+        """
+        if options is None:
+            return {}
+        if not isinstance(options, dict):
+            raise ValueError(f"options must be a dict, got {type(options).__name__}")
+        return dict(options)
 
     def validate_parameters(self, text: str, max_size: int, overlap: int):
         """
@@ -417,17 +442,18 @@ class ChunkerConfig:
                     v = cp.get('Chunking', 'cache_copy_on_access', fallback=None)
                     if v is not None:
                         self.cache_copy_on_access = str(v).strip().lower() in {"1","true","yes","on"}
-                except Exception:
-                    pass
+                except (AttributeError, KeyError, TypeError) as e:
+                    logger.debug(f"ChunkerConfig: failed to read 'cache_copy_on_access' from config: {e}")
                 try:
                     v = cp.get('Chunking', 'verbose_logging', fallback=None)
                     if v is not None:
                         self.verbose_logging = str(v).strip().lower() in {"1","true","yes","on"}
-                except Exception:
-                    pass
-        except Exception:
-            # Config loading is optional here; safe to ignore
-            pass
+                except (AttributeError, KeyError, TypeError) as e:
+                    logger.debug(f"ChunkerConfig: failed to read 'verbose_logging' from config: {e}")
+        except ImportError as e:
+            logger.debug(f"ChunkerConfig: config module not available, using defaults: {e}")
+        except (AttributeError, TypeError) as e:
+            logger.debug(f"ChunkerConfig: config loading failed, using defaults: {e}")
 
         logger.info(f"ChunkerConfig initialized with method={self.default_method.value if hasattr(self.default_method, 'value') else self.default_method}, "
                    f"max_size={default_max_size}, overlap={default_overlap}")

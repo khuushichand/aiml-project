@@ -27,6 +27,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
     ImportDictionaryResponse,
     ProcessTextRequest,
     ProcessTextResponse,
+    validate_regex_pattern_safety,
 )
 from tldw_Server_API.app.api.v1.utils.datetime_utils import coerce_datetime, parse_timed_effects
 from tldw_Server_API.app.core.Character_Chat.chat_dictionary import (
@@ -384,6 +385,61 @@ async def update_dictionary_entry(
 ) -> DictionaryEntryResponse:
     """Update a dictionary entry."""
     service = ChatDictionaryService(db)
+
+    # Security: Validate regex pattern safety when updates could enable regex matching.
+    # The Pydantic validator only validates when BOTH type and pattern are provided.
+    # We need to check existing values when only one field changes.
+    existing_dict_id = None
+    if (
+        (update.pattern is not None and update.type is None)
+        or (update.type == "regex" and update.pattern is None)
+    ):
+        # Pattern is being updated without explicit type, or type is being set to regex.
+        try:
+            existing_entry = service.get_entry(entry_id, active_only=False)
+            if not existing_entry:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Entry not found for validation",
+                )
+            existing_dict_id = existing_entry.get("dictionary_id")
+            if existing_dict_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Entry not found for validation",
+                )
+            existing_type = existing_entry.get("type")
+            if not existing_type:
+                # Fallback for legacy is_regex field
+                existing_type = "regex" if existing_entry.get("is_regex") else "literal"
+            if update.pattern is not None and update.type is None:
+                if existing_type == "regex":
+                    # Validate the new pattern for ReDoS safety
+                    try:
+                        validate_regex_pattern_safety(update.pattern)
+                    except ValueError as e:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=str(e)
+                        ) from e
+            elif update.type == "regex":
+                existing_pattern = existing_entry.get("pattern") or existing_entry.get("key") or ""
+                try:
+                    validate_regex_pattern_safety(existing_pattern)
+                except ValueError as e:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=str(e)
+                    ) from e
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error checking existing entry type for regex validation: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Unable to validate regex pattern safety",
+            ) from e
+
     timed_effects_dict = update.timed_effects.model_dump() if update.timed_effects else None
     try:
         success = service.update_entry(
@@ -399,7 +455,14 @@ async def update_dictionary_entry(
             case_sensitive=update.case_sensitive,
         )
 
-        dictionary_id_for_entry = service.get_entry_dictionary_id(entry_id) if success else None
+        if success:
+            dictionary_id_for_entry = (
+                existing_dict_id
+                if existing_dict_id is not None
+                else service.get_entry_dictionary_id(entry_id)
+            )
+        else:
+            dictionary_id_for_entry = None
         refreshed_entries = (
             service.get_entries(dictionary_id=dictionary_id_for_entry, active_only=False)
             if dictionary_id_for_entry is not None

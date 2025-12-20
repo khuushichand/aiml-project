@@ -210,6 +210,7 @@ async def list_alerts(
                     "monitoring: failed to parse alert metadata JSON: {}",
                     e,
                 )
+                r["metadata"] = {"raw": meta}
         items.append(AlertItem(**r))
     return AlertsListResponse(items=items)
 
@@ -286,14 +287,15 @@ async def send_test_notification(payload: NotificationTestRequest) -> Notificati
     )
     try:
         # notifier.notify performs file I/O; offload to a thread to keep the event loop responsive.
-        await asyncio.to_thread(notifier.notify, alert)
+        result = await asyncio.to_thread(notifier.notify, alert)
     except Exception as e:  # Generic 500 handler
         logger.exception("monitoring: failed to send test notification")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to send test notification",
         ) from e
-    return NotificationTestResponse(status="ok")
+    status_value = result if isinstance(result, str) and result else "ok"
+    return NotificationTestResponse(status=status_value)
 
 
 def _tail_jsonl_file(path: str, limit: int) -> list[str]:

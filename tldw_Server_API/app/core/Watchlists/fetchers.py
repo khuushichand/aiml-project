@@ -16,6 +16,7 @@ Returned item structure (normalized):
 from __future__ import annotations
 
 import os
+import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import urljoin
@@ -413,6 +414,15 @@ def fetch_site_article(url: str) -> Optional[Dict[str, Any]]:
         return {"title": title, "url": url, "content": content, "author": author}
     except Exception as e:
         logger.warning(f"fetch_site_article failed for {url}: {e}")
+        return None
+
+
+async def fetch_site_article_async(url: str) -> Optional[Dict[str, Any]]:
+    """Async wrapper for blocking article extraction."""
+    try:
+        return await asyncio.to_thread(fetch_site_article, url)
+    except Exception as exc:
+        logger.debug(f"fetch_site_article_async failed for {url}: {exc}")
         return None
 
 

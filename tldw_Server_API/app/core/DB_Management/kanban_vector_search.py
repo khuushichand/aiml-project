@@ -1,0 +1,382 @@
+# kanban_vector_search.py
+# Description: Optional ChromaDB vector search integration for Kanban cards.
+#
+"""
+kanban_vector_search.py
+-----------------------
+
+Provides optional vector search functionality for Kanban cards using ChromaDB.
+Gracefully degrades to FTS-only search when ChromaDB is not available.
+
+Collection name: kanban_user_{safe_user_id}
+Document: Card title + description + label names
+Metadata: card_id, board_id, list_id, due_date, priority, labels, created_at
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+from typing import Any, Dict, List, Optional, Tuple
+
+from loguru import logger
+
+# Try to import ChromaDB components - graceful fallback if unavailable
+_CHROMADB_AVAILABLE = False
+_ChromaDBManager = None
+
+try:
+    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import (
+        ChromaDBManager,
+    )
+    _ChromaDBManager = ChromaDBManager
+    _CHROMADB_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"ChromaDB not available for Kanban vector search: {e}")
+except Exception as e:
+    logger.warning(f"ChromaDB initialization error for Kanban: {e}")
+
+
+KANBAN_COLLECTION_PREFIX = "kanban_user_"
+
+
+def is_vector_search_available() -> bool:
+    """Check if vector search is available."""
+    return _CHROMADB_AVAILABLE
+
+
+def get_kanban_collection_name(user_id: str) -> str:
+    """
+    Get the ChromaDB collection name for a user's Kanban cards.
+
+    Sanitizes the user_id for use in collection names by replacing
+    hyphens and spaces with underscores. User IDs longer than 50 characters
+    are shortened with a hash suffix to reduce collision risk while
+    respecting collection name limits.
+
+    Args:
+        user_id: The user identifier (can contain hyphens, spaces, etc.)
+
+    Returns:
+        A sanitized collection name in the format 'kanban_user_{safe_user_id}'.
+    """
+    user_id_str = str(user_id)
+    sanitized = user_id_str.replace("-", "_").replace(" ", "_")
+    if len(sanitized) > 50:
+        hash_suffix = hashlib.sha256(user_id_str.encode("utf-8")).hexdigest()[:16]
+        prefix_len = 50 - 1 - len(hash_suffix)
+        safe_user_id = f"{sanitized[:prefix_len]}_{hash_suffix}"
+    else:
+        safe_user_id = sanitized
+    return f"{KANBAN_COLLECTION_PREFIX}{safe_user_id}"
+
+
+class KanbanVectorSearch:
+    """
+    Provides vector search functionality for Kanban cards.
+
+    Wraps ChromaDBManager with Kanban-specific logic for:
+    - Building searchable documents from cards
+    - Filtering by board, labels, priority
+    - Graceful degradation when unavailable
+    """
+
+    def __init__(
+        self,
+        user_id: str,
+        embedding_config: Optional[Dict[str, Any]] = None,
+    ):
+        """
+        Initialize the Kanban vector search.
+
+        Args:
+            user_id: The user ID for isolation.
+            embedding_config: Configuration for ChromaDB/embeddings.
+                             If None, vector search will be disabled.
+        """
+        self.user_id = str(user_id)
+        self.embedding_config = embedding_config
+        self._manager: Optional[Any] = None
+        self._collection_name = get_kanban_collection_name(self.user_id)
+        self._available = False
+
+        if not _CHROMADB_AVAILABLE:
+            logger.debug(f"KanbanVectorSearch for user {self.user_id}: ChromaDB not available")
+            return
+
+        if not embedding_config:
+            logger.debug(f"KanbanVectorSearch for user {self.user_id}: No embedding config provided")
+            return
+
+        try:
+            self._manager = _ChromaDBManager(
+                user_id=self.user_id,
+                user_embedding_config=embedding_config,
+            )
+            self._available = True
+            logger.info(f"KanbanVectorSearch initialized for user {self.user_id}")
+        except Exception as e:
+            logger.warning(f"KanbanVectorSearch init failed for user {self.user_id}: {e}")
+
+    @property
+    def available(self) -> bool:
+        """Check if vector search is available for this instance."""
+        return self._available and self._manager is not None
+
+    def close(self) -> None:
+        """Close the ChromaDB manager."""
+        if self._manager is not None:
+            try:
+                self._manager.close()
+            except Exception as e:
+                logger.warning(f"Error closing KanbanVectorSearch for user {self.user_id}: {e}")
+            finally:
+                self._manager = None
+                self._available = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+    def _build_document(self, card: Dict[str, Any]) -> str:
+        """
+        Build a searchable document from card data.
+
+        Combines title, description, and label names for embedding.
+        """
+        parts = []
+
+        # Title is required
+        title = card.get("title", "")
+        if title:
+            parts.append(title)
+
+        # Description is optional
+        description = card.get("description", "")
+        if description:
+            parts.append(description)
+
+        # Add label names if present
+        labels = card.get("labels", [])
+        if labels:
+            label_names = [label.get("name", "") for label in labels if label.get("name")]
+            if label_names:
+                parts.append("Labels: " + ", ".join(label_names))
+
+        return " ".join(parts)
+
+    def _build_metadata(self, card: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build ChromaDB metadata from card data.
+
+        Only includes serializable values.
+        """
+        metadata = {
+            "card_id": card.get("id"),
+            "board_id": card.get("board_id"),
+            "list_id": card.get("list_id"),
+        }
+
+        # Optional fields
+        if card.get("priority"):
+            metadata["priority"] = card["priority"]
+        if card.get("due_date"):
+            metadata["due_date"] = card["due_date"]
+        if card.get("created_at"):
+            metadata["created_at"] = card["created_at"]
+
+        return metadata
+
+    def index_card(self, card: Dict[str, Any]) -> bool:
+        """
+        Index a card for vector search.
+
+        Args:
+            card: Card data including id, title, description, labels, etc.
+
+        Returns:
+            True if indexed successfully, False otherwise.
+        """
+        if not self.available:
+            return False
+
+        try:
+            card_id = card.get("id")
+            if not card_id:
+                logger.warning(f"KanbanVectorSearch.index_card: missing or invalid card id for user {self.user_id}")
+                return False
+
+            doc_id = f"card_{card_id}"
+            document = self._build_document(card)
+            metadata = self._build_metadata(card)
+
+            # Upsert the document using the manager's generic storage API
+            # Reuse the existing collection name and let the manager handle embedding generation.
+            self._manager.process_and_store_content(
+                content=document,
+                media_id=doc_id,
+                file_name=f"kanban_card_{card_id}",
+                collection_name=self._collection_name,
+                create_embeddings=True,
+                create_contextualized=False,
+                base_metadata=metadata,
+            )
+
+            logger.debug(f"Indexed card {card_id} for user {self.user_id}")
+            return True
+
+        except Exception as e:
+            logger.warning(f"Failed to index card {card.get('id')} for user {self.user_id}: {e}")
+            return False
+
+    def remove_card(self, card_id: int) -> bool:
+        """
+        Remove a card from the vector index.
+
+        Args:
+            card_id: The card ID to remove.
+
+        Returns:
+            True if removed successfully, False otherwise.
+        """
+        if not self.available:
+            return False
+
+        try:
+            doc_id = f"card_{card_id}"
+            collection = self._manager.get_or_create_collection(self._collection_name)
+            collection.delete(ids=[doc_id])
+
+            logger.debug(f"Removed card {card_id} from index for user {self.user_id}")
+            return True
+
+        except Exception as e:
+            logger.warning(f"Failed to remove card {card_id} from index for user {self.user_id}: {e}")
+            return False
+
+    def search(
+        self,
+        query: str,
+        board_id: Optional[int] = None,
+        priority: Optional[str] = None,
+        limit: int = 20,
+        ) -> List[Dict[str, Any]]:
+        """
+        Search cards using vector similarity.
+
+        The returned ``relevance_score`` is a normalized similarity value in the
+        range ``0.0`` to ``1.0``, derived from the underlying L2 distance
+        reported by ChromaDB (lower distance → higher relevance).
+
+        Args:
+            query: The search query.
+            board_id: Optional board ID filter.
+            priority: Optional priority filter.
+            limit: Maximum number of results.
+
+        Returns:
+            List of search results with card_id, board_id, list_id and
+            relevance_score in the range [0.0, 1.0].
+        """
+        if not self.available:
+            return []
+
+        try:
+            # Build where filter
+            where_filter: Optional[Dict[str, Any]] = None
+            if board_id or priority:
+                where_filter = {}
+                if board_id:
+                    where_filter["board_id"] = board_id
+                if priority:
+                    where_filter["priority"] = priority
+
+            # Use the manager's vector search
+            results = self._manager.vector_search(
+                query=query,
+                collection_name=self._collection_name,
+                k=limit,
+                where_filter=where_filter,
+                include_fields=["metadatas", "distances"],
+            )
+
+            # Convert results to our format
+            search_results = []
+            for result in results:
+                metadata = result.get("metadata", {})
+                distance = result.get("distance", 1.0)
+
+                # Convert distance to similarity score (lower distance = higher similarity)
+                # ChromaDB uses L2 distance by default
+                relevance_score = 1.0 / (1.0 + distance) if distance is not None else 0.0
+
+                search_results.append({
+                    "card_id": metadata.get("card_id"),
+                    "board_id": metadata.get("board_id"),
+                    "list_id": metadata.get("list_id"),
+                    "relevance_score": relevance_score,
+                })
+
+            return search_results
+
+        except Exception as e:
+            logger.warning(f"Vector search failed for user {self.user_id}: {e}")
+            return []
+
+    def reindex_all_cards(self, cards: List[Dict[str, Any]]) -> Tuple[int, int]:
+        """
+        Reindex all cards for a user (useful for rebuilding the index).
+
+        Args:
+            cards: List of card dictionaries.
+
+        Returns:
+            Tuple of (success_count, failure_count).
+        """
+        if not self.available:
+            return 0, len(cards)
+
+        success = 0
+        failure = 0
+
+        for card in cards:
+            if self.index_card(card):
+                success += 1
+            else:
+                failure += 1
+
+        logger.info(f"Reindexed {success} cards for user {self.user_id} ({failure} failures)")
+        return success, failure
+
+
+def create_kanban_vector_search(
+    user_id: str,
+    embedding_config: Optional[Dict[str, Any]] = None,
+) -> Optional[KanbanVectorSearch]:
+    """
+    Factory function to create a KanbanVectorSearch instance.
+
+    Returns None if vector search is not available or not configured.
+
+    Args:
+        user_id: The user ID.
+        embedding_config: Embedding configuration (from app config).
+
+    Returns:
+        KanbanVectorSearch instance or None.
+    """
+    if not is_vector_search_available():
+        return None
+
+    if not embedding_config:
+        return None
+
+    try:
+        search = KanbanVectorSearch(user_id, embedding_config)
+        return search if search.available else None
+    except Exception as e:
+        logger.warning(f"Failed to create KanbanVectorSearch for user {user_id}: {e}")
+        return None

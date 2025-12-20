@@ -29,6 +29,10 @@ from tldw_Server_API.app.core.config import rg_redis_fail_mode
 TimeSource = Callable[[], float]
 
 
+class _FallbackToMemory(Exception):
+    """Signal that Redis operations failed and fallback_memory should be used."""
+
+
 @dataclass
 class _RedisKeys:
     ns: str
@@ -106,6 +110,8 @@ class RedisResourceGovernor(ResourceGovernor):
         self._requests_deny_until: Dict[Tuple[str, str, str], float] = {}
         # Requests acceptance tracker per (ns, policy, entity) to harden burst behavior
         self._requests_accept_window: Dict[Tuple[str, str, str], Tuple[float, int, int]] = {}
+        # Handles issued by fallback-to-memory reserve paths
+        self._fallback_handles: set[str] = set()
         ensure_rg_metrics_registered()
         # Pin a metrics registry reference at construction time to avoid
         # writing to a different registry instance if modules reload in tests.
@@ -349,6 +355,15 @@ class RedisResourceGovernor(ResourceGovernor):
             pass
         return self._fail_mode
 
+    def _fallback_allowed(self, policy: Dict[str, Any], categories: Dict[str, Any]) -> bool:
+        try:
+            for category in categories.keys():
+                if self._effective_fail_mode(policy, category) == "fallback_memory":
+                    return True
+        except Exception:
+            return False
+        return False
+
     @staticmethod
     def _parse_entity(entity: str) -> Tuple[str, str]:
         if ":" in entity:
@@ -457,7 +472,9 @@ class RedisResourceGovernor(ResourceGovernor):
                 ra = window
             return False, int(ra), count
         except Exception:
-            if fail_mode in ("fail_open", "fallback_memory"):
+            if fail_mode == "fallback_memory":
+                raise _FallbackToMemory
+            if fail_mode == "fail_open":
                 return True, 0, 0
             return False, window, 0
 
@@ -678,425 +695,441 @@ class RedisResourceGovernor(ResourceGovernor):
         backend = "redis"
         now = self._time()
 
-        # Detect client type for diagnostics
+        fallback_allowed = self._fallback_allowed(pol, req.categories)
         try:
-            client = await self._client_get()
-            is_stub = await self._is_stub_client()
-            if self._force_stub_rate():
-                is_stub = True
+            # Detect client type for diagnostics
             try:
-                logger.debug(
-                    "RG check init: policy_id={pid} entity={ent} client={cls} is_stub={is_stub}",
-                    pid=policy_id,
-                    ent=req.entity,
-                    cls=getattr(client, "__class__", type(client)).__name__,
-                    is_stub=is_stub,
-                )
-            except Exception:
-                pass
-        except Exception:
-            is_stub = True
-            client = None
-
-        # Use ZSET-based sliding-window checks for both real and stub clients.
-        # Atomic multi-key reservations are only attempted on real Redis in reserve().
-        force_stub_rate = False
-        overall_allowed = True
-        retry_after_overall = 0
-        per_category: Dict[str, Any] = {}
-
-        smoothing_any = False
-        for category, cfg in req.categories.items():
-            units = int(cfg.get("units") or 0)
-            if category == "requests":
-                rpm = int((pol.get("requests") or {}).get("rpm") or 0)
-                window = 60
-                limit = rpm
-                allowed = True
-                retry_after = 0
-                cat_fail = self._effective_fail_mode(pol, category)
-                # Harden with acceptance-window tracker: if we already accepted up to limit
-                # within the current window, deny until the window resets regardless of
-                # ZSET anomalies (helps in constrained environments/tests).
-                # In stub-rate tests, allow a final-step smoothing admit when calls are
-                # spaced near step ~= 60/limit to satisfy steady-rate expectations.
-                smoothing_applied = False
-                if self._accept_window_enabled():
-                    try:
-                        key_aw = (policy_id, req.entity)
-                        start_aw, lim_aw, cnt_aw = self._requests_accept_window.get((self._keys.ns,) + key_aw, (None, None, None))  # type: ignore[assignment]
-                        if start_aw is not None and lim_aw == limit:
-                            if int((cnt_aw or 0) + units) > int(limit):
-                                if now < float(start_aw) + float(window):
-                                    # Default deny within the active window
-                                    allowed = False
-                                    retry_after = max(retry_after, int(max(0.0, float(start_aw) + float(window) - now))) or window
-                                    # Tail smoothing only for stub-rate tests and when we're within
-                                    # the last step of the window (step < window).
-                                    if self._force_stub_rate():
-                                        step = max(1, int(float(window) / max(1, int(limit))))
-                                        try:
-                                            logger.debug(
-                                                "RG accept-window pre-smoothing: ns={ns} pid={pid} ent={ent} start={st} cnt={cnt} lim={lim} now={now} step={step}",
-                                                ns=self._keys.ns,
-                                                pid=policy_id,
-                                                ent=req.entity,
-                                                st=start_aw,
-                                                cnt=cnt_aw,
-                                                lim=limit,
-                                                now=now,
-                                                step=step,
-                                            )
-                                        except Exception:
-                                            pass
-
-                                        if step < window and now >= float(start_aw) + float(window - step):
-                                            # Allow within final step and mark smoothing applied so subsequent
-                                            # checks do not re-apply early deny paths in this evaluation.
-                                            allowed = True
-                                            retry_after = 0
-                                            smoothing_applied = True
-                                            smoothing_any = True
-                    except Exception:
-                        pass
-                # Requests deny floor based on prior denial
-                key_e = (self._keys.ns, policy_id, req.entity)
-                if not smoothing_applied:
-                    deny_until = float(self._requests_deny_until.get(key_e, 0.0) or 0.0)
-                    if now < deny_until:
-                        allowed = False
-                        retry_after = max(retry_after, int(max(0, deny_until - now)))
-                # Backoff guard (memory + Redis TTL): if we recently denied this
-                # entity/policy, keep denying until the backoff window elapses to
-                # prevent premature admits due to rounding or clock drift.
-                key_b = (self._keys.ns, policy_id, req.entity, category)
-                backoff_until = float(self._stub_backoff_until.get(key_b, 0.0) or 0.0)
-                # Only consult in-memory backoff (FakeTime-aware). Redis TTL is set
-                # for cross-process stability but is not used to gate decisions here
-                # to avoid conflicts with FakeTime in tests.
-                if now < backoff_until:
-                    allowed = False
-                    retry_after = max(retry_after, int(max(0, backoff_until - now)))
-                elif not smoothing_applied:
-                    # Sliding-window count checks across scopes
-                    for sc, ev in (("global", "*"), (entity_scope, entity_value)):
-                        if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
-                            continue
-                        key = self._keys.win(policy_id, category, sc, ev)
-                        ok, ra, _cnt = await self._allow_requests_sliding_check_only(
-                            key=key, limit=limit, window=window, units=units, now=now, fail_mode=cat_fail
-                        )
-                        try:
-                            logger.debug(
-                                "RG requests scope check: policy_id={pid} scope={sc} entity={ev} cnt_ok={ok} ra={ra}",
-                                pid=policy_id,
-                                sc=sc,
-                                ev=ev,
-                                ok=ok,
-                                ra=ra,
-                            )
-                        except Exception:
-                            pass
-                        allowed = allowed and ok
-                        retry_after = max(retry_after, ra)
-                # If denied, set deny floor until the computed RA expires based on window/oldest
-                if not allowed and retry_after > 0:
-                    self._requests_deny_until[key_e] = now + float(retry_after)
-                elif allowed and key_e in self._requests_deny_until:
-                    try:
-                        if now >= float(self._requests_deny_until.get(key_e, 0.0) or 0.0):
-                            del self._requests_deny_until[key_e]
-                    except Exception:
-                        pass
+                client = await self._client_get()
+                is_stub = await self._is_stub_client()
+                if self._force_stub_rate():
+                    is_stub = True
                 try:
                     logger.debug(
-                        "RG requests decision: ns={ns} pid={pid} ent={ent} allowed={al} ra={ra} limit={lim}",
-                        ns=self._keys.ns, pid=policy_id, ent=req.entity, al=allowed, ra=retry_after, lim=limit,
+                        "RG check init: policy_id={pid} entity={ent} client={cls} is_stub={is_stub}",
+                        pid=policy_id,
+                        ent=req.entity,
+                        cls=getattr(client, "__class__", type(client)).__name__,
+                        is_stub=is_stub,
                     )
                 except Exception:
                     pass
-                # Persist/clear backoff window based on decision
-                if not allowed and retry_after > 0:
-                    self._stub_backoff_until[key_b] = now + float(retry_after)
-                    try:
-                        # Set Redis TTL for cross-process stability
-                        client = await self._client_get()
-                        await client.set(self._keys.backoff(policy_id, category, req.entity), "1", ex=int(retry_after))
-                    except Exception:
-                        pass
-                elif allowed and key_b in self._stub_backoff_until:
-                    try:
-                        del self._stub_backoff_until[key_b]
-                    except Exception:
-                        pass
-                # Optional durable daily caps (v1.1) backed by ResourceDailyLedger.
-                try:
-                    daily_cap = int((pol.get(category) or {}).get("daily_cap") or 0)
-                except Exception:
-                    daily_cap = 0
-                daily_details: Dict[str, Any] = {}
-                if daily_cap > 0:
-                    daily_allowed, daily_ra, daily_details = await check_daily_cap(
-                        entity_scope=entity_scope,
-                        entity_value=entity_value,
-                        category=category,
-                        daily_cap=daily_cap,
-                        units=units,
-                    )
-                    if not daily_allowed:
+            except Exception:
+                is_stub = True
+                client = None
+    
+            # Use ZSET-based sliding-window checks for both real and stub clients.
+            # Atomic multi-key reservations are only attempted on real Redis in reserve().
+            force_stub_rate = False
+            overall_allowed = True
+            retry_after_overall = 0
+            per_category: Dict[str, Any] = {}
+    
+            smoothing_any = False
+            for category, cfg in req.categories.items():
+                units = int(cfg.get("units") or 0)
+                if category == "requests":
+                    rpm = int((pol.get("requests") or {}).get("rpm") or 0)
+                    window = 60
+                    limit = rpm
+                    allowed = True
+                    retry_after = 0
+                    cat_fail = self._effective_fail_mode(pol, category)
+                    # Harden with acceptance-window tracker: if we already accepted up to limit
+                    # within the current window, deny until the window resets regardless of
+                    # ZSET anomalies (helps in constrained environments/tests).
+                    # In stub-rate tests, allow a final-step smoothing admit when calls are
+                    # spaced near step ~= 60/limit to satisfy steady-rate expectations.
+                    smoothing_applied = False
+                    if self._accept_window_enabled():
+                        try:
+                            key_aw = (policy_id, req.entity)
+                            start_aw, lim_aw, cnt_aw = self._requests_accept_window.get((self._keys.ns,) + key_aw, (None, None, None))  # type: ignore[assignment]
+                            if start_aw is not None and lim_aw == limit:
+                                if int((cnt_aw or 0) + units) > int(limit):
+                                    if now < float(start_aw) + float(window):
+                                        # Default deny within the active window
+                                        allowed = False
+                                        retry_after = max(retry_after, int(max(0.0, float(start_aw) + float(window) - now))) or window
+                                        # Tail smoothing only for stub-rate tests and when we're within
+                                        # the last step of the window (step < window).
+                                        if self._force_stub_rate():
+                                            step = max(1, int(float(window) / max(1, int(limit))))
+                                            try:
+                                                logger.debug(
+                                                    "RG accept-window pre-smoothing: ns={ns} pid={pid} ent={ent} start={st} cnt={cnt} lim={lim} now={now} step={step}",
+                                                    ns=self._keys.ns,
+                                                    pid=policy_id,
+                                                    ent=req.entity,
+                                                    st=start_aw,
+                                                    cnt=cnt_aw,
+                                                    lim=limit,
+                                                    now=now,
+                                                    step=step,
+                                                )
+                                            except Exception:
+                                                pass
+    
+                                            if step < window and now >= float(start_aw) + float(window - step):
+                                                # Allow within final step and mark smoothing applied so subsequent
+                                                # checks do not re-apply early deny paths in this evaluation.
+                                                allowed = True
+                                                retry_after = 0
+                                                smoothing_applied = True
+                                                smoothing_any = True
+                        except Exception:
+                            pass
+                    # Requests deny floor based on prior denial
+                    key_e = (self._keys.ns, policy_id, req.entity)
+                    if not smoothing_applied:
+                        deny_until = float(self._requests_deny_until.get(key_e, 0.0) or 0.0)
+                        if now < deny_until:
+                            allowed = False
+                            retry_after = max(retry_after, int(max(0, deny_until - now)))
+                    # Backoff guard (memory + Redis TTL): if we recently denied this
+                    # entity/policy, keep denying until the backoff window elapses to
+                    # prevent premature admits due to rounding or clock drift.
+                    key_b = (self._keys.ns, policy_id, req.entity, category)
+                    backoff_until = float(self._stub_backoff_until.get(key_b, 0.0) or 0.0)
+                    # Only consult in-memory backoff (FakeTime-aware). Redis TTL is set
+                    # for cross-process stability but is not used to gate decisions here
+                    # to avoid conflicts with FakeTime in tests.
+                    if now < backoff_until:
                         allowed = False
-                    retry_after = max(int(retry_after or 0), int(daily_ra or 0))
-
-                per_category[category] = {
-                    "allowed": allowed,
-                    "limit": limit,
-                    "retry_after": retry_after,
-                    **(daily_details or {}),
-                }
-                # Final smoothing guard retained inside _allow_requests_sliding_check_only.
-            elif category == "tokens":
-                per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
-                window = 60
-                limit = per_min
-                allowed = True
-                retry_after = 0
-                cat_fail = self._effective_fail_mode(pol, category)
-                counts: list[int] = []
-                if limit > 0:
-                    for sc, ev in (("global", "*"), (entity_scope, entity_value)):
-                        if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
-                            continue
-                        key = self._keys.win(policy_id, category, sc, ev)
-                        ok, ra, _cnt = await self._allow_requests_sliding_check_only(
-                            key=key, limit=limit, window=window, units=units, now=now, fail_mode=cat_fail
-                        )
-                        counts.append(int(_cnt))
-                        allowed = allowed and ok
-                        retry_after = max(retry_after, ra)
-                # Special-case: allow initial large batch when no prior usage in window
-                try:
-                    if not allowed and limit > 0 and int(units or 0) > int(limit) and counts and max(counts) == 0:
-                        allowed = True
-                        retry_after = 0
-                except Exception:
-                    pass
-                # Robust guard: if still denied for an over-limit first batch, re-check
-                # both scopes directly. If both effective windows are empty (no members
-                # or only members with scores ahead of FakeTime), allow once to let
-                # commit(actuals) refund correctly. This avoids flaky denials when
-                # residual ZSET entries from real-time tests contaminate FakeTime≈0 runs.
-                if not allowed and limit > 0 and int(units or 0) > int(limit):
-                    try:
-                        client = await self._client_get()
-                        scopes_to_check = []
+                        retry_after = max(retry_after, int(max(0, backoff_until - now)))
+                    elif not smoothing_applied:
+                        # Sliding-window count checks across scopes
                         for sc, ev in (("global", "*"), (entity_scope, entity_value)):
                             if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
                                 continue
-                            scopes_to_check.append((sc, ev))
-                        effective_empty_all = True
-                        for sc, ev in scopes_to_check:
                             key = self._keys.win(policy_id, category, sc, ev)
-                            # Best-effort purge of expired members for correctness
+                            ok, ra, _cnt = await self._allow_requests_sliding_check_only(
+                                key=key, limit=limit, window=window, units=units, now=now, fail_mode=cat_fail
+                            )
                             try:
-                                await client.zremrangebyscore(key, float("-inf"), float(now - window))
+                                logger.debug(
+                                    "RG requests scope check: policy_id={pid} scope={sc} entity={ev} cnt_ok={ok} ra={ra}",
+                                    pid=policy_id,
+                                    sc=sc,
+                                    ev=ev,
+                                    ok=ok,
+                                    ra=ra,
+                                )
                             except Exception:
                                 pass
-                            # If ZSET is empty after purge, treat as empty
-                            try:
-                                card = int(await client.zcard(key))
-                            except Exception:
-                                card = 0
-                            if card <= 0:
+                            allowed = allowed and ok
+                            retry_after = max(retry_after, ra)
+                    # If denied, set deny floor until the computed RA expires based on window/oldest
+                    if not allowed and retry_after > 0:
+                        self._requests_deny_until[key_e] = now + float(retry_after)
+                    elif allowed and key_e in self._requests_deny_until:
+                        try:
+                            if now >= float(self._requests_deny_until.get(key_e, 0.0) or 0.0):
+                                del self._requests_deny_until[key_e]
+                        except Exception:
+                            pass
+                    try:
+                        logger.debug(
+                            "RG requests decision: ns={ns} pid={pid} ent={ent} allowed={al} ra={ra} limit={lim}",
+                            ns=self._keys.ns, pid=policy_id, ent=req.entity, al=allowed, ra=retry_after, lim=limit,
+                        )
+                    except Exception:
+                        pass
+                    # Persist/clear backoff window based on decision
+                    if not allowed and retry_after > 0:
+                        self._stub_backoff_until[key_b] = now + float(retry_after)
+                        try:
+                            # Set Redis TTL for cross-process stability
+                            client = await self._client_get()
+                            await client.set(self._keys.backoff(policy_id, category, req.entity), "1", ex=int(retry_after))
+                        except Exception:
+                            pass
+                    elif allowed and key_b in self._stub_backoff_until:
+                        try:
+                            del self._stub_backoff_until[key_b]
+                        except Exception:
+                            pass
+                    # Optional durable daily caps (v1.1) backed by ResourceDailyLedger.
+                    try:
+                        daily_cap = int((pol.get(category) or {}).get("daily_cap") or 0)
+                    except Exception:
+                        daily_cap = 0
+                    daily_details: Dict[str, Any] = {}
+                    if daily_cap > 0:
+                        daily_allowed, daily_ra, daily_details = await check_daily_cap(
+                            entity_scope=entity_scope,
+                            entity_value=entity_value,
+                            category=category,
+                            daily_cap=daily_cap,
+                            units=units,
+                        )
+                        if not daily_allowed:
+                            allowed = False
+                        retry_after = max(int(retry_after or 0), int(daily_ra or 0))
+    
+                    per_category[category] = {
+                        "allowed": allowed,
+                        "limit": limit,
+                        "retry_after": retry_after,
+                        **(daily_details or {}),
+                    }
+                    # Final smoothing guard retained inside _allow_requests_sliding_check_only.
+                elif category == "tokens":
+                    per_min = int((pol.get("tokens") or {}).get("per_min") or 0)
+                    window = 60
+                    limit = per_min
+                    allowed = True
+                    retry_after = 0
+                    cat_fail = self._effective_fail_mode(pol, category)
+                    counts: list[int] = []
+                    if limit > 0:
+                        for sc, ev in (("global", "*"), (entity_scope, entity_value)):
+                            if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
                                 continue
-                            # Under FakeTime≈0 contexts, treat any residual members as
-                            # cross-run contamination for the purpose of initial over-limit
-                            # allowance. This ensures tests that start at time 0 with a clean
-                            # intent are not denied due to leftover keys.
-                            try:
-                                if float(now) < 1.0:
-                                    # Consider this scope effectively empty in test-mode
-                                    continue
-                            except Exception:
-                                pass
-                            # For FakeTime near zero, treat any oldest-score strictly
-                            # greater than 'now' as cross-run contamination and thus empty
-                            try:
-                                oldest = await client.zrange(key, 0, 0)
-                                oscore = None
-                                if oldest:
-                                    oscore = await client.zscore(key, oldest[0])
-                                if oscore is not None and (float(now) < 1.0) and (float(oscore) > float(now)):
-                                    # Consider this scope effectively empty for initial allowance
-                                    continue
-                            except Exception:
-                                # If we cannot inspect the oldest score, be conservative
-                                effective_empty_all = False
-                                break
-                            # Non-empty and not clearly future-stamped → not empty
-                            effective_empty_all = False
-                            break
-                        if effective_empty_all:
+                            key = self._keys.win(policy_id, category, sc, ev)
+                            ok, ra, _cnt = await self._allow_requests_sliding_check_only(
+                                key=key, limit=limit, window=window, units=units, now=now, fail_mode=cat_fail
+                            )
+                            counts.append(int(_cnt))
+                            allowed = allowed and ok
+                            retry_after = max(retry_after, ra)
+                    # Special-case: allow initial large batch when no prior usage in window
+                    try:
+                        if not allowed and limit > 0 and int(units or 0) > int(limit) and counts and max(counts) == 0:
                             allowed = True
                             retry_after = 0
                     except Exception:
-                        # Non-fatal: keep original decision
                         pass
-                # Optional durable daily caps (v1.1) for tokens via ResourceDailyLedger.
-                daily_details: Dict[str, Any] = {}
-                try:
-                    daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
-                except Exception:
-                    daily_cap = 0
-                if daily_cap > 0:
-                    daily_allowed, daily_ra, daily_details = await check_daily_cap(
-                        entity_scope=entity_scope,
-                        entity_value=entity_value,
-                        category="tokens",
-                        daily_cap=daily_cap,
-                        units=units,
-                    )
-                    if not daily_allowed:
-                        allowed = False
-                    retry_after = max(int(retry_after or 0), int(daily_ra or 0))
-                per_category[category] = {
-                    "allowed": allowed,
-                    "limit": limit,
-                    "retry_after": retry_after,
-                    **(daily_details or {}),
-                }
-            elif category in ("streams", "jobs"):
-                limit = int((pol.get(category) or {}).get("max_concurrent") or 0)
-                ttl_sec = int((pol.get(category) or {}).get("ttl_sec") or 60)
-                allowed = True
-                retry_after = 0
-                cat_fail = self._effective_fail_mode(pol, category)
-                for sc, ev in (("global", "*"), (entity_scope, entity_value)):
-                    if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
-                        continue
-                    key = self._keys.lease(policy_id, category, sc, ev)
-                    # Use stub leases and, when available, real Redis ZSET counts
-                    active_stub = self._stub_lease_purge_and_count(key=key, now=now)
+                    # Robust guard: if still denied for an over-limit first batch, re-check
+                    # both scopes directly. If both effective windows are empty (no members
+                    # or only members with scores ahead of FakeTime), allow once to let
+                    # commit(actuals) refund correctly. This avoids flaky denials when
+                    # residual ZSET entries from real-time tests contaminate FakeTime≈0 runs.
+                    if not allowed and limit > 0 and int(units or 0) > int(limit):
+                        try:
+                            client = await self._client_get()
+                            scopes_to_check = []
+                            for sc, ev in (("global", "*"), (entity_scope, entity_value)):
+                                if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
+                                    continue
+                                scopes_to_check.append((sc, ev))
+                            effective_empty_all = True
+                            for sc, ev in scopes_to_check:
+                                key = self._keys.win(policy_id, category, sc, ev)
+                                # Best-effort purge of expired members for correctness
+                                try:
+                                    await client.zremrangebyscore(key, float("-inf"), float(now - window))
+                                except Exception:
+                                    pass
+                                # If ZSET is empty after purge, treat as empty
+                                try:
+                                    card = int(await client.zcard(key))
+                                except Exception:
+                                    card = 0
+                                if card <= 0:
+                                    continue
+                                # Under FakeTime≈0 contexts, treat any residual members as
+                                # cross-run contamination for the purpose of initial over-limit
+                                # allowance. This ensures tests that start at time 0 with a clean
+                                # intent are not denied due to leftover keys.
+                                try:
+                                    if float(now) < 1.0:
+                                        # Consider this scope effectively empty in test-mode
+                                        continue
+                                except Exception:
+                                    pass
+                                # For FakeTime near zero, treat any oldest-score strictly
+                                # greater than 'now' as cross-run contamination and thus empty
+                                try:
+                                    oldest = await client.zrange(key, 0, 0)
+                                    oscore = None
+                                    if oldest:
+                                        oscore = await client.zscore(key, oldest[0])
+                                    if oscore is not None and (float(now) < 1.0) and (float(oscore) > float(now)):
+                                        # Consider this scope effectively empty for initial allowance
+                                        continue
+                                except Exception:
+                                    # If we cannot inspect the oldest score, be conservative
+                                    effective_empty_all = False
+                                    break
+                                # Non-empty and not clearly future-stamped → not empty
+                                effective_empty_all = False
+                                break
+                            if effective_empty_all:
+                                allowed = True
+                                retry_after = 0
+                        except Exception:
+                            # Non-fatal: keep original decision
+                            pass
+                    # Optional durable daily caps (v1.1) for tokens via ResourceDailyLedger.
+                    daily_details: Dict[str, Any] = {}
+                    try:
+                        daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
+                    except Exception:
+                        daily_cap = 0
+                    if daily_cap > 0:
+                        daily_allowed, daily_ra, daily_details = await check_daily_cap(
+                            entity_scope=entity_scope,
+                            entity_value=entity_value,
+                            category="tokens",
+                            daily_cap=daily_cap,
+                            units=units,
+                        )
+                        if not daily_allowed:
+                            allowed = False
+                        retry_after = max(int(retry_after or 0), int(daily_ra or 0))
+                    per_category[category] = {
+                        "allowed": allowed,
+                        "limit": limit,
+                        "retry_after": retry_after,
+                        **(daily_details or {}),
+                    }
+                elif category in ("streams", "jobs"):
+                    limit = int((pol.get(category) or {}).get("max_concurrent") or 0)
+                    ttl_sec = int((pol.get(category) or {}).get("ttl_sec") or 60)
+                    allowed = True
+                    retry_after = 0
+                    cat_fail = self._effective_fail_mode(pol, category)
+                    for sc, ev in (("global", "*"), (entity_scope, entity_value)):
+                        if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
+                            continue
+                        key = self._keys.lease(policy_id, category, sc, ev)
+                        # Use stub leases and, when available, real Redis ZSET counts
+                        active_stub = self._stub_lease_purge_and_count(key=key, now=now)
                     active_real = 0
                     try:
                         client = await self._client_get()
                         # Purge expired and count active members in real Redis
                         await client.zremrangebyscore(key, float("-inf"), now)
                         active_real = int(await client.zcard(key))
-                    except Exception:
+                    except Exception as exc:
+                        if cat_fail == "fallback_memory":
+                            raise _FallbackToMemory from exc
                         active_real = 0
-                    active = max(active_stub, active_real)
-                    try:
-                        logger.debug(
-                            "RG concurrency check: policy_id={pid} scope={sc} entity={ev} active={active} limit={limit}",
-                            pid=policy_id,
-                            sc=sc,
-                            ev=ev,
-                            active=active,
-                            limit=limit,
-                        )
-                    except Exception:
-                        pass
-                    # Update gauge to reflect any TTL purge effects
-                    reg = self._reg()
-                    if reg:
+                        active = max(active_stub, active_real)
                         try:
-                            reg.set_gauge(
-                                "rg_concurrency_active",
-                                float(active),
-                                _labels(category=category, scope=sc, policy_id=policy_id),
+                            logger.debug(
+                                "RG concurrency check: policy_id={pid} scope={sc} entity={ev} active={active} limit={limit}",
+                                pid=policy_id,
+                                sc=sc,
+                                ev=ev,
+                                active=active,
+                                limit=limit,
                             )
                         except Exception:
                             pass
+                        # Update gauge to reflect any TTL purge effects
+                        reg = self._reg()
+                        if reg:
+                            try:
+                                reg.set_gauge(
+                                    "rg_concurrency_active",
+                                    float(active),
+                                    _labels(category=category, scope=sc, policy_id=policy_id),
+                                )
+                            except Exception:
+                                pass
                     remaining = max(0, limit - active)
-                    if remaining <= 0:
+                    if remaining < units:
                         allowed = False
                         retry_after = max(retry_after, ttl_sec)
-                per_category[category] = {"allowed": allowed, "limit": limit, "retry_after": retry_after, "ttl_sec": ttl_sec}
-            else:
-                allowed = True
-                retry_after = 0
-                details_other: Dict[str, Any] = {"allowed": True, "retry_after": 0}
-                try:
-                    daily_cap = int((pol.get(category) or {}).get("daily_cap") or 0)
-                except Exception:
-                    daily_cap = 0
-                if daily_cap > 0:
-                    daily_allowed, daily_ra, daily_details = await check_daily_cap(
-                        entity_scope=entity_scope,
-                        entity_value=entity_value,
-                        category=category,
-                        daily_cap=daily_cap,
-                        units=units,
-                    )
-                    if not daily_allowed:
-                        allowed = False
-                    retry_after = max(int(retry_after or 0), int(daily_ra or 0))
+                    per_category[category] = {"allowed": allowed, "limit": limit, "retry_after": retry_after, "ttl_sec": ttl_sec}
+                else:
+                    allowed = True
+                    retry_after = 0
+                    details_other: Dict[str, Any] = {"allowed": True, "retry_after": 0}
                     try:
-                        details_other.update({"limit": int(daily_cap), **(daily_details or {})})
+                        daily_cap = int((pol.get(category) or {}).get("daily_cap") or 0)
                     except Exception:
-                        details_other["limit"] = int(daily_cap)
-                details_other["allowed"] = allowed
-                details_other["retry_after"] = retry_after
-                per_category[category] = details_other
-
-            if overall_allowed and not per_category[category]["allowed"]:
-                overall_allowed = False
-            retry_after_overall = max(retry_after_overall, int(per_category[category].get("retry_after") or 0))
-
-            # Metrics per category (decision)
-            reg = self._reg()
-            if reg:
-                try:
-                    reg.increment(
-                        "rg_decisions_total",
-                        1,
-                        _labels(
+                        daily_cap = 0
+                    if daily_cap > 0:
+                        daily_allowed, daily_ra, daily_details = await check_daily_cap(
+                            entity_scope=entity_scope,
+                            entity_value=entity_value,
                             category=category,
-                            scope=entity_scope,
-                            backend=backend,
-                            result=("allow" if per_category[category]["allowed"] else "deny"),
-                            policy_id=policy_id,
-                        ),
-                    )
-                    if not per_category[category]["allowed"]:
-                        reg.increment(
-                            "rg_denials_total",
-                            1,
-                            _labels(category=category, scope=entity_scope, reason="insufficient_capacity", policy_id=policy_id),
+                            daily_cap=daily_cap,
+                            units=units,
                         )
-                    # Optional by-entity metrics (hashed)
+                        if not daily_allowed:
+                            allowed = False
+                        retry_after = max(int(retry_after or 0), int(daily_ra or 0))
+                        try:
+                            details_other.update({"limit": int(daily_cap), **(daily_details or {})})
+                        except Exception:
+                            details_other["limit"] = int(daily_cap)
+                    details_other["allowed"] = allowed
+                    details_other["retry_after"] = retry_after
+                    per_category[category] = details_other
+    
+                if overall_allowed and not per_category[category]["allowed"]:
+                    overall_allowed = False
+                retry_after_overall = max(retry_after_overall, int(per_category[category].get("retry_after") or 0))
+    
+                # Metrics per category (decision)
+                reg = self._reg()
+                if reg:
                     try:
-                        if rg_metrics_entity_label_enabled():
-                            ent_h = hash_entity(req.entity)
+                        reg.increment(
+                            "rg_decisions_total",
+                            1,
+                            _labels(
+                                category=category,
+                                scope=entity_scope,
+                                backend=backend,
+                                result=("allow" if per_category[category]["allowed"] else "deny"),
+                                policy_id=policy_id,
+                            ),
+                        )
+                        if not per_category[category]["allowed"]:
                             reg.increment(
-                                "rg_decisions_by_entity_total",
+                                "rg_denials_total",
                                 1,
-                                {"category": category, "scope": entity_scope, "backend": backend, "result": ("allow" if per_category[category]["allowed"] else "deny"), "policy_id": policy_id, "entity": ent_h},
+                                _labels(category=category, scope=entity_scope, reason="insufficient_capacity", policy_id=policy_id),
                             )
-                            if not per_category[category]["allowed"]:
+                        # Optional by-entity metrics (hashed)
+                        try:
+                            if rg_metrics_entity_label_enabled():
+                                ent_h = hash_entity(req.entity)
                                 reg.increment(
-                                    "rg_denials_by_entity_total",
+                                    "rg_decisions_by_entity_total",
                                     1,
-                                    {"category": category, "scope": entity_scope, "reason": "insufficient_capacity", "policy_id": policy_id, "entity": ent_h},
+                                    {"category": category, "scope": entity_scope, "backend": backend, "result": ("allow" if per_category[category]["allowed"] else "deny"), "policy_id": policy_id, "entity": ent_h},
                                 )
+                                if not per_category[category]["allowed"]:
+                                    reg.increment(
+                                        "rg_denials_by_entity_total",
+                                        1,
+                                        {"category": category, "scope": entity_scope, "reason": "insufficient_capacity", "policy_id": policy_id, "entity": ent_h},
+                                    )
+                        except Exception:
+                            pass
                     except Exception:
                         pass
+    
+            # Record decision metric (summary per-category already emitted via caller ideally)
+            details: Dict[str, Any] = {"policy_id": policy_id, "categories": per_category}
+            if smoothing_any:
+                details["smoothing_stub"] = True
+            return RGDecision(allowed=overall_allowed, retry_after=(retry_after_overall or None), details=details)
+    
+        except _FallbackToMemory:
+            if fallback_allowed and self._stub_delegate is not None:
+                dec = await self._stub_delegate.check(req)
+                try:
+                    if isinstance(dec.details, dict):
+                        dec.details["fallback_memory"] = True
                 except Exception:
                     pass
-
-        # Record decision metric (summary per-category already emitted via caller ideally)
-        details: Dict[str, Any] = {"policy_id": policy_id, "categories": per_category}
-        if smoothing_any:
-            details["smoothing_stub"] = True
-        return RGDecision(allowed=overall_allowed, retry_after=(retry_after_overall or None), details=details)
+                return dec
+            return RGDecision(allowed=True, retry_after=None, details={"policy_id": policy_id, "categories": {}})
 
     async def reserve(self, req: RGRequest, op_id: Optional[str] = None) -> Tuple[RGDecision, Optional[str]]:
         # Use native logic for both real Redis and in-memory stub.
         client = await self._client_get()
+        policy_id = req.tags.get("policy_id") or "default"
         # Best-effort, test-only cleanup of prior window state when FakeTime≈0
         try:
             now0 = self._time()
-            await self._maybe_test_purge_windows_once(policy_id=req.tags.get("policy_id") or "default", categories=req.categories, now=now0)
+            await self._maybe_test_purge_windows_once(policy_id=policy_id, categories=req.categories, now=now0)
         except Exception:
             pass
 
@@ -1286,16 +1319,17 @@ class RedisResourceGovernor(ResourceGovernor):
         # Best-effort pre-reserve purge of expired leases for this policy to make
         # unique ns/policy deletions effective in tests.
         try:
-            pol_id_for_purge = req.tags.get("policy_id") or "default"
-            await self._maybe_test_purge_leases(policy_id=pol_id_for_purge, now=self._time())
+            await self._maybe_test_purge_leases(policy_id=policy_id, now=self._time())
         except Exception:
             pass
 
         dec = await self.check(req)
+        if (dec.details or {}).get("fallback_memory") and self._stub_delegate is not None:
+            dec_f, handle_f = await self._stub_delegate.reserve(req, op_id=op_id)
+            if handle_f:
+                self._fallback_handles.add(handle_f)
+            return dec_f, handle_f
         if not dec.allowed:
-            # Only short-circuit on pre-check denial when the denied category is
-            # requests. For tokens, continue to reservation to allow saturation
-            # up to capacity (initial over-asks admitted partially).
             cats_bm = (dec.details or {}).get("categories") or {}
             has_requests_denial = any(
                 (name == "requests") and (not bool((info or {}).get("allowed"))) for name, info in cats_bm.items()
@@ -1315,14 +1349,14 @@ class RedisResourceGovernor(ResourceGovernor):
                                 reg.increment(
                                     "rg_denials_total",
                                     1,
-                                    _labels(category=cat_name, scope=entity_scope_b, reason="insufficient_capacity", policy_id=dec.details.get("policy_id") or req.tags.get("policy_id") or "default"),
+                                    _labels(category=cat_name, scope=entity_scope_b, reason="insufficient_capacity", policy_id=dec.details.get("policy_id") or policy_id),
                                 )
                     except Exception:
                         pass
                 # Establish backoff for denied categories
                 try:
                     now_b = self._time()
-                    policy_id_b = dec.details.get("policy_id") or req.tags.get("policy_id") or "default"
+                    policy_id_b = dec.details.get("policy_id") or policy_id
                     for cat_name, cat_info in cats_bm.items():
                         try:
                             if not bool(cat_info.get("allowed") is False):
@@ -1363,12 +1397,12 @@ class RedisResourceGovernor(ResourceGovernor):
                             continue
                 except Exception:
                     pass
-                if op_id:
-                    try:
-                        await client.set(self._keys.op(op_id), json.dumps({"type": "reserve", "decision": dec.__dict__, "handle_id": None}), ex=86400)
-                    except Exception:
-                        pass
-                return dec, None
+            if op_id:
+                try:
+                    await client.set(self._keys.op(op_id), json.dumps({"type": "reserve", "decision": dec.__dict__, "handle_id": None}), ex=86400)
+                except Exception:
+                    pass
+            return dec, None
 
         # If any concurrency category (streams/jobs) is denied, short-circuit and
         # avoid acquiring leases or creating a handle. Concurrency denials should
@@ -1695,24 +1729,29 @@ class RedisResourceGovernor(ResourceGovernor):
             return denial_decision, None
 
         # Concurrency: acquire leases (global and entity) after rate counters
+        concurrency_members: Dict[str, Dict[Tuple[str, str], list[str]]] = {}
         for category, cfg in req.categories.items():
             if category in ("streams", "jobs"):
+                units = int((cfg or {}).get("units") or 0)
+                if units <= 0:
+                    continue
                 ttl_sec = int((pol.get(category) or {}).get("ttl_sec") or 60)
-                cat_fail = self._effective_fail_mode(pol, category)
                 for sc, ev in (("global", "*"), (entity_scope, entity_value)):
                     if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
                         continue
                     key = self._keys.lease(policy_id, category, sc, ev)
-                    # Add stub lease with TTL and mirror into real Redis when available
-                    ttl_sec = int((pol.get(category) or {}).get("ttl_sec") or 60)
+                    # Add stub leases with TTL and mirror into real Redis when available
                     expires_at = now + max(1, int(ttl_sec))
+                    members = [f"{handle_id}:{sc}:{ev}:{i}:{uuid.uuid4().hex}" for i in range(int(units))]
+                    concurrency_members.setdefault(category, {})[(sc, ev)] = list(members)
                     bucket = self._stub_leases.setdefault(key, {})
-                    bucket[f"{handle_id}:{sc}:{ev}"] = float(expires_at)
+                    for mem in members:
+                        bucket[mem] = float(expires_at)
                     # Real Redis ZSET entry stores expiry timestamp as score
                     try:
                         client = await self._client_get()
                         await client.zremrangebyscore(key, float("-inf"), now)
-                        await client.zadd(key, {f"{handle_id}:{sc}:{ev}": float(expires_at)})
+                        await client.zadd(key, {mem: float(expires_at) for mem in members})
                     except Exception:
                         pass
                     # Metrics: update concurrency gauge based on stub size after purge
@@ -1727,6 +1766,9 @@ class RedisResourceGovernor(ResourceGovernor):
                             )
                         except Exception:
                             pass
+
+        for cat, scopes in concurrency_members.items():
+            added_members.setdefault(cat, {}).update(scopes)
 
         # Persist handle
         try:
@@ -1824,6 +1866,10 @@ class RedisResourceGovernor(ResourceGovernor):
         return dec, handle_id
 
     async def commit(self, handle_id: str, actuals: Optional[Dict[str, int]] = None, op_id: Optional[str] = None) -> None:
+        if handle_id in self._fallback_handles and self._stub_delegate is not None:
+            await self._stub_delegate.commit(handle_id, actuals, op_id)
+            self._fallback_handles.discard(handle_id)
+            return
         # Delegate in explicit stub-rate mode
         if self._use_stub_rate():
             await self._stub_delegate.commit(handle_id, actuals, op_id)  # type: ignore[union-attr]
@@ -1868,15 +1914,25 @@ class RedisResourceGovernor(ResourceGovernor):
                     if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
                         continue
                     key = self._keys.lease(policy_id, category, sc, ev)
+                    scope_key = f"{sc}:{ev}"
+                    members_list: list[str] = []
+                    try:
+                        members_list = list((members.get(category) or {}).get(scope_key) or [])
+                    except Exception:
+                        members_list = []
+                    if not members_list:
+                        members_list = ["{}:{}:{}".format(handle_id, sc, ev)]
                     # Remove leases for this handle in stub map and real Redis
                     try:
                         bucket = self._stub_leases.get(key)
                         if bucket is not None:
-                            bucket.pop(f"{handle_id}:{sc}:{ev}", None)
+                            for mem in members_list:
+                                bucket.pop(mem, None)
                     except Exception:
                         pass
                     try:
-                        await client.zrem(key, f"{handle_id}:{sc}:{ev}")
+                        for mem in members_list:
+                            await client.zrem(key, mem)
                     except Exception:
                         pass
                     reg = self._reg()
@@ -1979,6 +2035,9 @@ class RedisResourceGovernor(ResourceGovernor):
                 pass
 
     async def refund(self, handle_id: str, deltas: Optional[Dict[str, int]] = None, op_id: Optional[str] = None) -> None:
+        if handle_id in self._fallback_handles and self._stub_delegate is not None:
+            await self._stub_delegate.refund(handle_id, deltas, op_id)
+            return
         # Delegate in explicit stub-rate mode
         if self._use_stub_rate():
             await self._stub_delegate.refund(handle_id, deltas, op_id)  # type: ignore[union-attr]
@@ -2068,6 +2127,9 @@ class RedisResourceGovernor(ResourceGovernor):
             pass
 
     async def renew(self, handle_id: str, ttl_s: int) -> None:
+        if handle_id in self._fallback_handles and self._stub_delegate is not None:
+            await self._stub_delegate.renew(handle_id, ttl_s)
+            return
         # Delegate in explicit stub-rate mode
         if self._use_stub_rate():
             await self._stub_delegate.renew(handle_id, ttl_s)  # type: ignore[union-attr]
@@ -2084,6 +2146,11 @@ class RedisResourceGovernor(ResourceGovernor):
             entity_scope, entity_value = self._parse_entity(entity)
             pol = self._get_policy(policy_id)
             cats = json.loads(data.get("categories") or "{}")
+            members_raw = data.get("members")
+            try:
+                members = json.loads(members_raw or "{}") if isinstance(members_raw, str) else (members_raw or {})
+            except Exception:
+                members = {}
             now = self._time()
             for category in cats.keys():
                 if category in ("streams", "jobs"):
@@ -2091,15 +2158,24 @@ class RedisResourceGovernor(ResourceGovernor):
                         if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
                             continue
                         key = self._keys.lease(policy_id, category, sc, ev)
+                        scope_key = f"{sc}:{ev}"
+                        members_list: list[str] = []
+                        try:
+                            members_list = list((members.get(category) or {}).get(scope_key) or [])
+                        except Exception:
+                            members_list = []
+                        if not members_list:
+                            members_list = ["{}:{}:{}".format(handle_id, sc, ev)]
                         # Update real Redis ZSET (best-effort)
                         try:
-                            await client.zadd(key, {f"{handle_id}:{sc}:{ev}": now + max(1, int(ttl_s))})
+                            await client.zadd(key, {mem: now + max(1, int(ttl_s)) for mem in members_list})
                         except Exception:
                             pass
                         # Update stub TTL and gauge
                         try:
                             bucket = self._stub_leases.setdefault(key, {})
-                            bucket[f"{handle_id}:{sc}:{ev}"] = float(now + max(1, int(ttl_s)))
+                            for mem in members_list:
+                                bucket[mem] = float(now + max(1, int(ttl_s)))
                             reg = self._reg()
                             if reg:
                                 active = self._stub_lease_purge_and_count(key=key, now=now)
@@ -2114,6 +2190,10 @@ class RedisResourceGovernor(ResourceGovernor):
             pass
 
     async def release(self, handle_id: str) -> None:
+        if handle_id in self._fallback_handles and self._stub_delegate is not None:
+            await self._stub_delegate.release(handle_id)
+            self._fallback_handles.discard(handle_id)
+            return
         # Delegate in explicit stub-rate mode
         if self._use_stub_rate():
             await self._stub_delegate.release(handle_id)  # type: ignore[union-attr]

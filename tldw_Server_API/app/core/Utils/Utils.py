@@ -251,10 +251,14 @@ def format_metadata_as_text(metadata):
                 # Format large numbers with commas
                 formatted_value = f"{value:,}"
             elif key == 'duration':
-                # Convert seconds to HH:MM:SS format
-                hours, remainder = divmod(value, 3600)
-                minutes, seconds = divmod(remainder, 60)
-                formatted_value = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                # Convert seconds or time strings to HH:MM:SS format
+                try:
+                    total_seconds = convert_to_seconds(value)
+                    hours, remainder = divmod(int(total_seconds), 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    formatted_value = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                except Exception:
+                    formatted_value = str(value)
             else:
                 formatted_value = str(value)
 
@@ -434,6 +438,11 @@ def download_file(url, dest_path, expected_checksum=None, max_retries=3, delay=5
         policy = RetryPolicy(attempts=max_retries, backoff_base_ms=int(delay * 1000))
         download(url=url, dest=dest_path, resume=True, retry=policy)
         if expected_checksum and not verify_checksum(dest_path, expected_checksum):
+            try:
+                if os.path.exists(dest_path):
+                    os.remove(dest_path)
+            except Exception as cleanup_error:
+                logging.error(f"Failed to remove file after checksum mismatch: {cleanup_error}")
             raise ValueError("Downloaded file's checksum does not match the expected checksum")
         logging.info("Download complete and verified!")
         return dest_path
@@ -635,6 +644,9 @@ def sanitize_filename(filename, *, max_total_length: int | None = None, extensio
     sanitized = re.sub(r'\s+', ' ', sanitized).strip()
     # 3) Replace consecutive dashes with a single dash
     sanitized = re.sub(r'-{2,}', '-', sanitized)
+
+    if sanitized in {"", ".", ".."}:
+        sanitized = "untitled"
 
     # Optional capping: preserve extension if provided and cap overall length conservatively
     if max_total_length is not None and max_total_length > 0:
@@ -888,6 +900,16 @@ class ZipValidator:
     VALID_EXTENSIONS = {'.md', '.txt'}
 
     @staticmethod
+    def _is_malicious_zip_path(filename: str) -> bool:
+        normalized = filename.replace("\\", "/")
+        if normalized.startswith("/") or normalized.startswith("//"):
+            return True
+        if re.match(r"^[A-Za-z]:", normalized):
+            return True
+        parts = [part for part in normalized.split("/") if part not in ("", ".")]
+        return any(part == ".." for part in parts)
+
+    @staticmethod
     def validate_zip_file(zip_path: str) -> Tuple[bool, str, List[str]]:
         """
         Validate zip file and its contents
@@ -906,7 +928,7 @@ class ZipValidator:
 
                 # Check for directory traversal attempts
                 for file_info in zip_ref.filelist:
-                    if '..' in file_info.filename or file_info.filename.startswith('/'):
+                    if ZipValidator._is_malicious_zip_path(file_info.filename):
                         return False, "Invalid file paths detected", []
 
                 # Validate each file
@@ -1008,7 +1030,8 @@ def extract_media_id_from_result_string(result_msg: Optional[str]) -> Optional[s
 
     # If a match is found, match.group(1) will contain the captured ID part
     if match:
-        return match.group(1)
+        media_id = match.group(1).rstrip(".,;:)]}\"'")
+        return media_id or None
     else:
         # The pattern "Media ID: <id>" was not found in the string
         return None

@@ -77,24 +77,40 @@ def submit_job_audit_event(event: str, *, job: Optional[Dict[str, Any]], attrs: 
 
 
 def shutdown_jobs_audit_bridge() -> None:
-    """Signal the audit worker to stop (used in tests/shutdown)."""
-    if not _audit_enabled():
-        return
+    """Signal the audit worker to stop (used in tests/shutdown).
+
+    Safe to call even if audit is disabled - will attempt cleanup regardless.
+    """
+    global _WORKER_THREAD
     with _WORKER_LOCK:
-        global _WORKER_THREAD
         if _WORKER_THREAD and _WORKER_THREAD.is_alive():
-            _EVENT_QUEUE.put_nowait(_SHUTDOWN_SENTINEL)
+            try:
+                _EVENT_QUEUE.put_nowait(_SHUTDOWN_SENTINEL)
+            except Exception:
+                pass
             _WORKER_THREAD.join(timeout=5)
         _WORKER_THREAD = None
+    # Clear any remaining items in queue
+    while True:
+        try:
+            _EVENT_QUEUE.get_nowait()
+        except Empty:
+            break
 
 
 def _ensure_worker_started() -> bool:
     if not _audit_enabled():
         return False
+    global _WORKER_THREAD
     with _WORKER_LOCK:
-        global _WORKER_THREAD
+        # If thread exists but is dead, clean it up first
+        if _WORKER_THREAD and not _WORKER_THREAD.is_alive():
+            _WORKER_THREAD = None
+            _WORKER_READY.clear()
+
         if _WORKER_THREAD and _WORKER_THREAD.is_alive():
             return True
+
         try:
             # Reset readiness signal before starting
             _WORKER_READY.clear()
@@ -103,7 +119,11 @@ def _ensure_worker_started() -> bool:
             # Block briefly until the worker initializes the audit service and schema.
             # This avoids a race where the DB file exists but tables are not yet created,
             # causing tests that probe the file immediately to fail.
-            _WORKER_READY.wait(timeout=2.0)
+            ready = _WORKER_READY.wait(timeout=2.0)
+            if not ready:
+                # Worker failed to initialize within timeout
+                logger.warning("Jobs audit worker failed to initialize within timeout")
+                return False
             return True
         except Exception as exc:
             logger.warning(f"Failed to start Jobs audit worker: {exc}")

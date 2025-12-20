@@ -8,16 +8,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 from loguru import logger
 
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
-    chat_with_openai, chat_with_anthropic, chat_with_cohere,
-    chat_with_groq, chat_with_openrouter, chat_with_deepseek,
-    chat_with_mistral, chat_with_google
-)
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
-    chat_with_llama, chat_with_kobold, chat_with_oobabooga,
-    chat_with_tabbyapi, chat_with_vllm, chat_with_aphrodite,
-    chat_with_ollama, chat_with_custom_openai
-)
+from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 
 ########################################################################################################################
@@ -26,28 +17,20 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptSt
 class PromptExecutor:
     """Executes prompts with various LLM providers."""
 
-    # Map provider names to functions
-    PROVIDER_FUNCTIONS = {
-        "openai": chat_with_openai,
-        "anthropic": chat_with_anthropic,
-        "cohere": chat_with_cohere,
-        "groq": chat_with_groq,
-        "openrouter": chat_with_openrouter,
-        "deepseek": chat_with_deepseek,
-        "mistral": chat_with_mistral,
-        "google": chat_with_google,
-        # Local LLM providers
-        "llama": chat_with_llama,
-        "kobold": chat_with_kobold,
-        "ooba": chat_with_oobabooga,
-        "oobabooga": chat_with_oobabooga,
-        "tabby": chat_with_tabbyapi,
-        "tabbyapi": chat_with_tabbyapi,
-        "vllm": chat_with_vllm,
-        "aphrodite": chat_with_aphrodite,
-        "ollama": chat_with_ollama,
-        "custom": chat_with_custom_openai,
-        "custom_openai": chat_with_custom_openai
+    # Template variable constraints
+    MAX_VARIABLE_VALUE_LENGTH = 100000  # 100K chars max per variable
+    MAX_TOTAL_PROMPT_LENGTH = 500000    # 500K chars max total
+
+    # Normalize common aliases to canonical provider ids used by chat_api_call.
+    PROVIDER_ALIASES = {
+        "llama": "llama.cpp",
+        "oobabooga": "ooba",
+        "tabby": "tabbyapi",
+        "custom": "custom-openai-api",
+        "custom_openai": "custom-openai-api",
+        "custom-openai": "custom-openai-api",
+        "custom_openai_2": "custom-openai-api-2",
+        "custom-openai-2": "custom-openai-api-2",
     }
 
     def __init__(self, db: PromptStudioDatabase):
@@ -204,6 +187,74 @@ class PromptExecutor:
     ####################################################################################################################
     # LLM Integration
 
+    @classmethod
+    def _normalize_provider(cls, provider: str) -> str:
+        provider_lower = (provider or "").strip().lower()
+        return cls.PROVIDER_ALIASES.get(provider_lower, provider_lower)
+
+    @staticmethod
+    def _coerce_llm_response(response: Any) -> Tuple[str, int]:
+        if response is None:
+            return "", 0
+        if isinstance(response, tuple) and len(response) == 2:
+            content, tokens = response
+            try:
+                return str(content or ""), int(tokens or 0)
+            except Exception:
+                return str(content or ""), 0
+        if isinstance(response, str):
+            return response, int(len(response.split()) * 1.3)
+        if isinstance(response, list) and response:
+            if isinstance(response[0], str):
+                content = response[0]
+                return content, int(len(content.split()) * 1.3)
+            if isinstance(response[0], dict):
+                return PromptExecutor._coerce_llm_response(response[0])
+        if isinstance(response, dict):
+            content = None
+            choices = response.get("choices")
+            if isinstance(choices, list):
+                for choice in choices:
+                    if not isinstance(choice, dict):
+                        continue
+                    message = choice.get("message") or {}
+                    msg_content = message.get("content")
+                    if isinstance(msg_content, list):
+                        parts = [part.get("text", "") for part in msg_content if isinstance(part, dict)]
+                        msg_content = "".join(parts)
+                    if isinstance(msg_content, str):
+                        content = msg_content
+                        break
+                    delta = choice.get("delta") or {}
+                    delta_content = delta.get("content")
+                    if isinstance(delta_content, list):
+                        parts = [part.get("text", "") for part in delta_content if isinstance(part, dict)]
+                        delta_content = "".join(parts)
+                    if isinstance(delta_content, str):
+                        content = delta_content
+                        break
+            if content is None:
+                raw_content = response.get("content")
+                if isinstance(raw_content, str):
+                    content = raw_content
+            if content is None:
+                content = str(response)
+            tokens = 0
+            usage = response.get("usage")
+            if isinstance(usage, dict):
+                total_tokens = usage.get("total_tokens")
+                if isinstance(total_tokens, int):
+                    tokens = total_tokens
+                else:
+                    prompt_tokens = usage.get("prompt_tokens") or 0
+                    completion_tokens = usage.get("completion_tokens") or 0
+                    if isinstance(prompt_tokens, int) or isinstance(completion_tokens, int):
+                        tokens = int(prompt_tokens) + int(completion_tokens)
+            if tokens == 0 and isinstance(content, str):
+                tokens = int(len(content.split()) * 1.3)
+            return content, tokens
+        return str(response), 0
+
     async def _call_llm(self, provider: str, model: str, prompt: str,
                        system_prompt: Optional[str] = None,
                        parameters: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -220,61 +271,30 @@ class PromptExecutor:
         Returns:
             LLM response
         """
-        # Get provider function
-        provider_lower = (provider or "").lower()
-        provider_func = self.PROVIDER_FUNCTIONS.get(provider_lower)
-        if not provider_func:
-            raise ValueError(f"Unknown provider: {provider}")
-
         # Prepare parameters
         params = parameters or {}
         temperature = params.get("temperature", 0.7)
         max_tokens = params.get("max_tokens", 1000)
 
-        # Build messages
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        api_endpoint = self._normalize_provider(provider)
+        messages = [{"role": "user", "content": prompt}]
 
         # Backoff + retry for transient/provider limit errors
         last_exc = None
         for attempt in range(3):
             try:
-                # Call provider (most providers have similar signatures)
-                if provider_lower in ["openai", "anthropic", "groq", "mistral", "deepseek"]:
-                    response = await asyncio.to_thread(
-                        provider_func,
-                        messages,
-                        model=model,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        stream=False
-                    )
-                elif provider_lower == "ollama":
-                    response = await asyncio.to_thread(
-                        provider_func,
-                        messages,
-                        model=model,
-                        temperature=temperature,
-                        max_tokens=max_tokens
-                    )
-                else:
-                    # Local models
-                    response = await asyncio.to_thread(
-                        provider_func,
-                        messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens
-                    )
-                # Parse response
-                if isinstance(response, tuple):
-                    content, tokens = response
-                    return {"content": content, "tokens": tokens}
-                elif isinstance(response, str):
-                    return {"content": response, "tokens": len(response.split()) * 1.3}  # Estimate
-                else:
-                    return {"content": str(response), "tokens": 0}
+                response = await asyncio.to_thread(
+                    chat_api_call,
+                    api_endpoint=api_endpoint,
+                    messages_payload=messages,
+                    system_message=system_prompt,
+                    temp=temperature,
+                    max_tokens=max_tokens,
+                    model=model,
+                    streaming=False,
+                )
+                content, tokens = self._coerce_llm_response(response)
+                return {"content": content, "tokens": tokens}
             except Exception as e:
                 last_exc = e
                 # Basic 429/backoff detection
@@ -321,14 +341,44 @@ class PromptExecutor:
         # Prompt Studio stores system and user prompts separately; use user_prompt as the template
         template = (prompt.get("user_prompt") or "")
 
-        # Replace variables in template
+        # Replace variables in template with length validation
         for key, value in inputs.items():
-            # Handle different placeholder formats
-            template = template.replace(f"{{{key}}}", str(value))
+            # Validate key name to prevent template injection
+            # Keys should be alphanumeric with underscores only
+            if not key or not isinstance(key, str):
+                logger.warning(f"Skipping invalid variable key: {key!r}")
+                continue
+            # Sanitize key: only allow alphanumeric and underscore characters
+            sanitized_key = ''.join(c for c in key if c.isalnum() or c == '_')
+            if sanitized_key != key:
+                logger.warning(
+                    f"Variable key '{key}' contains invalid characters, sanitized to '{sanitized_key}'"
+                )
+            if not sanitized_key:
+                logger.warning(f"Variable key '{key}' sanitized to empty string, skipping")
+                continue
+
+            # Convert to string and validate length
+            str_value = str(value) if value is not None else ""
+            if len(str_value) > self.MAX_VARIABLE_VALUE_LENGTH:
+                logger.warning(
+                    f"Variable '{sanitized_key}' value truncated from {len(str_value)} to {self.MAX_VARIABLE_VALUE_LENGTH} chars"
+                )
+                str_value = str_value[:self.MAX_VARIABLE_VALUE_LENGTH] + "... [truncated]"
+
+            # Handle different placeholder formats using sanitized key
+            template = template.replace(f"{{{sanitized_key}}}", str_value)
             # Double-brace template: replace {{var}} correctly
-            template = template.replace(f"{{{{{key}}}}}", str(value))
-            template = template.replace(f"${key}", str(value))
-            template = template.replace(f"<{key}>", str(value))
+            template = template.replace(f"{{{{{sanitized_key}}}}}", str_value)
+            template = template.replace(f"${sanitized_key}", str_value)
+            template = template.replace(f"<{sanitized_key}>", str_value)
+
+        # Validate total prompt length
+        if len(template) > self.MAX_TOTAL_PROMPT_LENGTH:
+            logger.warning(
+                f"Final prompt truncated from {len(template)} to {self.MAX_TOTAL_PROMPT_LENGTH} chars"
+            )
+            template = template[:self.MAX_TOTAL_PROMPT_LENGTH] + "\n... [prompt truncated due to length]"
 
         # Add signature instructions if present
         if signature:
@@ -426,41 +476,51 @@ class PromptExecutor:
         Returns:
             Estimated cost in USD
         """
-        # Rough cost estimates per 1K tokens (input + output averaged)
+        # Approximate cost estimates per 1K tokens (blended input/output average).
+        # NOTE: Actual pricing differs significantly between input and output tokens
+        # (output is typically 3-5x more expensive). These are rough estimates for
+        # cost tracking purposes. For accurate billing, use provider-specific APIs.
+        # Prices as of late 2024 - may be outdated.
         cost_per_1k = {
             "openai": {
-                "gpt-4": 0.03,
+                "gpt-4o": 0.005,
+                "gpt-4o-mini": 0.00015,
                 "gpt-4-turbo": 0.01,
-                "gpt-3.5-turbo": 0.002,
-                "gpt-3.5-turbo-16k": 0.003
+                "gpt-4": 0.03,
+                "gpt-3.5-turbo": 0.0005,
+                "o1": 0.015,
+                "o1-mini": 0.003,
             },
             "anthropic": {
-                # Current
-                "claude-opus-4.1": 0.015,
-                "claude-sonnet-4.5": 0.003,
-                "claude-haiku-4.5": 0.001,
-                # Back-compat
+                # Claude 4.x series
+                "claude-opus-4-5": 0.015,
+                "claude-sonnet-4-5": 0.003,
+                # Claude 3.x series
+                "claude-3-5-sonnet": 0.003,
+                "claude-3-5-haiku": 0.001,
                 "claude-3-opus": 0.015,
                 "claude-3-sonnet": 0.003,
                 "claude-3-haiku": 0.00025,
-                "claude-2.1": 0.008,
-                "claude-2": 0.008
             },
             "groq": {
-                "llama2-70b": 0.0007,
-                "mixtral-8x7b": 0.0006,
-                "llama3-70b": 0.0008,
-                "llama3-8b": 0.0001
+                "llama-3.3-70b": 0.0006,
+                "llama-3.1-70b": 0.0006,
+                "llama-3.1-8b": 0.00006,
+                "mixtral-8x7b": 0.0002,
             },
             "mistral": {
-                "mistral-tiny": 0.00025,
-                "mistral-small": 0.0006,
-                "mistral-medium": 0.0027,
-                "mistral-large": 0.008
+                "mistral-large": 0.002,
+                "mistral-small": 0.0002,
+                "codestral": 0.0003,
             },
             "deepseek": {
-                "deepseek-coder": 0.0001,
-                "deepseek-chat": 0.0002
+                "deepseek-chat": 0.00014,
+                "deepseek-coder": 0.00014,
+            },
+            "google": {
+                "gemini-1.5-pro": 0.00125,
+                "gemini-1.5-flash": 0.000075,
+                "gemini-2.0-flash": 0.0001,
             }
         }
 

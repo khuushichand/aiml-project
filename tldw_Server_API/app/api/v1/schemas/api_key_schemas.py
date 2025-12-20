@@ -1,15 +1,36 @@
 """Pydantic schemas for API key management endpoints."""
 
 from datetime import datetime
-from typing import Optional, List, Any, Dict
-from pydantic import BaseModel, Field
+from typing import Optional, List, Any, Dict, Union
+from pydantic import BaseModel, Field, field_validator
+
+
+VALID_SCOPES = {"read", "write", "admin", "service"}
 
 
 class APIKeyCreateRequest(BaseModel):
     name: Optional[str] = Field(None, description="Optional display name for the key")
     description: Optional[str] = Field(None, description="Optional description")
-    scope: str = Field("read", description="Permission scope: read|write|admin|service")
+    scope: Union[str, List[str]] = Field(
+        "read",
+        description="Permission scope(s): 'read', 'write', 'admin', 'service' or a list of these"
+    )
     expires_in_days: Optional[int] = Field(365, ge=1, description="Days until expiration (None = never)")
+
+    @field_validator("scope")
+    @classmethod
+    def validate_scope(cls, v: Union[str, List[str]]) -> Union[str, List[str]]:
+        scopes = [v] if isinstance(v, str) else v
+        if not isinstance(scopes, list):
+            raise TypeError("scope must be a string or list of strings")
+        for scope in scopes:
+            if not isinstance(scope, str):
+                raise TypeError("scope entries must be strings")
+        invalid = set(scopes) - VALID_SCOPES
+        if invalid:
+            invalid_list = ", ".join(sorted(invalid))
+            raise ValueError(f"Invalid scope(s): {invalid_list}")
+        return v
 
 
 class APIKeyRotateRequest(BaseModel):
@@ -21,7 +42,7 @@ class APIKeyMetadata(BaseModel):
     key_prefix: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
-    scope: str
+    scope: Union[str, List[str]]
     status: Optional[str] = None
     created_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None

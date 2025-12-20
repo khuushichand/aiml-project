@@ -12,10 +12,11 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
     verify_api_key,
     check_evaluation_rate_limit,
     enforce_heavy_evaluations_admin,
+    get_eval_request_user,
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope, get_auth_principal
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
@@ -47,7 +48,7 @@ async def create_embeddings_abtest(
     payload: EmbeddingsABTestCreateRequest,
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
-    current_user: User = Depends(get_request_user),  # noqa: B008
+    current_user: User = Depends(get_eval_request_user),  # noqa: B008
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     response: Response = None,
 ):
@@ -107,7 +108,7 @@ async def run_embeddings_abtest(
     __: None = Depends(require_token_scope("workflows", require_if_present=True, require_schedule_match=False, allow_admin_bypass=True, endpoint_id="evals.embeddings_abtest.run", count_as="run")),
     media_db = Depends(get_media_db_for_user),
     principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
-    current_user: User = Depends(get_request_user),  # noqa: B008
+    current_user: User = Depends(get_eval_request_user),  # noqa: B008
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     response: Response = None,
 ):
@@ -187,7 +188,7 @@ async def get_embeddings_abtest_status(
     test_id: str,
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
-    current_user: User = Depends(get_request_user),  # noqa: B008
+    current_user: User = Depends(get_eval_request_user),  # noqa: B008
 ):
     svc = get_unified_evaluation_service_for_user(current_user.id)
     row = svc.db.get_abtest(test_id)
@@ -239,7 +240,7 @@ async def get_embeddings_abtest_results(
     page_size: int = Query(50, ge=1, le=500),
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
-    current_user: User = Depends(get_request_user),  # noqa: B008
+    current_user: User = Depends(get_eval_request_user),  # noqa: B008
 ):
     svc = get_unified_evaluation_service_for_user(current_user.id)
     rows, total = svc.db.list_abtest_results(test_id, limit=page_size, offset=(page-1)*page_size)
@@ -280,7 +281,7 @@ async def get_embeddings_abtest_significance(
     metric: str = Query("ndcg"),
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
-    current_user: User = Depends(get_request_user),  # noqa: B008
+    current_user: User = Depends(get_eval_request_user),  # noqa: B008
 ):
     svc = get_unified_evaluation_service_for_user(current_user.id)
     _ = svc.db.get_abtest(test_id) or (_ for _ in ()).throw(HTTPException(404, "abtest not found"))

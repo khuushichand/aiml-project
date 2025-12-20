@@ -13,6 +13,11 @@ from loguru import logger
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError
 
 
+# Default placeholder names used across Character_Chat helpers
+DEFAULT_CHARACTER_NAME = "Character"
+DEFAULT_USER_NAME = "User"
+
+
 def replace_placeholders(text: Optional[str], char_name: Optional[str], user_name: Optional[str]) -> str:
     """Replaces predefined placeholders in a text string.
 
@@ -20,13 +25,12 @@ def replace_placeholders(text: Optional[str], char_name: Optional[str], user_nam
     '{{random_user}}', '<USER>', and '<CHAR>' with the provided character
     and user names. If names are not provided, default values ("Character", "User")
     are used. Returns an empty string if the input text is None or empty.
-
     Args:
         text (Optional[str]): The input string, possibly containing placeholders.
         char_name (Optional[str]): The name of the character to substitute for
-            '{{char}}' and '<CHAR>'. Defaults to "Character" if None.
+            '{{char}}' and '<CHAR>'. Defaults to DEFAULT_CHARACTER_NAME if None.
         user_name (Optional[str]): The name of the user to substitute for
-            '{{user}}', '{{random_user}}', and '<USER>'. Defaults to "User" if None.
+            '{{user}}', '{{random_user}}', and '<USER>'. Defaults to DEFAULT_USER_NAME if None.
 
     Returns:
         str: The text with placeholders replaced. If the input `text` is None or
@@ -34,8 +38,8 @@ def replace_placeholders(text: Optional[str], char_name: Optional[str], user_nam
     """
     if not text:
         return ""
-    char_name_actual = str(char_name) if char_name is not None else "Character"
-    user_name_actual = str(user_name) if user_name is not None else "User"
+    char_name_actual = str(char_name) if char_name is not None else DEFAULT_CHARACTER_NAME
+    user_name_actual = str(user_name) if user_name is not None else DEFAULT_USER_NAME
     replacements = {
         '{{char}}': char_name_actual,
         '{{user}}': user_name_actual,
@@ -60,7 +64,7 @@ def replace_user_placeholder(history: List[Tuple[Optional[str], Optional[str]]],
     Returns:
         Updated history with placeholders replaced
     """
-    user_name_actual = user_name if user_name else "User"
+    user_name_actual = user_name if user_name else DEFAULT_USER_NAME
     updated_history = []
     for user_msg, bot_msg in history:
         updated_user_msg = user_msg.replace("{{user}}", user_name_actual) if user_msg else None
@@ -172,7 +176,7 @@ def map_sender_to_role(sender: Optional[str], character_name: Optional[str]) -> 
         return "assistant"
     if s in USER_SENDER_ALIASES:
         return "user"
-    if s in TOOL_ALIASES:
+    if s in TOOL_ALIASES or any(s.startswith(f"{p}:") for p in TOOL_ALIASES):
         return "tool"
     if s in SYSTEM_ALIASES or any(s.startswith(f"{p}:") for p in SYSTEM_ALIASES):
         return "system"
@@ -194,4 +198,6 @@ __all__ = [
     "SYSTEM_ALIASES",
     "TOOL_ALIASES",
     "NON_CHARACTER_SENDER_ALIASES",
+    "DEFAULT_CHARACTER_NAME",
+    "DEFAULT_USER_NAME",
 ]

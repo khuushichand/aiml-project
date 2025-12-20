@@ -249,7 +249,7 @@ class OpenAIAdapter(TTSAdapter):
 
         # Validate request using new validation system
         try:
-            validate_tts_request(request, provider=self.provider_name.lower())
+            validate_tts_request(request, provider=self.provider_key)
         except Exception as e:
             logger.error(f"{self.provider_name} request validation failed: {e}")
             raise
@@ -439,6 +439,7 @@ class OpenAITTSAdapter(OpenAIAdapter):
     - Performs raise-style validation for invalid inputs
     """
 
+    PROVIDER_KEY = "openai"
     SUPPORTED_MODELS = ["tts-1", "tts-1-hd"]
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):

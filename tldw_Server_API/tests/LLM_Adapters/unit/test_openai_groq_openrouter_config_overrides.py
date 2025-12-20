@@ -70,6 +70,31 @@ def test_openai_app_config_base_url_and_timeout(monkeypatch):
     assert str(captured.get("url", "")).startswith("https://mock.openai.local/v1/chat/completions")
 
 
+@pytest.mark.parametrize("legacy_key", ["api_base", "base_url"])
+def test_openai_app_config_legacy_base_url_keys(monkeypatch, legacy_key: str):
+    from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
+    import tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter as mod
+
+    captured: Dict[str, Any] = {}
+
+    def _factory(*args, timeout: float | None = None, **kwargs):
+        captured["timeout"] = timeout
+        return _FakeClient(captured)
+
+    monkeypatch.setattr(mod, "http_client_factory", _factory, raising=True)
+
+    a = OpenAIAdapter()
+    req = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "model": "gpt-4o-mini",
+        "api_key": "k",
+        "app_config": {"openai_api": {legacy_key: "https://legacy.openai.local/v1", "api_timeout": 17}},
+    }
+    _ = a.chat(req)
+    assert captured.get("timeout") == 17
+    assert str(captured.get("url", "")).startswith("https://legacy.openai.local/v1/chat/completions")
+
+
 def test_groq_app_config_base_url_and_timeout(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter import GroqAdapter
     import tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter as mod

@@ -222,6 +222,31 @@ def test_channel_with_playlist_query_wins_over_channel(client_with_user: TestCli
     assert r.headers.get("X-YouTube-Canonical-URL") == "https://www.youtube.com/feeds/videos.xml?playlist_id=PLHELLO"
 
 
+def test_opml_import_normalizes_or_rejects_youtube_urls(client_with_user: TestClient):
+    c = client_with_user
+    opml = """<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head><title>Test</title></head>
+  <body>
+    <outline text="YT Channel" xmlUrl="https://www.youtube.com/channel/UCZZZZ" />
+    <outline text="YT Watch" xmlUrl="https://www.youtube.com/watch?v=abc123" />
+  </body>
+</opml>
+"""
+    r = c.post(
+        "/api/v1/watchlists/sources/import",
+        files={"file": ("watchlists.opml", opml.encode("utf-8"), "text/xml")},
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    items = data.get("items", [])
+    by_name = {it.get("name"): it for it in items}
+    assert by_name["YT Channel"]["status"] == "created"
+    assert by_name["YT Channel"]["url"].startswith("https://www.youtube.com/feeds/videos.xml?channel_id=")
+    assert by_name["YT Watch"]["status"] == "error"
+    assert "invalid_youtube_rss_url" in (by_name["YT Watch"].get("error") or "")
+
+
 def test_user_url_normalization_sets_user_feed_and_headers(client_with_user: TestClient):
     c = client_with_user
     r = c.post(

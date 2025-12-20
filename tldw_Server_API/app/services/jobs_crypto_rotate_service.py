@@ -37,27 +37,25 @@ async def run_jobs_crypto_rotate(stop_event: asyncio.Event) -> None:
     try:
         while not stop_event.is_set():
             try:
-                if not old_key or not new_key:
-                    await asyncio.sleep(interval)
-                    continue
-                affected = jm.rotate_encryption_keys(
-                    domain=domain,
-                    queue=queue,
-                    job_type=job_type,
-                    old_key_b64=old_key,
-                    new_key_b64=new_key,
-                    fields=fields,
-                    limit=batch,
-                    dry_run=False,
-                )
-                if affected:
-                    logger.info("Jobs Crypto Rotate Service: re-encrypted {} rows", affected)
+                if old_key and new_key:
+                    affected = jm.rotate_encryption_keys(
+                        domain=domain,
+                        queue=queue,
+                        job_type=job_type,
+                        old_key_b64=old_key,
+                        new_key_b64=new_key,
+                        fields=fields,
+                        limit=batch,
+                        dry_run=False,
+                    )
+                    if affected:
+                        logger.info("Jobs Crypto Rotate Service: re-encrypted {} rows", affected)
             except Exception as e:
                 logger.warning(f"Jobs Crypto Rotate Service error: {e}")
-            await asyncio.wait_for(stop_event.wait(), timeout=interval)
-    except asyncio.TimeoutError:
-        # normal wake-up
-        pass
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                continue
     except Exception as e:
         logger.warning(f"Jobs Crypto Rotate Service stopped with error: {e}")
     finally:

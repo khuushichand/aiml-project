@@ -64,7 +64,8 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         super().__init__(language)
         # Policy toggles via config.txt (no env toggles)
         self._force_simple_only = False
-        self._disable_mp = True
+        # Prefer process-based isolation by default to enable hard timeouts.
+        self._disable_mp = False
         try:
             from tldw_Server_API.app.core.config import load_comprehensive_config
             _cp = load_comprehensive_config()
@@ -228,12 +229,38 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         except Exception as e:
             out_queue.put(("err", str(e)))
 
+    def _run_finditer_process(self, pattern: str, text: str, flags: int, timeout_s: float) -> List[Tuple[int, int, str]]:
+        """Run regex finditer in a separate process and enforce a hard timeout."""
+        ctx = mp.get_context("fork") if hasattr(mp, "get_context") else mp
+        q: mp.Queue = ctx.Queue()
+        p = ctx.Process(target=self._finditer_worker, args=(pattern, text, flags, q))
+        p.daemon = True
+        p.start()
+        p.join(timeout_s)
+        if p.is_alive():
+            try:
+                p.terminate()
+            finally:
+                p.join(1)
+            raise ProcessingError("Regex operation timed out - possible ReDoS attack (process)")
+        if not q.empty():
+            st, pl = q.get_nowait()
+            if st == "ok":
+                return pl  # type: ignore[return-value]
+            raise ProcessingError(f"Regex execution failed: {pl}")
+        raise ProcessingError("Regex execution failed without result (process)")
+
     def _safe_finditer(self, pattern: str, text: str, flags: int, timeout_s: float) -> List[Tuple[int, int, str]]:
         """Run regex finditer in a separate process with a deadline.
 
         Returns list of (start, end, group0) tuples or raises ProcessingError on timeout/error.
         """
-        # Prefer safe thread-based execution first to avoid process spawning issues
+        if not getattr(self, "_disable_mp", True):
+            try:
+                return self._run_finditer_process(pattern, text, flags, timeout_s)
+            except Exception as e:
+                logger.warning(f"Process-based regex execution failed; falling back to thread: {e}")
+        # Fallback to thread-based execution when multiprocessing is disabled/unavailable
         done_q: Queue = Queue(maxsize=1)
 
         def _runner():
@@ -261,30 +288,6 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             raise ProcessingError("Regex execution failed without result (thread)")
         if status == "ok":
             return payload  # type: ignore[return-value]
-        # Optional: try process-based isolation only if explicitly enabled and thread path failed without timeout
-        if not getattr(self, "_disable_mp", True):
-            try:
-                ctx = mp.get_context("fork") if hasattr(mp, "get_context") else mp
-                q: mp.Queue = ctx.Queue()
-                p = ctx.Process(target=self._finditer_worker, args=(pattern, text, flags, q))
-                p.daemon = True
-                p.start()
-                p.join(timeout_s)
-                if p.is_alive():
-                    try:
-                        p.terminate()
-                    finally:
-                        p.join(1)
-                    raise ProcessingError("Regex operation timed out - possible ReDoS attack (process)")
-                if not q.empty():
-                    st2, pl2 = q.get_nowait()
-                    if st2 == "ok":
-                        return pl2  # type: ignore[return-value]
-                    raise ProcessingError(f"Regex execution failed: {pl2}")
-                raise ProcessingError("Regex execution failed without result (process)")
-            except Exception as e:
-                raise ProcessingError(f"Regex execution failed: {e}")
-        # If MP disabled, just raise with the earlier payload
         raise ProcessingError(f"Regex execution failed: {payload}")
 
     def _timed_finditer(self, pattern: str, text: str, flags: int, timeout_s: float) -> List[Tuple[int, int, str]]:
@@ -293,6 +296,11 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         Even for simple patterns, guard execution to avoid unexpected hangs.
         Returns list of (start, end, group0) tuples.
         """
+        if not getattr(self, "_disable_mp", True):
+            try:
+                return self._run_finditer_process(pattern, text, flags, timeout_s)
+            except Exception as e:
+                logger.warning(f"Process-based regex execution failed; falling back to thread: {e}")
         done_q: Queue = Queue(maxsize=1)
 
         def _runner():
@@ -379,8 +387,8 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         Returns:
             List of text chunks
         """
-        if not text:
-            raise InvalidInputError("Cannot chunk empty text")
+        if not text or not text.strip():
+            return []  # Consistent with other strategies
 
         try:
             # Get custom pattern or use language-specific default
@@ -505,10 +513,60 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         Returns:
             List of ChunkResult objects with metadata
         """
-        if not text:
-            raise InvalidInputError("Cannot chunk empty text")
+        if not text or not text.strip():
+            return []  # Consistent with other strategies
+
+        if max_size <= 0:
+            raise InvalidInputError("max_size must be positive")
+        if overlap < 0:
+            overlap = 0
+        if overlap >= max_size:
+            logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}); adjusting to max_size - 1")
+            overlap = max_size - 1
 
         try:
+            chunks: List[ChunkResult] = []
+            chunk_index = 0
+
+            def _trim_bounds(start: int, end: int) -> Optional[Tuple[int, int]]:
+                segment = text[start:end]
+                ltrim = len(segment) - len(segment.lstrip())
+                rtrim = len(segment) - len(segment.rstrip())
+                new_start = start + ltrim
+                new_end = end - rtrim if rtrim else end
+                if new_end <= new_start:
+                    return None
+                return new_start, new_end
+
+            def _word_spans(segment_text: str) -> List[Tuple[int, int]]:
+                return [(m.start(), m.end()) for m in re.finditer(r'\S+', segment_text)]
+
+            def _append_chunk(seg_start: int, spans: List[Tuple[int, int]],
+                              start_idx: int, end_idx: int, meta_opts: Dict[str, Any]) -> None:
+                nonlocal chunk_index
+                if end_idx <= start_idx:
+                    return
+                chunk_start = seg_start + spans[start_idx][0]
+                chunk_end = seg_start + spans[end_idx - 1][1]
+                try:
+                    chunk_end = self._expand_end_to_grapheme_boundary(text, chunk_end)
+                except Exception:
+                    pass
+                if chunk_end < chunk_start:
+                    chunk_end = chunk_start
+                chunk_text = text[chunk_start:chunk_end]
+                metadata = ChunkMetadata(
+                    index=chunk_index,
+                    start_char=chunk_start,
+                    end_char=chunk_end,
+                    word_count=end_idx - start_idx,
+                    language=self.language,
+                    method='ebook_chapters',
+                    options=dict(meta_opts),
+                )
+                chunks.append(ChunkResult(text=chunk_text, metadata=metadata))
+                chunk_index += 1
+
             # Get custom pattern or use language-specific default
             custom_pattern = options.get('custom_chapter_pattern')
             if custom_pattern:
@@ -530,62 +588,32 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                     chapter_markers = spans
             except Exception as e:
                 logger.warning(f"Chapter marker detection timed out or failed ({e}); falling back to size-based split (metadata)")
-                # Return a single chunk with basic metadata if detection fails
-                if max_size <= 0:
-                    raise InvalidInputError("max_size must be positive")
-                if overlap < 0:
-                    overlap = 0
-                if overlap >= max_size:
-                    logger.warning(f"Overlap ({overlap}) >= max_size ({max_size}); adjusting to max_size - 1")
-                    overlap = max_size - 1
-
-                words = text.split()
-                chunks: List[ChunkResult] = []
-                chunk_index = 0
+                bounds = _trim_bounds(0, len(text))
+                if not bounds:
+                    return []
+                seg_start, seg_end = bounds
+                spans = _word_spans(text[seg_start:seg_end])
+                if not spans:
+                    return []
                 step = max(1, (max_size - overlap) if overlap > 0 else max_size)
-                for i in range(0, len(words), step):
-                    end_idx = min(i + max_size, len(words))
-                    chunk_words = words[i:end_idx]
-                    chunk_text = ' '.join(chunk_words)
-                    metadata = ChunkMetadata(
-                        index=chunk_index,
-                        start_char=0,
-                        end_char=len(chunk_text),
-                        word_count=len(chunk_words),
-                        language=self.language,
-                        method='ebook_chapters',
-                        options={'fallback': 'size_split'}
-                    )
-                    chunks.append(ChunkResult(text=chunk_text, metadata=metadata))
-                    chunk_index += 1
+                for i in range(0, len(spans), step):
+                    end_idx = min(i + max_size, len(spans))
+                    _append_chunk(seg_start, spans, i, end_idx, {'fallback': 'size_split'})
                 return chunks
-
-            chunks = []
-            chunk_index = 0
 
             if not chapter_markers:
                 # No chapters found, treat as single chunk
-                words = text.split()
-                i = 0
-                while i < len(words):
-                    end_idx = min(i + max_size, len(words))
-                    chunk_words = words[i:end_idx]
-                    chunk_text = ' '.join(chunk_words)
-
-                    metadata = ChunkMetadata(
-                        index=chunk_index,
-                        start_char=0,  # Simplified
-                        end_char=len(chunk_text),
-                        word_count=len(chunk_words),
-                        language=self.language,
-                        method='ebook_chapters',
-                        options={'no_chapters': True}
-                    )
-
-                    chunks.append(ChunkResult(text=chunk_text, metadata=metadata))
-                    chunk_index += 1
-                    i += max_size - overlap if overlap > 0 else max_size
-
+                bounds = _trim_bounds(0, len(text))
+                if not bounds:
+                    return []
+                seg_start, seg_end = bounds
+                spans = _word_spans(text[seg_start:seg_end])
+                if not spans:
+                    return []
+                step = max(1, (max_size - overlap) if overlap > 0 else max_size)
+                for i in range(0, len(spans), step):
+                    end_idx = min(i + max_size, len(spans))
+                    _append_chunk(seg_start, spans, i, end_idx, {'no_chapters': True})
                 return chunks
 
             # Process each chapter
@@ -597,65 +625,49 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                 else:
                     chapter_end = len(text)
 
-                chapter_text = text[chapter_start:chapter_end].strip()
+                bounds = _trim_bounds(chapter_start, chapter_end)
+                if not bounds:
+                    continue
+                seg_start, seg_end = bounds
+                segment = text[seg_start:seg_end]
+                spans = _word_spans(segment)
+                if not spans:
+                    continue
                 chapter_title = (marker[2] if isinstance(marker, tuple) else marker.group()).strip()
-                word_count = len(chapter_text.split())
+                word_count = len(spans)
 
                 # Check if chapter needs to be split
                 if word_count > max_size:
                     # Split large chapter
-                    words = chapter_text.split()
-                    j = 0
+                    step = max(1, (max_size - overlap) if overlap > 0 else max_size)
                     part = 1
-                    while j < len(words):
-                        end_idx = min(j + max_size, len(words))
-                        chunk_words = words[j:end_idx]
-                        chunk_text = ' '.join(chunk_words)
-
-                        try:
-                            end_adj = self._expand_end_to_grapheme_boundary(text, chapter_start + len(chunk_text))
-                        except Exception:
-                            end_adj = chapter_start + len(chunk_text)
-                        metadata = ChunkMetadata(
-                            index=chunk_index,
-                            start_char=chapter_start,
-                            end_char=end_adj,
-                            word_count=len(chunk_words),
-                            language=self.language,
-                            method='ebook_chapters',
-                            options={
+                    for j in range(0, len(spans), step):
+                        end_idx = min(j + max_size, len(spans))
+                        _append_chunk(
+                            seg_start,
+                            spans,
+                            j,
+                            end_idx,
+                            {
                                 'chapter_title': f"{chapter_title} (Part {part})",
                                 'chapter_number': i + 1,
                                 'is_split': True
                             }
                         )
-
-                        chunks.append(ChunkResult(text=chunk_text, metadata=metadata))
-                        chunk_index += 1
                         part += 1
-                        j += max_size - overlap if overlap > 0 else max_size
                 else:
                     # Keep chapter as single chunk
-                    try:
-                        chapter_end = self._expand_end_to_grapheme_boundary(text, chapter_end)
-                    except Exception:
-                        pass
-                    metadata = ChunkMetadata(
-                        index=chunk_index,
-                        start_char=chapter_start,
-                        end_char=chapter_end,
-                        word_count=word_count,
-                        language=self.language,
-                        method='ebook_chapters',
-                        options={
+                    _append_chunk(
+                        seg_start,
+                        spans,
+                        0,
+                        len(spans),
+                        {
                             'chapter_title': chapter_title,
                             'chapter_number': i + 1,
                             'total_chapters': len(chapter_markers)
                         }
                     )
-
-                    chunks.append(ChunkResult(text=chapter_text, metadata=metadata))
-                    chunk_index += 1
 
             logger.debug(f"Created {len(chunks)} chapter-based chunks with metadata")
             return chunks

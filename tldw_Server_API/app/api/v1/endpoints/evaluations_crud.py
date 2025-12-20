@@ -10,9 +10,12 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
     verify_api_key,
     create_error_response,
     sanitize_error_message,
+    check_evaluation_rate_limit,
+    get_eval_request_user,
+    require_eval_permissions,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_token_scope
 from tldw_Server_API.app.core.AuthNZ.permissions import EVALS_MANAGE, EVALS_READ
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
@@ -21,6 +24,7 @@ from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     CreateEvaluationRequest, UpdateEvaluationRequest, EvaluationResponse,
     EvaluationListResponse, RunResponse, RunListResponse,
+    DatasetOverride,
     
 )
 from pydantic import BaseModel, Field
@@ -34,6 +38,7 @@ class CreateRunSimpleRequest(BaseModel):
     """
     model_config = ConfigDict(extra='forbid')
     target_model: Optional[str] = Field(default=None, description="Model to evaluate")
+    dataset_override: Optional[DatasetOverride] = Field(default=None, description="Override dataset for this run")
     config: Dict[str, Any] = Field(default_factory=dict, description="Run configuration (free-form)")
     webhook_url: Optional[str] = Field(default=None, description="Optional webhook URL for run events")
 
@@ -49,13 +54,13 @@ RBAC_EVALS_CREATE = rbac_rate_limit("evals.create")
     status_code=status.HTTP_201_CREATED,
     dependencies=[
         Depends(RBAC_EVALS_CREATE),
-        Depends(require_permissions(EVALS_MANAGE)),
+        Depends(require_eval_permissions(EVALS_MANAGE)),
     ],
 )
 async def create_evaluation(
     eval_request: CreateEvaluationRequest,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     response: Response = None,
 ):
@@ -72,10 +77,10 @@ async def create_evaluation(
                                 response.headers["X-Idempotent-Replay"] = "true"
                                 response.headers["Idempotency-Key"] = idempotency_key
                         except Exception as e:
-                            logger.debug(f"evaluations_crud: failed to load eval metadata for {row.get('id') if isinstance(row, dict) else 'row'}: {e}")
+                            logger.debug(f"evaluations_crud: failed to set idempotency headers for {existing_id}: {e}")
                         return EvaluationResponse(**existing)
             except Exception as e:
-                logger.debug(f"evaluations_crud: error during pagination counting: {e}")
+                logger.debug(f"evaluations_crud: idempotency lookup failed for key {idempotency_key}: {e}")
         evaluation = await svc.create_evaluation(
             name=eval_request.name,
             description=eval_request.description,
@@ -90,7 +95,9 @@ async def create_evaluation(
             if idempotency_key and evaluation.get("id"):
                 svc.db.record_idempotency("evaluation", idempotency_key, evaluation["id"], user_id)
         except Exception as e:
-            logger.debug(f"evaluations_crud: failed to compute totals: {e}")
+            logger.debug(
+                f"evaluations_crud: failed to record idempotency for evaluation {evaluation.get('id')}: {e}"
+            )
         return EvaluationResponse(**evaluation)
     except Exception as e:
         logger.error(f"Failed to create evaluation: {e}")
@@ -104,14 +111,13 @@ async def create_evaluation(
 @crud_router.get(
     "/",
     response_model=EvaluationListResponse,
-    dependencies=[Depends(require_permissions(EVALS_READ))],
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
 )
 async def list_evaluations(
     limit: int = Query(20, ge=1, le=100),
     after: Optional[str] = Query(None),
     eval_type: Optional[str] = Query(None),
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -142,12 +148,11 @@ async def list_evaluations(
 @crud_router.get(
     "/{eval_id}",
     response_model=EvaluationResponse,
-    dependencies=[Depends(require_permissions(EVALS_READ))],
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
 )
 async def get_evaluation(
     eval_id: str,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -173,13 +178,12 @@ async def get_evaluation(
 @crud_router.patch(
     "/{eval_id}",
     response_model=EvaluationResponse,
-    dependencies=[Depends(require_permissions(EVALS_MANAGE))],
+    dependencies=[Depends(require_eval_permissions(EVALS_MANAGE))],
 )
 async def update_evaluation(
     eval_id: str,
     update_request: UpdateEvaluationRequest,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -207,12 +211,11 @@ async def update_evaluation(
 @crud_router.delete(
     "/{eval_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_permissions(EVALS_MANAGE))],
+    dependencies=[Depends(require_eval_permissions(EVALS_MANAGE))],
 )
 async def delete_evaluation(
     eval_id: str,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -239,27 +242,64 @@ async def delete_evaluation(
     "/{eval_id}/runs",
     response_model=RunResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(require_permissions(EVALS_MANAGE))],
+    dependencies=[
+        Depends(require_eval_permissions(EVALS_MANAGE)),
+        Depends(check_evaluation_rate_limit),
+        Depends(require_token_scope(
+            "workflows",
+            require_if_present=True,
+            require_schedule_match=False,
+            allow_admin_bypass=True,
+            endpoint_id="evals.create_run",
+            count_as="run",
+        )),
+    ],
 )
 async def create_run(
     eval_id: str,
     request: CreateRunSimpleRequest,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    response: Response = None,
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
+        if idempotency_key:
+            try:
+                existing_id = svc.db.lookup_idempotency("run", idempotency_key, user_id)
+                if existing_id:
+                    existing = await svc.get_run(existing_id)
+                    if existing:
+                        try:
+                            if response is not None:
+                                response.headers["X-Idempotent-Replay"] = "true"
+                                response.headers["Idempotency-Key"] = idempotency_key
+                        except Exception as e:
+                            logger.debug(
+                                f"evaluations_crud: failed to set idempotency headers for {existing_id}: {e}"
+                            )
+                        return RunResponse(**existing)
+            except Exception as e:
+                logger.debug(f"evaluations_crud: idempotency lookup failed for key {idempotency_key}: {e}")
         target_model = request.target_model
         # Allow free-form config; convert Pydantic models if provided in future
         config = model_dump_compat(request.config) if hasattr(request.config, 'model_dump') else (request.config or {})
+        dataset_override = model_dump_compat(request.dataset_override) if request.dataset_override else None
         webhook_url = request.webhook_url
         run = await svc.create_run(
             eval_id=eval_id,
             target_model=target_model,
             config=config,
+            dataset_override=dataset_override,
             webhook_url=webhook_url,
             created_by=user_id,
         )
+        try:
+            if idempotency_key and run.get("id"):
+                svc.db.record_idempotency("run", idempotency_key, run["id"], user_id)
+        except Exception as e:
+            logger.debug(f"evaluations_crud: failed to record idempotency for run {run.get('id')}: {e}")
         return RunResponse(**run)
     except HTTPException:
         raise
@@ -275,15 +315,14 @@ async def create_run(
 @crud_router.get(
     "/{eval_id}/runs",
     response_model=RunListResponse,
-    dependencies=[Depends(require_permissions(EVALS_READ))],
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
 )
 async def list_runs(
     eval_id: str,
     limit: int = Query(20, ge=1, le=100),
     after: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -303,12 +342,11 @@ async def list_runs(
 @crud_router.get(
     "/runs/{run_id}",
     response_model=RunResponse,
-    dependencies=[Depends(require_permissions(EVALS_READ))],
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
 )
 async def get_run(
     run_id: str,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -333,16 +371,15 @@ async def get_run(
 
 @crud_router.post(
     "/runs/{run_id}/cancel",
-    dependencies=[Depends(require_permissions(EVALS_MANAGE))],
+    dependencies=[Depends(require_eval_permissions(EVALS_MANAGE))],
 )
 async def cancel_run(
     run_id: str,
-    user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        await svc.cancel_run(run_id, cancelled_by=user_id)
+        await svc.cancel_run(run_id, cancelled_by=current_user.id_str)
         return {"status": "cancelled", "run_id": run_id}
     except HTTPException:
         raise

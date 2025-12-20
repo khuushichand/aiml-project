@@ -185,6 +185,7 @@ Notes
 ## 14. Security & Privacy
 - All tokens encrypted at rest; minimum scopes required; secrets from `.env` or `Config_Files`.
 - Multi-user: accounts and sources strictly scoped to `user_id`.
+- OAuth state is stored server-side and consumed once during callback; expired/invalid states are rejected.
 - No telemetry. Logs redact PII/secrets; include provider request IDs when possible.
 - CORS and auth modes respected; rate limits enforced at endpoints.
 
@@ -210,7 +211,8 @@ Environment variables (examples):
 - CONNECTOR_MS_CLIENT_ID / CONNECTOR_MS_CLIENT_SECRET
 - CONNECTOR_NOTION_SECRET (internal token for Notion OAuth or integration secret)
 - CONNECTOR_DROPBOX_CLIENT_ID / CONNECTOR_DROPBOX_CLIENT_SECRET
-- CONNECTOR_REDIRECT_BASE_URL
+- CONNECTOR_REDIRECT_BASE_URL (optional; fallback to request host/connector base)
+- CONNECTOR_OAUTH_STATE_TTL_MINUTES (default: 10)
 - CONNECTOR_DEFAULT_EXPORTS (json)
 - CONNECTOR_JOB_LIMITS (json)
 - ORG_CONNECTORS_ENABLED_PROVIDERS (csv or json)

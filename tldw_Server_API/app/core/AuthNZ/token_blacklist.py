@@ -97,7 +97,7 @@ class TokenBlacklist:
             # Unknown expiry, avoid caching indefinitely
             self._cache_remove(jti)
             return
-        if expiry <= datetime.utcnow():
+        if expiry <= datetime.now(timezone.utc).replace(tzinfo=None):
             self._cache_remove(jti)
             return
         # Refresh ordering
@@ -112,7 +112,7 @@ class TokenBlacklist:
             self._local_cache[jti] = expiry
             self._local_order.append(jti)
         # Evict expired entries and enforce size limit
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         while self._local_order:
             oldest = self._local_order[0]
             cached_expiry = self._local_cache.get(oldest)
@@ -224,7 +224,7 @@ class TokenBlacklist:
 
         except Exception as e:
             logger.error(f"Failed to create token blacklist table: {e}")
-            raise DatabaseError(f"Failed to create blacklist table: {e}")
+            raise DatabaseError(f"Failed to create blacklist table: {e}") from e
 
     async def _ensure_session_revocation_columns(self, conn) -> None:
         """Ensure legacy SQLite session tables include revocation columns."""
@@ -293,7 +293,7 @@ class TokenBlacklist:
         # initialization/IO latency so that immediate post-revocation checks
         # reliably observe the blacklisted state even for very short expiries.
         # This is conservative (tokens remain blacklisted slightly longer).
-        now_utc = datetime.utcnow()
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
         min_grace = timedelta(seconds=1)
         effective_cache_expiry = (
             now_utc + min_grace if normalized_expiry <= now_utc + min_grace else normalized_expiry
@@ -304,7 +304,7 @@ class TokenBlacklist:
         if self.redis_client:
             try:
                 key = f"blacklist:{jti}"
-                ttl = int((normalized_expiry - datetime.utcnow()).total_seconds())
+                ttl = int((normalized_expiry - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds())
 
                 if ttl > 0:
                     await self.redis_client.setex(
@@ -314,7 +314,7 @@ class TokenBlacklist:
                             "user_id": user_id,
                             "token_type": token_type,
                             "reason": reason,
-                            "revoked_at": datetime.utcnow().isoformat()
+                            "revoked_at": datetime.now(timezone.utc).isoformat()
                         })
                     )
                     if self.settings.PII_REDACT_LOGS:
@@ -373,7 +373,7 @@ class TokenBlacklist:
         # Check local cache first (fastest)
         cached_expiry = self._local_cache.get(jti)
         if cached_expiry:
-            if cached_expiry > datetime.utcnow():
+            if cached_expiry > datetime.now(timezone.utc).replace(tzinfo=None):
                 return True
             self._cache_remove(jti)
 
@@ -389,7 +389,7 @@ class TokenBlacklist:
                     ttl = await self.redis_client.ttl(key)
                     expiry = None
                     if isinstance(ttl, (int, float)) and ttl > 0:
-                        expiry = datetime.utcnow() + timedelta(seconds=int(ttl))
+                        expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=int(ttl))
                     # Add to local cache for next time if expiry known
                     self._cache_add(jti, expiry)
                     return True
@@ -400,7 +400,7 @@ class TokenBlacklist:
         try:
             db_pool = await self._ensure_db_pool()
             repo = AuthnzTokenBlacklistRepo(db_pool)
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             expires_at = await repo.get_active_expiry_for_jti(jti=jti, now=now)
 
             if expires_at:
@@ -537,7 +537,7 @@ class TokenBlacklist:
         try:
             db_pool = await self._ensure_db_pool()
             repo = AuthnzTokenBlacklistRepo(db_pool)
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             count = await repo.cleanup_expired(now=now)
 
             if count > 0:
@@ -570,7 +570,7 @@ class TokenBlacklist:
         try:
             db_pool = await self._ensure_db_pool()
             repo = AuthnzTokenBlacklistRepo(db_pool)
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             return await repo.get_blacklist_stats(now=now, user_id=user_id)
         except Exception as e:
             logger.error(f"Failed to get blacklist stats: {e}")

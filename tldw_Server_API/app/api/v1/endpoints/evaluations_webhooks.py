@@ -3,6 +3,7 @@ Webhook management endpoints extracted from evaluations_unified.
 """
 
 from datetime import datetime, timezone
+import inspect
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
@@ -11,8 +12,9 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
     verify_api_key,
     create_error_response,
     sanitize_error_message,
+    get_eval_request_user,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
@@ -40,8 +42,8 @@ def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
             svc = get_unified_evaluation_service_for_user(user_id)
             setattr(svc, "webhook_manager", webhook_manager)
             return webhook_manager
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Test mode detection skipped: {e}")
     service = get_unified_evaluation_service_for_user(user_id)
     manager = getattr(service, "webhook_manager", None)
     if manager is None:
@@ -79,7 +81,7 @@ def _normalize_webhook_status_record(record: Dict[str, Any]) -> Dict[str, Any]:
 async def register_webhook(
     request: WebhookRegistrationRequest,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         wm = _get_webhook_manager_for_user(current_user.id)
@@ -94,8 +96,7 @@ async def register_webhook(
             timeout_seconds=request.timeout_seconds or 30,
         )
         try:
-            import inspect as _inspect
-            result = await _res if _inspect.isawaitable(_res) else _res
+            result = await _res if inspect.isawaitable(_res) else _res
         except Exception:
             result = _res
         return WebhookRegistrationResponse(**result)
@@ -110,14 +111,13 @@ async def register_webhook(
 @webhooks_router.get("/webhooks", response_model=List[WebhookStatusResponse])
 async def list_webhooks(
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         _get_webhook_manager_for_user(current_user.id)
         _res = webhook_manager.get_webhook_status(user_id=user_id)
         try:
-            import inspect as _inspect
-            records = await _res if _inspect.isawaitable(_res) else _res
+            records = await _res if inspect.isawaitable(_res) else _res
         except Exception:
             records = _res
         normalized = [_normalize_webhook_status_record(w) for w in records]
@@ -134,14 +134,13 @@ async def list_webhooks(
 async def unregister_webhook(
     webhook_id: str,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         wm = _get_webhook_manager_for_user(current_user.id)
         _res = wm.unregister_webhook(user_id, webhook_id)
         try:
-            import inspect as _inspect
-            if _inspect.isawaitable(_res):
+            if inspect.isawaitable(_res):
                 await _res
         except Exception:
             pass
@@ -158,14 +157,13 @@ async def unregister_webhook(
 async def test_webhook(
     payload: WebhookTestRequest,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         _get_webhook_manager_for_user(current_user.id)
         _res = webhook_manager.test_webhook(user_id=user_id, url=str(payload.url))
         try:
-            import inspect as _inspect
-            result = await _res if _inspect.isawaitable(_res) else _res
+            result = await _res if inspect.isawaitable(_res) else _res
         except Exception:
             result = _res
         if isinstance(result, WebhookTestResponse):

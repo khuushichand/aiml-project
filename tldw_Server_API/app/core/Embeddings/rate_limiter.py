@@ -397,8 +397,21 @@ class UserRateLimiter:
                 del self.user_requests[user_id]
                 self.user_tiers.pop(user_id, None)
 
-            if users_to_remove:
-                logger.info(f"Cleaned up {len(users_to_remove)} inactive users from rate limiter")
+            # Also clean up shadow request history to prevent memory leak
+            shadow_users_to_remove = []
+            for user_id, queue in self._shadow_user_requests.items():
+                if not queue or (queue and queue[-1] < cutoff_time):
+                    shadow_users_to_remove.append(user_id)
+
+            for user_id in shadow_users_to_remove:
+                del self._shadow_user_requests[user_id]
+
+            total_cleaned = len(users_to_remove) + len(shadow_users_to_remove)
+            if total_cleaned:
+                logger.info(
+                    f"Cleaned up {len(users_to_remove)} inactive users and "
+                    f"{len(shadow_users_to_remove)} shadow entries from rate limiter"
+                )
 
             return len(users_to_remove)
 
@@ -537,6 +550,17 @@ class AsyncRateLimiter:
         Returns:
             Tuple of (allowed, retry_after_seconds)
         """
+        if not _rg_embeddings_enabled():
+            # RG disabled: fall back to legacy limiter behavior.
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                self.executor,
+                self.rate_limiter.check_rate_limit,
+                user_id,
+                cost,
+                ip_address,
+            )
+
         # Prefer Resource Governor when configured; use the legacy limiter only
         # as a fallback when RG is unavailable.
         rg_decision = await _maybe_enforce_with_rg(
@@ -584,12 +608,8 @@ class AsyncRateLimiter:
 
             return rg_allowed, rg_decision.get("retry_after")
 
-        if _rg_embeddings_enabled():
-            # Legacy limiter fallback retired.
-            return False, 1
-
-        # RG disabled → treat as unlimited.
-        return True, None
+        # Legacy limiter fallback retired; fail closed when RG is enabled but unavailable.
+        return False, 1
 
     async def record_usage_async(self, user_id: str, cost: int = 1):
         """Record usage asynchronously (for post-processing)"""

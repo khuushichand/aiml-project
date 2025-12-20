@@ -422,8 +422,14 @@ class BackendPromptStudioDatabaseBase:
                     )
                     cur.execute(stmt)
                 else:
-                    safe_value = user_value.replace("'", "''")
-                    cur.execute(f"SET SESSION app.current_user_id = '{safe_value}'")
+                    # Validate input strictly - only allow alphanumeric, dash, underscore, dot
+                    import re
+                    if not re.match(r'^[\w\-\.]+$', user_value):
+                        logger.warning(f"Invalid client_id format for SET SESSION: {user_value[:50]}")
+                    else:
+                        # Use parameterized query via format_map for safety
+                        safe_value = user_value.replace("'", "''").replace("\\", "\\\\")
+                        cur.execute(f"SET SESSION app.current_user_id = '{safe_value}'")
                 try:
                     raw_conn.commit()
                 except Exception:
@@ -933,15 +939,30 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         json.dumps(payload, separators=(',', ':')) if payload else None,
                     ),
                 )
-        except Exception:
-            # sync_log is optional across backends; swallow any logging failures
-            logger.debug(
-                "Prompt Studio sync_log not available; skipping event for %s/%s",
-                entity,
-                entity_uuid,
-            )
+        except Exception as e:
+            # sync_log is optional across backends
+            err_str = str(e).lower()
+            if "no such table" in err_str or "does not exist" in err_str or "relation" in err_str:
+                # Table doesn't exist - expected in some deployments
+                logger.debug(
+                    "Prompt Studio sync_log table not available; skipping event for %s/%s",
+                    entity,
+                    entity_uuid,
+                )
+            else:
+                # Actual write error - worth warning about
+                logger.warning(
+                    "Failed to log sync event for %s/%s: %s",
+                    entity,
+                    entity_uuid,
+                    e,
+                )
 
     # --- Core API ---
+    # Project name constraints
+    MAX_PROJECT_NAME_LENGTH = 255
+    MIN_PROJECT_NAME_LENGTH = 1
+
     def create_project(
         self,
         name: str,
@@ -950,6 +971,15 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         metadata: Optional[Dict[str, Any]] = None,
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        # Validate project name
+        if not name or not isinstance(name, str):
+            raise ValueError("Project name must be a non-empty string")
+        name = name.strip()
+        if len(name) < self.MIN_PROJECT_NAME_LENGTH:
+            raise ValueError("Project name cannot be empty")
+        if len(name) > self.MAX_PROJECT_NAME_LENGTH:
+            raise ValueError(f"Project name cannot exceed {self.MAX_PROJECT_NAME_LENGTH} characters")
+
         project_uuid = str(uuid.uuid4())
         payload = (
             project_uuid,
@@ -1160,6 +1190,18 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         allowed_fields = {"name", "description", "status", "metadata"}
         set_clauses: List[str] = []
         params: List[Any] = []
+
+        # Validate name if being updated
+        if "name" in updates:
+            name = updates["name"]
+            if not name or not isinstance(name, str):
+                raise ValueError("Project name must be a non-empty string")
+            name = name.strip()
+            if len(name) < self.MIN_PROJECT_NAME_LENGTH:
+                raise ValueError("Project name cannot be empty")
+            if len(name) > self.MAX_PROJECT_NAME_LENGTH:
+                raise ValueError(f"Project name cannot exceed {self.MAX_PROJECT_NAME_LENGTH} characters")
+            updates["name"] = name
 
         for field, value in updates.items():
             if field not in allowed_fields:
@@ -4864,42 +4906,45 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
     def _log_sync_event(self, entity: str, entity_uuid: str, operation: str, payload: Dict[str, Any]):
         """Log an event to sync_log table if it exists."""
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
+            with self.transaction() as conn:
+                cursor = conn.cursor()
 
-            # Check if sync_log table exists
-            cursor.execute(
-                """
-                SELECT name FROM sqlite_master
-                WHERE type='table' AND name='sync_log'
-                """
-            )
-
-            if cursor.fetchone():
+                # Check if sync_log table exists
                 cursor.execute(
                     """
-                    INSERT INTO sync_log (
-                        entity,
-                        entity_uuid,
-                        operation,
-                        client_id,
-                        version,
-                        payload,
-                        timestamp
-                    )
-                    VALUES (?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP)
-                    """,
-                    (
-                        entity,
-                        entity_uuid,
-                        operation,
-                        self.client_id,
-                        json.dumps(payload),
-                    ),
+                    SELECT name FROM sqlite_master
+                    WHERE type='table' AND name='sync_log'
+                    """
                 )
-                conn.commit()
+
+                if cursor.fetchone():
+                    cursor.execute(
+                        """
+                        INSERT INTO sync_log (
+                            entity,
+                            entity_uuid,
+                            operation,
+                            client_id,
+                            version,
+                            payload,
+                            timestamp
+                        )
+                        VALUES (?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP)
+                        """,
+                        (
+                            entity,
+                            entity_uuid,
+                            operation,
+                            self.client_id,
+                            json.dumps(payload),
+                        ),
+                    )
         except Exception as e:
-            logger.debug(f"Could not log sync event: {e}")
+            err_str = str(e).lower()
+            if "no such table" in err_str or "does not exist" in err_str:
+                logger.debug(f"sync_log table not available: {e}")
+            else:
+                logger.warning(f"Failed to log sync event for {entity}/{entity_uuid}: {e}")
 
     # Public convenience alias matching some endpoint call sites
     def row_to_dict(self, row: tuple, cursor: sqlite3.Cursor) -> Dict[str, Any]:

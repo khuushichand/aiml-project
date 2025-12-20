@@ -3,7 +3,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 
 @pytest.fixture
@@ -15,19 +14,11 @@ def client():
         yield c
 
 
-def _override_user(admin=False):
-    async def _f():
-        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
-        return User(id=1, username="admin" if admin else "u", email="u@x", is_active=True, is_admin=admin)
-    return _f
-
-
 @pytest.mark.unit
-def test_metrics_endpoint_details_shape(client):
+def test_metrics_endpoint_details_shape(client, admin_user):
     # Make a simple request to increment counters
     os.environ["TESTING"] = "true"
     try:
-        app.dependency_overrides[get_request_user] = _override_user(admin=True)
         r1 = client.post(
             "/api/v1/embeddings",
             json={"input": "metrics check", "model": "text-embedding-3-small"}

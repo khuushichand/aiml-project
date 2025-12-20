@@ -6,6 +6,7 @@ and postprocessing stages.
 """
 
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Callable, Union
 from dataclasses import dataclass, field
@@ -13,6 +14,18 @@ from loguru import logger
 import re
 
 from .base import ChunkerConfig
+
+# Pre-compiled regex patterns for common operations (performance optimization)
+_RE_MULTI_SPACE = re.compile(r'[ \t]+')
+_RE_CRLF = re.compile(r'\r\n')
+
+
+@lru_cache(maxsize=16)
+def _get_linebreak_pattern(max_breaks: int) -> re.Pattern:
+    """Get compiled regex for limiting consecutive line breaks (cached)."""
+    return re.compile(r'\n{' + str(max_breaks + 1) + ',}')
+
+
 from .regex_safety import check_pattern as _rx_check
 from .regex_safety import compile_flags as _rx_flags
 from .chunker import Chunker
@@ -54,10 +67,10 @@ class TemplateProcessor:
         logger.debug("TemplateProcessor initialized")
 
     def _get_chunker(self) -> Chunker:
-        """Get or create chunker instance."""
-        if self._chunker is None:
-            self._chunker = Chunker()
-        return self._chunker
+        """Get a chunker instance (fresh per call unless one was provided)."""
+        if self._chunker is not None:
+            return self._chunker
+        return Chunker()
 
     def _register_builtin_operations(self):
         """Register built-in preprocessing and postprocessing operations."""
@@ -217,6 +230,9 @@ class TemplateProcessor:
             for k in ("max_size", "overlap", "method", "language"):
                 if k in extra_params:
                     extra_params = {kk: vv for kk, vv in extra_params.items() if kk != k}
+        method_options = dict(extra_params or {})
+        for k in ("hierarchical", "hierarchical_template"):
+            method_options.pop(k, None)
 
         # Perform chunking (supports hierarchical via config and overrides)
         chunker = self._get_chunker()
@@ -246,6 +262,7 @@ class TemplateProcessor:
                 overlap=overlap,
                 language=language_override,
                 template=hier_template if isinstance(hier_template, dict) else None,
+                method_options=method_options,
             )
             data["chunks"] = chunks
         else:
@@ -308,16 +325,18 @@ class TemplateProcessor:
     # Built-in preprocessing operations
     def _normalize_whitespace(self, text: str, options: Dict[str, Any]) -> str:
         """Normalize whitespace in text."""
-        # Replace multiple spaces with single space
-        text = re.sub(r'[ \t]+', ' ', text)
-        # Normalize line breaks
-        text = re.sub(r'\r\n', '\n', text)
+        # Replace multiple spaces with single space (using cached pattern)
+        text = _RE_MULTI_SPACE.sub(' ', text)
+        # Normalize line breaks (using cached pattern)
+        text = _RE_CRLF.sub('\n', text)
         # Remove excessive line breaks (coerce provided value to int safely)
         try:
             max_breaks = int(options.get("max_line_breaks", 2))
         except Exception:
             max_breaks = 2
-        text = re.sub(r'\n{' + str(max_breaks + 1) + ',}', '\n' * max_breaks, text)
+        # Use cached compiled pattern for line break normalization
+        linebreak_pattern = _get_linebreak_pattern(max_breaks)
+        text = linebreak_pattern.sub('\n' * max_breaks, text)
         return text.strip()
 
     def _remove_headers(self, text: str, options: Dict[str, Any]) -> str:

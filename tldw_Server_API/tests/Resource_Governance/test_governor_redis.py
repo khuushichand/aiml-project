@@ -1,7 +1,10 @@
+from datetime import datetime, timezone
+
 import pytest
 pytestmark = pytest.mark.rate_limit
 
 from tldw_Server_API.app.core.Resource_Governance import RedisResourceGovernor, RGRequest
+from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import ResourceDailyLedger, LedgerEntry
 
 
 class FakeTime:
@@ -117,6 +120,53 @@ async def test_tokens_per_min_zero_is_unbounded_in_reserve():
 
 
 @pytest.mark.asyncio
+async def test_tokens_daily_cap_denial_short_circuits_reserve(monkeypatch, tmp_path):
+    db_path = tmp_path / "authnz_tokens_daily.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    try:
+        from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        await reset_db_pool()
+        reset_settings()
+    except Exception:
+        pass
+    try:
+        from tldw_Server_API.app.core.AuthNZ.initialize import ensure_authnz_schema_ready_once
+        await ensure_authnz_schema_ready_once()
+    except Exception:
+        pass
+    try:
+        import tldw_Server_API.app.core.Resource_Governance.daily_caps as _dc
+        _dc._daily_ledger = None  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    ledger = ResourceDailyLedger()
+    await ledger.initialize()
+    await ledger.add(
+        LedgerEntry(
+            entity_scope="user",
+            entity_value="1",
+            category="tokens",
+            units=1,
+            op_id="seed-tokens",
+            occurred_at=datetime.now(timezone.utc),
+        )
+    )
+
+    class _Loader:
+        def get_policy(self, pid):
+            return {"tokens": {"per_min": 1000000, "daily_cap": 1}, "scopes": ["user"]}
+
+    rg = RedisResourceGovernor(policy_loader=_Loader(), ns="rg_t_daily_cap")
+    req = RGRequest(entity="user:1", categories={"tokens": {"units": 1}}, tags={"policy_id": "p"})
+    d, h = await rg.reserve(req, op_id="daily-cap-1")
+    assert (not d.allowed) and (h is None)
+    assert not rg._local_handles
+
+
+@pytest.mark.asyncio
 async def test_concurrency_leases_with_zrem_capability():
     class _Loader:
         def get_policy(self, pid):
@@ -145,6 +195,38 @@ async def test_concurrency_leases_with_zrem_capability():
 
     d2, h2 = await rg.reserve(req)
     assert not d2.allowed and h2 is None
+
+
+@pytest.mark.asyncio
+async def test_concurrency_streams_units_enforced():
+    class _Loader:
+        def get_policy(self, pid):
+            return {"streams": {"max_concurrent": 2, "ttl_sec": 60}, "scopes": ["user"]}
+
+    ft = FakeTime(0.0)
+    ns = "rg_t_conc_units"
+    rg = RedisResourceGovernor(policy_loader=_Loader(), time_source=ft, ns=ns)
+    client = await rg._client_get()
+    try:
+        for pat in (f"{ns}:lease:punit:streams*", f"{ns}:lease:punit:*"):
+            _cur, keys = await client.scan(match=pat)
+            for k in keys:
+                await client.delete(k)
+    except Exception:
+        pass
+
+    req_two = RGRequest(entity="user:9", categories={"streams": {"units": 2}}, tags={"policy_id": "punit"})
+    req_one = RGRequest(entity="user:9", categories={"streams": {"units": 1}}, tags={"policy_id": "punit"})
+
+    d1, h1 = await rg.reserve(req_two, op_id="u1")
+    assert d1.allowed and h1
+
+    d2, h2 = await rg.reserve(req_one, op_id="u2")
+    assert not d2.allowed and h2 is None
+
+    await rg.release(h1)
+    d3, h3 = await rg.reserve(req_one, op_id="u3")
+    assert d3.allowed and h3
 
     # Commit should release just this handle's leases via ZREM
     await rg.commit(h1)

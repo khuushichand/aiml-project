@@ -9,7 +9,7 @@ keeping the wire behavior identical.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple, List, Callable, AsyncIterator, Iterator
+from typing import Any, Dict, Optional, Tuple, List, Callable, AsyncIterator, Iterator, Awaitable
 from fastapi import HTTPException, status
 from loguru import logger
 import base64
@@ -126,8 +126,8 @@ def _load_models_with_case_cached(provider: str) -> List[str]:
         # Expected file/format issues: fall back to normalized catalog
         logger.debug(f"Model catalog raw load fallback for provider '{provider}': {_e}")
     except Exception as _ue:
-        # Log unexpected exceptions for visibility at debug level
-        logger.debug(f"Unexpected error loading model catalog for provider '{provider}': {_ue}")
+        # Unexpected exceptions should be visible in production logs
+        logger.warning(f"Unexpected error loading model catalog for provider '{provider}': {_ue}")
 
     # Fallback: use the normalized list (lowercase keys)
     return list_provider_models(provider) or []
@@ -156,7 +156,8 @@ def _load_alias_overrides_cached() -> Dict[str, Dict[str, str]]:
     except (ValueError, TypeError) as _e:
         logger.debug(f"CHAT_MODEL_ALIAS_OVERRIDES parse failed: {_e}")
     except Exception as _ue:
-        logger.debug(f"Unexpected error parsing CHAT_MODEL_ALIAS_OVERRIDES: {_ue}")
+        # Unexpected exceptions should be visible in production logs
+        logger.warning(f"Unexpected error parsing CHAT_MODEL_ALIAS_OVERRIDES: {_ue}")
 
     # 2) File keys in pricing catalog
     try:
@@ -174,7 +175,8 @@ def _load_alias_overrides_cached() -> Dict[str, Dict[str, str]]:
     except (OSError, ValueError, KeyError, AttributeError) as _e:
         logger.debug(f"Alias overrides load fallback: {_e}")
     except Exception as _ue:
-        logger.debug(f"Unexpected error loading alias overrides: {_ue}")
+        # Unexpected exceptions should be visible in production logs
+        logger.warning(f"Unexpected error loading alias overrides: {_ue}")
 
     # 3) Test-friendly defaults (preserve legacy behavior under pytest only)
     if os.getenv("PYTEST_CURRENT_TEST"):
@@ -356,8 +358,8 @@ def normalize_request_provider_and_model(
         # Expected lookup/attr issues: do not block request
         pass
     except Exception as _unexpected:
-        # Log unexpected exceptions instead of silencing them
-        logger.debug(f"Unexpected error during model alias resolution: {_unexpected}")
+        # Unexpected exceptions should be visible in production logs
+        logger.warning(f"Unexpected error during model alias resolution: {_unexpected}")
     provider = (api_provider or default_provider).lower()
     if "/" in model_str:
         parts = model_str.split("/", 1)
@@ -496,7 +498,8 @@ def resolve_provider_api_key(
 
         dynamic_keys = _schemas_mod.get_api_keys() or {}
     except Exception as _err:
-        logger.debug(f"resolve_provider_api_key failed to load dynamic keys: {_err}")
+        # API key loading errors should be visible in production
+        logger.warning(f"resolve_provider_api_key failed to load dynamic keys: {_err}")
         dynamic_keys = {}
 
     module_keys: Dict[str, Optional[str]] = {}
@@ -507,7 +510,7 @@ def resolve_provider_api_key(
                 module_keys.update(schema_keys)
                 debug_info["module_sources"].append("chat_request_schemas")
         except Exception as _schema_err:
-            logger.debug(f"resolve_provider_api_key skipped schema module keys: {_schema_err}")
+            logger.warning(f"resolve_provider_api_key skipped schema module keys: {_schema_err}")
         try:
             from tldw_Server_API.app.api.v1.endpoints import chat as _chat_mod  # type: ignore
 
@@ -517,7 +520,7 @@ def resolve_provider_api_key(
                 module_keys.update(endpoint_keys)
                 debug_info["module_sources"].append("chat_endpoint")
         except Exception as _chat_err:
-            logger.debug(f"resolve_provider_api_key skipped endpoint module keys: {_chat_err}")
+            logger.warning(f"resolve_provider_api_key skipped endpoint module keys: {_chat_err}")
 
     dynamic_value = dynamic_keys.get(provider_key)
     debug_info["dynamic_value_present"] = dynamic_value is not None
@@ -534,7 +537,11 @@ def resolve_provider_api_key(
         raw_value = module_keys.get(provider_key)
         debug_info["selected_source"] = "module_override"
     elif raw_value is not None:
-        env_var = f"{provider_key.upper().replace('.', '_')}_API_KEY" if provider_key else None
+        env_var = (
+            f"{provider_key.upper().replace('.', '_').replace('-', '_')}_API_KEY"
+            if provider_key
+            else None
+        )
         debug_info["selected_source"] = "env" if env_var and os.getenv(env_var) is not None else "config"
     else:
         debug_info["selected_source"] = "missing"
@@ -586,6 +593,7 @@ def build_call_params_from_request(
     provider_api_key: Optional[str],
     templated_llm_payload: List[Dict[str, Any]],
     final_system_message: Optional[str],
+    app_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Construct the cleaned argument dictionary for chat_api_call.
 
@@ -625,6 +633,8 @@ def build_call_params_from_request(
             "streaming": getattr(request_data, "stream", False),
         }
     )
+    if app_config is not None:
+        call_params["app_config"] = app_config
 
     # Filter Nones; keep explicit None for system_message only if provided
     cleaned_args = {k: v for k, v in call_params.items() if v is not None}
@@ -684,7 +694,7 @@ async def moderate_input_messages(
             except Exception:
                 pass
             if mon is not None and text:
-                mon.evaluate_and_alert(
+                mon.schedule_evaluate_and_alert(
                     user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
                     text=text,
                     source="chat.input",
@@ -744,15 +754,18 @@ async def moderate_input_messages(
 
         if resolved_action == "block":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Input violates moderation policy")
-        if resolved_action == "redact" and redacted is not None:
-            return redacted
+        if resolved_action == "redact":
+            return moderation_service.redact_text(text, eff_policy)
         return text
 
     # Apply moderation across request messages
+    # Moderate both "user" messages and "tool" messages (tool call results may contain
+    # external content that should be checked for policy violations)
+    MODERATED_ROLES = {"user", "tool"}
     try:
         if eff_policy.enabled and eff_policy.input_enabled and request_data and request_data.messages:
             for m in request_data.messages:
-                if getattr(m, "role", None) != "user":
+                if getattr(m, "role", None) not in MODERATED_ROLES:
                     continue
                 if isinstance(m.content, str):
                     m.content = await _moderate_text_in_place(m.content)
@@ -874,10 +887,17 @@ async def build_context_and_messages(
         if db_order == "DESC":
             raw_hist = list(reversed(raw_hist))
         for db_msg in raw_hist:
-            role = "user" if db_msg.get("sender", "").lower() == "user" else "assistant"
+            sender_val = str(db_msg.get("sender", "") or "")
+            sender_lower = sender_val.lower()
+            if sender_lower == "user":
+                role = "user"
+            elif sender_lower == "tool":
+                role = "tool"
+            else:
+                role = "assistant"
             char_name_hist = character_card.get("name", "Char") if character_card else "Char"
             text_content = db_msg.get("content", "")
-            if text_content:
+            if text_content and role != "tool":
                 text_content = replace_placeholders(text_content, char_name_hist, "User")
             msg_parts = []
             if text_content:
@@ -906,7 +926,11 @@ async def build_context_and_messages(
                 except Exception as e:
                     logger.warning(f"Error encoding DB image for history (msg_id {db_msg.get('id')}): {e}")
             if msg_parts:
-                hist_entry = {"role": role, "content": msg_parts}
+                hist_entry = {"role": role}
+                if role == "tool" and len(msg_parts) == 1 and msg_parts[0].get("type") == "text":
+                    hist_entry["content"] = msg_parts[0].get("text", "")
+                else:
+                    hist_entry["content"] = msg_parts
                 if role == "assistant" and character_card and character_card.get("name"):
                     name = sanitize_sender_name(character_card.get("name"))
                     if name:
@@ -921,35 +945,95 @@ async def build_context_and_messages(
                 tool_calls_meta = None
                 function_call_meta = None
                 content_placeholder_reason = None
+                tool_call_id_meta = None
                 if metadata:
                     tool_calls_meta = metadata.get("tool_calls")
                     extra_meta = metadata.get("extra") or {}
                     if isinstance(extra_meta, dict):
                         function_call_meta = extra_meta.get("function_call")
                         content_placeholder_reason = extra_meta.get("content_placeholder_reason")
+                        tool_call_id_meta = extra_meta.get("tool_call_id")
                 if tool_calls_meta is not None:
                     hist_entry["tool_calls"] = tool_calls_meta
                 if function_call_meta and not hist_entry.get("tool_calls"):
                     hist_entry["function_call"] = function_call_meta
                 if content_placeholder_reason in {"tool_calls", "function_call"}:
                     hist_entry["content"] = ""
+                if role == "tool" and tool_call_id_meta:
+                    hist_entry["tool_call_id"] = tool_call_id_meta
                 historical_msgs.append(hist_entry)
         logger.info(f"Loaded {len(historical_msgs)} historical messages for conv_id '{conv_id}'.")
 
     # Process current turn messages (persist if needed)
-    current_turn: List[Dict[str, Any]] = []
+    request_messages: List[Dict[str, Any]] = []
     for msg_model in request_data.messages:
         if msg_model.role == "system":
             continue
-        msg_dict = msg_model.model_dump(exclude_none=True)
+        request_messages.append(msg_model.model_dump(exclude_none=True))
+
+    # If the client included history with conversation_id, trim overlaps against DB history
+    overlap_cut = 0
+    if conv_id and historical_msgs and request_messages:
+        has_non_user_role = any(
+            msg.get("role") in {"assistant", "tool"} for msg in request_messages
+        )
+        if not has_non_user_role or len(request_messages) < 2:
+            has_non_user_role = False
+        def _normalize_content(value: Any) -> Any:
+            if isinstance(value, str):
+                return [{"type": "text", "text": value}]
+            if isinstance(value, list):
+                return value
+            return value
+
+        def _msg_sig(msg: Dict[str, Any]) -> str:
+            payload = {
+                "role": msg.get("role"),
+                "content": _normalize_content(msg.get("content")),
+                "tool_calls": msg.get("tool_calls"),
+                "function_call": msg.get("function_call"),
+                "tool_call_id": msg.get("tool_call_id"),
+            }
+            try:
+                return _json.dumps(payload, sort_keys=True, default=str)
+            except Exception:
+                return str(payload)
+
+        if has_non_user_role:
+            hist_sigs = [_msg_sig(m) for m in historical_msgs]
+            req_sigs = [_msg_sig(m) for m in request_messages]
+            max_k = min(len(hist_sigs), len(req_sigs))
+            overlap_start = None
+            overlap_k = 0
+            for k in range(max_k, 0, -1):
+                tail = hist_sigs[-k:]
+                for i in range(0, len(req_sigs) - k + 1):
+                    if req_sigs[i:i + k] == tail:
+                        overlap_start = i
+                        overlap_k = k
+                        break
+                if overlap_k:
+                    break
+            if overlap_k and overlap_start is not None:
+                overlap_cut = overlap_start + overlap_k
+                if overlap_cut > 0:
+                    logger.debug(
+                        "Trimmed %d request messages overlapping history for conv_id %s.",
+                        overlap_cut,
+                        conv_id,
+                    )
+
+    current_turn: List[Dict[str, Any]] = []
+    for msg_dict in request_messages[overlap_cut:]:
+        role = msg_dict.get("role")
         msg_for_db = msg_dict.copy()
-        if msg_model.role == "assistant" and character_card:
+        if role == "assistant" and character_card:
             # Persist assistant sender as sanitized character name
             msg_for_db["name"] = sanitize_sender_name(character_card.get("name", "Assistant"))
         if should_persist:
             await save_message_fn(chat_db, conv_id, msg_for_db, use_transaction=True)
         msg_for_llm = msg_dict.copy()
-        if msg_model.role == "assistant" and character_card and character_card.get("name"):
+        if role == "assistant" and character_card and character_card.get("name"):
             name = sanitize_sender_name(character_card.get("name"))
             if name:
                 msg_for_llm["name"] = name
@@ -1055,9 +1139,11 @@ async def execute_streaming_call(
     queue_execution_enabled: bool,
     enable_provider_fallback: bool,
     llm_call_func: Callable[[], Any],
-    refresh_provider_params: Callable[[str], Tuple[Dict[str, Any], Optional[str]]],
+    refresh_provider_params: Callable[[str], Any],
     moderation_getter: Optional[Callable[[], Any]] = None,
     rg_commit_cb: Optional[Callable[[int], Any]] = None,
+    rg_refund_cb: Optional[Callable[..., Any]] = None,
+    on_success: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> StreamingResponse:
     """Execute a streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -1159,7 +1245,20 @@ async def execute_streaming_call(
 
             async def _channel_stream():
                 while True:
-                    item = await stream_channel.get()
+                    try:
+                        # Add timeout to prevent indefinite hang if producer crashes
+                        # without sending the sentinel None value
+                        item = await asyncio.wait_for(
+                            stream_channel.get(),
+                            timeout=float(CHAT_IDLE_TIMEOUT)
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "Stream channel get timed out after {}s - "
+                            "producer may have crashed without sending sentinel",
+                            CHAT_IDLE_TIMEOUT
+                        )
+                        break
                     if item is None:
                         break
                     yield item
@@ -1243,7 +1342,14 @@ async def execute_streaming_call(
                 if fallback_provider:
                     logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
                     try:
-                        refreshed_args, refreshed_model = refresh_provider_params(fallback_provider)
+                        refreshed = refresh_provider_params(fallback_provider)
+                        if hasattr(refreshed, "__await__"):
+                            refreshed_args, refreshed_model = await refreshed  # type: ignore[misc]
+                        else:
+                            refreshed_args, refreshed_model = refreshed
+                        # Validate refreshed params have required fields before proceeding
+                        if not isinstance(refreshed_args, dict) or "messages_payload" not in refreshed_args:
+                            raise ValueError(f"Invalid refreshed params for {fallback_provider}: missing required fields")
                     except Exception as refresh_error:
                         provider_manager.record_failure(fallback_provider, refresh_error)
                         raise
@@ -1307,13 +1413,112 @@ async def execute_streaming_call(
     if not (hasattr(raw_stream_iter, "__aiter__") or hasattr(raw_stream_iter, "__iter__")):
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Provider did not return a valid stream.")
 
+    stream_mod_state = {"block_logged": False, "redact_logged": False}
+
     async def save_callback(
         full_reply: str,
         tool_calls: Optional[List[Dict[str, Any]]],
         function_call: Optional[Dict[str, Any]],
     ):
-        if should_persist and final_conversation_id and (
-            full_reply or tool_calls or function_call
+        full_reply_to_save = full_reply
+        post_stream_blocked = False
+        try:
+            _get_mod = moderation_getter or get_moderation_service
+            moderation = _get_mod()
+            req_user_id = None
+            try:
+                if request is not None and hasattr(request, "state"):
+                    req_user_id = getattr(request.state, "user_id", None)
+            except Exception:
+                req_user_id = None
+            eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
+            if full_reply and eff_policy.enabled and eff_policy.output_enabled:
+                action = None
+                redacted = None
+                sample = None
+                category = None
+                if hasattr(moderation, "evaluate_action"):
+                    eval_res = moderation.evaluate_action(full_reply, eff_policy, "output")
+                    if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+                        action, redacted, sample = eval_res[0], eval_res[1], eval_res[2]
+                        category = eval_res[3] if len(eval_res) >= 4 else None
+                    else:
+                        action, redacted, sample = eval_res  # type: ignore
+                else:
+                    flagged, sample = moderation.check_text(full_reply, eff_policy)
+                    if flagged:
+                        action = eff_policy.output_action
+                        if action == "redact":
+                            redacted = moderation.redact_text(full_reply, eff_policy)
+
+                if action == "block":
+                    if not stream_mod_state["block_logged"]:
+                        try:
+                            metrics.track_moderation_stream_block(
+                                str(req_user_id or client_id),
+                                category=(category or "default"),
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            if audit_service and audit_context:
+                                import asyncio as _asyncio
+                                _asyncio.create_task(
+                                    audit_service.log_event(
+                                        event_type=AuditEventType.SECURITY_VIOLATION,
+                                        context=audit_context,
+                                        action="moderation.output",
+                                        result="failure",
+                                        metadata={
+                                            "phase": "output",
+                                            "streaming": True,
+                                            "action": "block",
+                                            "pattern": sample,
+                                        },
+                                    )
+                                )
+                        except Exception:
+                            pass
+                        stream_mod_state["block_logged"] = True
+                    post_stream_blocked = True
+                    full_reply_to_save = None
+                elif action == "redact":
+                    if not stream_mod_state["redact_logged"]:
+                        try:
+                            metrics.track_moderation_output(
+                                str(req_user_id or client_id),
+                                "redact",
+                                streaming=True,
+                                category=(category or "default"),
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            if audit_service and audit_context:
+                                import asyncio as _asyncio
+                                _asyncio.create_task(
+                                    audit_service.log_event(
+                                        event_type=AuditEventType.SECURITY_VIOLATION,
+                                        context=audit_context,
+                                        action="moderation.output",
+                                        result="success",
+                                        metadata={
+                                            "phase": "output",
+                                            "streaming": True,
+                                            "action": "redact",
+                                            "pattern": sample,
+                                        },
+                                    )
+                                )
+                        except Exception:
+                            pass
+                        stream_mod_state["redact_logged"] = True
+                    full_reply_to_save = moderation.redact_text(full_reply, eff_policy)
+        except Exception:
+            pass
+
+        if should_persist and final_conversation_id and not post_stream_blocked and (
+            full_reply_to_save or tool_calls or function_call
         ):
             asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
             asst_name = (
@@ -1328,8 +1533,8 @@ async def execute_streaming_call(
                 "role": "assistant",
                 "name": asst_name,
             }
-            if full_reply is not None:
-                message_payload["content"] = full_reply
+            if full_reply_to_save is not None:
+                message_payload["content"] = full_reply_to_save
             if tool_calls:
                 message_payload["tool_calls"] = tool_calls
             if function_call:
@@ -1401,6 +1606,12 @@ async def execute_streaming_call(
                 )
         except Exception:
             pass
+        # BYOK usage tracking (best-effort)
+        try:
+            if callable(on_success):
+                await on_success(selected_provider)
+        except Exception:
+            pass
 
     async def tracked_streaming_generator():
         async with metrics.track_streaming(final_conversation_id) as stream_tracker:
@@ -1416,8 +1627,6 @@ async def execute_streaming_call(
 
             from tldw_Server_API.app.core.Chat.streaming_utils import StopStreamWithError
 
-            stream_block_logged = False
-            stream_redact_logged = False
             pending_audit_tasks: list[asyncio.Task[Any]] = []
 
             def _track_audit_task(task: "asyncio.Task[Any]") -> None:
@@ -1430,7 +1639,6 @@ async def execute_streaming_call(
                 task.add_done_callback(_cleanup)
 
             def _out_transform(s: str) -> str:
-                nonlocal stream_block_logged, stream_redact_logged
                 try:
                     mon = None
                     try:
@@ -1446,7 +1654,7 @@ async def execute_streaming_call(
                     except Exception:
                         pass
                     if mon is not None and s:
-                        mon.evaluate_and_alert(
+                        mon.schedule_evaluate_and_alert(
                             user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
                             text=s,
                             source="chat.output",
@@ -1480,7 +1688,7 @@ async def execute_streaming_call(
                     resolved_action = eff_policy.output_action
                     redacted_s = moderation.redact_text(s, eff_policy) if resolved_action == "redact" else None
                 if resolved_action == "block":
-                    if not stream_block_logged:
+                    if not stream_mod_state["block_logged"]:
                         try:
                             metrics.track_moderation_stream_block(str(req_user_id or client_id), category=(out_category or "default"))
                         except Exception:
@@ -1505,10 +1713,10 @@ async def execute_streaming_call(
                                 _track_audit_task(task)
                         except Exception:
                             pass
-                        stream_block_logged = True
+                        stream_mod_state["block_logged"] = True
                     raise StopStreamWithError(message="Output violates moderation policy", error_type="output_moderation_block")
                 if resolved_action == "redact":
-                    if not stream_redact_logged:
+                    if not stream_mod_state["redact_logged"]:
                         try:
                             metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=True, category=(out_category or "default"))
                         except Exception:
@@ -1533,18 +1741,27 @@ async def execute_streaming_call(
                                 _track_audit_task(task)
                         except Exception:
                             pass
-                        stream_redact_logged = True
-                    return redacted_s or moderation.redact_text(s, eff_policy)
+                        stream_mod_state["redact_logged"] = True
+                    return moderation.redact_text(s, eff_policy)
                 return s
+
+            async def _finalize_stream(*, success: bool, cancelled: bool, error: bool) -> None:
+                if success:
+                    return
+                if callable(rg_refund_cb):
+                    res = rg_refund_cb(cancelled=cancelled, error=error)
+                    if hasattr(res, "__await__"):
+                        await res  # type: ignore[misc]
 
             generator = create_streaming_response_with_timeout(
                 stream=raw_stream_iter,  # type: ignore[arg-type]
                 conversation_id=final_conversation_id,
                 model_name=model,
                 save_callback=save_callback,
+                finalize_callback=_finalize_stream if callable(rg_refund_cb) else None,
                 idle_timeout=CHAT_IDLE_TIMEOUT,
                 heartbeat_interval=CHAT_HEARTBEAT_INTERVAL,
-                text_transform=_out_transform if (eff_policy.enabled and eff_policy.output_enabled) else None,
+                text_transform=_out_transform,
             )
             try:
                 async for chunk in generator:
@@ -1661,8 +1878,9 @@ async def execute_non_stream_call(
     queue_execution_enabled: bool,
     enable_provider_fallback: bool,
     llm_call_func: Callable[[], Any],
-    refresh_provider_params: Callable[[str], Tuple[Dict[str, Any], Optional[str]]],
+    refresh_provider_params: Callable[[str], Any],
     moderation_getter: Optional[Callable[[], Any]] = None,
+    on_success: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> Dict[str, Any]:
     """Execute a non-streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -1795,7 +2013,14 @@ async def execute_non_stream_call(
                 if fallback_provider:
                     logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
                     try:
-                        refreshed_args, refreshed_model = refresh_provider_params(fallback_provider)
+                        refreshed = refresh_provider_params(fallback_provider)
+                        if hasattr(refreshed, "__await__"):
+                            refreshed_args, refreshed_model = await refreshed  # type: ignore[misc]
+                        else:
+                            refreshed_args, refreshed_model = refreshed
+                        # Validate refreshed params have required fields before proceeding
+                        if not isinstance(refreshed_args, dict) or "messages_payload" not in refreshed_args:
+                            raise ValueError(f"Invalid refreshed params for {fallback_provider}: missing required fields")
                     except Exception as refresh_error:
                         provider_manager.record_failure(fallback_provider, refresh_error)
                         raise
@@ -1961,7 +2186,7 @@ async def execute_non_stream_call(
                     except Exception:
                         pass
                     if mon3 is not None and content_to_save:
-                        mon3.evaluate_and_alert(
+                        mon3.schedule_evaluate_and_alert(
                             user_id=str(req_user_id or client_id) if (req_user_id or client_id) else None,
                             text=content_to_save,
                             source="chat.output",
@@ -1997,7 +2222,7 @@ async def execute_non_stream_call(
                             )
                     except Exception:
                         pass
-                    content_to_save = redacted_val or moderation.redact_text(content_to_save, eff_policy)
+                    content_to_save = moderation.redact_text(content_to_save, eff_policy)
                     # Update llm_response dict if applicable
                     try:
                         if isinstance(llm_response, dict):
@@ -2068,5 +2293,12 @@ async def execute_non_stream_call(
             )
         except Exception:
             pass
+
+    # BYOK usage tracking (best-effort)
+    try:
+        if callable(on_success):
+            await on_success(selected_provider)
+    except Exception:
+        pass
 
     return encoded_payload

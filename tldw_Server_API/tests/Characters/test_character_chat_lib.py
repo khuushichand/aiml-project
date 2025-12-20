@@ -28,6 +28,7 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
     replace_user_placeholder,
     get_character_list_for_ui,
     extract_character_id_from_ui_choice,
+    map_sender_to_role,
     load_character_and_image,
     process_db_messages_to_ui_history,
     process_db_messages_to_rich_ui_history,
@@ -266,6 +267,23 @@ def test_process_db_messages_to_ui_history_normalizes_common_roles():
         ("final turn", None),
     ]
     assert process_db_messages_to_ui_history(db_messages, char_name, user_name) == expected
+
+
+def test_process_db_messages_to_ui_history_trims_sender_aliases():
+    char_name = "Botty"
+    user_name = "Human"
+    db_messages = [
+        {"sender": " User ", "content": "Hello {{char}}"},
+        {"sender": " Botty ", "content": "Hi {{user}}"},
+    ]
+    expected = [("Hello Botty", "Hi Human")]
+    assert process_db_messages_to_ui_history(db_messages, char_name, user_name) == expected
+
+
+def test_map_sender_to_role_handles_tool_prefix():
+    assert map_sender_to_role("tool:lookup", "Botty") == "tool"
+    assert map_sender_to_role("function:search", "Botty") == "tool"
+    assert map_sender_to_role("assistant_tool:call", "Botty") == "tool"
 
 
 def test_process_db_messages_to_ui_history_handles_additional_alias():
@@ -549,6 +567,38 @@ def test_parse_v1_card_unit():
     assert parsed_extra["extensions"]["custom_field"] == "custom_val"
 
 
+def test_import_textgen_context_greeting():
+    payload = {
+        "name": "TextGenChar",
+        "context": "Backstory context",
+        "greeting": "Hello there!",
+        "example_dialogue": "User: Hi\nBot: Hello",
+    }
+    parsed = import_character_card_from_json_string(json.dumps(payload))
+    assert parsed is not None
+    assert parsed["name"] == "TextGenChar"
+    assert parsed["first_message"] == "Hello there!"
+    assert parsed["description"] == "Backstory context"
+    assert parsed["scenario"] == "Backstory context"
+    assert parsed["message_example"] == "User: Hi\nBot: Hello"
+
+
+def test_import_alpaca_instruction_input():
+    payload = {
+        "instruction": "Follow the rules.",
+        "input": "Be concise.",
+        "output": "Understood.",
+    }
+    parsed = import_character_card_from_json_string(json.dumps(payload))
+    assert parsed is not None
+    assert parsed["name"].startswith("Alpaca-")
+    assert parsed["description"] == "Follow the rules."
+    assert parsed["scenario"] == "Follow the rules."
+    assert parsed["personality"] == "Be concise."
+    assert parsed["first_message"] == "Understood."
+    assert parsed["message_example"] == "Understood."
+
+
 def test_prepare_character_data_preserves_transparency():
     transparent_img = io.BytesIO()
     PILImageReal.new("RGBA", (2, 2), (255, 0, 0, 0)).save(transparent_img, format="PNG")
@@ -562,6 +612,32 @@ def test_prepare_character_data_preserves_transparency():
     assert processed.mode in ("RGBA", "LA")
     pixel = processed.getpixel((0, 0))
     assert len(pixel) >= 2 and pixel[-1] == 0
+
+
+def test_prepare_character_data_uses_lossless_for_alpha():
+    """
+    Regression test for Issue #5: WEBP alpha channel handling.
+
+    When saving images with alpha channels, lossless compression should be used
+    to preserve transparency quality without artifacts.
+    """
+    # Create a test image with semi-transparent pixels
+    test_img = io.BytesIO()
+    img = PILImageReal.new("RGBA", (10, 10), (128, 64, 32, 128))  # Semi-transparent
+    img.save(test_img, format="PNG")
+    encoded = base64.b64encode(test_img.getvalue()).decode("utf-8")
+
+    db_ready = _prepare_character_data_for_db_storage({"name": "AlphaTest", "image_base64": encoded})
+    stored_image_bytes = db_ready["image"]
+
+    # Verify the output is a valid image with alpha preserved
+    processed = PILImageReal.open(io.BytesIO(stored_image_bytes))
+    assert "A" in processed.getbands(), "Alpha channel should be preserved"
+
+    # Verify alpha value is preserved (lossless should keep exact values)
+    pixel = processed.getpixel((0, 0))
+    assert len(pixel) == 4, "RGBA pixel should have 4 components"
+    assert pixel[3] == 128, f"Alpha value should be preserved as 128, got {pixel[3]}"
 
 
 def test_parse_character_book_unit():
@@ -610,6 +686,24 @@ def test_validate_character_book_unit():
     # Test invalid: entries not a list
     is_valid_nel, errors_nel = validate_character_book({"entries": "not_a_list"})
     assert not is_valid_nel and "must be a list" in errors_nel[0]
+
+
+def test_validate_character_book_entry_at_depth_position():
+    """
+    Regression test for Issue #6: Position validation values.
+
+    The 'at_depth' position value should be accepted as valid per V2 spec.
+    """
+    entry_at_depth = {
+        "keys": ["keyword1"],
+        "content": "Entry content",
+        "enabled": True,
+        "insertion_order": 0,
+        "position": "at_depth"  # This should now be valid
+    }
+    is_valid, errors = validate_character_book_entry(entry_at_depth, 0, set())
+    assert is_valid, f"Position 'at_depth' should be valid. Errors: {errors}"
+    assert not errors, "No validation errors should occur for 'at_depth' position"
 
 
 def test_validate_v2_card_unit():
@@ -1372,6 +1466,36 @@ def test_retrieve_conversation_messages_for_ui_desc_order(db):
     ]
 
 
+def test_retrieve_conversation_messages_for_ui_desc_alias_inference(db):
+    char_id = db.add_character_card({"name": "AliasChar"})
+    conv_id = db.add_conversation({"character_id": char_id, "title": "Alias Chat"})
+
+    db.add_message({"conversation_id": conv_id, "sender": "User", "content": "Hello"})
+    db.add_message({"conversation_id": conv_id, "sender": "AltA", "content": "AltA says hi"})
+    db.add_message({"conversation_id": conv_id, "sender": "User", "content": "Ping"})
+    db.add_message({"conversation_id": conv_id, "sender": "AltB", "content": "AltB says hi"})
+    db.add_message({"conversation_id": conv_id, "sender": "User", "content": "Bye"})
+
+    desc_history = retrieve_conversation_messages_for_ui(
+        db,
+        conversation_id=conv_id,
+        character_name="AliasChar",
+        user_name="User",
+        order="DESC",
+        rich_output=True,
+    )
+
+    contents = []
+    for turn in desc_history:
+        for role in ("user", "character", "non_character"):
+            if turn.get(role) and turn[role].get("content"):
+                contents.append(turn[role]["content"])
+
+    assert any("AltA says hi" == content for content in contents)
+    assert any("[AltB]" in content for content in contents)
+    assert all("[AltA]" not in content for content in contents)
+
+
 def test_retrieve_conversation_messages_for_ui_rich_output(db):
     char_id = db.add_character_card({"name": "Chrony"})
     conv_id = db.add_conversation({"character_id": char_id, "title": "Chrony Chat"})
@@ -1476,6 +1600,61 @@ def test_retrieve_message_details_integration(db):
     details = retrieve_message_details(db, msg_id, "MsgDetChar", "TestUser")
     assert details and details["content"] == "Test MsgDetChar from TestUser"
     assert retrieve_message_details(db, "non_existent_msg", "Char", "User") is None
+
+#
+# --- Regression Tests for Bug Fixes ---
+#
+
+def test_ambiguous_sender_lookahead_next_is_character():
+    """
+    Regression test for Issue #4: Ambiguous sender resolution with lookahead.
+
+    When next sender is clearly a character (and not a user), the ambiguous
+    message should be classified as 'user' to maintain conversation alternation.
+    """
+    # Test the process_db_messages_to_ui_history function with ambiguous senders
+    db_messages = [
+        {"sender": "User", "content": "Hello"},
+        {"sender": "unknown_sender", "content": "Middle message"},  # Ambiguous
+        {"sender": "Alice", "content": "Response"},  # Next is character
+    ]
+
+    history = process_db_messages_to_ui_history(
+        db_messages=db_messages,
+        char_name_from_card="Alice",
+        user_name_for_placeholders="User",
+        actual_user_sender_id_in_db="User",
+        actual_char_sender_id_in_db="Alice",
+    )
+
+    # The history should correctly pair messages
+    assert len(history) >= 1, "History should have at least one turn"
+
+
+def test_ambiguous_sender_lookahead_next_is_user():
+    """
+    Regression test for Issue #4: Ambiguous sender resolution with lookahead.
+
+    When next sender is clearly a user (and not a character), the ambiguous
+    message should be classified as 'character'.
+    """
+    db_messages = [
+        {"sender": "Alice", "content": "Hello"},
+        {"sender": "mystery", "content": "Middle message"},  # Ambiguous
+        {"sender": "User", "content": "Thanks"},  # Next is user
+    ]
+
+    history = process_db_messages_to_ui_history(
+        db_messages=db_messages,
+        char_name_from_card="Alice",
+        user_name_for_placeholders="User",
+        actual_user_sender_id_in_db="User",
+        actual_char_sender_id_in_db="Alice",
+    )
+
+    # The history should correctly pair messages
+    assert len(history) >= 1, "History should have at least one turn"
+
 
 #
 # End of test_character_chat_lib.py

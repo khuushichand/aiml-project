@@ -2,13 +2,12 @@
 #
 #
 # Imports
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
 #
 # Third-party imports
 from loguru import logger as logging
 from pathlib import Path
 
-from tldw_Server_API.app.core.Local_LLM.Huggingface_Handler import HuggingFaceHandler
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import InferenceError
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LLMManagerConfig
 from tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler import LlamaCppHandler
@@ -16,11 +15,10 @@ from tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler import LlamaCppHandler
 # Local imports
 from tldw_Server_API.app.core.Local_LLM.Llamafile_Handler import LlamafileHandler
 from tldw_Server_API.app.core.Local_LLM.Ollama_Handler import OllamaHandler
-# from .ollama_handler import OllamaHandler # Relative imports for package structure
-# from .huggingface_handler import HuggingFaceHandler
-# from .llamafile_handler import LlamafileHandler
-# from .config_model import LLMManagerConfig, OllamaConfig, HuggingFaceConfig, LlamafileConfig
-# from .exceptions import InferenceError, ModelNotFoundError
+
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.Local_LLM.Huggingface_Handler import HuggingFaceHandler
+
 ########################################################################################################################
 #
 # Functions:
@@ -35,46 +33,51 @@ class LLMInferenceManager:
             self.ollama = OllamaHandler(self.config.ollama, self.config.app_config)
             self.logger.info("Ollama handler initialized.")
 
-        self.huggingface: Optional[HuggingFaceHandler] = None
+        self.huggingface: Optional["HuggingFaceHandler"] = None
         if self.config.huggingface and self.config.huggingface.enabled:
-            # Ensure models_dir is Path object and created
+            # Ensure models_dir exists (use local variable to avoid mutating config)
             hf_cfg = self.config.huggingface
-            if isinstance(hf_cfg.models_dir, str):
-                 hf_cfg.models_dir = Path(hf_cfg.models_dir)
-            hf_cfg.models_dir.mkdir(parents=True, exist_ok=True)
+            hf_models_dir = Path(hf_cfg.models_dir) if isinstance(hf_cfg.models_dir, str) else hf_cfg.models_dir
+            hf_models_dir.mkdir(parents=True, exist_ok=True)
 
-            self.huggingface = HuggingFaceHandler(hf_cfg, self.config.app_config)
-            self.logger.info(f"HuggingFace handler initialized. Models directory: {hf_cfg.models_dir}")
+            try:
+                from tldw_Server_API.app.core.Local_LLM.Huggingface_Handler import HuggingFaceHandler
+            except ImportError as e:
+                self.logger.warning(
+                    f"HuggingFace handler unavailable; install transformers/torch to enable it: {e}"
+                )
+            else:
+                self.huggingface = HuggingFaceHandler(hf_cfg, self.config.app_config)
+                self.logger.info(f"HuggingFace handler initialized. Models directory: {hf_models_dir}")
 
 
         self.llamafile: Optional[LlamafileHandler] = None
         if self.config.llamafile and self.config.llamafile.enabled:
             lf_cfg = self.config.llamafile
-            if isinstance(lf_cfg.llamafile_dir, str):
-                lf_cfg.llamafile_dir = Path(lf_cfg.llamafile_dir)
-            if isinstance(lf_cfg.models_dir, str):
-                lf_cfg.models_dir = Path(lf_cfg.models_dir)
-            lf_cfg.llamafile_dir.mkdir(parents=True, exist_ok=True)
-            lf_cfg.models_dir.mkdir(parents=True, exist_ok=True)
+            # Use local variables to avoid mutating config
+            lf_exe_dir = Path(lf_cfg.llamafile_dir) if isinstance(lf_cfg.llamafile_dir, str) else lf_cfg.llamafile_dir
+            lf_models_dir = Path(lf_cfg.models_dir) if isinstance(lf_cfg.models_dir, str) else lf_cfg.models_dir
+            lf_exe_dir.mkdir(parents=True, exist_ok=True)
+            lf_models_dir.mkdir(parents=True, exist_ok=True)
 
             self.llamafile = LlamafileHandler(lf_cfg, self.config.app_config)
-            self.logger.info(f"Llamafile handler initialized. Executable dir: {lf_cfg.llamafile_dir}, Models dir: {lf_cfg.models_dir}")
+            self.logger.info(f"Llamafile handler initialized. Executable dir: {lf_exe_dir}, Models dir: {lf_models_dir}")
 
         self.llamacpp: Optional[LlamaCppHandler] = None
         if self.config.llamacpp and self.config.llamacpp.enabled:
             lc_cfg = self.config.llamacpp
-            if isinstance(lc_cfg.models_dir, str):
-                lc_cfg.models_dir = Path(lc_cfg.models_dir)
+            # Use local variable to avoid mutating config
+            lc_models_dir = Path(lc_cfg.models_dir) if isinstance(lc_cfg.models_dir, str) else lc_cfg.models_dir
             try:
-                lc_cfg.models_dir.mkdir(parents=True, exist_ok=True)
+                lc_models_dir.mkdir(parents=True, exist_ok=True)
             except Exception as e:
                 self.logger.warning(
-                    f"Failed to create llama.cpp models directory {lc_cfg.models_dir}: {e}. "
+                    f"Failed to create llama.cpp models directory {lc_models_dir}: {e}. "
                     "Handler will proceed but model loading may fail."
                 )
             self.llamacpp = LlamaCppHandler(lc_cfg, self.config.app_config)
             self.logger.info(
-                f"Llama.cpp handler initialized. Executable: {lc_cfg.executable_path}, Models dir: {lc_cfg.models_dir}"
+                f"Llama.cpp handler initialized. Executable: {lc_cfg.executable_path}, Models dir: {lc_models_dir}"
             )
 
 
@@ -228,12 +231,14 @@ class LLMInferenceManager:
         raise InferenceError(f"Server status not supported for backend {backend}.")
 
     def cleanup_on_exit(self):
-        """Call this on application shutdown to clean up managed resources, like llamafile servers."""
+        """Call this on application shutdown to clean up managed resources, like llamafile and llamacpp servers."""
         self.logger.info("LLMInferenceManager performing cleanup_on_exit...")
         if self.llamafile:
             # Use the synchronous cleanup helper defined on the handler
-            self.llamafile._cleanup_all_managed_servers_sync()  # type: ignore[attr-defined]
-        # Add other cleanup if needed
+            self.llamafile._cleanup_all_managed_servers_sync()
+        if self.llamacpp:
+            # Clean up llama.cpp server processes
+            self.llamacpp._cleanup_managed_server_sync()
         self.logger.info("LLMInferenceManager cleanup_on_exit complete.")
 
 #

@@ -249,6 +249,17 @@ class TTSAdapter(ABC):
         """Get provider name"""
         return self.__class__.__name__.replace('Adapter', '')
 
+    @property
+    def provider_key(self) -> str:
+        """Get canonical provider key for config/metrics/validation."""
+        provider_key = getattr(self, "PROVIDER_KEY", None)
+        if isinstance(provider_key, str) and provider_key.strip():
+            return provider_key.strip().lower()
+        name = self.provider_name
+        if isinstance(name, str) and name:
+            return name.lower()
+        return self.__class__.__name__.lower()
+
     @abstractmethod
     async def initialize(self) -> bool:
         """

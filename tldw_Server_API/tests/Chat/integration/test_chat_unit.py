@@ -2,6 +2,7 @@
 Unit tests for chat functionality using isolated fixtures.
 These tests don't require external services or global state modifications.
 """
+import os
 import pytest
 from fastapi import status
 from unittest.mock import patch, MagicMock
@@ -323,10 +324,14 @@ class TestChatErrorHandling:
              patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}):
             mock_perform.side_effect = Exception("LLM API Error")
 
+            from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+            settings = get_settings()
+            api_key = settings.SINGLE_USER_API_KEY or os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+
             response = client.post(
                 "/api/v1/chat/completions",
                 json=request_data,
-                headers={"X-CSRF-Token": csrf_token, "Token": "Bearer test-api-key"}
+                headers={"X-CSRF-Token": csrf_token, "X-API-KEY": api_key}
             )
 
             assert response.status_code >= 500

@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError, Field
 # Local Imports
 # New unified settings
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
 # New JWT service
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
@@ -23,6 +24,7 @@ from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
+from tldw_Server_API.app.core.exceptions import InactiveUserError
 # Utils
 from loguru import logger
 # API Dependencies
@@ -366,6 +368,36 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         logger.error(f"Unexpected error decoding token: {e}")
         raise credentials_exception
 
+    # Enforce scope checks for scoped tokens to prevent privilege expansion.
+    try:
+        scoped_claims = (
+            "scope",
+            "allowed_endpoints",
+            "allowed_methods",
+            "allowed_paths",
+            "max_calls",
+            "max_runs",
+            "schedule_id",
+        )
+        has_scoped_claim = any(payload.get(claim) is not None for claim in scoped_claims)
+    except Exception:
+        has_scoped_claim = False
+
+    if has_scoped_claim:
+        try:
+            scope_enforced = bool(getattr(request.state, "_token_scope_enforced", False))
+        except Exception:
+            scope_enforced = False
+        if not scope_enforced:
+            if pii_redact_logs:
+                logger.warning("Scoped token used without scope enforcement (details redacted)")
+            else:
+                logger.warning("Scoped token used without scope enforcement for subject %s", raw_subject)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Scoped token requires endpoint scope enforcement",
+            )
+
     if pii_redact_logs:
         logger.debug("Token decoded successfully for authenticated subject (redacted)")
     else:
@@ -472,7 +504,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             logger.warning("Authentication attempt by inactive user (details redacted)")
         else:
             logger.warning(f"Authentication attempt by inactive user: {user.username} (ID: {user.id})")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
+        raise InactiveUserError("Inactive user")
 
     # Attach user id for downstream context (usage logging, RBAC rate limits)
     try:
@@ -578,6 +610,25 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
             if test_key:
                 allowed_keys.add(test_key)
             if api_key in allowed_keys:
+                client_ip = None
+                try:
+                    client = getattr(request, "client", None)
+                    if client is not None:
+                        client_ip = getattr(client, "host", None)
+                except Exception:
+                    client_ip = None
+                if not is_single_user_ip_allowed(client_ip, settings):
+                    if settings.PII_REDACT_LOGS:
+                        logger.warning("Single-user API key rejected due to client IP allowlist (details redacted)")
+                    else:
+                        logger.warning(
+                            "Single-user API key rejected due to client IP allowlist (ip={})",
+                            client_ip,
+                        )
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid or missing API Key",
+                    )
                 user = get_single_user_instance()
                 # Ensure admin-style claims are present
                 if not user.roles:
@@ -640,6 +691,9 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 except Exception:
                     logger.debug("Unable to populate AuthContext for single-user API key")
                 return user
+    except HTTPException:
+        # Preserve explicit auth failures (e.g., IP allowlist rejection).
+        raise
     except Exception as single_exc:
         logger.debug(
             "authenticate_api_key_user: single-user API key path failed; falling back to multi-user flow: {}",
@@ -713,6 +767,8 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
         try:
             request.state.user_id = user_id
             request.state.api_key_id = key_info.get("id")
+            # Store scope for require_api_key_scope() dependency enforcement
+            request.state._api_key_scope = key_info.get("scope", "read")
             # Attach org/team context if present (virtual keys)
             try:
                 if key_info.get("org_id") is not None:
@@ -920,10 +976,23 @@ async def get_request_user(
         if extracted:
             api_key = extracted
 
-    # Prefer Bearer JWT when present; otherwise fall back to API key.
+    # Prefer Bearer JWT when present; in single-user mode treat Bearer as API key.
     if token:
+        try:
+            settings = get_settings()
+        except Exception:
+            settings = None
+        if settings is not None and getattr(settings, "AUTH_MODE", None) == "single_user":
+            logger.debug("get_request_user: Treating Bearer token as API key in single-user mode.")
+            return await authenticate_api_key_user(request, token)
         logger.debug("get_request_user: Attempting JWT-based authentication.")
-        user = await verify_jwt_and_fetch_user(request, token)
+        try:
+            user = await verify_jwt_and_fetch_user(request, token)
+        except InactiveUserError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Inactive user",
+            ) from exc
         # verify_jwt_and_fetch_user already sets request.state.auth; cache user for fast-path reuse.
         try:
             request.state._auth_user = user

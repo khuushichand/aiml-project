@@ -1,5 +1,6 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -82,3 +83,31 @@ def test_pg_concurrent_acquire_skip_locked():
     got_ids = {r for r in (r1, r2, r3) if r is not None}
     # Expect at least 2 distinct jobs acquired without conflict
     assert len(got_ids) >= 2
+
+
+def test_pg_reschedule_persists_updates():
+    jm = _new_pg_manager()
+    future = datetime.now(timezone.utc) + timedelta(hours=1)
+    job = jm.create_job(
+        domain="chatbooks",
+        queue="default",
+        job_type="export",
+        payload={"action": "export"},
+        owner_user_id="1",
+        available_at=future,
+    )
+    before = jm.get_job(int(job["id"]))["available_at"]
+    count = jm.reschedule_jobs(
+        domain="chatbooks",
+        queue="default",
+        job_type="export",
+        status="queued",
+        set_now=True,
+        dry_run=False,
+    )
+    assert count >= 1
+    after = jm.get_job(int(job["id"]))["available_at"]
+    assert after is not None
+    assert after < before
+    acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=5, worker_id="w-resched")
+    assert acq and int(acq["id"]) == int(job["id"])

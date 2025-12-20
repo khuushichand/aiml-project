@@ -6,6 +6,7 @@ interface for SQLite databases, maintaining compatibility with the
 existing codebase while enabling multi-backend support.
 """
 
+import re
 import sqlite3
 import threading
 import time
@@ -30,6 +31,9 @@ from .base import (
 
 logger = _loguru_logger
 
+_NUMERIC_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_QUOTED_IDENTIFIER_RE = re.compile(r'^"[^"]+"$')
 
 class SQLiteConnectionPool(ConnectionPool):
     """SQLite-specific connection pool using thread-local storage."""
@@ -291,11 +295,8 @@ class SQLiteBackend(DatabaseBackend):
             else:
                 cursor.execute(query)
 
-            # Determine whether to fetch rows: SELECT or statements with RETURNING
-            upper = query.strip().upper()
-            is_select = upper.startswith("SELECT")
-            has_returning = " RETURNING " in upper
-            if is_select or has_returning:
+            # Determine whether to fetch rows: any statement that returns rows
+            if cursor.description is not None:
                 rows = cursor.fetchall()
                 result_rows = [dict(row) for row in rows]
             else:
@@ -449,12 +450,19 @@ class SQLiteBackend(DatabaseBackend):
             params.append(value)
 
         # Add ORDER BY using bm25() by default for better relevance
-        if fts_query.rank_expression:
-            query_parts.append(f"ORDER BY {fts_query.rank_expression}")
+        rank_expression = self._safe_fts_rank_expression(fts_query)
+        if fts_query.rank_expression and rank_expression is None:
+            logger.warning(
+                "Ignoring unsafe FTS rank_expression for table %s",
+                fts_query.table,
+            )
+        if rank_expression:
+            query_parts.append(f"ORDER BY {rank_expression}")
         else:
             # bm25 returns lower scores for more relevant rows; sort ASC
-            # Use bare table name (consistent with project queries elsewhere)
-            query_parts.append(f"ORDER BY bm25({fts_query.table}) ASC")
+            query_parts.append(
+                f"ORDER BY bm25({self.escape_identifier(fts_query.table)}) ASC"
+            )
 
         # Add LIMIT/OFFSET
         if fts_query.limit:
@@ -480,6 +488,48 @@ class SQLiteBackend(DatabaseBackend):
         # SQLite uses double quotes for identifiers
         escaped = identifier.replace('"', '""')
         return f'"{escaped}"'
+
+    def _safe_fts_rank_expression(self, fts_query: FTSQuery) -> Optional[str]:
+        expr = (fts_query.rank_expression or "").strip()
+        if not expr or not fts_query.table:
+            return None
+
+        direction = None
+        parts = expr.rsplit(None, 1)
+        if len(parts) == 2 and parts[1].upper() in {"ASC", "DESC"}:
+            expr_core = parts[0].strip()
+            direction = parts[1].upper()
+        else:
+            expr_core = expr
+
+        bm25_match = re.match(r"^bm25(?:\((.*)\))?$", expr_core, re.IGNORECASE)
+        if bm25_match:
+            inner = (bm25_match.group(1) or "").strip()
+            weights: List[str] = []
+            if inner:
+                tokens = [token.strip() for token in inner.split(",") if token.strip()]
+                if tokens and (_IDENTIFIER_RE.match(tokens[0]) or _QUOTED_IDENTIFIER_RE.match(tokens[0])):
+                    tokens = tokens[1:]
+                for token in tokens:
+                    if not _NUMERIC_RE.fullmatch(token):
+                        return None
+                weights = tokens
+
+            expr_safe = f"bm25({self.escape_identifier(fts_query.table)}"
+            if weights:
+                expr_safe += ", " + ", ".join(weights)
+            expr_safe += ")"
+            if direction:
+                expr_safe += f" {direction}"
+            return expr_safe
+
+        if _IDENTIFIER_RE.match(expr_core):
+            expr_safe = self.escape_identifier(expr_core)
+            if direction:
+                expr_safe += f" {direction}"
+            return expr_safe
+
+        return None
 
     def get_last_insert_id(self, connection: Optional[sqlite3.Connection] = None) -> Optional[int]:
         """Get the last inserted row ID."""

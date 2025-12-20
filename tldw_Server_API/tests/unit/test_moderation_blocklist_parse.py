@@ -166,3 +166,159 @@ def test_replacement_limits_are_enforced():
             os.unlink(tmp_path)
         except Exception:
             pass
+
+
+@pytest.mark.unit
+def test_user_override_empty_categories_clears_gating():
+    svc = ModerationService()
+    lines = [
+        "secret -> block #confidential",
+    ]
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp.write("\n".join(lines) + "\n")
+        tmp_path = tmp.name
+    try:
+        rules = svc._load_block_patterns(tmp_path)
+        svc._global_policy = ModerationPolicy(
+            enabled=True,
+            input_enabled=True,
+            output_enabled=True,
+            input_action="block",
+            output_action="redact",
+            redact_replacement="[REDACTED]",
+            per_user_overrides=True,
+            block_patterns=rules,
+            categories_enabled={"pii"},
+        )
+        svc._user_overrides = {"user1": {"categories_enabled": ""}}
+        pol = svc.get_effective_policy("user1")
+        assert pol.categories_enabled == set()
+        act, _, _, cat = svc.evaluate_action("secret", pol, "input")
+        assert act == "block"
+        assert cat == "confidential"
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+def test_evaluate_action_redacts_all_matching_rules():
+    svc = ModerationService()
+    lines = [
+        "secret -> redact:[MASK]",
+        "token -> redact:[TOK]",
+    ]
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp.write("\n".join(lines) + "\n")
+        tmp_path = tmp.name
+    try:
+        rules = svc._load_block_patterns(tmp_path)
+        pol = ModerationPolicy(
+            enabled=True,
+            input_enabled=True,
+            output_enabled=True,
+            input_action="block",
+            output_action="redact",
+            redact_replacement="[REDACTED]",
+            per_user_overrides=False,
+            block_patterns=rules,
+        )
+        act, red, _, _ = svc.evaluate_action("secret token", pol, "output")
+        assert act == "redact"
+        assert red is not None
+        assert "[MASK]" in red
+        assert "[TOK]" in red
+        assert "secret" not in red
+        assert "token" not in red
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+def test_evaluate_action_block_precedence_over_warn():
+    svc = ModerationService()
+    lines = [
+        "secret -> warn #pii",
+        "secret -> block #confidential",
+    ]
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp.write("\n".join(lines) + "\n")
+        tmp_path = tmp.name
+    try:
+        rules = svc._load_block_patterns(tmp_path)
+        pol = ModerationPolicy(
+            enabled=True,
+            input_enabled=True,
+            output_enabled=True,
+            input_action="warn",
+            output_action="warn",
+            redact_replacement="[REDACTED]",
+            per_user_overrides=False,
+            block_patterns=rules,
+        )
+        act, _, _, cat = svc.evaluate_action("secret", pol, "input")
+        assert act == "block"
+        assert cat == "confidential"
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+def test_chunk_scanning_detects_matches_past_max_chars():
+    svc = ModerationService()
+    lines = [
+        "secret -> block",
+    ]
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp.write("\n".join(lines) + "\n")
+        tmp_path = tmp.name
+    try:
+        rules = svc._load_block_patterns(tmp_path)
+        pol = ModerationPolicy(
+            enabled=True,
+            input_enabled=True,
+            output_enabled=True,
+            input_action="block",
+            output_action="redact",
+            redact_replacement="[REDACTED]",
+            per_user_overrides=False,
+            block_patterns=rules,
+        )
+        svc._max_scan_chars = 10
+        text = ("a" * 25) + "secret"
+        flagged, sample = svc.check_text(text, pol)
+        assert flagged is True
+        assert sample is not None
+        act, _, _, _ = svc.evaluate_action(text, pol, "input")
+        assert act == "block"
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+def test_set_blocklist_lines_empty_writes_empty_file():
+    svc = ModerationService()
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        svc._blocklist_path = tmp_path
+        ok = svc.set_blocklist_lines([])
+        assert ok is True
+        lines = svc.get_blocklist_lines()
+        assert lines == []
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass

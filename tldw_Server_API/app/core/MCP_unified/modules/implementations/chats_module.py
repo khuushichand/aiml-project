@@ -126,72 +126,85 @@ class ChatsModule(BaseModule):
         sender = args.get("sender")
 
         db = self._open_db(context)
-        results: List[Dict[str, Any]] = []
-        # Conversations by title
-        if by in {"both", "title"}:
-            convs = db.search_conversations_by_title(
-                query,
-                character_id=character_id,
-                limit=limit + offset,
-                client_id=None,  # MCP operates with a synthetic client_id; fetch full tenant scope explicitly.
-            )
-            for r in convs[offset: offset + limit]:
-                results.append({
-                    "id": r.get("id"),
-                    "source": "chats",
-                    "title": r.get("title"),
-                    "snippet": r.get("title"),
-                    "uri": f"chats://{r.get('id')}",
-                    "score": 1.0,
-                    "score_type": "fts",
-                    "created_at": r.get("created_at"),
-                    "last_modified": r.get("last_modified"),
-                    "version": r.get("version"),
-                    "tags": None,
-                    "conversation_id": r.get("id"),
-                    "loc": {"conversation_id": r.get("id")},
-                })
+        try:
+            max_fetch = limit + offset
+            combined: List[Dict[str, Any]] = []
+            convs_raw_len = 0
+            msgs_raw_len = 0
 
-        # Messages by content
-        if by in {"both", "message"}:
-            msgs = db.search_messages_by_content(query, conversation_id=None, limit=limit + offset)
-            idx = 0
-            for r in msgs:
-                if sender and (str(r.get("sender") or "").lower() != str(sender).lower()):
-                    continue
-                if idx < offset:
-                    idx += 1
-                    continue
-                if len(results) >= limit + offset:
-                    break
-                content = r.get("content") or ""
-                results.append({
-                    "id": r.get("id"),
-                    "source": "chats",
-                    "title": None,
-                    "snippet": " ".join(content.split())[:snippet_len],
-                    "uri": f"chats://{r.get('conversation_id')}#{r.get('id')}",
-                    "score": 1.0,
-                    "score_type": "fts",
-                    "created_at": r.get("timestamp"),
-                    "last_modified": r.get("last_modified"),
-                    "version": r.get("version"),
-                    "tags": None,
-                    "conversation_id": r.get("conversation_id"),
-                    "message_id": r.get("id"),
-                    "sender": r.get("sender"),
-                    "loc": {"conversation_id": r.get("conversation_id"), "message_id": r.get("id")},
-                })
-                idx += 1
+            # Conversations by title
+            if by in {"both", "title"}:
+                convs = db.search_conversations_by_title(
+                    query,
+                    character_id=character_id,
+                    limit=max_fetch,
+                    client_id=None,  # MCP operates with a synthetic client_id; fetch full tenant scope explicitly.
+                )
+                convs_raw_len = len(convs)
+                for r in convs:
+                    combined.append({
+                        "id": r.get("id"),
+                        "source": "chats",
+                        "title": r.get("title"),
+                        "snippet": r.get("title"),
+                        "uri": f"chats://{r.get('id')}",
+                        "score": 1.0,
+                        "score_type": "fts",
+                        "created_at": r.get("created_at"),
+                        "last_modified": r.get("last_modified"),
+                        "version": r.get("version"),
+                        "tags": None,
+                        "conversation_id": r.get("id"),
+                        "loc": {"conversation_id": r.get("id")},
+                    })
 
-        # Normalize length, compute has_more/next_offset best-effort
-        results = results[:limit]
-        return {
-            "results": results,
-            "has_more": False,
-            "next_offset": None,
-            "total_estimated": len(results) + offset,
-        }
+            # Messages by content
+            if by in {"both", "message"}:
+                msgs = db.search_messages_by_content(query, conversation_id=None, limit=max_fetch)
+                msgs_raw_len = len(msgs)
+                msg_results: List[Dict[str, Any]] = []
+                for r in msgs:
+                    if sender and (str(r.get("sender") or "").lower() != str(sender).lower()):
+                        continue
+                    content = r.get("content") or ""
+                    msg_results.append({
+                        "id": r.get("id"),
+                        "source": "chats",
+                        "title": None,
+                        "snippet": " ".join(content.split())[:snippet_len],
+                        "uri": f"chats://{r.get('conversation_id')}#{r.get('id')}",
+                        "score": 1.0,
+                        "score_type": "fts",
+                        "created_at": r.get("timestamp"),
+                        "last_modified": r.get("last_modified"),
+                        "version": r.get("version"),
+                        "tags": None,
+                        "conversation_id": r.get("conversation_id"),
+                        "message_id": r.get("id"),
+                        "sender": r.get("sender"),
+                        "loc": {"conversation_id": r.get("conversation_id"), "message_id": r.get("id")},
+                    })
+                    if len(msg_results) >= max_fetch:
+                        break
+                combined.extend(msg_results)
+
+            sliced = combined[offset: offset + limit]
+            has_more = len(combined) > (offset + limit)
+            if not has_more and (convs_raw_len >= max_fetch or msgs_raw_len >= max_fetch):
+                has_more = True
+            next_offset = (offset + len(sliced)) if has_more else None
+
+            return {
+                "results": sliced,
+                "has_more": has_more,
+                "next_offset": next_offset,
+                "total_estimated": len(combined),
+            }
+        finally:
+            try:
+                db.close_all_connections()
+            except Exception as exc:
+                logger.debug("Failed to close ChaChaNotes DB connections after chats search: {}", exc)
 
     def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
         if tool_name == "chats.search":
@@ -241,85 +254,91 @@ class ChatsModule(BaseModule):
         loc = retrieval.get("loc") or {}
 
         db = self._open_db(context)
-        conv = db.get_conversation_by_id(conversation_id)
-        if not conv:
-            raise ValueError(f"Conversation not found: {conversation_id}")
-        messages = db.get_messages_for_conversation(conversation_id, limit=1000, offset=0, order_by_timestamp="ASC")
+        try:
+            conv = db.get_conversation_by_id(conversation_id)
+            if not conv:
+                raise ValueError(f"Conversation not found: {conversation_id}")
+            messages = db.get_messages_for_conversation(conversation_id, limit=1000, offset=0, order_by_timestamp="ASC")
 
-        meta = {
-            "id": conversation_id,
-            "source": "chats",
-            "title": conv.get("title"),
-            "snippet": conv.get("title") or "",
-            "uri": f"chats://{conversation_id}",
-            "score": 1.0,
-            "score_type": "fts",
-            "created_at": conv.get("created_at"),
-            "last_modified": conv.get("last_modified"),
-            "version": conv.get("version"),
-            "tags": None,
-            "conversation_id": conversation_id,
-            "loc": None,
-        }
+            meta = {
+                "id": conversation_id,
+                "source": "chats",
+                "title": conv.get("title"),
+                "snippet": conv.get("title") or "",
+                "uri": f"chats://{conversation_id}",
+                "score": 1.0,
+                "score_type": "fts",
+                "created_at": conv.get("created_at"),
+                "last_modified": conv.get("last_modified"),
+                "version": conv.get("version"),
+                "tags": None,
+                "conversation_id": conversation_id,
+                "loc": None,
+            }
 
-        def _estimate_tokens(s: str) -> int:
-            return max(1, (len(s) + cpt - 1) // cpt)
+            def _estimate_tokens(s: str) -> int:
+                return max(1, (len(s) + cpt - 1) // cpt)
 
-        if mode == "full":
-            body = "\n".join([f"{m.get('sender')}: {m.get('content','')}" for m in messages])
-            return {"meta": meta, "content": body, "attachments": messages}
+            if mode == "full":
+                body = "\n".join([f"{m.get('sender')}: {m.get('content','')}" for m in messages])
+                return {"meta": meta, "content": body, "attachments": messages}
 
-        if mode == "chunk_with_siblings" and messages:
-            anchor_id = None
-            try:
-                if isinstance(loc, dict) and loc.get("message_id"):
-                    anchor_id = str(loc.get("message_id"))
-            except Exception:
+            if mode == "chunk_with_siblings" and messages:
                 anchor_id = None
-            anchor_index = 0
-            if anchor_id:
-                for i, m in enumerate(messages):
-                    if str(m.get("id")) == anchor_id:
-                        anchor_index = i
-                        break
-            # Greedy expand around anchor under token budget
-            selected = [anchor_index]
-            budget = int(max_tokens) if isinstance(max_tokens, (int, float)) else None
-            if budget is None:
-                # default window of 5 messages each side
-                w = 5
-                left = max(0, anchor_index - w)
-                right = min(len(messages), anchor_index + w + 1)
-                span = messages[left:right]
-            else:
-                current = _estimate_tokens(messages[anchor_index].get("content") or "")
-                left = anchor_index - 1
-                right = anchor_index + 1
-                while True:
-                    progressed = False
-                    if left >= 0:
-                        t_add = _estimate_tokens(messages[left].get("content") or "")
-                        if current + t_add <= budget:
-                            selected.insert(0, left)
-                            current += t_add
-                            left -= 1
-                            progressed = True
-                    if right < len(messages):
-                        t_add = _estimate_tokens(messages[right].get("content") or "")
-                        if current + t_add <= budget:
-                            selected.append(right)
-                            current += t_add
-                            right += 1
-                            progressed = True
-                    if not progressed:
-                        break
-                span = [messages[i] for i in selected]
-            body = "\n".join([f"{m.get('sender')}: {m.get('content','')}" for m in span])
-            meta["loc"] = {"conversation_id": conversation_id, "message_index": anchor_index, "message_id": messages[anchor_index].get("id")}
-            return {"meta": meta, "content": body, "attachments": span}
+                try:
+                    if isinstance(loc, dict) and loc.get("message_id"):
+                        anchor_id = str(loc.get("message_id"))
+                except Exception:
+                    anchor_id = None
+                anchor_index = 0
+                if anchor_id:
+                    for i, m in enumerate(messages):
+                        if str(m.get("id")) == anchor_id:
+                            anchor_index = i
+                            break
+                # Greedy expand around anchor under token budget
+                selected = [anchor_index]
+                budget = int(max_tokens) if isinstance(max_tokens, (int, float)) else None
+                if budget is None:
+                    # default window of 5 messages each side
+                    w = 5
+                    left = max(0, anchor_index - w)
+                    right = min(len(messages), anchor_index + w + 1)
+                    span = messages[left:right]
+                else:
+                    current = _estimate_tokens(messages[anchor_index].get("content") or "")
+                    left = anchor_index - 1
+                    right = anchor_index + 1
+                    while True:
+                        progressed = False
+                        if left >= 0:
+                            t_add = _estimate_tokens(messages[left].get("content") or "")
+                            if current + t_add <= budget:
+                                selected.insert(0, left)
+                                current += t_add
+                                left -= 1
+                                progressed = True
+                        if right < len(messages):
+                            t_add = _estimate_tokens(messages[right].get("content") or "")
+                            if current + t_add <= budget:
+                                selected.append(right)
+                                current += t_add
+                                right += 1
+                                progressed = True
+                        if not progressed:
+                            break
+                    span = [messages[i] for i in selected]
+                body = "\n".join([f"{m.get('sender')}: {m.get('content','')}" for m in span])
+                meta["loc"] = {"conversation_id": conversation_id, "message_index": anchor_index, "message_id": messages[anchor_index].get("id")}
+                return {"meta": meta, "content": body, "attachments": span}
 
-        # snippet default: title or first message excerpt
-        if messages:
-            first = messages[0]
-            meta["snippet"] = (first.get("content") or "")[:snippet_len]
-        return {"meta": meta, "content": meta["snippet"], "attachments": None}
+            # snippet default: title or first message excerpt
+            if messages:
+                first = messages[0]
+                meta["snippet"] = (first.get("content") or "")[:snippet_len]
+            return {"meta": meta, "content": meta["snippet"], "attachments": None}
+        finally:
+            try:
+                db.close_all_connections()
+            except Exception as exc:
+                logger.debug("Failed to close ChaChaNotes DB connections after chats get: {}", exc)

@@ -9,7 +9,7 @@ import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch, Mock
 import pytest
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # Local Imports
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
@@ -91,6 +91,52 @@ class MockAdapter(TTSAdapter):
 
     async def cleanup(self):
         self.initialized = False
+
+
+class MetricsStub:
+    def register_metric(self, *args, **kwargs):
+        return None
+
+    def set_gauge(self, *args, **kwargs):
+        return None
+
+    def increment(self, *args, **kwargs):
+        return None
+
+    def observe(self, *args, **kwargs):
+        return None
+
+    def gauge_add(self, *args, **kwargs):
+        return None
+
+
+class RecordingAdapter(TTSAdapter):
+    PROVIDER_KEY = "openai"
+
+    def __init__(self, config: Dict[str, Any] = None):
+        super().__init__(config or {})
+        self.last_text: Optional[str] = None
+
+    async def initialize(self) -> bool:
+        self._initialized = True
+        self._status = ProviderStatus.AVAILABLE
+        self._capabilities = await self.get_capabilities()
+        return True
+
+    async def generate(self, request: TTSRequest) -> TTSResponse:
+        self.last_text = request.text
+        return TTSResponse(audio_data=b"ok", format=request.format)
+
+    async def get_capabilities(self) -> TTSCapabilities:
+        return TTSCapabilities(
+            provider_name="Recording",
+            supports_streaming=True,
+            supports_voice_cloning=False,
+            supported_languages={"en"},
+            supported_formats={AudioFormat.MP3},
+            max_text_length=5000,
+            supported_voices=[],
+        )
 
 
 class TestTTSServiceV2:
@@ -327,6 +373,76 @@ class TestTTSServiceV2:
 
             # Should not allow calls
             assert not cb.allow_request()
+
+
+@pytest.mark.asyncio
+async def test_generate_speech_uses_provider_key_for_validation():
+    adapter = RecordingAdapter()
+    factory = MagicMock()
+    factory.get_adapter_by_model = AsyncMock(return_value=adapter)
+    factory.get_provider_for_model = MagicMock(return_value=None)
+    factory.registry = MagicMock()
+    factory.registry.get_adapter = AsyncMock(return_value=adapter)
+    factory.registry.config = {"providers": {"openai": {"sanitize_text": False}}}
+
+    service = TTSServiceV2(factory)
+    service.metrics = MetricsStub()
+
+    providers = []
+
+    def fake_validate(request, provider=None, config=None):
+        providers.append(provider)
+
+    request = OpenAISpeechRequest(
+        input="Hello world",
+        model="openai",
+        voice="alloy",
+        response_format="mp3",
+    )
+    request.stream = False
+
+    with patch("tldw_Server_API.app.core.TTS.tts_service_v2.validate_tts_request", side_effect=fake_validate):
+        chunks = [chunk async for chunk in service.generate_speech(request)]
+
+    assert b"ok" in b"".join(chunks)
+    assert providers
+    assert providers[-1] == "openai"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sanitize_enabled", [True, False])
+async def test_provider_opt_in_sanitization(sanitize_enabled):
+    adapter = RecordingAdapter()
+    factory = MagicMock()
+    factory.get_adapter_by_model = AsyncMock(return_value=adapter)
+    factory.get_provider_for_model = MagicMock(return_value=None)
+    factory.registry = MagicMock()
+    factory.registry.get_adapter = AsyncMock(return_value=adapter)
+    factory.registry.config = {
+        "providers": {"openai": {"sanitize_text": sanitize_enabled}},
+        "strict_validation": False,
+    }
+
+    service = TTSServiceV2(factory)
+    service.metrics = MetricsStub()
+
+    input_text = "Hello <script>alert('xss')</script> world"
+    request = OpenAISpeechRequest(
+        input=input_text,
+        model="openai",
+        voice="alloy",
+        response_format="mp3",
+    )
+    request.stream = False
+
+    chunks = [chunk async for chunk in service.generate_speech(request)]
+
+    assert b"ok" in b"".join(chunks)
+    assert adapter.last_text is not None
+    if sanitize_enabled:
+        assert "<script>" not in adapter.last_text
+    else:
+        assert adapter.last_text == input_text
 
 
 class TestAudioUtils:

@@ -5,7 +5,8 @@
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timedelta
+import threading
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from uuid import uuid4
 #
@@ -32,6 +33,15 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 
 class JWTService:
     """Service for creating and verifying JWT tokens with persistent secret management"""
+
+    # Valid token types - reject any token with an unknown type
+    VALID_TOKEN_TYPES = frozenset({
+        "access",
+        "refresh",
+        "password_reset",
+        "email_verification",
+        "service",
+    })
 
     def __init__(self, settings: Optional[Settings] = None):
         """Initialize JWT service"""
@@ -70,7 +80,16 @@ class JWTService:
             # Asymmetric (RSA/ECDSA)
             self._encode_key = self.settings.JWT_PRIVATE_KEY
             # Allow verifying with public if provided, else private
-            self._decode_key = self.settings.JWT_PUBLIC_KEY or self.settings.JWT_PRIVATE_KEY
+            if self.settings.JWT_PUBLIC_KEY:
+                self._decode_key = self.settings.JWT_PUBLIC_KEY
+            else:
+                # Warn when using private key for verification - unusual configuration
+                self._decode_key = self.settings.JWT_PRIVATE_KEY
+                if self._decode_key:
+                    logger.warning(
+                        "JWTService: No JWT_PUBLIC_KEY configured; using private key for verification. "
+                        "Consider configuring JWT_PUBLIC_KEY for asymmetric algorithms."
+                    )
             self._secondary_decode_key = self.settings.JWT_SECONDARY_PUBLIC_KEY
             if not self._encode_key:
                 raise ConfigurationError("JWT_PRIVATE_KEY", f"Private key required for {self.algorithm}")
@@ -101,7 +120,7 @@ class JWTService:
             Encoded JWT access token
         """
         # Calculate expiration dynamically from settings
-        expire = datetime.utcnow() + timedelta(minutes=self.settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=self.settings.ACCESS_TOKEN_EXPIRE_MINUTES)
 
         # Build token payload
         payload = {
@@ -109,7 +128,7 @@ class JWTService:
             "username": username,
             "role": role,
             "exp": expire,
-            "iat": datetime.utcnow(),
+            "iat": datetime.now(timezone.utc),
             "jti": str(uuid4()),  # JWT ID for tracking
             "type": "access"
         }
@@ -154,14 +173,14 @@ class JWTService:
             Encoded JWT refresh token
         """
         # Calculate expiration dynamically from settings
-        expire = datetime.utcnow() + timedelta(days=self.settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        expire = datetime.now(timezone.utc) + timedelta(days=self.settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
         # Build token payload (minimal claims for refresh token)
         payload = {
             "sub": str(user_id),
             "username": username,
             "exp": expire,
-            "iat": datetime.utcnow(),
+            "iat": datetime.now(timezone.utc),
             "jti": str(uuid4()),
             "type": "refresh"
         }
@@ -219,8 +238,15 @@ class JWTService:
                 if getattr(self, "_secondary_decode_key", None):
                     try:
                         payload = jwt.decode(token, self._secondary_decode_key, **decode_kwargs)
-                    except JWTError:
-                        raise primary_err
+                        # SECURITY: Log when secondary key is used - indicates key rotation in progress
+                        logger.info(
+                            "JWT verified using secondary key - key rotation may be in progress. "
+                            "Primary key verification failed, falling back to secondary."
+                        )
+                    except JWTError as secondary_err:
+                        # Both keys failed - chain exceptions to preserve both error contexts
+                        logger.debug(f"Token verification failed with both keys: primary={primary_err}, secondary={secondary_err}")
+                        raise primary_err from secondary_err
                 else:
                     raise
 
@@ -231,9 +257,15 @@ class JWTService:
                 if await is_token_blacklisted(jti):
                     raise InvalidTokenError("Token has been revoked")
 
+            # Validate token type against whitelist
+            actual_type = payload.get("type")
+            if actual_type and actual_type not in self.VALID_TOKEN_TYPES:
+                logger.warning(f"Token has unknown type: {actual_type}")
+                raise InvalidTokenError(f"Unknown token type: {actual_type}")
+
             # Verify token type if specified
-            if token_type and payload.get("type") != token_type:
-                raise InvalidTokenError(f"Invalid token type. Expected {token_type}, got {payload.get('type')}")
+            if token_type and actual_type != token_type:
+                raise InvalidTokenError(f"Invalid token type. Expected {token_type}, got {actual_type}")
 
             if self.settings.PII_REDACT_LOGS:
                 logger.debug("Token verified successfully for authenticated user (details redacted)")
@@ -259,7 +291,19 @@ class JWTService:
 
     def verify_token(self, token: str, token_type: Optional[str] = None) -> Dict[str, Any]:
         """
-        Verify and decode a JWT token (sync, stateless; no blacklist checks)
+        Verify and decode a JWT token (sync, stateless; no blacklist checks).
+
+        SECURITY WARNING: This method performs ONLY cryptographic signature
+        validation and expiry checks. It does NOT check if the token has been
+        revoked/blacklisted. Revoked tokens will still pass validation here.
+
+        For security-critical paths that require blacklist enforcement, use
+        `verify_token_async()` instead, which checks the token blacklist.
+
+        Use cases for this sync method:
+        - Performance-critical read operations where blacklist lag is acceptable
+        - Contexts where async is not available and revocation is handled elsewhere
+        - Token introspection/debugging (not for authorization decisions)
 
         Args:
             token: JWT token to verify
@@ -287,14 +331,22 @@ class JWTService:
                 if getattr(self, "_secondary_decode_key", None):
                     try:
                         payload = jwt.decode(token, self._secondary_decode_key, **decode_kwargs)
-                    except JWTError:
-                        raise primary_err
+                    except JWTError as secondary_err:
+                        # Both keys failed - chain exceptions to preserve both error contexts
+                        logger.debug(f"Token verification failed with both keys: primary={primary_err}, secondary={secondary_err}")
+                        raise primary_err from secondary_err
                 else:
                     raise
 
+            # Validate token type against whitelist
+            actual_type = payload.get("type")
+            if actual_type and actual_type not in self.VALID_TOKEN_TYPES:
+                logger.warning(f"Token has unknown type: {actual_type}")
+                raise InvalidTokenError(f"Unknown token type: {actual_type}")
+
             # Verify token type if specified
-            if token_type and payload.get("type") != token_type:
-                raise InvalidTokenError(f"Invalid token type. Expected {token_type}, got {payload.get('type')}")
+            if token_type and actual_type != token_type:
+                raise InvalidTokenError(f"Invalid token type. Expected {token_type}, got {actual_type}")
 
             # Note: blacklist enforcement is only supported in verify_token_async()
 
@@ -352,6 +404,54 @@ class JWTService:
         """
         return self.verify_token(token, token_type="refresh")
 
+    def verify_password_reset_token(self, token: str) -> Dict[str, Any]:
+        """
+        Verify and decode a password reset token.
+
+        Args:
+            token: Password reset token to verify
+
+        Returns:
+            Decoded token payload containing user_id and email
+
+        Raises:
+            InvalidTokenError: If token is invalid or wrong type
+            TokenExpiredError: If token has expired
+        """
+        return self.verify_token(token, token_type="password_reset")
+
+    def verify_email_verification_token(self, token: str) -> Dict[str, Any]:
+        """
+        Verify and decode an email verification token.
+
+        Args:
+            token: Email verification token to verify
+
+        Returns:
+            Decoded token payload containing user_id and email
+
+        Raises:
+            InvalidTokenError: If token is invalid or wrong type
+            TokenExpiredError: If token has expired
+        """
+        return self.verify_token(token, token_type="email_verification")
+
+    def verify_service_token(self, token: str) -> Dict[str, Any]:
+        """
+        Verify and decode a service account token.
+
+        Args:
+            token: Service account token to verify
+
+        Returns:
+            Decoded token payload containing service name and permissions
+
+        Raises:
+            InvalidTokenError: If token is invalid or wrong type
+            TokenExpiredError: If token has expired
+        """
+        return self.verify_token(token, token_type="service")
+
     def create_virtual_access_token(
         self,
         *,
@@ -382,13 +482,13 @@ class JWTService:
         Returns:
             Encoded JWT access token (scoped)
         """
-        expire = datetime.utcnow() + timedelta(minutes=max(1, int(ttl_minutes)))
+        expire = datetime.now(timezone.utc) + timedelta(minutes=max(1, int(ttl_minutes)))
         payload: Dict[str, Any] = {
             "sub": str(user_id),
             "username": username,
             "role": role,
             "exp": expire,
-            "iat": datetime.utcnow(),
+            "iat": datetime.now(timezone.utc),
             "jti": str(uuid4()),
             "type": "access",
             "scope": str(scope or "workflows"),
@@ -447,6 +547,31 @@ class JWTService:
             raise ValueError("Unable to derive HMAC hash for token")
         return candidates[0]
 
+    def hash_password_reset_token(self, token: str) -> str:
+        """
+        Create a computationally expensive hash of a password reset token.
+
+        This uses PBKDF2-HMAC with SHA256 and a high iteration count so that
+        brute-forcing reset tokens is significantly more expensive than a
+        single SHA256 evaluation.
+
+        Args:
+            token: Password reset token to hash
+
+        Returns:
+            Hex-encoded PBKDF2-HMAC-SHA256 hash of the token
+        """
+        # Derive a stable salt from the existing HMAC key material
+        base_key = derive_hmac_key(self.settings)
+        salt = hmac.new(base_key, b"password-reset-token-salt", hashlib.sha256).digest()
+        dk = hashlib.pbkdf2_hmac(
+            "sha256",
+            token.encode("utf-8"),
+            salt,
+            200_000,
+        )
+        return dk.hex()
+
     def extract_jti(self, token: str) -> Optional[str]:
         """
         Extract the JTI (JWT ID) from a token without full verification
@@ -482,13 +607,13 @@ class JWTService:
         Returns:
             Encoded password reset token
         """
-        expire = datetime.utcnow() + timedelta(hours=expires_in_hours)
+        expire = datetime.now(timezone.utc) + timedelta(hours=expires_in_hours)
 
         payload = {
             "sub": str(user_id),
             "email": email,
             "exp": expire,
-            "iat": datetime.utcnow(),
+            "iat": datetime.now(timezone.utc),
             "jti": str(uuid4()),
             "type": "password_reset"
         }
@@ -526,13 +651,13 @@ class JWTService:
         Returns:
             Encoded email verification token
         """
-        expire = datetime.utcnow() + timedelta(hours=expires_in_hours)
+        expire = datetime.now(timezone.utc) + timedelta(hours=expires_in_hours)
 
         payload = {
             "sub": str(user_id),
             "email": email,
             "exp": expire,
-            "iat": datetime.utcnow(),
+            "iat": datetime.now(timezone.utc),
             "jti": str(uuid4()),
             "type": "email_verification"
         }
@@ -570,14 +695,14 @@ class JWTService:
         Returns:
             Encoded service account token
         """
-        expire = datetime.utcnow() + timedelta(days=expires_in_days)
+        expire = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
 
         payload = {
             "sub": f"service:{service_name}",
             "service": service_name,
             "permissions": permissions,
             "exp": expire,
-            "iat": datetime.utcnow(),
+            "iat": datetime.now(timezone.utc),
             "jti": str(uuid4()),
             "type": "service"
         }
@@ -619,24 +744,37 @@ class JWTService:
         payload = self.verify_token(refresh_token, token_type="refresh")
 
         # Optional guard: best-effort blacklist enforcement for the presented refresh token
+        # SECURITY: Always check blacklist regardless of async context
         try:
             jti = payload.get("jti")
             if jti:
                 import asyncio as _asyncio
-                # If we're not in an event loop, run the async blacklist check synchronously
+                from tldw_Server_API.app.core.AuthNZ.token_blacklist import is_token_blacklisted as _is_bl
+                # Check if we're in an event loop
                 try:
-                    _asyncio.get_running_loop()
+                    loop = _asyncio.get_running_loop()
                     in_loop = True
                 except RuntimeError:
+                    loop = None
                     in_loop = False
+
                 if not in_loop:
-                    from tldw_Server_API.app.core.AuthNZ.token_blacklist import is_token_blacklisted as _is_bl
+                    # Not in event loop - run synchronously
                     if _asyncio.run(_is_bl(jti)):
                         raise InvalidTokenError("Token has been revoked")
                 else:
-                    # In running event loops, avoid blocking; log a hint to prefer /auth/refresh path
-                    logger.debug(
-                        "refresh_access_token called in running loop; blacklist may not be enforced here. Prefer /auth/refresh endpoint."
+                    # In event loop - we need to check synchronously using the blacklist cache
+                    # The blacklist has an in-memory hint cache that can be checked without async
+                    from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist as _get_bl
+                    bl = _get_bl()
+                    # Check in-memory cache first (synchronous)
+                    if hasattr(bl, '_hint_cache') and jti in getattr(bl, '_hint_cache', {}):
+                        raise InvalidTokenError("Token has been revoked")
+                    # Log warning that full async check cannot be performed in sync context
+                    # Callers in async context should use the async-aware /auth/refresh endpoint
+                    logger.warning(
+                        "refresh_access_token called in sync context within event loop; "
+                        "full blacklist check deferred. Prefer /auth/refresh endpoint for complete revocation enforcement."
                     )
         except InvalidTokenError:
             raise
@@ -685,8 +823,8 @@ class JWTService:
                     old_jti = payload.get("jti")
                     old_exp = payload.get("exp")
                     if old_jti and isinstance(old_exp, (int, float)):
-                        from datetime import datetime as _dt
-                        exp_dt = _dt.utcfromtimestamp(old_exp)
+                        from datetime import datetime as _dt, timezone as _tz
+                        exp_dt = _dt.fromtimestamp(old_exp, tz=_tz.utc)
                         import asyncio as _asyncio
                         from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist as _get_bl
                         try:
@@ -757,7 +895,7 @@ class JWTService:
             payload = self.verify_token(token)
             exp = payload.get("exp")
             if exp:
-                remaining = exp - datetime.utcnow().timestamp()
+                remaining = exp - datetime.now(timezone.utc).timestamp()
                 return max(0, int(remaining))
             return None
 
@@ -769,22 +907,31 @@ class JWTService:
 #
 # Module Functions for convenience
 
-# Global instance
+# Global instance with thread-safe initialization
 _jwt_service: Optional[JWTService] = None
+_jwt_service_lock = threading.Lock()
 
 
 def get_jwt_service() -> JWTService:
-    """Get JWT service singleton instance"""
+    """Get JWT service singleton instance (thread-safe)"""
     global _jwt_service
-    if not _jwt_service:
-        _jwt_service = JWTService()
-    return _jwt_service
+    # Fast path - no lock if already initialized
+    if _jwt_service is not None:
+        return _jwt_service
+
+    # Slow path - acquire lock for initialization
+    with _jwt_service_lock:
+        # Double-check after acquiring lock
+        if _jwt_service is None:
+            _jwt_service = JWTService()
+        return _jwt_service
 
 
 def reset_jwt_service() -> None:
     """Reset the cached JWTService singleton (used in tests to pick up new settings)."""
     global _jwt_service
-    _jwt_service = None
+    with _jwt_service_lock:
+        _jwt_service = None
 
 
 def create_access_token(user_id: int, username: str, role: str) -> str:

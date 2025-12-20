@@ -93,6 +93,11 @@ def validate_model_id(model_id: str) -> str:
     """
     Validates model identifier to prevent injection attacks.
 
+    Note: This function allows forward slashes to support model paths like
+    "org/model" (e.g., "openai/text-embedding-3-small"). It should NOT be used
+    to validate identifiers that will be used in file path construction.
+    For path-safe identifiers, use validate_user_id() instead.
+
     Args:
         model_id: The model identifier to validate
 
@@ -227,10 +232,11 @@ class ChromaDBManager:
             if use_stub:
                 # Scope the stub client key by user and base dir to avoid cross-config leakage
                 stub_key = f"{self.user_id}::{str(user_db_base_path)}"
-                cli = _TEST_STUB_CLIENTS.get(stub_key)
-                if cli is None:
-                    cli = _InMemoryChromaClient()
-                    _TEST_STUB_CLIENTS[stub_key] = cli
+                with _TEST_STUB_CLIENTS_LOCK:
+                    cli = _TEST_STUB_CLIENTS.get(stub_key)
+                    if cli is None:
+                        cli = _InMemoryChromaClient()
+                        _TEST_STUB_CLIENTS[stub_key] = cli
                 self.client = cli
                 logger.warning(
                     f"User '{self.user_id}': Using internal in-memory Chroma client (config backend=stub)."
@@ -254,10 +260,11 @@ class ChromaDBManager:
                     )
                     if allow_stub_fallback:
                         stub_key = f"{self.user_id}::{str(user_db_base_path)}"
-                        cli = _TEST_STUB_CLIENTS.get(stub_key)
-                        if cli is None:
-                            cli = _InMemoryChromaClient()
-                            _TEST_STUB_CLIENTS[stub_key] = cli
+                        with _TEST_STUB_CLIENTS_LOCK:
+                            cli = _TEST_STUB_CLIENTS.get(stub_key)
+                            if cli is None:
+                                cli = _InMemoryChromaClient()
+                                _TEST_STUB_CLIENTS[stub_key] = cli
                         self.client = cli
                         logger.warning(
                             f"User '{self.user_id}': Falling back to in-memory Chroma stub (allow_stub_fallback=true)."
@@ -568,10 +575,26 @@ class ChromaDBManager:
                                   llm_model_for_context: Optional[str] = None,  # e.g., "gpt-3.5-turbo"
                                   chunk_options: Optional[Dict] = None,
                                   hierarchical_chunking: Optional[bool] = None,
-                                  hierarchical_template: Optional[Dict] = None):
+                                  hierarchical_template: Optional[Dict] = None,
+                                  base_metadata: Optional[Dict[str, Any]] = None):
         """
         Processes content by chunking, optionally contextualizing, generating embeddings,
         and storing them in ChromaDB and references in SQL DB.
+
+        Args:
+            content: Raw document text to process.
+            media_id: Logical identifier for the document.
+            file_name: File name associated with the content.
+            collection_name: Optional Chroma collection name.
+            embedding_model_id_override: Optional embedding model override.
+            create_embeddings: Whether to generate embeddings.
+            create_contextualized: Whether to generate contextual summaries.
+            llm_model_for_context: Optional LLM for contextualization.
+            chunk_options: Chunking configuration.
+            hierarchical_chunking: Enable hierarchical chunking.
+            hierarchical_template: Template for hierarchical chunking.
+            base_metadata: Optional base metadata to merge into each chunk's metadata
+                           before storage (e.g., domain-specific identifiers).
         """
         target_collection = self.get_or_create_collection(collection_name)
 
@@ -939,6 +962,20 @@ class ChromaDBManager:
                         }
                         # Add metadata from chunk_for_embedding
                         meta.update(chunk_info.get('metadata', {}))
+
+                        # Merge in any base-level metadata provided by caller (base first, then chunk-specific)
+                        if base_metadata:
+                            try:
+                                # Reverse order: start with base-level metadata, then overlay chunk-specific metadata
+                                base_copy = dict(base_metadata)
+                                base_copy.update(meta)
+                                meta = base_copy
+                            except TypeError as e:
+                                # Best-effort merge; log and skip on type errors
+                                logger.debug(
+                                    f"User '{self.user_id}': Failed to merge base_metadata for chunk {i} "
+                                    f"(media_id: {media_id}). Type error: {e}"
+                                )
 
                         if create_contextualized:
                             # If docs_for_chroma contains original text, but texts_for_embedding_generation has context,
@@ -1530,7 +1567,8 @@ class ChromaDBManager:
 _default_chroma_manager = None
 _manager_lock = threading.Lock()
 _TEST_FALLBACK_DIRS: Dict[str, Path] = {}
-_TEST_STUB_CLIENTS = {}
+_TEST_STUB_CLIENTS: Dict[str, Any] = {}
+_TEST_STUB_CLIENTS_LOCK = threading.Lock()
 
 
 # --------------------

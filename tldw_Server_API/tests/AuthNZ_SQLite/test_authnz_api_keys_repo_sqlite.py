@@ -1,3 +1,4 @@
+import json
 import uuid
 
 import pytest
@@ -49,6 +50,53 @@ async def test_authnz_api_keys_repo_fetch_key_limits_sqlite(isolated_test_enviro
     assert bool(row.get("is_virtual")) is True
     assert int(row.get("llm_budget_day_tokens") or 0) == 123
     assert pytest.approx(float(row.get("llm_budget_month_usd") or 0.0), rel=1e-6) == 4.56
+
+
+@pytest.mark.asyncio
+async def test_api_key_scope_list_serializes_and_normalizes_sqlite(isolated_test_environment):
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager, normalize_scope
+
+    _client, _db_name = isolated_test_environment
+    pool = await get_db_pool()
+
+    users_db = UsersDB(pool)
+    await users_db.initialize()
+    created_user = await users_db.create_user(
+        username="scope_list_user",
+        email="scope_list_user@example.com",
+        password_hash="hash",
+        role="user",
+        is_active=True,
+        is_superuser=False,
+        storage_quota_mb=5120,
+        uuid_value=uuid.uuid4(),
+    )
+    user_id = int(created_user["id"])
+
+    mgr = APIKeyManager(pool)
+    await mgr.initialize()
+
+    scopes = ["read", "write"]
+    created = await mgr.create_api_key(
+        user_id=user_id,
+        name="scope-list-key",
+        scope=scopes,
+    )
+    key_id = int(created["id"])
+
+    row = await pool.fetchrow(
+        "SELECT scope FROM api_keys WHERE id = ?",
+        key_id,
+    )
+    assert row is not None
+    assert row["scope"] == json.dumps(scopes)
+
+    normalized = normalize_scope(row["scope"])
+    assert normalized == {"read", "write"}
+    for scope in scopes:
+        assert mgr._has_scope(row["scope"], scope) is True
 
 
 @pytest.mark.asyncio

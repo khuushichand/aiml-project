@@ -20,6 +20,44 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHA
 
 #######################################################################################################################
 #
+# Character Name Sanitization:
+
+# Characters to remove from character names for OpenAI API compatibility
+# OpenAI requires name to match pattern ^[^\s<|\\/>]+$ (no spaces or special chars)
+_UNSAFE_NAME_CHARS = frozenset(' \t\n\r<>|\\/"\'`:;!@#$%^&*()+=[]{}')
+
+
+def _sanitize_character_name(name: str, replacement: str = '_') -> str:
+    """
+    Sanitize a character name for OpenAI API compatibility.
+
+    Args:
+        name: Raw character name
+        replacement: Character to use for replacements (default: underscore)
+
+    Returns:
+        Sanitized name safe for OpenAI 'name' field, or empty string if all chars removed
+    """
+    if not isinstance(name, str):
+        return ''
+
+    # Replace unsafe characters
+    sanitized = ''.join(
+        replacement if c in _UNSAFE_NAME_CHARS else c
+        for c in name
+    )
+
+    # Remove consecutive replacement chars and leading/trailing replacements
+    while replacement + replacement in sanitized:
+        sanitized = sanitized.replace(replacement + replacement, replacement)
+    sanitized = sanitized.strip(replacement)
+
+    # Truncate to reasonable length (64 chars max for OpenAI)
+    return sanitized[:64]
+
+
+#######################################################################################################################
+#
 # Request Validation Functions:
 
 async def validate_request_payload(
@@ -227,9 +265,18 @@ async def get_or_create_conversation(
             'client_id': client_id
         }
 
-        # Try to create with retry on conflict
+        # Try to create with retry on conflict - with overall timeout
         max_retries = 3
+        overall_timeout = 5.0  # Maximum 5 seconds for all retries
+        start_time = datetime.datetime.now(datetime.timezone.utc).timestamp()
+
         for attempt in range(max_retries):
+            # Check overall timeout
+            elapsed = datetime.datetime.now(datetime.timezone.utc).timestamp() - start_time
+            if elapsed >= overall_timeout:
+                logger.error(f"Conversation creation timed out after {elapsed:.2f}s")
+                raise TimeoutError(f"Conversation creation timed out after {overall_timeout}s")
+
             try:
                 # Use transaction context for atomic creation
                 from tldw_Server_API.app.core.DB_Management.transaction_utils import db_transaction
@@ -241,7 +288,6 @@ async def get_or_create_conversation(
             except Exception as e:
                 if attempt < max_retries - 1:
                     # Add small random delay to reduce collision probability
-                    import random
                     await asyncio.sleep(0.05 + random.random() * 0.1)
                     # Update timestamp for uniqueness
                     timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
@@ -296,7 +342,14 @@ async def load_conversation_history(
         )
 
         for db_msg in raw_history:
-            role = "user" if db_msg.get("sender", "").lower() == "user" else "assistant"
+            sender_val = str(db_msg.get("sender", "") or "")
+            sender_lower = sender_val.lower()
+            if sender_lower == "user":
+                role = "user"
+            elif sender_lower == "tool":
+                role = "tool"
+            else:
+                role = "assistant"
 
             # Build message content
             msg_parts = []
@@ -304,8 +357,8 @@ async def load_conversation_history(
             # Add text content
             text_content = db_msg.get("content", "")
             if text_content:
-                # Apply placeholder replacement if using character context
-                if character_card:
+                # Apply placeholder replacement if using character context (skip tool outputs)
+                if character_card and role != "tool":
                     from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import replace_placeholders
                     char_name = character_card.get('name', "Assistant")
                     text_content = replace_placeholders(text_content, char_name, "User")
@@ -353,7 +406,7 @@ async def load_conversation_history(
 
                 # Add sanitized character name for assistant messages
                 if role == "assistant" and character_card and character_card.get('name'):
-                    safe_name = character_card.get('name', '').replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')
+                    safe_name = _sanitize_character_name(character_card.get('name', ''))
                     if safe_name:
                         hist_entry["name"] = safe_name
 
@@ -402,7 +455,7 @@ async def prepare_llm_messages(
         # Add character name for assistant messages (sanitized for OpenAI compatibility)
         if msg_model.role == "assistant" and character_card and character_card.get('name'):
             # OpenAI requires name to match pattern ^[^\\s<|\\\/>]+$ (no spaces or special chars)
-            name = character_card.get('name', '').replace(' ', '_').replace('<', '').replace('>', '').replace('|', '').replace('\\', '').replace('/', '')
+            name = _sanitize_character_name(character_card.get('name', ''))
             if name:  # Only add if name is not empty after sanitization
                 msg_dict["name"] = name
 

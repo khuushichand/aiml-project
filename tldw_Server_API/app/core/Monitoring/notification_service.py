@@ -45,20 +45,13 @@ class NotificationService:
         self.enabled = os.getenv("MONITORING_NOTIFY_ENABLED", str((ncfg or {}).get("enabled", False))).strip().lower() in {"1","true","yes","on","y"}
         self.min_severity = str(os.getenv("MONITORING_NOTIFY_MIN_SEVERITY", (ncfg or {}).get("min_severity", "critical"))).strip().lower()
         raw_file = os.getenv("MONITORING_NOTIFY_FILE", (ncfg or {}).get("file", "Databases/monitoring_notifications.log"))
-        try:
-            fp = Path(str(raw_file))
-            if not fp.is_absolute():
-                from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
-                fp = Path(_gpr()) / fp
-            self.file_path = str(fp)
-        except Exception:
-            # Last resort: anchor relative to package root to avoid CWD effects
-            self.file_path = str(Path(__file__).resolve().parents[5] / str(raw_file))
+        self.file_path = self._resolve_file_path(raw_file)
         self.webhook_url = os.getenv("MONITORING_NOTIFY_WEBHOOK_URL", (ncfg or {}).get("webhook_url", ""))
         self.email_to = os.getenv("MONITORING_NOTIFY_EMAIL_TO", (ncfg or {}).get("email_to", ""))
         # SMTP configuration (optional)
         self.smtp_host = os.getenv("MONITORING_NOTIFY_SMTP_HOST", (ncfg or {}).get("smtp_host", ""))
-        self.smtp_port = int(os.getenv("MONITORING_NOTIFY_SMTP_PORT", (ncfg or {}).get("smtp_port", "587") or 587))
+        raw_smtp_port = os.getenv("MONITORING_NOTIFY_SMTP_PORT", (ncfg or {}).get("smtp_port", "587"))
+        self.smtp_port = self._coerce_int(raw_smtp_port, 587)
         self.smtp_starttls = str(os.getenv("MONITORING_NOTIFY_SMTP_STARTTLS", (ncfg or {}).get("smtp_starttls", "true"))).lower() in {"1","true","yes","on","y"}
         self.smtp_user = os.getenv("MONITORING_NOTIFY_SMTP_USER", (ncfg or {}).get("smtp_user", ""))
         self.smtp_password = os.getenv("MONITORING_NOTIFY_SMTP_PASSWORD", (ncfg or {}).get("smtp_password", ""))
@@ -68,6 +61,40 @@ class NotificationService:
             Path(self.file_path).parent.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
+
+    @staticmethod
+    def _coerce_int(value: Any, default: int) -> int:
+        if value is None or value == "":
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            logger.warning(f"Invalid MONITORING_NOTIFY_SMTP_PORT={value!r}; using {default}")
+            return default
+
+    @staticmethod
+    def _resolve_file_path(raw_file: str) -> str:
+        try:
+            fp = Path(str(raw_file))
+            if not fp.is_absolute():
+                try:
+                    from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+                    fp = Path(_gpr()) / fp
+                except Exception:
+                    # Last resort: anchor relative to package root to avoid CWD effects
+                    fp = Path(__file__).resolve().parents[5] / fp
+            return str(fp)
+        except Exception:
+            return str(Path(__file__).resolve().parents[5] / str(raw_file))
+
+    @staticmethod
+    def _parse_email_recipients(raw: Optional[str]) -> list[str]:
+        if not raw:
+            return []
+        if isinstance(raw, (list, tuple, set)):
+            return [str(addr).strip() for addr in raw if addr and str(addr).strip()]
+        parts = str(raw).replace(";", ",").split(",")
+        return [part.strip() for part in parts if part.strip()]
 
     def get_notification_file_path(self) -> str | None:
         """Return the path to the notification JSONL file."""
@@ -109,8 +136,9 @@ class NotificationService:
             self.min_severity = str(min_severity).lower()
         if file is not None:
             try:
-                Path(file).parent.mkdir(parents=True, exist_ok=True)
-                self.file_path = file
+                resolved = self._resolve_file_path(file)
+                Path(resolved).parent.mkdir(parents=True, exist_ok=True)
+                self.file_path = resolved
             except Exception as e:
                 logger.warning(f"Failed to update MONITORING_NOTIFY_FILE: {e}")
         if webhook_url is not None:
@@ -120,10 +148,7 @@ class NotificationService:
         if smtp_host is not None:
             self.smtp_host = smtp_host
         if smtp_port is not None:
-            try:
-                self.smtp_port = int(smtp_port)
-            except Exception:
-                pass
+            self.smtp_port = self._coerce_int(smtp_port, self.smtp_port)
         if smtp_starttls is not None:
             self.smtp_starttls = bool(smtp_starttls)
         if smtp_user is not None:
@@ -143,13 +168,13 @@ class NotificationService:
         except Exception:
             return False
 
-    def notify(self, alert: TopicAlert) -> None:
+    def notify(self, alert: TopicAlert) -> str:
         """Record a notification intent for an alert. Phase 1: JSONL file sink only.
 
         Future: send to webhook/email if configured and networking permitted.
         """
         if not self._meets_threshold(alert.rule_severity):
-            return
+            return "skipped"
         payload: Dict[str, Any] = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "type": "topic_alert",
@@ -166,11 +191,13 @@ class NotificationService:
             "route_tags": {"scope_type": alert.scope_type, "scope_id": alert.scope_id},
         }
         # Always append to JSONL file (local-first scaffold)
+        file_written = True
         try:
             with self._lock:
                 with open(self.file_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         except Exception as e:
+            file_written = False
             logger.warning(f"Notification file sink failed: {e}")
         # Best-effort asynchronous sends (non-blocking)
         try:
@@ -180,10 +207,12 @@ class NotificationService:
             logger.debug(f"Webhook thread start failed: {e}")
         try:
             # Email optional and only if SMTP configured and recipients provided
-            if self.email_to and (self.smtp_host and (self.smtp_user or not self.smtp_user)) and self.email_from:
+            recipients = self._parse_email_recipients(self.email_to)
+            if recipients and self.smtp_host and self.email_from:
                 threading.Thread(target=self._send_email_safe, args=(alert,), daemon=True).start()
         except Exception as e:
             logger.debug(f"Email thread start failed: {e}")
+        return "logged" if file_written else "failed"
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=False)
     def _send_webhook(self, payload: Dict[str, Any]) -> None:
@@ -205,7 +234,8 @@ class NotificationService:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=False)
     def _send_email(self, alert: TopicAlert) -> None:
-        if not (self.smtp_host and self.email_from and self.email_to):
+        recipients = self._parse_email_recipients(self.email_to)
+        if not (self.smtp_host and self.email_from and recipients):
             return
         subject = f"Topic Alert: {alert.rule_category or 'topic'} ({alert.rule_severity or 'info'})"
         body = (
@@ -220,7 +250,7 @@ class NotificationService:
         msg = MIMEText(body)
         msg["Subject"] = subject
         msg["From"] = self.email_from
-        msg["To"] = self.email_to
+        msg["To"] = ", ".join(recipients)
 
         with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=10) as server:
             if self.smtp_starttls:
@@ -230,7 +260,7 @@ class NotificationService:
                     pass
             if self.smtp_user:
                 server.login(self.smtp_user, self.smtp_password or "")
-            server.sendmail(self.email_from, [self.email_to], msg.as_string())
+            server.sendmail(self.email_from, recipients, msg.as_string())
 
     def _send_email_safe(self, alert: TopicAlert) -> None:
         try:

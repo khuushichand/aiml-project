@@ -201,6 +201,21 @@ def test_list_and_search_pagination_and_404s(client_with_notes_db: TestClient):
     assert del_no_header.status_code in (400, 422)
 
 
+def test_create_note_invalid_links_404(client_with_notes_db: TestClient):
+    client = client_with_notes_db
+
+    bad_conv = client.post(
+        "/api/v1/notes/",
+        json={"title": "Bad Conv", "content": "X", "conversation_id": "missing-conv"},
+    )
+    assert bad_conv.status_code == 404
+
+    bad_msg = client.post(
+        "/api/v1/notes/",
+        json={"title": "Bad Msg", "content": "Y", "message_id": "missing-msg"},
+    )
+    assert bad_msg.status_code == 404
+
 def test_keywords_list_pagination_and_search_limit(client_with_notes_db: TestClient):
     client = client_with_notes_db
     # Create many keywords
@@ -311,3 +326,68 @@ def test_delete_conflict_and_success(client_with_notes_db: TestClient):
     # Delete with current version -> success
     ok_del = client.delete(f"/api/v1/notes/{nid}", headers={"expected-version": str(v2)})
     assert ok_del.status_code in (200, 204)
+
+
+def test_bulk_create_preserves_conversation_and_message_ids(client_with_notes_db: TestClient):
+    client = client_with_notes_db
+    from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+    db_override = client.app.dependency_overrides.get(get_chacha_db_for_user)
+    assert db_override is not None
+    db = db_override()
+    char_id = db.add_character_card({"name": "Bulk Test Character"})
+    conv_id = db.add_conversation({"character_id": char_id, "title": "Bulk Test Conversation"})
+    msg_id = db.add_message({"conversation_id": conv_id, "sender": "user", "content": "Hello"})
+    payload = {
+        "notes": [
+            {
+                "title": "Bulk A",
+                "content": "Bulk content A",
+                "conversation_id": conv_id,
+                "message_id": msg_id,
+            },
+            {
+                "title": "Bulk B",
+                "content": "Bulk content B",
+                "conversation_id": conv_id,
+                "message_id": msg_id,
+            },
+        ]
+    }
+    resp = client.post("/api/v1/notes/bulk", json=payload)
+    assert resp.status_code in (200, 207), resp.text
+    results = resp.json().get("results", [])
+    assert results
+    first_note = next((r.get("note") for r in results if r.get("note")), None)
+    assert first_note is not None
+    assert first_note.get("conversation_id") == conv_id
+    assert first_note.get("message_id") == msg_id
+
+    fetched = client.get(f"/api/v1/notes/{first_note['id']}")
+    assert fetched.status_code == 200
+    fetched_note = fetched.json()
+    assert fetched_note.get("conversation_id") == first_note.get("conversation_id")
+    assert fetched_note.get("message_id") == first_note.get("message_id")
+
+
+def test_missing_note_update_and_delete_return_404(client_with_notes_db: TestClient):
+    client = client_with_notes_db
+    missing_id = "missing-note-id"
+    upd = client.put(
+        f"/api/v1/notes/{missing_id}",
+        json={"title": "Nope"},
+        headers={"expected-version": "1"},
+    )
+    assert upd.status_code == 404
+
+    delete_resp = client.delete(
+        f"/api/v1/notes/{missing_id}",
+        headers={"expected-version": "1"},
+    )
+    assert delete_resp.status_code == 404
+
+
+def test_keyword_search_rejects_special_characters(client_with_notes_db: TestClient):
+    client = client_with_notes_db
+    client.post("/api/v1/notes/keywords/", json={"keyword": "alpha"})
+    resp = client.get("/api/v1/notes/keywords/search/", params={"query": 'kw"bad', "limit": 5})
+    assert resp.status_code == 400

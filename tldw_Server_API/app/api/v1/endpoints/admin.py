@@ -4,8 +4,8 @@
 # Imports
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
+from typing import Dict, Any, List, Optional, Literal
+from datetime import datetime, timedelta, timezone
 import secrets
 import string
 import os
@@ -52,6 +52,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     RateLimitResetResponse,
     NotesTitleSettingsUpdate,
     AdminCleanupSettingsUpdate,
+    KanbanFtsMaintenanceResponse,
 )
 from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyCreateRequest,
@@ -61,6 +62,16 @@ from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyUpdateRequest,
     APIKeyAuditEntry,
     APIKeyAuditListResponse,
+)
+from tldw_Server_API.app.api.v1.schemas.user_keys import (
+    AdminUserKeysResponse,
+    AdminUserKeyStatusItem,
+    SharedProviderKeyUpsertRequest,
+    SharedProviderKeyResponse,
+    SharedProviderKeysResponse,
+    SharedProviderKeyStatusItem,
+    SharedProviderKeyTestRequest,
+    SharedProviderKeyTestResponse,
 )
 from tldw_Server_API.app.api.v1.schemas.admin_rbac_schemas import (
     RoleCreateRequest,
@@ -85,10 +96,18 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_db_transaction,
     get_storage_service_dep,
     get_auth_principal,
+    check_rate_limit,
 )
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter as get_authnz_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
+    is_byok_enabled,
+    is_provider_allowlisted,
+    resolve_byok_allowlist,
+    validate_credential_fields,
+)
+from tldw_Server_API.app.core.AuthNZ.byok_testing import test_provider_credentials
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     UserNotFoundError,
@@ -116,7 +135,25 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     list_org_memberships_for_user,
 )
 from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
+from tldw_Server_API.app.core.AuthNZ.repos.user_provider_secrets_repo import (
+    AuthnzUserProviderSecretsRepo,
+)
+from tldw_Server_API.app.core.AuthNZ.repos.org_provider_secrets_repo import (
+    AuthnzOrgProviderSecretsRepo,
+)
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB, KanbanDBError, InputError
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError, DuplicateTeamError, DuplicateRoleError
+from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
+    build_secret_payload,
+    decrypt_byok_payload,
+    encrypt_byok_payload,
+    dumps_envelope,
+    key_hint_for_api_key,
+    loads_envelope,
+    normalize_provider_name,
+)
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrganizationCreateRequest,
     OrganizationResponse,
@@ -436,6 +473,336 @@ async def admin_update_user_api_key(
     except Exception as e:
         logger.error(f"Admin failed to update API key {key_id} for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to update API key")
+
+
+#######################################################################################################################
+#
+# BYOK Key Management (Admin)
+
+async def _get_user_byok_repo() -> AuthnzUserProviderSecretsRepo:
+    """Initialize user BYOK repository and ensure schema exists."""
+    try:
+        pool = await get_db_pool()
+        repo = AuthnzUserProviderSecretsRepo(pool)
+        await repo.ensure_tables()
+        return repo
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to initialize user BYOK repository: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="BYOK infrastructure is not available",
+        ) from exc
+
+
+async def _get_shared_byok_repo() -> AuthnzOrgProviderSecretsRepo:
+    """Initialize shared BYOK repository and ensure schema exists."""
+    try:
+        pool = await get_db_pool()
+        repo = AuthnzOrgProviderSecretsRepo(pool)
+        await repo.ensure_tables()
+        return repo
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to initialize shared BYOK repository: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="BYOK infrastructure is not available",
+        ) from exc
+
+
+def _require_byok_enabled() -> None:
+    if not is_byok_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="BYOK is disabled in this deployment",
+        )
+
+
+async def _touch_shared_last_used_if_match(
+    repo: AuthnzOrgProviderSecretsRepo,
+    *,
+    scope_type: str,
+    scope_id: int,
+    provider: str,
+    api_key: str,
+) -> None:
+    row = await repo.fetch_secret(scope_type, scope_id, provider)
+    if not row:
+        return
+    encrypted_blob = row.get("encrypted_blob")
+    if not encrypted_blob:
+        return
+    try:
+        payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
+    except (ValueError, KeyError, TypeError) as exc:
+        logger.debug(
+            "BYOK: failed to decrypt shared secret for %s:%s (%s): %s",
+            scope_type,
+            scope_id,
+            provider,
+            exc,
+        )
+        return
+    if payload.get("api_key") != api_key:
+        return
+    await repo.touch_last_used(scope_type, scope_id, provider, datetime.now(timezone.utc))
+
+
+@router.get(
+    "/keys/users/{user_id}",
+    response_model=AdminUserKeysResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def admin_list_user_byok_keys(user_id: int) -> AdminUserKeysResponse:
+    _require_byok_enabled()
+    repo = await _get_user_byok_repo()
+    try:
+        rows = await repo.list_secrets_for_user(user_id)
+    except Exception as exc:
+        logger.error("BYOK: failed to list user keys for user_id=%s: %s", user_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to list user BYOK keys") from exc
+    allowlist = resolve_byok_allowlist()
+    items = [
+        AdminUserKeyStatusItem(
+            provider=row.get("provider"),
+            key_hint=row.get("key_hint"),
+            last_used_at=row.get("last_used_at"),
+            allowed=str(row.get("provider")) in allowlist,
+        )
+        for row in rows
+    ]
+    return AdminUserKeysResponse(user_id=user_id, items=items)
+
+
+@router.delete(
+    "/keys/users/{user_id}/{provider}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def admin_revoke_user_byok_key(user_id: int, provider: str) -> None:
+    _require_byok_enabled()
+    repo = await _get_user_byok_repo()
+    provider_norm = normalize_provider_name(provider)
+    try:
+        deleted = await repo.delete_secret(user_id, provider_norm)
+    except Exception as exc:
+        logger.error(
+            "BYOK: failed to revoke user key for user_id=%s provider=%s: %s",
+            user_id,
+            provider_norm,
+            exc,
+        )
+        raise HTTPException(status_code=500, detail="Failed to revoke user BYOK key") from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Key not found")
+
+
+@router.post(
+    "/keys/shared",
+    response_model=SharedProviderKeyResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def admin_upsert_shared_byok_key(payload: SharedProviderKeyUpsertRequest) -> SharedProviderKeyResponse:
+    _require_byok_enabled()
+    provider_norm = normalize_provider_name(payload.provider)
+    if not is_provider_allowlisted(provider_norm):
+        raise HTTPException(status_code=403, detail="Provider not allowed for BYOK")
+
+    api_key = (payload.api_key or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="api_key is required")
+
+    try:
+        credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    secret_payload = build_secret_payload(api_key, credential_fields or None)
+    try:
+        envelope = encrypt_byok_payload(secret_payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail="BYOK encryption is not configured") from exc
+
+    repo = await _get_shared_byok_repo()
+    now = datetime.now(timezone.utc)
+    try:
+        row = await repo.upsert_secret(
+            scope_type=payload.scope_type,
+            scope_id=payload.scope_id,
+            provider=provider_norm,
+            encrypted_blob=dumps_envelope(envelope),
+            key_hint=key_hint_for_api_key(api_key),
+            metadata=payload.metadata,
+            updated_at=now,
+        )
+    except Exception as exc:
+        logger.error(
+            "BYOK: failed to upsert shared key for %s:%s provider=%s: %s",
+            payload.scope_type,
+            payload.scope_id,
+            provider_norm,
+            exc,
+        )
+        raise HTTPException(status_code=500, detail="Failed to store shared BYOK key") from exc
+    return SharedProviderKeyResponse(
+        scope_type=payload.scope_type,
+        scope_id=payload.scope_id,
+        provider=provider_norm,
+        key_hint=row.get("key_hint") or key_hint_for_api_key(api_key),
+        updated_at=row.get("updated_at") or now,
+    )
+
+
+@router.post(
+    "/keys/shared/test",
+    response_model=SharedProviderKeyTestResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def admin_test_shared_byok_key(payload: SharedProviderKeyTestRequest) -> SharedProviderKeyTestResponse:
+    _require_byok_enabled()
+    provider_norm = normalize_provider_name(payload.provider)
+    if not is_provider_allowlisted(provider_norm):
+        raise HTTPException(status_code=403, detail="Provider not allowed for BYOK")
+
+    api_key = (payload.api_key or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="api_key is required")
+
+    try:
+        credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        model_used = await test_provider_credentials(
+            provider=provider_norm,
+            api_key=api_key,
+            credential_fields=credential_fields,
+            model=payload.model,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ChatAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Provider test call failed") from exc
+
+    repo = await _get_shared_byok_repo()
+    await _touch_shared_last_used_if_match(
+        repo,
+        scope_type=payload.scope_type,
+        scope_id=payload.scope_id,
+        provider=provider_norm,
+        api_key=api_key,
+    )
+
+    return SharedProviderKeyTestResponse(
+        scope_type=payload.scope_type,
+        scope_id=payload.scope_id,
+        provider=provider_norm,
+        status="valid",
+        model=model_used,
+    )
+
+
+@router.get(
+    "/keys/shared",
+    response_model=SharedProviderKeysResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def admin_list_shared_byok_keys(
+    scope_type: Optional[str] = Query(None),
+    scope_id: Optional[int] = Query(None),
+    provider: Optional[str] = Query(None),
+) -> SharedProviderKeysResponse:
+    _require_byok_enabled()
+    repo = await _get_shared_byok_repo()
+    try:
+        rows = await repo.list_secrets(
+            scope_type=scope_type,
+            scope_id=scope_id,
+            provider=provider,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(
+            "BYOK: failed to list shared keys for scope_type=%s scope_id=%s provider=%s: %s",
+            scope_type,
+            scope_id,
+            provider,
+            exc,
+        )
+        raise HTTPException(status_code=500, detail="Failed to list shared BYOK keys") from exc
+    items = [
+        SharedProviderKeyStatusItem(
+            scope_type=row.get("scope_type"),
+            scope_id=row.get("scope_id"),
+            provider=row.get("provider"),
+            key_hint=row.get("key_hint"),
+            last_used_at=row.get("last_used_at"),
+        )
+        for row in rows
+    ]
+    return SharedProviderKeysResponse(items=items)
+
+
+@router.delete(
+    "/keys/shared/{scope_type}/{scope_id}/{provider}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def admin_delete_shared_byok_key(scope_type: str, scope_id: int, provider: str) -> None:
+    _require_byok_enabled()
+    repo = await _get_shared_byok_repo()
+    provider_norm = normalize_provider_name(provider)
+    try:
+        deleted = await repo.delete_secret(scope_type, scope_id, provider_norm)
+    except Exception as exc:
+        logger.error(
+            "BYOK: failed to delete shared key for scope_type=%s scope_id=%s provider=%s: %s",
+            scope_type,
+            scope_id,
+            provider_norm,
+            exc,
+        )
+        raise HTTPException(status_code=500, detail="Failed to delete shared BYOK key") from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Key not found")
+
+
+def _get_kanban_db_for_user_id(user_id: int) -> KanbanDB:
+    db_path = DatabasePaths.get_kanban_db_path(user_id)
+    return KanbanDB(db_path=str(db_path), user_id=str(user_id))
+
+
+@router.post(
+    "/kanban/fts/{action}",
+    response_model=KanbanFtsMaintenanceResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def admin_kanban_fts_maintenance(
+    action: Literal["optimize", "rebuild"],
+    user_id: int = Query(..., ge=1),
+) -> KanbanFtsMaintenanceResponse:
+    try:
+        db = _get_kanban_db_for_user_id(user_id)
+        if action == "rebuild":
+            db.rebuild_fts()
+        else:
+            db.optimize_fts()
+    except InputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KanbanDBError as exc:
+        logger.error(f"Kanban FTS {action} failed for user {user_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Kanban FTS maintenance failed") from exc
+    except Exception as exc:
+        logger.error(f"Kanban FTS {action} failed for user {user_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Kanban FTS maintenance failed") from exc
+    return KanbanFtsMaintenanceResponse(user_id=user_id, action=action, status="ok")
 
 
 #######################################################################################################################

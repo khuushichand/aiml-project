@@ -2,7 +2,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 
 class FakeAsyncRedisCtl:
@@ -27,20 +26,12 @@ class FakeAsyncRedisCtl:
         self.closed = True
 
 
-def _override_user(admin=False):
-    async def _f():
-        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
-        return User(id=1, username="admin" if admin else "u", email="u@x", is_active=True, is_admin=admin)
-    return _f
-
-
 @pytest.mark.unit
-def test_stage_pause_resume_drain(monkeypatch):
+def test_stage_pause_resume_drain(monkeypatch, admin_user):
     client = TestClient(app)
     client.cookies.set("csrf_token", "x")
     client.headers["X-CSRF-Token"] = "x"
     client.headers["Authorization"] = "Bearer key"
-    app.dependency_overrides[get_request_user] = _override_user(admin=True)
 
     fake = FakeAsyncRedisCtl()
 
@@ -78,4 +69,4 @@ def test_stage_pause_resume_drain(monkeypatch):
     assert r6.json()["embedding"]["paused"] is False
     assert r6.json()["embedding"]["drain"] is False
 
-    app.dependency_overrides.pop(get_request_user, None)
+    # Cleanup handled by admin_user fixture

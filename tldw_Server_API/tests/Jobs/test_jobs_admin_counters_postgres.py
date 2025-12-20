@@ -63,6 +63,49 @@ def test_pg_batch_cancel_updates_counters(monkeypatch):
         conn.close()
 
 
+def test_pg_complete_queued_updates_counters(monkeypatch):
+    dsn = _require_pg(monkeypatch)
+    jm = JobManager(backend="postgres", db_url=dsn)
+    domain = "chatbooks"; queue = "default"; jt = "export"
+
+    ready = jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
+    scheduled = jm.create_job(
+        domain=domain,
+        queue=queue,
+        job_type=jt,
+        payload={},
+        owner_user_id="1",
+        available_at=datetime.now(tz=timezone.utc) + timedelta(seconds=60),
+    )
+
+    conn = jm._connect()
+    try:
+        with jm._pg_cursor(conn) as cur:
+            cur.execute(
+                "SELECT ready_count, scheduled_count, processing_count FROM job_counters WHERE domain=%s AND queue=%s AND job_type=%s",
+                (domain, queue, jt),
+            )
+            row = cur.fetchone(); assert row is not None
+            assert int(row[0] or 0) == 1 and int(row[1] or 0) == 1 and int(row[2] or 0) == 0
+    finally:
+        conn.close()
+
+    assert jm.complete_job(int(ready["id"]), result={}, enforce=False)
+    assert jm.complete_job(int(scheduled["id"]), result={}, enforce=False)
+
+    conn = jm._connect()
+    try:
+        with jm._pg_cursor(conn) as cur:
+            cur.execute(
+                "SELECT ready_count, scheduled_count, processing_count FROM job_counters WHERE domain=%s AND queue=%s AND job_type=%s",
+                (domain, queue, jt),
+            )
+            row = cur.fetchone(); assert row is not None
+            assert int(row[0] or 0) == 0 and int(row[1] or 0) == 0 and int(row[2] or 0) == 0
+    finally:
+        conn.close()
+
+
 def test_pg_batch_reschedule_moves_ready_to_scheduled(monkeypatch):
     dsn = _require_pg(monkeypatch)
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
