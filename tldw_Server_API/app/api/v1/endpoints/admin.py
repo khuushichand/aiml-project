@@ -537,7 +537,7 @@ async def _touch_shared_last_used_if_match(
         return
     try:
         payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
-    except Exception as exc:
+    except (ValueError, KeyError, TypeError) as exc:
         logger.debug(
             "BYOK: failed to decrypt shared secret for %s:%s (%s): %s",
             scope_type,

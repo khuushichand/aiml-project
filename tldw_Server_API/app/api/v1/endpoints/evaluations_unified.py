@@ -10,7 +10,7 @@ import json
 import asyncio
 import time
 from datetime import datetime
-from typing import List, Optional, Dict, Any, Annotated
+from typing import List, Optional, Dict, Any, Annotated, Union
 from fastapi import APIRouter, HTTPException, Depends, status, Query, Request, Response, Header, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
@@ -161,6 +161,38 @@ async def _validate_provider_credentials(
                 "message": f"Provider '{provider_name}' requires an API key.",
             },
         )
+
+
+async def _resolve_and_validate_eval_provider(
+    request: Union[GEvalRequest, RAGEvaluationRequest, ResponseQualityRequest],
+    eval_type: str,
+    *,
+    current_user: User,
+    http_request: Request,
+) -> tuple[str, Optional[str], Optional[str], Optional[ResolvedByokCredentials]]:
+    """Resolve provider credentials and validate BYOK requirements for evaluation requests."""
+    provider_name = (request.api_name or "openai").strip() or "openai"
+    provider_key = provider_name.lower()
+    explicit_key = (request.api_key or "").strip() if request.api_key else None
+    provider_api_key = explicit_key
+    byok_resolution: Optional[ResolvedByokCredentials] = None
+
+    if not provider_api_key:
+        byok_resolution = await _resolve_eval_credentials(
+            provider_key,
+            current_user=current_user,
+            request=http_request,
+        )
+        provider_api_key = byok_resolution.api_key
+
+    await _validate_provider_credentials(
+        eval_type,
+        provider_key,
+        provider_name,
+        provider_api_key,
+    )
+
+    return provider_name, provider_api_key, explicit_key, byok_resolution
 
 
 # verify_api_key et al. imported from evaluations_auth
@@ -649,25 +681,11 @@ async def evaluate_geval(
         except Exception:
             effective_user_id = user_id
 
-        provider_name = (request.api_name or "openai").strip() or "openai"
-        provider_key = provider_name.lower()
-        explicit_key = (request.api_key or "").strip() if request.api_key else None
-        provider_api_key = explicit_key
-        byok_resolution = None
-
-        if not provider_api_key:
-            byok_resolution = await _resolve_eval_credentials(
-                provider_key,
-                current_user=current_user,
-                request=http_request,
-            )
-            provider_api_key = byok_resolution.api_key
-
-        await _validate_provider_credentials(
+        provider_name, provider_api_key, explicit_key, byok_resolution = await _resolve_and_validate_eval_provider(
+            request,
             "geval",
-            provider_key,
-            provider_name,
-            provider_api_key,
+            current_user=current_user,
+            http_request=http_request,
         )
 
         # Send webhook: evaluation started (await in TEST_MODE)
@@ -862,25 +880,11 @@ async def evaluate_rag(
         except Exception:
             effective_user_id = user_id
 
-        provider_name = (request.api_name or "openai").strip() or "openai"
-        provider_key = provider_name.lower()
-        explicit_key = (request.api_key or "").strip() if request.api_key else None
-        provider_api_key = explicit_key
-        byok_resolution = None
-
-        if not provider_api_key:
-            byok_resolution = await _resolve_eval_credentials(
-                provider_key,
-                current_user=current_user,
-                request=http_request,
-            )
-            provider_api_key = byok_resolution.api_key
-
-        await _validate_provider_credentials(
+        provider_name, provider_api_key, explicit_key, byok_resolution = await _resolve_and_validate_eval_provider(
+            request,
             "rag",
-            provider_key,
-            provider_name,
-            provider_api_key,
+            current_user=current_user,
+            http_request=http_request,
         )
 
         # Send webhook: evaluation started (await in TEST_MODE)
@@ -1029,25 +1033,11 @@ async def evaluate_response_quality(
         except Exception:
             effective_user_id = user_id
 
-        provider_name = (request.api_name or "openai").strip() or "openai"
-        provider_key = provider_name.lower()
-        explicit_key = (request.api_key or "").strip() if request.api_key else None
-        provider_api_key = explicit_key
-        byok_resolution = None
-
-        if not provider_api_key:
-            byok_resolution = await _resolve_eval_credentials(
-                provider_key,
-                current_user=current_user,
-                request=http_request,
-            )
-            provider_api_key = byok_resolution.api_key
-
-        await _validate_provider_credentials(
+        provider_name, provider_api_key, explicit_key, byok_resolution = await _resolve_and_validate_eval_provider(
+            request,
             "response_quality",
-            provider_key,
-            provider_name,
-            provider_api_key,
+            current_user=current_user,
+            http_request=http_request,
         )
 
         # Send webhook: evaluation started (await in TEST_MODE)

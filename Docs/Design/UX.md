@@ -103,8 +103,14 @@ https://medium.com/design-bootcamp/10-tiny-ui-fixes-that-make-a-big-difference-c
 https://medium.muz.li/neurodesign-in-ux-what-cognitive-science-can-teach-us-about-better-interfaces-c21c73363119?gi=14cfe4be7385
 https://medium.com/@alphadesignglobal/full-screen-headers-are-obsolete-these-layouts-are-killing-them-8b2137560001
 
+https://thefwa.com/awards/page/1/?filterDate=&filterAwards=1.0-2.0-3.0-7.0-top100.1&filterCaseTypes=1.1-5.1-6.1-11.1&filterEditorials=1.0-2.0-3.0-4.0-5.0-6.0-7.0-8.0-9.0-10.0
+https://sakofchit.github.io/system.css/
+
 www.aiuxplayground.com/pattern/chat-artifact
 https://www.8bitcn.com/?ref=sidebar
+https://github.com/kagisearch/smallweb
+
+https://www.aiuxpatterns.com/?utm_source=substack&utm_medium=email
 https://uxdesign.cc/designing-decisions-behavioral-psychology-that-moves-users-e5fb08e7917a
 https://medium.com/design-bootcamp/top-ui-ux-trends-to-watch-in-2026-379a955ce591
 https://commercialtype.com/about/collections/thorowgood_grotesque
