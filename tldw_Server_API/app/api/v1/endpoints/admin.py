@@ -559,7 +559,11 @@ async def _touch_shared_last_used_if_match(
 async def admin_list_user_byok_keys(user_id: int) -> AdminUserKeysResponse:
     _require_byok_enabled()
     repo = await _get_user_byok_repo()
-    rows = await repo.list_secrets_for_user(user_id)
+    try:
+        rows = await repo.list_secrets_for_user(user_id)
+    except Exception as exc:
+        logger.error("BYOK: failed to list user keys for user_id=%s: %s", user_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to list user BYOK keys") from exc
     allowlist = resolve_byok_allowlist()
     items = [
         AdminUserKeyStatusItem(
@@ -582,7 +586,16 @@ async def admin_revoke_user_byok_key(user_id: int, provider: str) -> None:
     _require_byok_enabled()
     repo = await _get_user_byok_repo()
     provider_norm = normalize_provider_name(provider)
-    deleted = await repo.delete_secret(user_id, provider_norm)
+    try:
+        deleted = await repo.delete_secret(user_id, provider_norm)
+    except Exception as exc:
+        logger.error(
+            "BYOK: failed to revoke user key for user_id=%s provider=%s: %s",
+            user_id,
+            provider_norm,
+            exc,
+        )
+        raise HTTPException(status_code=500, detail="Failed to revoke user BYOK key") from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")
 
@@ -615,15 +628,25 @@ async def admin_upsert_shared_byok_key(payload: SharedProviderKeyUpsertRequest) 
 
     repo = await _get_shared_byok_repo()
     now = datetime.now(timezone.utc)
-    row = await repo.upsert_secret(
-        scope_type=payload.scope_type,
-        scope_id=payload.scope_id,
-        provider=provider_norm,
-        encrypted_blob=dumps_envelope(envelope),
-        key_hint=key_hint_for_api_key(api_key),
-        metadata=payload.metadata,
-        updated_at=now,
-    )
+    try:
+        row = await repo.upsert_secret(
+            scope_type=payload.scope_type,
+            scope_id=payload.scope_id,
+            provider=provider_norm,
+            encrypted_blob=dumps_envelope(envelope),
+            key_hint=key_hint_for_api_key(api_key),
+            metadata=payload.metadata,
+            updated_at=now,
+        )
+    except Exception as exc:
+        logger.error(
+            "BYOK: failed to upsert shared key for %s:%s provider=%s: %s",
+            payload.scope_type,
+            payload.scope_id,
+            provider_norm,
+            exc,
+        )
+        raise HTTPException(status_code=500, detail="Failed to store shared BYOK key") from exc
     return SharedProviderKeyResponse(
         scope_type=payload.scope_type,
         scope_id=payload.scope_id,
@@ -705,6 +728,15 @@ async def admin_list_shared_byok_keys(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(
+            "BYOK: failed to list shared keys for scope_type=%s scope_id=%s provider=%s: %s",
+            scope_type,
+            scope_id,
+            provider,
+            exc,
+        )
+        raise HTTPException(status_code=500, detail="Failed to list shared BYOK keys") from exc
     items = [
         SharedProviderKeyStatusItem(
             scope_type=row.get("scope_type"),
@@ -727,7 +759,17 @@ async def admin_delete_shared_byok_key(scope_type: str, scope_id: int, provider:
     _require_byok_enabled()
     repo = await _get_shared_byok_repo()
     provider_norm = normalize_provider_name(provider)
-    deleted = await repo.delete_secret(scope_type, scope_id, provider_norm)
+    try:
+        deleted = await repo.delete_secret(scope_type, scope_id, provider_norm)
+    except Exception as exc:
+        logger.error(
+            "BYOK: failed to delete shared key for scope_type=%s scope_id=%s provider=%s: %s",
+            scope_type,
+            scope_id,
+            provider_norm,
+            exc,
+        )
+        raise HTTPException(status_code=500, detail="Failed to delete shared BYOK key") from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")
 
