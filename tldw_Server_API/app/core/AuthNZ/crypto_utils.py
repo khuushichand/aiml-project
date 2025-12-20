@@ -122,10 +122,14 @@ def derive_hmac_key_candidates(settings: Optional[Settings] = None) -> List[byte
         )
         digest_sources.append(b"tldw_default_api_key_hmac")
 
-    # Hash each material to produce uniform 32-byte HMAC keys
+    # Derive uniform 32-byte HMAC keys from each material using PBKDF2-HMAC-SHA256.
+    # This is intentionally computationally expensive to harden low-entropy secrets
+    # (for example, human-chosen API keys) against brute-force attacks.
     keys: list[bytes] = []
+    kdf_salt = b"tldw_authnz_hmac_kdf_v1"
+    kdf_iterations = 100_000
     for source in digest_sources:
-        hashed = hashlib.sha256(source).digest()
+        hashed = hashlib.pbkdf2_hmac("sha256", source, kdf_salt, kdf_iterations, dklen=32)
         if hashed not in keys:
             keys.append(hashed)
     return keys

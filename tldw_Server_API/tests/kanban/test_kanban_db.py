@@ -512,6 +512,37 @@ class TestSearchOperations:
 
 
 # =============================================================================
+# FTS Maintenance Tests
+# =============================================================================
+
+class TestFtsMaintenance:
+    """Tests for FTS maintenance actions."""
+
+    def test_optimize_and_rebuild_preserve_search(self, kanban_db: KanbanDB, sample_list: dict):
+        """Optimize and rebuild should not drop searchable content."""
+        card = kanban_db.create_card(
+            list_id=sample_list["id"],
+            title="Optimize FTS index",
+            client_id="fts-maint-card",
+            description="FTS maintenance smoke"
+        )
+
+        results, total = kanban_db.search_cards("optimize")
+        assert total >= 1
+        assert any(r["id"] == card["id"] for r in results)
+
+        kanban_db.optimize_fts()
+        results, total = kanban_db.search_cards("optimize")
+        assert total >= 1
+        assert any(r["id"] == card["id"] for r in results)
+
+        kanban_db.rebuild_fts()
+        results, total = kanban_db.search_cards("optimize")
+        assert total >= 1
+        assert any(r["id"] == card["id"] for r in results)
+
+
+# =============================================================================
 # Activity Tests
 # =============================================================================
 

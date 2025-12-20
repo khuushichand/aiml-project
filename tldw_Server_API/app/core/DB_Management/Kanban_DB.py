@@ -3875,12 +3875,45 @@ END;
         format_type = data.get("format")
 
         if format_type == "tldw_kanban_v1":
-            return self._import_tldw_format(data, board_name, board_client_id)
+            result = self._import_tldw_format(data, board_name, board_client_id)
         elif "cards" in data and "lists" in data and "name" in data:
             # Trello format detection
-            return self._import_trello_format(data, board_name, board_client_id)
+            result = self._import_trello_format(data, board_name, board_client_id)
         else:
             raise InputError("Unrecognized import format. Must be tldw_kanban_v1 or Trello JSON format.")
+
+        try:
+            self.optimize_fts()
+        except Exception as exc:
+            logger.warning(f"Kanban FTS optimize after import failed: {exc}")
+        return result
+
+    def _run_fts_maintenance(self, action: str) -> None:
+        """Run FTS5 maintenance commands (optimize or rebuild)."""
+        action_norm = str(action).strip().lower()
+        if action_norm not in {"optimize", "rebuild"}:
+            raise InputError("Unsupported FTS maintenance action. Use 'optimize' or 'rebuild'.")
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    "INSERT INTO kanban_cards_fts(kanban_cards_fts) VALUES (?)",
+                    (action_norm,),
+                )
+                conn.commit()
+            except Exception as e:
+                logger.error(f"Kanban FTS {action_norm} failed: {e}")
+                raise KanbanDBError(f"FTS {action_norm} failed: {e}") from e
+            finally:
+                conn.close()
+
+    def optimize_fts(self) -> None:
+        """Optimize the FTS index after large batch inserts."""
+        self._run_fts_maintenance("optimize")
+
+    def rebuild_fts(self) -> None:
+        """Rebuild the FTS index (expensive)."""
+        self._run_fts_maintenance("rebuild")
 
     def _import_tldw_format(
         self,

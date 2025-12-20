@@ -4,7 +4,7 @@
 # Imports
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Literal
 from datetime import datetime, timedelta, timezone
 import secrets
 import string
@@ -52,6 +52,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     RateLimitResetResponse,
     NotesTitleSettingsUpdate,
     AdminCleanupSettingsUpdate,
+    KanbanFtsMaintenanceResponse,
 )
 from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyCreateRequest,
@@ -140,6 +141,8 @@ from tldw_Server_API.app.core.AuthNZ.repos.user_provider_secrets_repo import (
 from tldw_Server_API.app.core.AuthNZ.repos.org_provider_secrets_repo import (
     AuthnzOrgProviderSecretsRepo,
 )
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB, KanbanDBError, InputError
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError, DuplicateTeamError, DuplicateRoleError
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     build_secret_payload,
@@ -727,6 +730,37 @@ async def admin_delete_shared_byok_key(scope_type: str, scope_id: int, provider:
     deleted = await repo.delete_secret(scope_type, scope_id, provider_norm)
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")
+
+
+def _get_kanban_db_for_user_id(user_id: int) -> KanbanDB:
+    db_path = DatabasePaths.get_kanban_db_path(user_id)
+    return KanbanDB(db_path=str(db_path), user_id=str(user_id))
+
+
+@router.post(
+    "/kanban/fts/{action}",
+    response_model=KanbanFtsMaintenanceResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def admin_kanban_fts_maintenance(
+    action: Literal["optimize", "rebuild"],
+    user_id: int = Query(..., ge=1),
+) -> KanbanFtsMaintenanceResponse:
+    try:
+        db = _get_kanban_db_for_user_id(user_id)
+        if action == "rebuild":
+            db.rebuild_fts()
+        else:
+            db.optimize_fts()
+    except InputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KanbanDBError as exc:
+        logger.error(f"Kanban FTS {action} failed for user {user_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Kanban FTS maintenance failed") from exc
+    except Exception as exc:
+        logger.error(f"Kanban FTS {action} failed for user {user_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Kanban FTS maintenance failed") from exc
+    return KanbanFtsMaintenanceResponse(user_id=user_id, action=action, status="ok")
 
 
 #######################################################################################################################

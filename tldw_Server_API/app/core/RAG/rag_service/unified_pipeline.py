@@ -545,7 +545,7 @@ async def unified_rag_pipeline(
             parts = [media_db_path, notes_db_path, character_db_path]
             if any(parts):
                 joined = "|".join([str(p or "") for p in parts])
-                cache_namespace = f"db:{hashlib.md5(joined.encode('utf-8')).hexdigest()[:12]}"
+                cache_namespace = f"db:{hashlib.sha256(joined.encode('utf-8')).hexdigest()[:12]}"
         except Exception:
             cache_namespace = None
 

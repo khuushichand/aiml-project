@@ -589,6 +589,7 @@ The FTS5 index is automatically maintained via triggers. If you need to rebuild:
 -- Rebuild FTS index
 INSERT INTO kanban_cards_fts(kanban_cards_fts) VALUES('rebuild');
 ```
+Admin note: Rebuild after major bulk inserts/updates, data migrations, detected corruption, inconsistent search results, notable performance degradation, or tokenizer changes. After large batch inserts, run `INSERT INTO kanban_cards_fts(kanban_cards_fts) VALUES('optimize');` before serving first queries. For large datasets, take a database backup first and expect rebuild time to scale with dataset size. Rebuilds can hold locks on the FTS table, so plan for brief read/write disruptions or schedule a maintenance window.
 
 #### ChromaDB Integration
 

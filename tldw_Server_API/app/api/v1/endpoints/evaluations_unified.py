@@ -293,6 +293,10 @@ def _estimate_tokens_from_texts(*texts: Optional[str], provider: Optional[str] =
     return max(0, total_chars // 4)
 
 
+def _get_request(request: Request) -> Request:
+    return request
+
+
 # ============= Rate Limiting =============
 
 # check_evaluation_rate_limit imported
@@ -609,7 +613,7 @@ async def evaluate_geval(
     response: Response,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
-    http_request: Request = None,
+    http_request: Request = Depends(_get_request),
 ):
     """
     Evaluate a summary using G-Eval metrics.
@@ -821,7 +825,7 @@ async def evaluate_rag(
     response: Response,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
-    http_request: Request = None,
+    http_request: Request = Depends(_get_request),
 ):
     """
     Evaluate RAG system performance.
@@ -989,7 +993,7 @@ async def evaluate_response_quality(
     response: Response,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
-    http_request: Request = None,
+    http_request: Request = Depends(_get_request),
 ):
     """
     Evaluate the quality of a generated response.
@@ -1256,7 +1260,7 @@ async def batch_evaluate(
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
     response: Response = None,
-    http_request: Request = None,
+    http_request: Request = Depends(_get_request),
 ):
     """
     Run multiple evaluations in batch.
@@ -1742,8 +1746,11 @@ async def evaluate_ocr_pdf_endpoint(
         if thresholds_json:
             try:
                 thresholds = json.loads(thresholds_json)
-            except Exception:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid thresholds_json")
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid thresholds_json",
+                ) from exc
         result = await service.evaluate_ocr(
             items=items,
             metrics=metrics,

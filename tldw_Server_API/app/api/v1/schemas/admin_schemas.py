@@ -441,6 +441,16 @@ class RateLimitResetResponse(BaseModel):
     db_rows_deleted: int = 0
     redis_keys_deleted: int = 0
 
+
+#
+# Kanban FTS Maintenance Schema
+
+class KanbanFtsMaintenanceResponse(BaseModel):
+    """Response for Kanban FTS maintenance actions."""
+    user_id: int
+    action: Literal["optimize", "rebuild"]
+    status: str = "ok"
+
 #
 #
 # Notes Title Settings Schema
