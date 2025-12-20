@@ -611,16 +611,32 @@ def _default_persist_path(namespace_key: str) -> Optional[str]:
 
 
 def _sanitize_persist_path(persist_path: Optional[str], namespace_key: str) -> Optional[str]:
-    """Normalize persist_path and ensure it stays under the cache base directory."""
+    """Normalize persist_path and ensure it stays under the cache base directory.
+
+    If the base cache directory cannot be determined or resolved, we fall back to
+    a default path derived from the namespace, or disable persistence entirely.
+    """
     if not persist_path:
         return None
     base_dir = _resolve_default_cache_dir()
     if not base_dir:
-        return persist_path
+        # Without a trusted base directory, do not trust an arbitrary persist_path.
+        fallback = _default_persist_path(namespace_key)
+        if fallback:
+            logger.warning("No base cache dir for semantic cache; using default cache path.")
+            return fallback
+        logger.warning("No base cache dir for semantic cache; persistence disabled.")
+        return None
     try:
         base_dir_resolved = base_dir.expanduser().resolve(strict=False)
     except Exception:
-        return persist_path
+        # If we cannot resolve the base directory safely, use the default path or disable.
+        fallback = _default_persist_path(namespace_key)
+        if fallback:
+            logger.warning("Failed to resolve base cache dir; using default cache path.")
+            return fallback
+        logger.warning("Failed to resolve base cache dir; persistence disabled.")
+        return None
     candidate_path = Path(persist_path).expanduser()
     try:
         if candidate_path.is_absolute():

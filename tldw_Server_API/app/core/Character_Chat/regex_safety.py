@@ -10,12 +10,16 @@ import re
 import time as _time_module
 from typing import Tuple
 
+import regex  # Third-party regex engine with timeout support
 from loguru import logger
 
 from tldw_Server_API.app.core.Character_Chat.constants import (
     MAX_REGEX_LENGTH,
     MAX_REGEX_COMPILE_TIME_MS,
 )
+
+# Maximum allowed time (in milliseconds) for the validation test match
+MAX_REGEX_VALIDATE_TIME_MS = 50
 
 
 # =============================================================================
@@ -162,17 +166,27 @@ def validate_regex_safety(pattern: str) -> Tuple[bool, str]:
 
     # Try to compile with a basic test to catch obvious issues
     try:
-        compiled = re.compile(pattern)
+        # Use the third-party regex module so we can enforce a timeout on the test search.
+        compiled = regex.compile(pattern)
         # Quick sanity test with a bounded string
         test_input = "a" * SAFE_TEST_INPUT_SIZE
         start_time = _time_module.perf_counter()
-        compiled.search(test_input)
+        try:
+            compiled.search(
+                test_input,
+                timeout=MAX_REGEX_VALIDATE_TIME_MS / 1000.0,
+            )
+        except regex.TimeoutError:
+            elapsed_ms = (_time_module.perf_counter() - start_time) * 1000
+            return False, f"Pattern too slow (timeout): test match exceeded {elapsed_ms:.2f}ms"
         elapsed_ms = (_time_module.perf_counter() - start_time) * 1000
 
         if elapsed_ms > MAX_REGEX_COMPILE_TIME_MS:
             return False, f"Pattern too slow: test match took {elapsed_ms:.2f}ms"
-    except re.error as e:
+    except regex.error as e:
         return False, f"Invalid regex: {e}"
+        # Catch-all to avoid unexpected exceptions from breaking validation.
+        logger.debug(f"Unexpected error during regex validation: {e}")
     except Exception as e:
         return False, f"Regex validation error: {e}"
 
