@@ -20,7 +20,6 @@ This guide covers the Kanban Board module for organizing tasks, research workflo
 3. [Developer Guide](#developer-guide)
    - [API Endpoints](#api-endpoints)
    - [Search API](#search-api)
-   - [Pydantic Schemas](#pydantic-schemas)
    - [Error Handling](#error-handling)
    - [Code Architecture](#code-architecture)
 4. [Administrator Guide](#administrator-guide)

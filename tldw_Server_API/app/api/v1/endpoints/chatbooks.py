@@ -56,6 +56,14 @@ router = APIRouter(prefix="/chatbooks", tags=["chatbooks"])
 from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 
 
+def _safe_increment_metric(metric_name: str, labels: dict, error_context: str = "") -> None:
+    """Safely increment a metric, logging failures without raising."""
+    try:
+        increment_counter(metric_name, labels=labels)
+    except Exception as m_err:
+        logger.debug(f"metrics increment failed ({error_context}): error={m_err}")
+
+
 def _setup_secure_temp_directory(user_id: str) -> Path:
     """
     Set up a secure temporary directory for file uploads.
@@ -433,10 +441,11 @@ async def import_chatbook(
                 temp_file.unlink()
             except Exception as e:
                 logger.warning(f"Failed to remove invalid uploaded file during import: path={temp_file}, user={user.id}, error={e}")
-            try:
-                increment_counter("app_warning_events_total", labels={"component": "chatbooks", "event": "import_invalid_upload_cleanup_failed"})
-            except Exception as m_err:
-                logger.debug(f"metrics increment failed (chatbooks import_invalid_upload_cleanup_failed): error={m_err}")
+            _safe_increment_metric(
+                "app_warning_events_total",
+                labels={"component": "chatbooks", "event": "import_invalid_upload_cleanup_failed"},
+                error_context="chatbooks import_invalid_upload_cleanup_failed",
+            )
             raise HTTPException(status_code=400, detail=error)
 
         # Convert content selections if provided (schema enum or string keys)
@@ -530,10 +539,11 @@ async def import_chatbook(
                 temp_file.unlink()
             except Exception as e:
                 logger.warning(f"Cleanup of temp import file failed: path={temp_file}, user={user.id}, error={e}")
-                try:
-                    increment_counter("app_warning_events_total", labels={"component": "chatbooks", "event": "import_cleanup_failed"})
-                except Exception as m_err:
-                    logger.debug(f"metrics increment failed (chatbooks import_cleanup_failed): error={m_err}")
+                _safe_increment_metric(
+                    "app_warning_events_total",
+                    labels={"component": "chatbooks", "event": "import_cleanup_failed"},
+                    error_context="chatbooks import_cleanup_failed",
+                )
 
 
 @router.post("/preview", response_model=PreviewChatbookResponse)
@@ -572,11 +582,6 @@ async def preview_chatbook(
         # Initialize quota manager (DB-backed) for consistent rate limiting
         quota_manager = QuotaManager(str(user.id), getattr(user, 'tier', 'free'), db=service.db)
 
-        # Pre-check that user has file size quota available (actual size checked below).
-        allowed, message = await quota_manager.check_file_size(0)
-        if not allowed:
-            raise HTTPException(status_code=413, detail=message)
-
         # Check file size (limit to 100MB for preview)
         file.file.seek(0, 2)
         file_size = file.file.tell()
@@ -608,10 +613,11 @@ async def preview_chatbook(
                 temp_file.unlink()
             except Exception as e:
                 logger.warning(f"Failed to remove invalid uploaded file during preview: path={temp_file}, user={user.id}, error={e}")
-            try:
-                increment_counter("app_warning_events_total", labels={"component": "chatbooks", "event": "preview_invalid_upload_cleanup_failed"})
-            except Exception as m_err:
-                logger.debug(f"metrics increment failed (chatbooks preview_invalid_upload_cleanup_failed): error={m_err}")
+            _safe_increment_metric(
+                "app_warning_events_total",
+                labels={"component": "chatbooks", "event": "preview_invalid_upload_cleanup_failed"},
+                error_context="chatbooks preview_invalid_upload_cleanup_failed",
+            )
             raise HTTPException(status_code=400, detail=err or "Invalid archive")
 
         # Preview chatbook
@@ -622,10 +628,11 @@ async def preview_chatbook(
             temp_file.unlink()
         except Exception as e:
             logger.warning(f"Cleanup of preview temp file failed: path={temp_file}, user={user.id}, error={e}")
-            try:
-                increment_counter("app_warning_events_total", labels={"component": "chatbooks", "event": "preview_cleanup_failed"})
-            except Exception as m_err:
-                logger.debug(f"metrics increment failed (chatbooks preview_cleanup_failed): error={m_err}")
+            _safe_increment_metric(
+                "app_warning_events_total",
+                labels={"component": "chatbooks", "event": "preview_cleanup_failed"},
+                error_context="chatbooks preview_cleanup_failed",
+            )
 
         if manifest:
             # Convert manifest to response model
@@ -750,7 +757,10 @@ async def list_export_jobs(
         raise
     except Exception:
         logger.exception(f"Error listing export jobs for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while retrieving export jobs")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while retrieving export jobs",
+        ) from None
 
 
 @router.get("/export/jobs/{job_id}", response_model=ExportJobResponse)
@@ -800,7 +810,10 @@ async def get_export_job(
         raise
     except Exception:
         logger.exception(f"Error getting export job {job_id} for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while retrieving the export job")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while retrieving the export job",
+        ) from None
 
 
 @router.get("/import/jobs", response_model=ListImportJobsResponse)
@@ -977,7 +990,7 @@ async def download_chatbook(
                 raise HTTPException(status_code=403, detail="Missing signature")
             try:
                 exp_int = int(exp)
-            except Exception as e:
+            except ValueError as e:
                 logger.warning(f"Invalid exp parameter in signed URL: exp={exp!r}, error={e}")
                 raise HTTPException(status_code=400, detail="Invalid exp")
             # Check exp against current time

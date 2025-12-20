@@ -8,7 +8,8 @@ from datetime import datetime
 from typing import List, Any, Dict, Optional, Tuple
 #
 # Third-party Libraries
-from fastapi import HTTPException, Depends, Query, UploadFile, File, APIRouter, Path as FastAPIPath, Response
+from fastapi import HTTPException, Depends, Query, UploadFile, File, APIRouter, Path as FastAPIPath
+from fastapi.responses import JSONResponse
 from loguru import logger
 from starlette import status
 
@@ -204,7 +205,6 @@ async def import_character_endpoint(
         character_file: UploadFile = File(..., description="Character card file (PNG, WEBP, JSON, MD)."),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         current_user: User = Depends(get_request_user),
-        response: Response = None,
 ):
     """
     Import a character card from a file.
@@ -303,9 +303,10 @@ async def import_character_endpoint(
         # If it returns the existing ID, then the initial `char_id` would be that.
         conflict_response = _build_conflict_import_response(e, db)
         if conflict_response:
-            if response is not None:
-                response.status_code = status.HTTP_200_OK
-            return conflict_response
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=conflict_response.model_dump()
+            )
 
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 

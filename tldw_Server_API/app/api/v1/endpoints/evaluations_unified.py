@@ -1457,7 +1457,11 @@ async def batch_evaluate(
                     return_exceptions=True,
                 )
 
-                for result, (_, byok_resolution, explicit_key) in zip(task_results, tasks_with_meta):
+                for result, (_, byok_resolution, explicit_key) in zip(
+                    task_results,
+                    tasks_with_meta,
+                    strict=True,
+                ):
                     if isinstance(result, Exception):
                         results.append({
                             "evaluation_id": None,

@@ -1756,6 +1756,40 @@ def rollback_037_drop_org_provider_secrets_table(conn: sqlite3.Connection) -> No
     logger.info("Rollback 037: Dropped org_provider_secrets table")
 
 
+def migration_038_add_org_provider_secrets_cleanup_triggers(conn: sqlite3.Connection) -> None:
+    """Add cleanup triggers for org_provider_secrets when orgs/teams are deleted."""
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS delete_org_provider_secrets_on_org_delete
+            AFTER DELETE ON organizations
+            FOR EACH ROW
+        BEGIN
+            DELETE FROM org_provider_secrets WHERE scope_type = 'org' AND scope_id = OLD.id;
+        END;
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS delete_org_provider_secrets_on_team_delete
+            AFTER DELETE ON teams
+            FOR EACH ROW
+        BEGIN
+            DELETE FROM org_provider_secrets WHERE scope_type = 'team' AND scope_id = OLD.id;
+        END;
+        """
+    )
+    conn.commit()
+    logger.info("Migration 038: Added org_provider_secrets cleanup triggers")
+
+
+def rollback_038_drop_org_provider_secrets_cleanup_triggers(conn: sqlite3.Connection) -> None:
+    """Rollback migration 038 by dropping org_provider_secrets cleanup triggers."""
+    conn.execute("DROP TRIGGER IF EXISTS delete_org_provider_secrets_on_org_delete")
+    conn.execute("DROP TRIGGER IF EXISTS delete_org_provider_secrets_on_team_delete")
+    conn.commit()
+    logger.info("Rollback 038: Dropped org_provider_secrets cleanup triggers")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -1853,6 +1887,12 @@ def get_authnz_migrations() -> List[Migration]:
             "Create org_provider_secrets table",
             migration_037_create_org_provider_secrets,
             rollback_037_drop_org_provider_secrets_table,
+        ),
+        Migration(
+            38,
+            "Add org_provider_secrets cleanup triggers",
+            migration_038_add_org_provider_secrets_cleanup_triggers,
+            rollback_038_drop_org_provider_secrets_cleanup_triggers,
         ),
     ]
 

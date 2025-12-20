@@ -283,9 +283,33 @@ async def delete_org(
         if hasattr(conn, "execute"):
             if hasattr(conn, "fetchrow"):
                 # PostgreSQL
+                await conn.execute(
+                    "DELETE FROM org_provider_secrets WHERE scope_type = 'org' AND scope_id = $1",
+                    ctx.org_id,
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM org_provider_secrets
+                    WHERE scope_type = 'team'
+                      AND scope_id IN (SELECT id FROM teams WHERE org_id = $1)
+                    """,
+                    ctx.org_id,
+                )
                 await conn.execute("DELETE FROM organizations WHERE id = $1", ctx.org_id)
             else:
                 # SQLite
+                await conn.execute(
+                    "DELETE FROM org_provider_secrets WHERE scope_type = 'org' AND scope_id = ?",
+                    (ctx.org_id,),
+                )
+                await conn.execute(
+                    """
+                    DELETE FROM org_provider_secrets
+                    WHERE scope_type = 'team'
+                      AND scope_id IN (SELECT id FROM teams WHERE org_id = ?)
+                    """,
+                    (ctx.org_id,),
+                )
                 await conn.execute("DELETE FROM organizations WHERE id = ?", (ctx.org_id,))
 
     logger.info(f"Org {ctx.org_id} deleted by owner")
@@ -716,8 +740,16 @@ async def delete_team(
 
     async with db_pool.transaction() as conn:
         if hasattr(conn, "fetchrow"):
+            await conn.execute(
+                "DELETE FROM org_provider_secrets WHERE scope_type = 'team' AND scope_id = $1",
+                team_id,
+            )
             await conn.execute("DELETE FROM teams WHERE id = $1", team_id)
         else:
+            await conn.execute(
+                "DELETE FROM org_provider_secrets WHERE scope_type = 'team' AND scope_id = ?",
+                (team_id,),
+            )
             await conn.execute("DELETE FROM teams WHERE id = ?", (team_id,))
 
     logger.info(f"Deleted team {team_id} from org {ctx.org_id}")

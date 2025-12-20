@@ -226,6 +226,22 @@ BEGIN
     UPDATE org_provider_secrets SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
 
+-- Cleanup org_provider_secrets when organizations are deleted
+CREATE TRIGGER IF NOT EXISTS delete_org_provider_secrets_on_org_delete
+    AFTER DELETE ON organizations
+    FOR EACH ROW
+BEGIN
+    DELETE FROM org_provider_secrets WHERE scope_type = 'org' AND scope_id = OLD.id;
+END;
+
+-- Cleanup org_provider_secrets when teams are deleted
+CREATE TRIGGER IF NOT EXISTS delete_org_provider_secrets_on_team_delete
+    AFTER DELETE ON teams
+    FOR EACH ROW
+BEGIN
+    DELETE FROM org_provider_secrets WHERE scope_type = 'team' AND scope_id = OLD.id;
+END;
+
 -- Update trigger for session activity
 CREATE TRIGGER IF NOT EXISTS update_session_activity
     AFTER UPDATE ON user_sessions
