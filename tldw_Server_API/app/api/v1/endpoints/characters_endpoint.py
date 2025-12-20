@@ -175,7 +175,7 @@ def _build_conflict_import_response(
                     existing_id = int(existing_char_obj.get("id"))
                 except (TypeError, ValueError) as exc:
                     logger.debug(f"Invalid conflict character id from name lookup: {exc}")
-    except Exception as exc:
+    except (CharactersRAGDBError, ValueError, TypeError) as exc:
         logger.debug(f"Failed to resolve conflict character id: {exc}")
         return None
     if not existing_id:

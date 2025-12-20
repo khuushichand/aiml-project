@@ -73,14 +73,11 @@ def _setup_secure_temp_directory(user_id: str) -> Path:
         HTTPException: If directory setup fails or security checks fail
     """
     import tempfile
-    import os as _os
 
     base_temp = Path(tempfile.gettempdir()).resolve(strict=False)
 
     # Use SHA256 hash of user_id for directory naming (collision-resistant, always safe)
     safe_user_id = hashlib.sha256(str(user_id).encode('utf-8')).hexdigest()
-    if not safe_user_id:
-        raise HTTPException(status_code=400, detail="Invalid user id for path")
 
     # Establish a fixed uploads root under the system temp and ensure it's not a symlink
     uploads_root = base_temp / "tldw_uploads"
@@ -91,7 +88,7 @@ def _setup_secure_temp_directory(user_id: str) -> Path:
 
     # Verify uploads_root is within the expected base temp directory using commonpath
     base_temp_resolved = base_temp.resolve(strict=False)
-    if _os.path.commonpath([str(uploads_root_resolved), str(base_temp_resolved)]) != str(base_temp_resolved):
+    if os.path.commonpath([str(uploads_root_resolved), str(base_temp_resolved)]) != str(base_temp_resolved):
         raise HTTPException(status_code=400, detail="Invalid temporary directory base")
 
     # Create and validate per-user directory
@@ -100,7 +97,7 @@ def _setup_secure_temp_directory(user_id: str) -> Path:
     if temp_dir.is_symlink():
         raise HTTPException(status_code=400, detail="Insecure user temporary directory")
     temp_dir = temp_dir.resolve(strict=True)
-    if _os.path.commonpath([str(temp_dir), str(uploads_root_resolved)]) != str(uploads_root_resolved):
+    if os.path.commonpath([str(temp_dir), str(uploads_root_resolved)]) != str(uploads_root_resolved):
         raise HTTPException(status_code=400, detail="Invalid temporary directory path")
 
     return temp_dir
@@ -518,10 +515,13 @@ async def import_chatbook(
 
     except HTTPException:
         raise
-    except Exception as e:
-        get_ps_logger(request_id=ensure_request_id(request), ps_component="endpoint", ps_job_kind="chatbooks", traceparent=ensure_traceparent(request)).error(
-            "Error importing chatbook for user %s: %s", user.id, e
-        )
+    except Exception:
+        get_ps_logger(
+            request_id=ensure_request_id(request),
+            ps_component="endpoint",
+            ps_job_kind="chatbooks",
+            traceparent=ensure_traceparent(request),
+        ).exception(f"Error importing chatbook for user {user.id}")
         raise HTTPException(status_code=500, detail="An error occurred while importing the chatbook")
     finally:
         # Cleanup uploaded file if not async
@@ -683,10 +683,13 @@ async def preview_chatbook(
 
     except HTTPException:
         raise
-    except Exception as e:
-        get_ps_logger(request_id=ensure_request_id(request), ps_component="endpoint", ps_job_kind="chatbooks", traceparent=ensure_traceparent(request)).error(
-            "Error previewing chatbook for user %s: %s", user.id, e
-        )
+    except Exception:
+        get_ps_logger(
+            request_id=ensure_request_id(request),
+            ps_component="endpoint",
+            ps_job_kind="chatbooks",
+            traceparent=ensure_traceparent(request),
+        ).exception(f"Error previewing chatbook for user {user.id}")
         raise HTTPException(status_code=500, detail="An error occurred while previewing the chatbook")
 
 
@@ -745,8 +748,8 @@ async def list_export_jobs(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error listing export jobs for user {user.id}: {e}")
+    except Exception:
+        logger.exception(f"Error listing export jobs for user {user.id}")
         raise HTTPException(status_code=500, detail="An error occurred while retrieving export jobs")
 
 
@@ -795,8 +798,8 @@ async def get_export_job(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error getting export job {job_id} for user {user.id}: {e}")
+    except Exception:
+        logger.exception(f"Error getting export job {job_id} for user {user.id}")
         raise HTTPException(status_code=500, detail="An error occurred while retrieving the export job")
 
 
@@ -1082,8 +1085,8 @@ async def download_chatbook(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error downloading chatbook {job_id} for user {user.id}: {e}")
+    except Exception:
+        logger.exception(f"Error downloading chatbook {job_id} for user {user.id}")
         raise HTTPException(status_code=500, detail="An error occurred while downloading the file")
 
 

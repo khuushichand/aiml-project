@@ -128,8 +128,9 @@ def _validate_and_truncate_tool_calls(tool_calls: Any) -> Optional[list]:
         if len(serialized) > MAX_TOOL_CALLS_SIZE:
             logger.warning(f"tool_calls exceeds size limit ({len(serialized)} > {MAX_TOOL_CALLS_SIZE}), truncating")
             # Progressively remove tool calls until within size limit
-            while tool_calls and len(json.dumps(tool_calls)) > MAX_TOOL_CALLS_SIZE:
+            while tool_calls and len(serialized) > MAX_TOOL_CALLS_SIZE:
                 tool_calls = tool_calls[:-1]
+                serialized = json.dumps(tool_calls)
             if not tool_calls:
                 return None
     except (TypeError, ValueError) as e:
@@ -758,12 +759,14 @@ async def character_chat_completion(
             except Exception:
                 return None
 
-        user_id_int = getattr(current_user, "id_int", None)
-        if user_id_int is None:
+        user_id_int: Optional[int] = None
+        if hasattr(current_user, "id_int"):
+            user_id_int = current_user.id_int
+        elif hasattr(current_user, "id"):
             try:
-                user_id_int = int(getattr(current_user, "id", None))
-            except Exception:
-                user_id_int = None
+                user_id_int = int(current_user.id)
+            except (TypeError, ValueError):
+                pass
 
         byok_resolution = await resolve_byok_credentials(
             provider,
@@ -1526,7 +1529,10 @@ async def export_chat_history(
                 if character:
                     lines.append(f"**Character**: {character.get('name', 'Unknown')}")
                 lines.append(f"**Date**: {conversation.get('created_at', '')}")
-                lines.append(f"**Messages**: {len(messages)}")
+                if total_messages is not None:
+                    lines.append(f"**Messages**: {len(messages)} of {total_messages} (page {page})")
+                else:
+                    lines.append(f"**Messages**: {len(messages)}")
                 lines.append("\n---\n")
 
             for msg in messages:

@@ -760,7 +760,10 @@ async def create_speech(
             _raise_for_tts_error(exc)
         finally:
             if byok_tts_resolution is not None:
-                await byok_tts_resolution.touch_last_used()
+                try:
+                    await byok_tts_resolution.touch_last_used()
+                except Exception as exc:
+                    logger.debug(f"Failed to update BYOK last_used timestamp: {exc}")
 
     if request_data.stream:
         first_chunk = await _pull_first_chunk()
@@ -804,7 +807,10 @@ async def create_speech(
         )
 
     if byok_tts_resolution is not None:
-        await byok_tts_resolution.touch_last_used()
+        try:
+            await byok_tts_resolution.touch_last_used()
+        except Exception as exc:
+            logger.debug(f"Failed to update BYOK last_used timestamp: {exc}")
 
     return Response(
         content=all_audio_bytes,
@@ -3048,7 +3054,10 @@ async def websocket_audio_chat_stream(
                 chat_history.append({"role": "assistant", "content": assistant_text})
             if len(chat_history) > CHAT_HISTORY_MAX_MESSAGES:
                 chat_history = chat_history[-CHAT_HISTORY_MAX_MESSAGES:]
-            await byok_resolution.touch_last_used()
+            try:
+                await byok_resolution.touch_last_used()
+            except Exception as exc:
+                logger.debug(f"Failed to update BYOK last_used timestamp for LLM: {exc}")
             return assistant_text, finish_reason, usage_payload
 
         async def _stream_tts(text: str, voice_to_voice_start: float) -> None:

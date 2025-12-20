@@ -63,7 +63,7 @@ async def test_get_rag_usage_debug_uses_enforcer(monkeypatch) -> None:
     async def _fake_membership(user_id: int, org_id: int) -> Dict[str, Any]:
         assert user_id == fake_principal.user_id
         assert org_id == 77
-        return {"role": "owner"}
+        return {"role": "owner", "status": "active"}
 
     monkeypatch.setattr(
         __import__("tldw_Server_API.app.api.v1.API_Deps.org_deps", fromlist=["_get_user_org_membership"]),

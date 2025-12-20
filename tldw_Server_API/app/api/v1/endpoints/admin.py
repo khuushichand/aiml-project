@@ -95,6 +95,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_db_transaction,
     get_storage_service_dep,
     get_auth_principal,
+    check_rate_limit,
 )
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter as get_authnz_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
@@ -476,17 +477,37 @@ async def admin_update_user_api_key(
 # BYOK Key Management (Admin)
 
 async def _get_user_byok_repo() -> AuthnzUserProviderSecretsRepo:
-    pool = await get_db_pool()
-    repo = AuthnzUserProviderSecretsRepo(pool)
-    await repo.ensure_tables()
-    return repo
+    """Initialize user BYOK repository and ensure schema exists."""
+    try:
+        pool = await get_db_pool()
+        repo = AuthnzUserProviderSecretsRepo(pool)
+        await repo.ensure_tables()
+        return repo
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to initialize user BYOK repository: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="BYOK infrastructure is not available",
+        ) from exc
 
 
 async def _get_shared_byok_repo() -> AuthnzOrgProviderSecretsRepo:
-    pool = await get_db_pool()
-    repo = AuthnzOrgProviderSecretsRepo(pool)
-    await repo.ensure_tables()
-    return repo
+    """Initialize shared BYOK repository and ensure schema exists."""
+    try:
+        pool = await get_db_pool()
+        repo = AuthnzOrgProviderSecretsRepo(pool)
+        await repo.ensure_tables()
+        return repo
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to initialize shared BYOK repository: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="BYOK infrastructure is not available",
+        ) from exc
 
 
 def _require_byok_enabled() -> None:
@@ -527,7 +548,11 @@ async def _touch_shared_last_used_if_match(
     await repo.touch_last_used(scope_type, scope_id, provider, datetime.now(timezone.utc))
 
 
-@router.get("/keys/users/{user_id}", response_model=AdminUserKeysResponse)
+@router.get(
+    "/keys/users/{user_id}",
+    response_model=AdminUserKeysResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
 async def admin_list_user_byok_keys(user_id: int) -> AdminUserKeysResponse:
     _require_byok_enabled()
     repo = await _get_user_byok_repo()
@@ -545,7 +570,11 @@ async def admin_list_user_byok_keys(user_id: int) -> AdminUserKeysResponse:
     return AdminUserKeysResponse(user_id=user_id, items=items)
 
 
-@router.delete("/keys/users/{user_id}/{provider}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/keys/users/{user_id}/{provider}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(check_rate_limit)],
+)
 async def admin_revoke_user_byok_key(user_id: int, provider: str) -> None:
     _require_byok_enabled()
     repo = await _get_user_byok_repo()
@@ -555,7 +584,11 @@ async def admin_revoke_user_byok_key(user_id: int, provider: str) -> None:
         raise HTTPException(status_code=404, detail="Key not found")
 
 
-@router.post("/keys/shared", response_model=SharedProviderKeyResponse)
+@router.post(
+    "/keys/shared",
+    response_model=SharedProviderKeyResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
 async def admin_upsert_shared_byok_key(payload: SharedProviderKeyUpsertRequest) -> SharedProviderKeyResponse:
     _require_byok_enabled()
     provider_norm = normalize_provider_name(payload.provider)
@@ -597,7 +630,11 @@ async def admin_upsert_shared_byok_key(payload: SharedProviderKeyUpsertRequest) 
     )
 
 
-@router.post("/keys/shared/test", response_model=SharedProviderKeyTestResponse)
+@router.post(
+    "/keys/shared/test",
+    response_model=SharedProviderKeyTestResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
 async def admin_test_shared_byok_key(payload: SharedProviderKeyTestRequest) -> SharedProviderKeyTestResponse:
     _require_byok_enabled()
     provider_norm = normalize_provider_name(payload.provider)
@@ -645,7 +682,11 @@ async def admin_test_shared_byok_key(payload: SharedProviderKeyTestRequest) -> S
     )
 
 
-@router.get("/keys/shared", response_model=SharedProviderKeysResponse)
+@router.get(
+    "/keys/shared",
+    response_model=SharedProviderKeysResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
 async def admin_list_shared_byok_keys(
     scope_type: Optional[str] = Query(None),
     scope_id: Optional[int] = Query(None),
@@ -674,7 +715,11 @@ async def admin_list_shared_byok_keys(
     return SharedProviderKeysResponse(items=items)
 
 
-@router.delete("/keys/shared/{scope_type}/{scope_id}/{provider}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/keys/shared/{scope_type}/{scope_id}/{provider}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(check_rate_limit)],
+)
 async def admin_delete_shared_byok_key(scope_type: str, scope_id: int, provider: str) -> None:
     _require_byok_enabled()
     repo = await _get_shared_byok_repo()

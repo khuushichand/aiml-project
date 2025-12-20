@@ -59,7 +59,8 @@ def _is_membership_active(membership: Optional[dict]) -> bool:
         return False
     status = membership.get("status")
     if status is None:
-        return True
+        # Treat missing status as inactive; legacy rows should be backfilled to "active".
+        return False
     return str(status).strip().lower() in ACTIVE_MEMBERSHIP_STATUSES
 
 
@@ -70,20 +71,22 @@ def _role_allowed(user_role: str, allowed_roles: List[str]) -> bool:
 
 
 async def _get_user_org_membership(
-    user_id: int, org_id: int
+    user_id: int, org_id: int, repo: Optional[AuthnzOrgsTeamsRepo] = None
 ) -> Optional[dict]:
     """Get a user's membership in an organization."""
-    db_pool = await get_db_pool()
-    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+    if repo is None:
+        db_pool = await get_db_pool()
+        repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
     return await repo.get_org_member(org_id, user_id)
 
 
 async def _get_user_team_membership(
-    user_id: int, team_id: int
+    user_id: int, team_id: int, repo: Optional[AuthnzOrgsTeamsRepo] = None
 ) -> Optional[dict]:
     """Get a user's membership in a team."""
-    db_pool = await get_db_pool()
-    repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+    if repo is None:
+        db_pool = await get_db_pool()
+        repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
     return await repo.get_team_member(team_id, user_id)
 
 
@@ -205,7 +208,9 @@ def require_team_role(*allowed_roles: str):
             )
 
         # Check org membership
-        org_membership = await _get_user_org_membership(principal.user_id, org_id)
+        db_pool = await get_db_pool()
+        repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
+        org_membership = await _get_user_org_membership(principal.user_id, org_id, repo=repo)
         if not org_membership:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -230,8 +235,6 @@ def require_team_role(*allowed_roles: str):
             )
 
         # Verify team belongs to org
-        db_pool = await get_db_pool()
-        repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
         team = await repo.get_team(team_id)
 
         if not team or team.get("org_id") != org_id:
@@ -241,7 +244,7 @@ def require_team_role(*allowed_roles: str):
             )
 
         # Check team membership
-        team_membership = await _get_user_team_membership(principal.user_id, team_id)
+        team_membership = await _get_user_team_membership(principal.user_id, team_id, repo=repo)
         team_role = None
         if team_membership:
             if not _is_membership_active(team_membership):

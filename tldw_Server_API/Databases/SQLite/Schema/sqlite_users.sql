@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS user_provider_secrets (
 -- Org/team shared provider secrets (BYOK)
 CREATE TABLE IF NOT EXISTS org_provider_secrets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scope_type TEXT NOT NULL,
+    scope_type TEXT NOT NULL CHECK (scope_type IN ('org', 'team')),
     scope_id INTEGER NOT NULL,
     provider TEXT NOT NULL,
     encrypted_blob TEXT NOT NULL,
@@ -196,6 +196,7 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at);
 CREATE INDEX IF NOT EXISTS idx_user_provider_secrets_user_id ON user_provider_secrets(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_provider_secrets_provider ON user_provider_secrets(provider);
 CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_scope ON org_provider_secrets(scope_type, scope_id);
+CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_provider ON org_provider_secrets(provider);
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_token ON password_reset_tokens(token);
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_expires_at ON password_reset_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_token ON email_verification_tokens(token);
@@ -207,6 +208,22 @@ CREATE TRIGGER IF NOT EXISTS update_users_timestamp
     FOR EACH ROW
 BEGIN
     UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+-- Update trigger for user_provider_secrets table
+CREATE TRIGGER IF NOT EXISTS update_user_provider_secrets_timestamp
+    AFTER UPDATE ON user_provider_secrets
+    FOR EACH ROW
+BEGIN
+    UPDATE user_provider_secrets SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
+
+-- Update trigger for org_provider_secrets table
+CREATE TRIGGER IF NOT EXISTS update_org_provider_secrets_timestamp
+    AFTER UPDATE ON org_provider_secrets
+    FOR EACH ROW
+BEGIN
+    UPDATE org_provider_secrets SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
 
 -- Update trigger for session activity

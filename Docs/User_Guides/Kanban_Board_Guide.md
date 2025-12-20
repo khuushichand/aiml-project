@@ -15,6 +15,7 @@ This guide covers the Kanban Board module for organizing tasks, research workflo
    - [Labels](#labels)
    - [Checklists](#checklists)
    - [Comments](#comments)
+   - [Content Links](#content-links)
    - [Searching Cards](#searching-cards)
 3. [Developer Guide](#developer-guide)
    - [API Endpoints](#api-endpoints)
@@ -187,6 +188,30 @@ curl -X POST "http://localhost:8000/api/v1/kanban/cards/{card_id}/comments" \
   -d '{"content": "Found a related paper on attention mechanisms"}'
 ```
 
+### Content Links
+
+Link cards to media items or notes to keep tasks connected to source material.
+
+#### Link a Card to Media or a Note
+```bash
+curl -X POST "http://localhost:8000/api/v1/kanban/cards/{card_id}/links" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"linked_type": "media", "linked_id": "123"}'
+```
+
+#### List Links for a Card
+```bash
+curl "http://localhost:8000/api/v1/kanban/cards/{card_id}/links?linked_type=media" \
+  -H "Authorization: Bearer <token>"
+```
+
+#### Find Cards Linked to a Media Item or Note
+```bash
+curl "http://localhost:8000/api/v1/kanban/linked/media/123/cards" \
+  -H "Authorization: Bearer <token>"
+```
+
 ### Searching Cards
 
 Search across all your cards using keywords, filters, and different search modes.
@@ -286,6 +311,8 @@ All endpoints are prefixed with `/api/v1/kanban`.
 | POST | `/boards/{id}/unarchive` | Unarchive board |
 | DELETE | `/boards/{id}` | Soft delete board |
 | POST | `/boards/{id}/restore` | Restore deleted board |
+| POST | `/boards/{id}/export` | Export board |
+| POST | `/boards/import` | Import board |
 
 #### Lists
 
@@ -349,6 +376,19 @@ All endpoints are prefixed with `/api/v1/kanban`.
 | PATCH | `/comments/{id}` | Update comment |
 | DELETE | `/comments/{id}` | Delete comment |
 
+#### Links
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/cards/{card_id}/links` | Add link to card |
+| GET | `/cards/{card_id}/links` | List links for card |
+| GET | `/cards/{card_id}/links/counts` | Get link counts for card |
+| DELETE | `/cards/{card_id}/links/{linked_type}/{linked_id}` | Remove link from card |
+| DELETE | `/links/{link_id}` | Remove link by ID |
+| POST | `/cards/{card_id}/links/bulk-add` | Bulk add links to card |
+| POST | `/cards/{card_id}/links/bulk-remove` | Bulk remove links from card |
+| GET | `/linked/{linked_type}/{linked_id}/cards` | Find cards linked to content |
+
 #### Search
 
 | Method | Endpoint | Description |
@@ -361,15 +401,17 @@ All endpoints are prefixed with `/api/v1/kanban`.
 
 #### Request Schema (POST)
 ```python
+SEARCH_MODES = Literal["fts", "vector", "hybrid"]
+
 class SearchRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=500)
-    board_id: Optional[int] = None
-    label_ids: Optional[List[int]] = None
-    priority: Optional[str] = None  # low, medium, high, urgent
-    include_archived: bool = False
-    search_mode: str = "fts"  # fts, vector, hybrid
-    page: int = Field(1, ge=1)
-    per_page: int = Field(20, ge=1, le=100)
+    query: str = Field(..., min_length=1, max_length=500, description="Search query")
+    board_id: Optional[int] = Field(None, description="Filter by board ID")
+    label_ids: Optional[List[int]] = Field(None, description="Filter by label IDs (cards must have ALL)")
+    priority: Optional[str] = Field(None, description="Filter by priority")
+    include_archived: bool = Field(False, description="Include archived cards")
+    search_mode: SEARCH_MODES = Field("fts", description="Search mode: fts, vector, or hybrid")
+    page: int = Field(1, ge=1, description="Page number")
+    per_page: int = Field(20, ge=1, le=100, description="Results per page")
 ```
 
 #### Response Schema
@@ -449,7 +491,7 @@ The Kanban module uses SQLite with the following tables:
 - `kanban_checklist_items` - Items in checklists
 - `kanban_comments` - Comments on cards
 - `kanban_activities` - Activity log
-- `kanban_cards_fts` - FTS5 virtual table for search
+- `kanban_card_links` - Card-to-card relationships (currently undocumented)
 
 #### Key Design Patterns
 
@@ -496,6 +538,13 @@ For cards found only by vector search (semantic match without keyword match):
 ```text
 score = VECTOR_ONLY_WEIGHT * vector_score
 ```
+
+#### Scoring Details
+
+- FTS-only results use the FTS score as-is; there is no vector component and `VECTOR_WEIGHT` is not applied.
+- Vector-only results use `VECTOR_ONLY_WEIGHT * vector_score`.
+- Both-match results use the hybrid formula and require both `fts_score` and `vector_score` to be normalized to [0,1] before weighting.
+- If your backends use different score scales, tune weights and/or normalization to keep the combined scores meaningful.
 
 #### Default Weights
 

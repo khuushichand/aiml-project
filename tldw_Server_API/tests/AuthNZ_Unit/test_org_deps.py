@@ -16,7 +16,7 @@ async def test_get_active_org_id_returns_explicit_org_id(monkeypatch):
     async def fake_membership(user_id: int, org_id: int):
         assert user_id == principal.user_id
         assert org_id == 42
-        return {"org_id": org_id, "role": "member"}
+        return {"org_id": org_id, "role": "member", "status": "active"}
 
     async def fake_get_user_orgs(_: object):
         raise AssertionError("get_user_orgs should not be called when org_id is provided")
@@ -73,3 +73,17 @@ async def test_get_active_org_id_returns_none_when_no_orgs(monkeypatch):
         org_id=None,
     )
     assert org_id is None
+
+
+@pytest.mark.parametrize(
+    "membership, expected",
+    [
+        (None, False),
+        ({}, False),
+        ({"status": None}, False),
+        ({"status": "active"}, True),
+        ({"status": "inactive"}, False),
+    ],
+)
+def test_is_membership_active_requires_explicit_status(membership, expected):
+    assert org_deps._is_membership_active(membership) is expected

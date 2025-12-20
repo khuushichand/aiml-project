@@ -379,7 +379,7 @@ async def cancel_run(
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
-        await svc.cancel_run(run_id, cancelled_by=user_id)
+        await svc.cancel_run(run_id, cancelled_by=current_user.id_str)
         return {"status": "cancelled", "run_id": run_id}
     except HTTPException:
         raise
