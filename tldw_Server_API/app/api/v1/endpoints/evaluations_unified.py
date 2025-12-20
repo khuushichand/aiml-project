@@ -110,9 +110,12 @@ def _is_eval_test_mode() -> bool:
 
 
 def _normalize_eval_user_id(current_user: User) -> Optional[int]:
+    user_id = getattr(current_user, "id", None)
+    if user_id is None:
+        return None
     try:
-        return int(getattr(current_user, "id", None))
-    except Exception:
+        return int(user_id)
+    except (TypeError, ValueError):
         return None
 
 
@@ -135,6 +138,29 @@ async def _resolve_eval_credentials(
         request=request,
         fallback_resolver=_fallback_resolver,
     )
+
+
+async def _validate_provider_credentials(
+    eval_type: str,
+    provider_key: str,
+    provider_name: str,
+    provider_api_key: Optional[str],
+) -> None:
+    """Validate required provider credentials for evaluation endpoints."""
+    if (
+        eval_type in {"geval", "rag", "response_quality"}
+        and PROVIDER_REQUIRES_KEY.get(provider_key, False)
+        and not provider_api_key
+        and not _is_eval_test_mode()
+    ):
+        record_byok_missing_credentials(provider_key, operation="evaluations")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error_code": "missing_provider_credentials",
+                "message": f"Provider '{provider_name}' requires an API key.",
+            },
+        )
 
 
 # verify_api_key et al. imported from evaluations_auth
@@ -633,15 +659,12 @@ async def evaluate_geval(
             )
             provider_api_key = byok_resolution.api_key
 
-        if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key and not _is_eval_test_mode():
-            record_byok_missing_credentials(provider_key, operation="evaluations")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error_code": "missing_provider_credentials",
-                    "message": f"Provider '{provider_name}' requires an API key.",
-                },
-            )
+        await _validate_provider_credentials(
+            "geval",
+            provider_key,
+            provider_name,
+            provider_api_key,
+        )
 
         # Send webhook: evaluation started (await in TEST_MODE)
         import os as _os
@@ -837,22 +860,24 @@ async def evaluate_rag(
 
         provider_name = (request.api_name or "openai").strip() or "openai"
         provider_key = provider_name.lower()
-        byok_resolution = await _resolve_eval_credentials(
-            provider_key,
-            current_user=current_user,
-            request=http_request,
-        )
-        provider_api_key = byok_resolution.api_key
+        explicit_key = (request.api_key or "").strip() if request.api_key else None
+        provider_api_key = explicit_key
+        byok_resolution = None
 
-        if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key and not _is_eval_test_mode():
-            record_byok_missing_credentials(provider_key, operation="evaluations")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error_code": "missing_provider_credentials",
-                    "message": f"Provider '{provider_name}' requires an API key.",
-                },
+        if not provider_api_key:
+            byok_resolution = await _resolve_eval_credentials(
+                provider_key,
+                current_user=current_user,
+                request=http_request,
             )
+            provider_api_key = byok_resolution.api_key
+
+        await _validate_provider_credentials(
+            "rag",
+            provider_key,
+            provider_name,
+            provider_api_key,
+        )
 
         # Send webhook: evaluation started (await in TEST_MODE)
         import os as _os
@@ -891,7 +916,7 @@ async def evaluate_rag(
             api_key=provider_api_key,
             user_id=effective_user_id
         )
-        if byok_resolution and byok_resolution.uses_byok:
+        if byok_resolution and byok_resolution.uses_byok and not explicit_key:
             await byok_resolution.touch_last_used()
         try:
             usage = result.get("usage") if isinstance(result, dict) else None
@@ -1002,22 +1027,24 @@ async def evaluate_response_quality(
 
         provider_name = (request.api_name or "openai").strip() or "openai"
         provider_key = provider_name.lower()
-        byok_resolution = await _resolve_eval_credentials(
-            provider_key,
-            current_user=current_user,
-            request=http_request,
-        )
-        provider_api_key = byok_resolution.api_key
+        explicit_key = (request.api_key or "").strip() if request.api_key else None
+        provider_api_key = explicit_key
+        byok_resolution = None
 
-        if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key and not _is_eval_test_mode():
-            record_byok_missing_credentials(provider_key, operation="evaluations")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error_code": "missing_provider_credentials",
-                    "message": f"Provider '{provider_name}' requires an API key.",
-                },
+        if not provider_api_key:
+            byok_resolution = await _resolve_eval_credentials(
+                provider_key,
+                current_user=current_user,
+                request=http_request,
             )
+            provider_api_key = byok_resolution.api_key
+
+        await _validate_provider_credentials(
+            "response_quality",
+            provider_key,
+            provider_name,
+            provider_api_key,
+        )
 
         # Send webhook: evaluation started (await in TEST_MODE)
         import os as _os
@@ -1056,7 +1083,7 @@ async def evaluate_response_quality(
             api_key=provider_api_key,
             user_id=effective_user_id
         )
-        if byok_resolution and byok_resolution.uses_byok:
+        if byok_resolution and byok_resolution.uses_byok and not explicit_key:
             await byok_resolution.touch_last_used()
         try:
             usage = result.get("usage") if isinstance(result, dict) else None
@@ -1254,6 +1281,36 @@ async def batch_evaluate(
             byok_cache[key] = resolved
             return resolved
 
+        async def _extract_provider_and_key(
+            eval_request: Any,
+            eval_type: str,
+        ) -> tuple[str, Optional[str], Optional[str], Optional[ResolvedByokCredentials]]:
+            """Extract provider name and API key for a batch evaluation item."""
+            provider_name = "openai"
+            explicit_key: Optional[str] = None
+            if isinstance(eval_request, dict):
+                provider_name = (eval_request.get("api_name") or "openai").strip() or "openai"
+                explicit_key = (eval_request.get("api_key") or "").strip() if eval_request.get("api_key") else None
+            provider_key = provider_name.lower()
+            provider_api_key = explicit_key
+            byok_resolution = None
+
+            if eval_type in {"geval", "rag", "response_quality"} and not provider_api_key:
+                if _is_eval_test_mode():
+                    provider_api_key = "test_api_key"
+                else:
+                    byok_resolution = await _resolve_byok(provider_key)
+                    provider_api_key = byok_resolution.api_key
+
+            await _validate_provider_credentials(
+                eval_type,
+                provider_key,
+                provider_name,
+                provider_api_key,
+            )
+
+            return provider_name, provider_api_key, explicit_key, byok_resolution
+
         # Per-user usage limits (aggregate all items)
         limiter = get_user_rate_limiter_for_user(current_user.id)
         tokens_total = 0
@@ -1323,45 +1380,17 @@ async def batch_evaluate(
 
         results = []
         failed_count = 0
+        eval_type = request.evaluation_type
 
         # Process evaluations based on parallel setting (use parallel_workers > 1 as indicator)
         if request.parallel_workers > 1:
             # Run evaluations in parallel
-            tasks = []
-            task_meta = []
+            tasks_with_meta = []
             for eval_request in request.items:
-                eval_type = request.evaluation_type  # Type is at batch level
-
-                provider_name = "openai"
-                explicit_key = None
-                byok_resolution = None
-                if isinstance(eval_request, dict):
-                    provider_name = (eval_request.get("api_name") or "openai").strip() or "openai"
-                    explicit_key = (eval_request.get("api_key") or "").strip() if eval_request.get("api_key") else None
-                provider_key = provider_name.lower()
-                provider_api_key = explicit_key
-
-                if eval_type in {"geval", "rag", "response_quality"} and not provider_api_key:
-                    byok_resolution = await _resolve_byok(provider_key)
-                    provider_api_key = byok_resolution.api_key
-
-                if (
-                    eval_type in {"geval", "rag", "response_quality"}
-                    and PROVIDER_REQUIRES_KEY.get(provider_key, False)
-                    and not provider_api_key
-                    and not _is_eval_test_mode()
-                ):
-                    record_byok_missing_credentials(provider_key, operation="evaluations")
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail={
-                            "error_code": "missing_provider_credentials",
-                            "message": f"Provider '{provider_name}' requires an API key.",
-                        },
-                    )
-
-                if eval_type == "geval" and not provider_api_key and _is_eval_test_mode():
-                    provider_api_key = "test_api_key"
+                provider_name, provider_api_key, explicit_key, byok_resolution = await _extract_provider_and_key(
+                    eval_request,
+                    eval_type,
+                )
 
                 if eval_type == "geval":
                     task = service.evaluate_geval(
@@ -1419,15 +1448,16 @@ async def batch_evaluate(
                     failed_count += 1
                     continue
 
-                if 'task' in locals():
-                    tasks.append(task)
-                    task_meta.append((byok_resolution, explicit_key))
+                tasks_with_meta.append((task, byok_resolution, explicit_key))
 
             # Wait for all tasks
-            if tasks:
-                task_results = await asyncio.gather(*tasks, return_exceptions=True)
+            if tasks_with_meta:
+                task_results = await asyncio.gather(
+                    *(task for task, _, _ in tasks_with_meta),
+                    return_exceptions=True,
+                )
 
-                for i, result in enumerate(task_results):
+                for result, (_, byok_resolution, explicit_key) in zip(task_results, tasks_with_meta):
                     if isinstance(result, Exception):
                         results.append({
                             "evaluation_id": None,
@@ -1436,8 +1466,6 @@ async def batch_evaluate(
                         })
                         failed_count += 1
                     else:
-                        meta = task_meta[i] if i < len(task_meta) else (None, None)
-                        byok_resolution, explicit_key = meta
                         if byok_resolution and byok_resolution.uses_byok and not explicit_key:
                             await byok_resolution.touch_last_used()
                         results.append({
@@ -1448,39 +1476,11 @@ async def batch_evaluate(
         else:
             # Run evaluations sequentially
             for eval_request in request.items:
-                eval_type = request.evaluation_type  # Type is at batch level
-
                 try:
-                    provider_name = "openai"
-                    explicit_key = None
-                    byok_resolution = None
-                    if isinstance(eval_request, dict):
-                        provider_name = (eval_request.get("api_name") or "openai").strip() or "openai"
-                        explicit_key = (eval_request.get("api_key") or "").strip() if eval_request.get("api_key") else None
-                    provider_key = provider_name.lower()
-                    provider_api_key = explicit_key
-
-                    if eval_type in {"geval", "rag", "response_quality"} and not provider_api_key:
-                        byok_resolution = await _resolve_byok(provider_key)
-                        provider_api_key = byok_resolution.api_key
-
-                    if (
-                        eval_type in {"geval", "rag", "response_quality"}
-                        and PROVIDER_REQUIRES_KEY.get(provider_key, False)
-                        and not provider_api_key
-                        and not _is_eval_test_mode()
-                    ):
-                        record_byok_missing_credentials(provider_key, operation="evaluations")
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail={
-                                "error_code": "missing_provider_credentials",
-                                "message": f"Provider '{provider_name}' requires an API key.",
-                            },
-                        )
-
-                    if eval_type == "geval" and not provider_api_key and _is_eval_test_mode():
-                        provider_api_key = "test_api_key"
+                    provider_name, provider_api_key, explicit_key, byok_resolution = await _extract_provider_and_key(
+                        eval_request,
+                        eval_type,
+                    )
 
                     if eval_type == "geval":
                         result = await service.evaluate_geval(
@@ -1692,19 +1692,25 @@ async def evaluate_ocr_pdf_endpoint(
         if ground_truths_json:
             try:
                 parsed = json.loads(ground_truths_json)
-                if isinstance(parsed, list):
-                    gt_list = parsed
-            except Exception:
-                pass
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid ground_truths_json",
+                ) from exc
+            if isinstance(parsed, list):
+                gt_list = parsed
 
         gt_pages_list = None
         if ground_truths_pages_json:
             try:
                 parsed_pages = json.loads(ground_truths_pages_json)
-                if isinstance(parsed_pages, list):
-                    gt_pages_list = parsed_pages
-            except Exception:
-                pass
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid ground_truths_pages_json",
+                ) from exc
+            if isinstance(parsed_pages, list):
+                gt_pages_list = parsed_pages
 
         for idx, f in enumerate(files):
             content = await f.read()
@@ -1749,7 +1755,7 @@ async def evaluate_ocr_pdf_endpoint(
             pass
         try:
             if response is not None:
-                await _apply_rate_limit_headers(limiter, user_id, response)
+                await _apply_rate_limit_headers(limiter, user_id, response, meta)
         except Exception:
             pass
         return OCREvaluationResponse(**result)

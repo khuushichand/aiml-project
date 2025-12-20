@@ -513,7 +513,14 @@ async def _touch_shared_last_used_if_match(
         return
     try:
         payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "BYOK: failed to decrypt shared secret for %s:%s (%s): %s",
+            scope_type,
+            scope_id,
+            provider,
+            exc,
+        )
         return
     if payload.get("api_key") != api_key:
         return

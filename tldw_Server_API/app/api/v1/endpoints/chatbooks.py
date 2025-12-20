@@ -572,7 +572,7 @@ async def preview_chatbook(
         # Initialize quota manager (DB-backed) for consistent rate limiting
         quota_manager = QuotaManager(str(user.id), getattr(user, 'tier', 'free'), db=service.db)
 
-        # Check quota limit before inspecting file size.
+        # Pre-check that user has file size quota available (actual size checked below).
         allowed, message = await quota_manager.check_file_size(0)
         if not allowed:
             raise HTTPException(status_code=413, detail=message)
@@ -902,9 +902,12 @@ async def get_import_job(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception(f"Error getting import job {job_id} for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while retrieving the import job")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while retrieving the import job",
+        ) from None
 
 
 @router.get("/download/{job_id}")

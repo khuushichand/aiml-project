@@ -963,6 +963,45 @@ class ChatDictionaryService:
             logger.error(f"Error fetching dictionary entries: {e}")
             raise CharactersRAGDBError(f"Error fetching dictionary entries: {e}")
 
+    def get_entry(self, entry_id: int, active_only: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        Get a single dictionary entry by ID, including metadata.
+
+        Args:
+            entry_id: Entry ID to fetch
+            active_only: Only return entries from active dictionaries
+
+        Returns:
+            Dictionary representing the entry or None if not found
+        """
+        try:
+            with self.db.get_connection() as conn:
+                query = (
+                    "SELECT e.* FROM dictionary_entries e JOIN chat_dictionaries d ON e.dictionary_id = d.id "
+                    "WHERE d.deleted = ? AND e.id = ?"
+                )
+                params: List[Any] = [False, entry_id]
+                if active_only:
+                    query += " AND d.is_active = ? AND e.enabled = ?"
+                    params.extend([True, True])
+
+                row = conn.execute(query, tuple(params)).fetchone()
+                if not row:
+                    return None
+
+                row_dict = dict(row)
+                entry_obj = ChatDictionaryEntry.from_dict(row_dict)
+                entry = entry_obj.to_dict()
+                entry["dictionary_id"] = row_dict.get("dictionary_id")
+                entry["created_at"] = row_dict.get("created_at")
+                entry["updated_at"] = row_dict.get("updated_at")
+                if not entry.get("group") and row_dict.get("group_name"):
+                    entry["group"] = row_dict.get("group_name")
+                return entry
+        except Exception as e:
+            logger.error(f"Error fetching dictionary entry: {e}")
+            raise CharactersRAGDBError(f"Error fetching dictionary entry: {e}")
+
     def get_entry_objects(
         self,
         dictionary_id: Optional[int] = None,

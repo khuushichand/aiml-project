@@ -70,7 +70,7 @@ def _resolve_redirect_base(request: Optional[Request], conn) -> str:
     if request is not None:
         try:
             return str(request.base_url).rstrip("/")
-        except Exception as e:
+        except (AttributeError, TypeError, ValueError) as e:
             logger.debug(f"Failed to resolve base_url from request: {e}")
     resolved = (getattr(conn, "redirect_base", "") or "").rstrip("/")
     if not resolved and request is not None:

@@ -341,6 +341,7 @@ Environment overrides:
 ---
 
 ## Auto-Download & Environment Switches
+
 | Variable | Purpose |
 | --- | --- |
 | `TTS_AUTO_DOWNLOAD` | Global toggle for all local providers (`1` to allow HF downloads). |

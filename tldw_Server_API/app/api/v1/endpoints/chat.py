@@ -1742,10 +1742,10 @@ async def create_chat_completion(
                 logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
                 record_byok_missing_credentials(target_api_provider, operation="chat")
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail={
                         "error_code": "missing_provider_credentials",
-                        "message": f"Provider '{target_api_provider}' requires an API key.",
+                        "message": f"Provider '{target_api_provider}' requires an API key. Please configure credentials.",
                     },
                 )
             # Additional deterministic behavior for tests: if a clearly invalid key is provided, fail fast with 401.
@@ -1823,10 +1823,10 @@ async def create_chat_completion(
                     )
                     record_byok_missing_credentials(target_provider, operation="chat")
                     raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         detail={
                             "error_code": "missing_provider_credentials",
-                            "message": f"Provider '{target_provider}' requires an API key.",
+                            "message": f"Provider '{target_provider}' requires an API key. Please configure credentials.",
                         },
                     )
 

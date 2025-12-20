@@ -9,6 +9,7 @@ import tempfile
 import io
 import base64
 import time
+import configparser
 from types import SimpleNamespace
 from functools import lru_cache
 from pathlib import Path as PathLib
@@ -587,13 +588,13 @@ async def create_speech(
     user_id_int: Optional[int] = None
     try:
         user_id_int = getattr(current_user, "id_int", None)
-    except Exception:
+        if user_id_int is None:
+            raw_id = getattr(current_user, "id", None)
+            if raw_id is not None:
+                user_id_int = int(raw_id)
+    except (AttributeError, TypeError, ValueError) as exc:
+        logger.debug(f"Failed to extract user_id from current_user: {exc}")
         user_id_int = None
-    if user_id_int is None:
-        try:
-            user_id_int = int(getattr(current_user, "id", None))
-        except Exception:
-            user_id_int = None
 
     tts_provider_hint = provider_hint
 
@@ -603,7 +604,8 @@ async def create_speech(
             provider_cfg = getattr(cfg, "providers", {}).get(name)
             api_key = getattr(provider_cfg, "api_key", None) if provider_cfg else None
             return api_key or None
-        except Exception:
+        except (AttributeError, KeyError, TypeError) as exc:
+            logger.debug(f"TTS fallback resolver failed for provider '{name}': {exc}")
             return None
 
     byok_tts_resolution = None
@@ -2938,14 +2940,15 @@ async def websocket_audio_chat_stream(
             def _fallback_resolver(name: str) -> Optional[str]:
                 try:
                     return get_api_keys().get(name)
-                except Exception:
+                except (KeyError, FileNotFoundError, OSError, ValueError, configparser.Error) as exc:
+                    logger.debug(f"LLM fallback resolver failed for provider '{name}': {exc}")
                     return None
 
             user_id_int = int(user_id_for_usage) if user_id_for_usage else None
             byok_resolution = await resolve_byok_credentials(
                 llm_provider,
                 user_id=user_id_int,
-                request=request,
+                request=websocket,
                 fallback_resolver=_fallback_resolver,
             )
             provider_api_key = byok_resolution.api_key

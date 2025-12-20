@@ -117,7 +117,6 @@ async def list_evaluations(
     limit: int = Query(20, ge=1, le=100),
     after: Optional[str] = Query(None),
     eval_type: Optional[str] = Query(None),
-    user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
 ):
     try:
@@ -153,7 +152,6 @@ async def list_evaluations(
 )
 async def get_evaluation(
     eval_id: str,
-    user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
 ):
     try:
@@ -185,7 +183,6 @@ async def get_evaluation(
 async def update_evaluation(
     eval_id: str,
     update_request: UpdateEvaluationRequest,
-    user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
 ):
     try:
@@ -218,7 +215,6 @@ async def update_evaluation(
 )
 async def delete_evaluation(
     eval_id: str,
-    user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
 ):
     try:
@@ -326,7 +322,6 @@ async def list_runs(
     limit: int = Query(20, ge=1, le=100),
     after: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
-    user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
 ):
     try:
@@ -351,7 +346,6 @@ async def list_runs(
 )
 async def get_run(
     run_id: str,
-    user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
 ):
     try:
@@ -381,7 +375,6 @@ async def get_run(
 )
 async def cancel_run(
     run_id: str,
-    user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
 ):
     try:

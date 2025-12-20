@@ -69,6 +69,14 @@ class InactiveUserError(Exception):
     """Raised when an authenticated user account is inactive."""
 
 
+class ServiceInitializationError(Exception):
+    """Raised when a service fails to initialize or coordination fails."""
+
+
+class ServiceInitializationTimeoutError(ServiceInitializationError):
+    """Raised when a service initialization exceeds its timeout."""
+
+
 async def video_processing_exception_handler(request: Request, exc: VideoProcessingError):
     return JSONResponse(
         status_code=500,

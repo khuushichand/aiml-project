@@ -61,12 +61,12 @@ async def _resolve_chunking_byok(
     provider: str,
     *,
     current_user: User,
-    request: Optional[Request],
+    request: Request,
     fallback_key: Optional[str],
 ):
     try:
         user_id_int = int(getattr(current_user, "id", None))
-    except Exception:
+    except (TypeError, AttributeError, ValueError):
         user_id_int = None
 
     def _fallback_resolver(_name: str) -> Optional[str]:
@@ -78,6 +78,10 @@ async def _resolve_chunking_byok(
         request=request,
         fallback_resolver=_fallback_resolver,
     )
+
+
+def _get_http_request(request: Request) -> Request:
+    return request
 
 # --- FastAPI Router ---
 chunking_router = APIRouter()
@@ -98,7 +102,7 @@ async def process_text_for_chunking_json(
     request_data: ChunkingTextRequest = Body(...),
     current_user: User = Depends(get_request_user),
     media_db: Optional[MediaDatabase] = Depends(try_get_media_db_for_user),
-    http_request: Request = None,
+    http_request: Request = Depends(_get_http_request),
 ):
     """
     Accepts text content and chunking options in a JSON body.
@@ -476,7 +480,7 @@ async def process_file_for_chunking(
     llm_step_system_prompt: Optional[str] = Form(None, description="Client suggested system prompt for internal LLM steps."),
     llm_step_max_tokens: Optional[int] = Form(None, description="Client suggested max tokens for internal LLM steps."),
     current_user: User = Depends(get_request_user),
-    http_request: Request = None,
+    http_request: Request = Depends(_get_http_request),
 ):
     logger.info(f"Received file upload for chunking: '{file.filename}'. Method from form: {method}.")
 

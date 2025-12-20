@@ -56,7 +56,7 @@ Access Kanban boards via the API at `/api/v1/kanban/`. All operations require au
 
 Boards are the top-level containers for organizing work.
 
-**Create a Board**
+#### Create a Board
 ```bash
 curl -X POST "http://localhost:8000/api/v1/kanban/boards" \
   -H "Authorization: Bearer <token>" \
@@ -64,13 +64,13 @@ curl -X POST "http://localhost:8000/api/v1/kanban/boards" \
   -d '{"name": "Research Project", "description": "Track research papers"}'
 ```
 
-**List Your Boards**
+#### List Your Boards
 ```bash
 curl "http://localhost:8000/api/v1/kanban/boards" \
   -H "Authorization: Bearer <token>"
 ```
 
-**Archive/Restore Boards**
+#### Archive/Restore Boards
 - Archive: `POST /api/v1/kanban/boards/{id}/archive`
 - Unarchive: `POST /api/v1/kanban/boards/{id}/unarchive`
 - Soft delete: `DELETE /api/v1/kanban/boards/{id}`
@@ -80,7 +80,7 @@ curl "http://localhost:8000/api/v1/kanban/boards" \
 
 Lists represent columns/stages in your workflow (e.g., "To Do", "In Progress", "Done").
 
-**Create a List**
+#### Create a List
 ```bash
 curl -X POST "http://localhost:8000/api/v1/kanban/boards/{board_id}/lists" \
   -H "Authorization: Bearer <token>" \
@@ -88,7 +88,7 @@ curl -X POST "http://localhost:8000/api/v1/kanban/boards/{board_id}/lists" \
   -d '{"name": "To Do"}'
 ```
 
-**Reorder Lists**
+#### Reorder Lists
 ```bash
 curl -X POST "http://localhost:8000/api/v1/kanban/boards/{board_id}/lists/reorder" \
   -H "Authorization: Bearer <token>" \
@@ -100,7 +100,7 @@ curl -X POST "http://localhost:8000/api/v1/kanban/boards/{board_id}/lists/reorde
 
 Cards are individual tasks or items within lists.
 
-**Create a Card**
+#### Create a Card
 ```bash
 curl -X POST "http://localhost:8000/api/v1/kanban/lists/{list_id}/cards" \
   -H "Authorization: Bearer <token>" \
@@ -113,7 +113,7 @@ curl -X POST "http://localhost:8000/api/v1/kanban/lists/{list_id}/cards" \
   }'
 ```
 
-**Move a Card**
+#### Move a Card
 ```bash
 curl -X POST "http://localhost:8000/api/v1/kanban/cards/{card_id}/move" \
   -H "Authorization: Bearer <token>" \
@@ -121,7 +121,7 @@ curl -X POST "http://localhost:8000/api/v1/kanban/cards/{card_id}/move" \
   -d '{"target_list_id": 5, "position": 0}'
 ```
 
-**Copy a Card**
+#### Copy a Card
 ```bash
 curl -X POST "http://localhost:8000/api/v1/kanban/cards/{card_id}/copy" \
   -H "Authorization: Bearer <token>" \
@@ -133,7 +133,7 @@ curl -X POST "http://localhost:8000/api/v1/kanban/cards/{card_id}/copy" \
 
 Labels are color-coded tags for categorizing cards within a board.
 
-**Create a Label**
+#### Create a Label
 ```bash
 curl -X POST "http://localhost:8000/api/v1/kanban/boards/{board_id}/labels" \
   -H "Authorization: Bearer <token>" \
@@ -141,7 +141,7 @@ curl -X POST "http://localhost:8000/api/v1/kanban/boards/{board_id}/labels" \
   -d '{"name": "Urgent", "color": "red"}'
 ```
 
-**Add Label to Card**
+#### Add Label to Card
 ```bash
 curl -X POST "http://localhost:8000/api/v1/kanban/cards/{card_id}/labels/{label_id}" \
   -H "Authorization: Bearer <token>"
@@ -151,7 +151,7 @@ curl -X POST "http://localhost:8000/api/v1/kanban/cards/{card_id}/labels/{label_
 
 Checklists track sub-tasks within a card.
 
-**Create a Checklist**
+#### Create a Checklist
 ```bash
 curl -X POST "http://localhost:8000/api/v1/kanban/cards/{card_id}/checklists" \
   -H "Authorization: Bearer <token>" \
@@ -159,7 +159,7 @@ curl -X POST "http://localhost:8000/api/v1/kanban/cards/{card_id}/checklists" \
   -d '{"name": "Reading tasks"}'
 ```
 
-**Add Checklist Item**
+#### Add Checklist Item
 ```bash
 curl -X POST "http://localhost:8000/api/v1/kanban/checklists/{checklist_id}/items" \
   -H "Authorization: Bearer <token>" \
@@ -167,7 +167,7 @@ curl -X POST "http://localhost:8000/api/v1/kanban/checklists/{checklist_id}/item
   -d '{"content": "Read abstract", "checked": false}'
 ```
 
-**Toggle All Items**
+#### Toggle All Items
 ```bash
 curl -X POST "http://localhost:8000/api/v1/kanban/checklists/{checklist_id}/toggle-all" \
   -H "Authorization: Bearer <token>" \
@@ -179,7 +179,7 @@ curl -X POST "http://localhost:8000/api/v1/kanban/checklists/{checklist_id}/togg
 
 Add notes and context to cards via comments.
 
-**Add a Comment**
+#### Add a Comment
 ```bash
 curl -X POST "http://localhost:8000/api/v1/kanban/cards/{card_id}/comments" \
   -H "Authorization: Bearer <token>" \
@@ -191,19 +191,19 @@ curl -X POST "http://localhost:8000/api/v1/kanban/cards/{card_id}/comments" \
 
 Search across all your cards using keywords, filters, and different search modes.
 
-**Basic Search (GET)**
+#### Basic Search (GET)
 ```bash
 curl "http://localhost:8000/api/v1/kanban/search?q=transformer&per_page=20" \
   -H "Authorization: Bearer <token>"
 ```
 
-**Search with Filters**
+#### Search with Filters
 ```bash
 curl "http://localhost:8000/api/v1/kanban/search?q=review&board_id=1&priority=high&label_ids=3,5" \
   -H "Authorization: Bearer <token>"
 ```
 
-**Search via POST** (for complex queries)
+#### Search via POST (for complex queries)
 ```bash
 curl -X POST "http://localhost:8000/api/v1/kanban/search" \
   -H "Authorization: Bearer <token>" \
@@ -220,7 +220,7 @@ curl -X POST "http://localhost:8000/api/v1/kanban/search" \
   }'
 ```
 
-**Search Parameters**
+#### Search Parameters
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -233,7 +233,7 @@ curl -X POST "http://localhost:8000/api/v1/kanban/search" \
 | `page` | int | Page number (default: 1) |
 | `per_page` | int | Results per page, max 100 (default: 20) |
 
-**Search Modes**
+#### Search Modes
 
 1. **FTS (Full-Text Search)**: Fast keyword-based search using SQLite FTS5. Best for exact term matching.
 
@@ -244,7 +244,7 @@ curl -X POST "http://localhost:8000/api/v1/kanban/search" \
    - 40% weight on semantic similarity (vector)
    - Vector-only matches get reduced weight (30%)
 
-**Check Search Status**
+#### Check Search Status
 ```bash
 curl "http://localhost:8000/api/v1/kanban/search/status" \
   -H "Authorization: Bearer <token>"
@@ -275,6 +275,7 @@ Response:
 All endpoints are prefixed with `/api/v1/kanban`.
 
 #### Boards
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/boards` | List boards |
@@ -287,6 +288,7 @@ All endpoints are prefixed with `/api/v1/kanban`.
 | POST | `/boards/{id}/restore` | Restore deleted board |
 
 #### Lists
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/boards/{board_id}/lists` | Get lists for board |
@@ -299,6 +301,7 @@ All endpoints are prefixed with `/api/v1/kanban`.
 | POST | `/boards/{board_id}/lists/reorder` | Reorder lists |
 
 #### Cards
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/lists/{list_id}/cards` | Get cards in list |
@@ -314,6 +317,7 @@ All endpoints are prefixed with `/api/v1/kanban`.
 | POST | `/lists/{list_id}/cards/reorder` | Reorder cards |
 
 #### Labels
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/boards/{board_id}/labels` | Get board labels |
@@ -324,6 +328,7 @@ All endpoints are prefixed with `/api/v1/kanban`.
 | DELETE | `/cards/{card_id}/labels/{label_id}` | Remove label from card |
 
 #### Checklists
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/cards/{card_id}/checklists` | Get card checklists |
@@ -336,6 +341,7 @@ All endpoints are prefixed with `/api/v1/kanban`.
 | POST | `/checklists/{id}/toggle-all` | Toggle all items |
 
 #### Comments
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/cards/{card_id}/comments` | Get card comments |
@@ -344,6 +350,7 @@ All endpoints are prefixed with `/api/v1/kanban`.
 | DELETE | `/comments/{id}` | Delete comment |
 
 #### Search
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/search` | Search cards (query params) |
@@ -420,7 +427,7 @@ Error response format:
 
 ### Code Architecture
 
-**Key Files**
+#### Key Files
 
 | File | Description |
 |------|-------------|
@@ -430,7 +437,7 @@ Error response format:
 | `app/api/v1/schemas/kanban_schemas.py` | Pydantic models |
 | `app/api/v1/API_Deps/kanban_deps.py` | FastAPI dependencies |
 
-**Database Schema**
+#### Database Schema
 
 The Kanban module uses SQLite with the following tables:
 - `kanban_boards` - Board metadata
@@ -444,7 +451,7 @@ The Kanban module uses SQLite with the following tables:
 - `kanban_activities` - Activity log
 - `kanban_cards_fts` - FTS5 virtual table for search
 
-**Key Design Patterns**
+#### Key Design Patterns
 
 1. **Soft Delete**: All entities support soft delete with `deleted` flag and `deleted_at` timestamp
 2. **Archive**: Separate from delete; archived items are hidden but fully restorable
@@ -478,19 +485,19 @@ KANBAN_SEARCH_VECTOR_ONLY_WEIGHT=0.3
 
 The hybrid search combines full-text search (FTS) and vector similarity scores using configurable weights.
 
-**Scoring Formula**
+#### Scoring Formula
 
 For cards found by both FTS and vector search:
-```
+```text
 hybrid_score = (FTS_WEIGHT * fts_score) + (VECTOR_WEIGHT * vector_score)
 ```
 
 For cards found only by vector search (semantic match without keyword match):
-```
+```text
 score = VECTOR_ONLY_WEIGHT * vector_score
 ```
 
-**Default Weights**
+#### Default Weights
 
 | Weight | Default | Purpose |
 |--------|---------|---------|
@@ -498,7 +505,7 @@ score = VECTOR_ONLY_WEIGHT * vector_score
 | VECTOR_WEIGHT | 0.4 (40%) | Supplements with semantic similarity |
 | VECTOR_ONLY_WEIGHT | 0.3 (30%) | Reduces rank of pure semantic matches |
 
-**Tuning Guidelines**
+#### Tuning Guidelines
 
 - **Increase FTS_WEIGHT** (e.g., 0.8) when users primarily search for exact terms
 - **Increase VECTOR_WEIGHT** (e.g., 0.6) when users expect conceptually related results
@@ -507,14 +514,14 @@ score = VECTOR_ONLY_WEIGHT * vector_score
 
 ### Database Management
 
-**Database Location**
+#### Database Location
 
 Per-user databases are stored at:
-```
+```text
 Databases/user_databases/{user_id}/Kanban.db
 ```
 
-**Backup**
+#### Backup
 
 SQLite databases can be backed up using standard tools:
 ```bash
@@ -527,7 +534,7 @@ sqlite3 Databases/user_databases/1/Kanban.db ".backup 'backup.db'"
 
 For production, consider using Litestream for continuous replication.
 
-**FTS5 Index**
+#### FTS5 Index
 
 The FTS5 index is automatically maintained via triggers. If you need to rebuild:
 ```sql
@@ -535,10 +542,10 @@ The FTS5 index is automatically maintained via triggers. If you need to rebuild:
 INSERT INTO kanban_cards_fts(kanban_cards_fts) VALUES('rebuild');
 ```
 
-**ChromaDB Integration**
+#### ChromaDB Integration
 
 Vector search requires ChromaDB to be configured. Collections are named:
-```
+```text
 kanban_user_{user_id}
 ```
 
@@ -549,7 +556,7 @@ curl "http://localhost:8000/api/v1/kanban/search/status"
 
 ### Monitoring
 
-**Key Metrics to Monitor**
+#### Key Metrics to Monitor
 
 1. **Search Performance**
    - P95 latency for `/search` endpoint (target: <200ms)
@@ -566,11 +573,11 @@ curl "http://localhost:8000/api/v1/kanban/search/status"
    - Search queries per day
    - Search mode distribution (fts/vector/hybrid)
 
-**Log Messages**
+#### Log Messages
 
 The module logs to the standard application logger. Key log patterns:
 
-```
+```text
 # Vector search fallback
 WARNING - Vector search failed, falling back to FTS: {error}
 WARNING - Vector search unavailable, falling back to FTS
@@ -583,7 +590,7 @@ WARNING - Hybrid search failed, using FTS only: {error}
 WARNING - Invalid float value for KANBAN_SEARCH_FTS_WEIGHT: {value}, using default 0.6
 ```
 
-**Health Checks**
+#### Health Checks
 
 Check search status endpoint for system health:
 ```bash
@@ -612,24 +619,24 @@ Expected healthy response:
 
 ### Common Issues
 
-**"Search query is required" error**
+#### "Search query is required" error
 - Ensure the `q` parameter (GET) or `query` field (POST) is provided and not empty
 
-**Search returns 0 results for special characters**
+#### Search returns 0 results for special characters
 - FTS5 doesn't index special characters like `%`, `_`, `*` as standalone terms
 - Search for words containing those characters instead (e.g., search "complete" to find "100% complete")
 
-**Vector/hybrid search falls back to FTS**
+#### Vector/hybrid search falls back to FTS
 - ChromaDB may not be configured or available
 - Check `/search/status` endpoint for `vector_available: false`
 - Review logs for ChromaDB connection errors
 
-**Slow search performance**
+#### Slow search performance
 - Large result sets: reduce `per_page` parameter
 - Complex label filters: ensure proper indexes exist
 - Consider FTS mode for keyword-heavy queries
 
-**409 Conflict on create**
+#### 409 Conflict on create
 - The `client_id` already exists for this entity type
 - Use a unique `client_id` or omit it for server-generated IDs
 

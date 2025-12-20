@@ -28,6 +28,10 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.exceptions import (
+    ServiceInitializationError,
+    ServiceInitializationTimeoutError,
+)
 
 #######################################################################################################################
 
@@ -105,7 +109,7 @@ def _schedule_service_stop(user_id: int, service: UnifiedAuditService, reason: s
     if getattr(service, "_tldw_stop_scheduled", False):
         return
 
-    setattr(service, "_tldw_stop_scheduled", True)
+    service._tldw_stop_scheduled = True  # type: ignore[attr-defined]
     service_key = id(service)
 
     with _services_stopping_lock:
@@ -161,7 +165,9 @@ def _schedule_service_stop(user_id: int, service: UnifiedAuditService, reason: s
         try:
             asyncio.run(_stop())
         except Exception as e:
-            logger.error(f"Audit service stop failed for user {user_id} in fallback thread: {e}")
+            logger.error(
+                f"Audit service stop failed for user {user_id} in fallback thread: {type(e).__name__}: {e}"
+            )
 
     threading.Thread(target=_run, name=f"audit-stop-{user_id}", daemon=True).start()
 
@@ -403,20 +409,20 @@ async def get_or_create_audit_service_for_user_id(user_id: int) -> UnifiedAuditS
         if wait_event is None:
             msg = f"Missing wait event for audit service initialization (user {user_id})"
             logger.warning(msg)
-            raise RuntimeError(msg)
+            raise ServiceInitializationError(msg)
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             msg = f"Timeout waiting for audit service initialization for user {user_id}"
             logger.warning(msg)
-            raise RuntimeError(msg)
+            raise ServiceInitializationTimeoutError(msg)
 
         try:
             await asyncio.wait_for(wait_event.wait(), timeout=remaining)
         except asyncio.TimeoutError as exc:
             msg = f"Timeout waiting for audit service initialization for user {user_id}"
             logger.warning(msg)
-            raise RuntimeError(msg) from exc
+            raise ServiceInitializationTimeoutError(msg) from exc
 
         # Check cache again after waiting
         with state.cache_lock:
@@ -454,7 +460,7 @@ async def get_or_create_audit_service_for_user_id(user_id: int) -> UnifiedAuditS
 
     if service_instance is None:
         # Defensive: should not happen, but avoid returning None.
-        raise RuntimeError(f"Could not initialize audit service for user {user_id}")
+        raise ServiceInitializationError(f"Could not initialize audit service for user {user_id}")
 
     return service_instance
 

@@ -1879,6 +1879,11 @@ async def create_embedding_endpoint(
         # Validate provider (defer policy checks until after input validation)
         provider = x_provider or "openai"
         model = embedding_request.model
+        if not model:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="model is required",
+            )
 
         # Auto-detect provider based on model name if not specified
         if ":" in model:
@@ -2258,8 +2263,8 @@ async def create_embedding_endpoint(
             final_credentials = byok_cache.get(provider.lower())
             if final_credentials:
                 await final_credentials.touch_last_used()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"BYOK touch_last_used failed for {provider}: {exc}")
 
         # Optional dimension adjustment (post-process)
         dims_policy_used = None

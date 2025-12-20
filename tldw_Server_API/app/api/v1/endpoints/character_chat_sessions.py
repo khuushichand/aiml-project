@@ -98,6 +98,7 @@ from tldw_Server_API.app.core.Character_Chat.constants import (
     THROTTLE_STALE_SECONDS,
 )
 
+THROTTLE_WINDOW_SIZE = 100
 
 def _validate_and_truncate_tool_calls(tool_calls: Any) -> Optional[list]:
     """
@@ -180,7 +181,7 @@ router = APIRouter()
 class _BoundedThrottleCache:
     """Bounded cache for throttle windows with automatic stale entry cleanup.
 
-    Thread-safe implementation using asyncio.Lock for concurrent access protection.
+    Concurrency-safe implementation using asyncio.Lock for async context protection.
     """
 
     def __init__(self):
@@ -189,7 +190,7 @@ class _BoundedThrottleCache:
         self._lock = asyncio.Lock()
 
     async def get(self, key: str) -> deque:
-        """Thread-safe access to throttle window for a given key."""
+        """Concurrency-safe access to throttle window for a given key."""
         async with self._lock:
             now = time.time()
             # Cleanup if too many keys
@@ -197,7 +198,7 @@ class _BoundedThrottleCache:
                 self._cleanup(now)
             # Create or get entry
             if key not in self._data:
-                self._data[key] = deque(maxlen=100)
+                self._data[key] = deque(maxlen=THROTTLE_WINDOW_SIZE)
             self._last_access[key] = now
             return self._data[key]
 

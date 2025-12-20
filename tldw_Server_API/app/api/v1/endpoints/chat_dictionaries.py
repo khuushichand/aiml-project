@@ -396,15 +396,14 @@ async def update_dictionary_entry(
     ):
         # Pattern is being updated without explicit type, or type is being set to regex.
         try:
-            existing_dict_id = service.get_entry_dictionary_id(entry_id)
-            if existing_dict_id is None:
+            existing_entry = service.get_entry(entry_id, active_only=False)
+            if not existing_entry:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Entry not found for validation",
                 )
-            existing_entries = service.get_entries(dictionary_id=existing_dict_id, active_only=False)
-            existing_entry = next((e for e in existing_entries if e.get("id") == entry_id), None)
-            if not existing_entry:
+            existing_dict_id = existing_entry.get("dictionary_id")
+            if existing_dict_id is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Entry not found for validation",

@@ -663,7 +663,7 @@ class RAGPipelineEvalSpec(BaseModel):
 # ============= Pipeline Presets & Cleanup Schemas =============
 
 class PipelinePresetCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=128)
+    name: str = Field(..., min_length=1, max_length=128, pattern=r'^[a-zA-Z0-9_\-]+$')
     config: Dict[str, Any] = Field(..., description="RAG pipeline config blocks: {chunking,retriever,reranker,rag}")
 
 

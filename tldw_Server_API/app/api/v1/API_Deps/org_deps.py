@@ -284,7 +284,8 @@ async def get_user_orgs(
     """
     db_pool = await get_db_pool()
     repo = AuthnzOrgsTeamsRepo(db_pool=db_pool)
-    return await repo.list_org_memberships_for_user(principal.user_id)
+    orgs, _total_count = await repo.list_organizations_for_user(principal.user_id)
+    return orgs
 
 
 async def get_active_org_id(

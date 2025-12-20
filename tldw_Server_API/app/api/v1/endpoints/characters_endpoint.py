@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Any, Dict, Optional, Tuple
 #
 # Third-party Libraries
-from fastapi import HTTPException, Depends, Query, UploadFile, File, APIRouter, Path as FastAPIPath
+from fastapi import HTTPException, Depends, Query, UploadFile, File, APIRouter, Path as FastAPIPath, Response
 from loguru import logger
 from starlette import status
 
@@ -61,7 +61,8 @@ def _validate_file_type(data: bytes, filename: Optional[str]) -> Tuple[bool, str
     Validate file type via both magic bytes and extension.
 
     Returns:
-        Tuple of (is_valid, error_message, detected_type)
+        Tuple of (is_valid, error_message, detected_type) where detected_type is
+        one of: "image", "json", "yaml", "text".
     """
     ext = None
     if filename:
@@ -92,12 +93,19 @@ def _validate_file_type(data: bytes, filename: Optional[str]) -> Tuple[bool, str
     # Determine file type for processing
     if detected_mime in ('image/png', 'image/webp', 'image/jpeg'):
         return True, "", "image"
-    elif detected_mime in ('application/json', 'text/plain') or ext in ('.json', '.yaml', '.yml', '.txt', '.md'):
+
+    if detected_mime == 'application/json':
         return True, "", "json"
 
-    # If we have a valid extension and it's text-based, allow it
-    if ext in ALLOWED_EXTENSIONS:
-        return True, "", "json" if ext in ('.json', '.yaml', '.yml') else "text"
+    if ext in ('.json',):
+        return True, "", "json"
+    if ext in ('.yaml', '.yml'):
+        return True, "", "yaml"
+    if ext in ('.txt', '.md'):
+        return True, "", "text"
+
+    if detected_mime == 'text/plain':
+        return True, "", "text"
 
     return False, "Could not determine file type", None
 #
@@ -141,16 +149,12 @@ def _convert_db_char_to_response_model(char_dict_from_db: Dict[str, Any]) -> Cha
             response_data['image_present'] = True
         except Exception as e:
             logger.error(f"Error encoding image for char {response_data.get('id')}: {e}")
-            response_data['image_base64'] = None;
+            response_data['image_base64'] = None
             response_data['image_present'] = False
     else:
         response_data['image_base64'] = None
         response_data['image_present'] = bool(
             response_data.get('image') and isinstance(response_data.get('image'), bytes))
-    for field_name in ["alternate_greetings", "tags", "extensions"]:
-        value = response_data.get(field_name)
-        if isinstance(value, str):  # Already deserialized by DB layer if stored as JSON text
-            pass  # Should be Python objects now from DB layer
     response_data.pop('image', None)
     return CharacterResponse.model_validate(response_data)
 
@@ -199,7 +203,8 @@ def _build_conflict_import_response(
 async def import_character_endpoint(
         character_file: UploadFile = File(..., description="Character card file (PNG, WEBP, JSON, MD)."),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-        current_user: User = Depends(get_request_user)
+        current_user: User = Depends(get_request_user),
+        response: Response = None,
 ):
     """
     Import a character card from a file.
@@ -298,7 +303,9 @@ async def import_character_endpoint(
         # If it returns the existing ID, then the initial `char_id` would be that.
         conflict_response = _build_conflict_import_response(e, db)
         if conflict_response:
-            return conflict_response  # Consider HTTP 200 OK for this case
+            if response is not None:
+                response.status_code = status.HTTP_200_OK
+            return conflict_response
 
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 

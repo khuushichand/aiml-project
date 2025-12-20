@@ -3,6 +3,7 @@ Webhook management endpoints extracted from evaluations_unified.
 """
 
 from datetime import datetime, timezone
+import inspect
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
@@ -41,8 +42,8 @@ def _get_webhook_manager_for_user(user_id: int) -> WebhookManager:
             svc = get_unified_evaluation_service_for_user(user_id)
             setattr(svc, "webhook_manager", webhook_manager)
             return webhook_manager
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Test mode detection skipped: {e}")
     service = get_unified_evaluation_service_for_user(user_id)
     manager = getattr(service, "webhook_manager", None)
     if manager is None:
@@ -95,8 +96,7 @@ async def register_webhook(
             timeout_seconds=request.timeout_seconds or 30,
         )
         try:
-            import inspect as _inspect
-            result = await _res if _inspect.isawaitable(_res) else _res
+            result = await _res if inspect.isawaitable(_res) else _res
         except Exception:
             result = _res
         return WebhookRegistrationResponse(**result)
@@ -117,8 +117,7 @@ async def list_webhooks(
         _get_webhook_manager_for_user(current_user.id)
         _res = webhook_manager.get_webhook_status(user_id=user_id)
         try:
-            import inspect as _inspect
-            records = await _res if _inspect.isawaitable(_res) else _res
+            records = await _res if inspect.isawaitable(_res) else _res
         except Exception:
             records = _res
         normalized = [_normalize_webhook_status_record(w) for w in records]
@@ -141,8 +140,7 @@ async def unregister_webhook(
         wm = _get_webhook_manager_for_user(current_user.id)
         _res = wm.unregister_webhook(user_id, webhook_id)
         try:
-            import inspect as _inspect
-            if _inspect.isawaitable(_res):
+            if inspect.isawaitable(_res):
                 await _res
         except Exception:
             pass
@@ -165,8 +163,7 @@ async def test_webhook(
         _get_webhook_manager_for_user(current_user.id)
         _res = webhook_manager.test_webhook(user_id=user_id, url=str(payload.url))
         try:
-            import inspect as _inspect
-            result = await _res if _inspect.isawaitable(_res) else _res
+            result = await _res if inspect.isawaitable(_res) else _res
         except Exception:
             result = _res
         if isinstance(result, WebhookTestResponse):

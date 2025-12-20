@@ -36,6 +36,8 @@ from tldw_Server_API.app.api.v1.schemas.billing_schemas import (
     RagUsageDebugResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.input_validation import validate_email
+from tldw_Server_API.app.core.Billing.enforcement import get_billing_enforcer
 from tldw_Server_API.app.core.Billing.subscription_service import get_subscription_service
 from tldw_Server_API.app.core.Billing.stripe_client import is_billing_enabled
 
@@ -50,10 +52,7 @@ router = APIRouter(
 )
 
 
-async def _require_billing_enabled(
-    _principal: Optional[AuthPrincipal] = None,
-    _org_id: Optional[int] = None,
-):
+async def _require_billing_enabled():
     """Raise error if billing is not enabled."""
     if not is_billing_enabled():
         raise HTTPException(
@@ -186,8 +185,6 @@ async def get_usage(
 
     service = await get_subscription_service()
 
-    # Get actual usage from billing enforcer
-    from tldw_Server_API.app.core.Billing.enforcement import get_billing_enforcer
     enforcer = get_billing_enforcer()
     usage_summary = await enforcer.get_org_usage(org_id)
 
@@ -235,8 +232,6 @@ async def get_rag_usage_debug(
             detail="Only organization owners and admins can view RAG usage",
         )
 
-    from tldw_Server_API.app.core.Billing.enforcement import get_billing_enforcer
-
     enforcer = get_billing_enforcer()
     usage_summary = await enforcer.get_org_usage(org_id)
     limits = await enforcer.get_org_limits(org_id)
@@ -281,6 +276,19 @@ async def create_checkout(
     service = await get_subscription_service()
 
     try:
+        principal_email = getattr(principal, "email", None)
+        if not principal_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Billing requires a valid email address for the authenticated user.",
+            )
+        principal_email_str = str(principal_email).strip()
+        is_valid_email, email_error = validate_email(principal_email_str)
+        if not is_valid_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Billing requires a valid email address: {email_error or 'invalid email'}",
+            )
         logger.info(f"Creating checkout session: org_id={org_id}, plan={body.plan_name}, user_id={principal.user_id}")
         session = await service.create_checkout_session(
             org_id=org_id,
@@ -288,7 +296,7 @@ async def create_checkout(
             billing_cycle=body.billing_cycle,
             success_url=str(body.success_url),
             cancel_url=str(body.cancel_url),
-            org_email=principal.email or f"user-{principal.user_id}@example.com",
+            org_email=principal_email_str,
             org_name=principal.username,
         )
 
@@ -334,18 +342,22 @@ async def create_portal(
     service = await get_subscription_service()
 
     try:
+        logger.info(f"Creating portal session: org_id={org_id}, user_id={principal.user_id}")
         session = await service.create_portal_session(
             org_id=org_id,
             return_url=str(body.return_url),
         )
 
+        logger.info(f"Portal session created: session_id={session.id}, org_id={org_id}")
         return PortalResponse(
             session_id=session.id,
             url=session.url,
         )
     except ValueError as e:
+        logger.warning(f"Portal session failed for org_id={org_id}: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except RuntimeError as e:
+        logger.error(f"Portal service error for org_id={org_id}: {e}")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)) from e
 
 
@@ -460,7 +472,7 @@ async def list_invoices(
 ):
     """List invoice history for an organization."""
     org_id = await _resolve_org_id(principal, org_id)
-    await _require_billing_enabled(principal, org_id)
+    await _require_billing_enabled()
 
     # Verify billing view permissions
     membership = await _get_user_org_membership(principal.user_id, org_id)
