@@ -195,14 +195,14 @@ async def forgot_password(
                 await db.execute("""
                     INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, ip_address)
                     VALUES ($1, $2, $3, $4)
-                """, user["id"], jwt_service.hash_token(reset_token),
+                """, user["id"], jwt_service.hash_password_reset_token(reset_token),
                     datetime.utcnow() + timedelta(hours=1), client_ip)
             else:
                 # SQLite
                 await db.execute("""
                     INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, ip_address)
                     VALUES (?, ?, ?, ?)
-                """, (user["id"], jwt_service.hash_token(reset_token),
+                """, (user["id"], jwt_service.hash_password_reset_token(reset_token),
                      (datetime.utcnow() + timedelta(hours=1)).isoformat(), client_ip))
                 await db.commit()
 
