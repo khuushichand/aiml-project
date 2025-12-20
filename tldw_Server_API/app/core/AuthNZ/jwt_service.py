@@ -547,6 +547,31 @@ class JWTService:
             raise ValueError("Unable to derive HMAC hash for token")
         return candidates[0]
 
+    def hash_password_reset_token(self, token: str) -> str:
+        """
+        Create a computationally expensive hash of a password reset token.
+
+        This uses PBKDF2-HMAC with SHA256 and a high iteration count so that
+        brute-forcing reset tokens is significantly more expensive than a
+        single SHA256 evaluation.
+
+        Args:
+            token: Password reset token to hash
+
+        Returns:
+            Hex-encoded PBKDF2-HMAC-SHA256 hash of the token
+        """
+        # Derive a stable salt from the existing HMAC key material
+        base_key = derive_hmac_key(self.settings)
+        salt = hmac.new(base_key, b"password-reset-token-salt", hashlib.sha256).digest()
+        dk = hashlib.pbkdf2_hmac(
+            "sha256",
+            token.encode("utf-8"),
+            salt,
+            200_000,
+        )
+        return dk.hex()
+
     def extract_jti(self, token: str) -> Optional[str]:
         """
         Extract the JTI (JWT ID) from a token without full verification
