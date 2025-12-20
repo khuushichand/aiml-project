@@ -605,18 +605,25 @@ def _resolve_default_cache_dir() -> Optional[Path]:
         return _DEFAULT_CACHE_DIR
     base_dir = os.getenv("RAG_SEMANTIC_CACHE_DIR") or os.getenv("RAG_CACHE_DIR")
     if base_dir:
-        _DEFAULT_CACHE_DIR = Path(base_dir).expanduser()
+        # Resolve to an absolute path so downstream checks can reliably enforce containment.
+        _DEFAULT_CACHE_DIR = Path(base_dir).expanduser().resolve(strict=False)
         return _DEFAULT_CACHE_DIR
     try:
         from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
         cfg = load_and_log_configs() or {}
         project_root = cfg.get("PROJECT_ROOT")
         if project_root:
-            _DEFAULT_CACHE_DIR = Path(project_root) / "Databases" / "cache"
+            # Use a fixed subdirectory under the project root for cache storage.
+            _DEFAULT_CACHE_DIR = (Path(project_root) / "Databases" / "cache").expanduser().resolve(strict=False)
             return _DEFAULT_CACHE_DIR
     except Exception:
         return None
     return None
+    # Ensure we are working with a resolved base directory path.
+    try:
+        base_dir_resolved = base_dir.expanduser().resolve(strict=False)
+    except Exception:
+        return None
 
 
 def _default_persist_path(namespace_key: str) -> Optional[str]:
@@ -625,7 +632,19 @@ def _default_persist_path(namespace_key: str) -> Optional[str]:
         return None
     # Normalize and bound the namespace key before embedding it in the filename.
     safe_key = _normalize_namespace_key_for_filename(namespace_key)
-    return str((base_dir / f"semantic_cache_{safe_key}.json").resolve())
+    candidate = base_dir_resolved / f"semantic_cache_{safe_key}.json"
+    try:
+        full_path = candidate.resolve(strict=False)
+    except Exception:
+        return None
+    # Verify that the final path is contained within the base cache directory.
+    try:
+        if not (full_path == base_dir_resolved or base_dir_resolved in full_path.parents):
+            logger.warning(f"Refusing to use out-of-root cache path: {full_path}")
+            return None
+    except Exception:
+        return None
+    return str(full_path)
 
 
 def _sanitize_persist_path(persist_path: Optional[str], namespace_key: str) -> Optional[str]:
